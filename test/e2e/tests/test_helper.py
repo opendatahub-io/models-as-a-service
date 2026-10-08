@@ -1382,18 +1382,29 @@ def _wait_for_gateway_auth_enforced(
     )
 
 
-def _wait_for_token_rate_limit_policy(model_ref, model_namespace=MODEL_NAMESPACE, timeout=60):
-    """Wait for TokenRateLimitPolicy to be created and enforced for a model.
+def _wait_for_token_rate_limit_policy(
+    model_ref, model_namespace=MODEL_NAMESPACE, timeout=60, *, subscription_name=None, subscription_namespace=None
+):
+    """Wait for the current TokenRateLimitPolicy generation to be enforced.
+
+    If a subscription is supplied, wait until the policy includes it. This
+    prevents accepting the old policy before the controller updates its spec.
 
     Args:
         model_ref: Name of the model (e.g., "e2e-distinct-simulated")
         model_namespace: Namespace where the TRLP should be created (default: MODEL_NAMESPACE)
         timeout: Maximum wait time in seconds (default: 60)
+        subscription_name: Subscription that the policy must include, if supplied
+        subscription_namespace: Subscription namespace (defaults to _ns())
 
     Raises:
         TimeoutError: If TRLP isn't created and enforced within timeout
     """
     trlp_name = f"maas-trlp-{model_ref}"
+    expected_subscription = (
+        f"{subscription_namespace or _ns()}/{subscription_name}" if subscription_name else None
+    )
+    last_snapshot = "not found"
     deadline = time.time() + timeout
     log.info(f"Waiting for TokenRateLimitPolicy {trlp_name} in {model_namespace} (timeout: {timeout}s)...")
 
@@ -1407,12 +1418,31 @@ def _wait_for_token_rate_limit_policy(model_ref, model_namespace=MODEL_NAMESPACE
         if result.returncode == 0:
             try:
                 trlp = json.loads(result.stdout)
-                conditions = trlp.get("status", {}).get("conditions", [])
+                metadata = trlp.get("metadata", {})
+                status = trlp.get("status", {})
+                generation = metadata.get("generation")
+                observed = status.get("observedGeneration")
+                conditions = status.get("conditions", [])
                 enforced = next((c for c in conditions if c.get("type") == "Enforced"), None)
-                if enforced and enforced.get("status") == "True":
-                    log.info(f"TokenRateLimitPolicy {trlp_name} is enforced")
+                subscriptions = {
+                    name.strip()
+                    for name in metadata.get("annotations", {}).get(
+                        "maas.opendatahub.io/subscriptions", ""
+                    ).split(",")
+                }
+                includes_subscription = expected_subscription is None or expected_subscription in subscriptions
+                last_snapshot = (
+                    f"generation={generation}, observedGeneration={observed}, "
+                    f"Enforced={enforced}, includes_subscription={includes_subscription}"
+                )
+                if (
+                    enforced and enforced.get("status") == "True"
+                    and generation is not None and observed == generation
+                    and includes_subscription
+                ):
+                    log.info(f"TokenRateLimitPolicy {trlp_name} generation {generation} is enforced")
                     return
-                log.debug(f"TokenRateLimitPolicy {trlp_name} exists but not enforced yet")
+                log.debug(f"TokenRateLimitPolicy {trlp_name} is not ready: {last_snapshot}")
             except (json.JSONDecodeError, KeyError) as e:
                 log.debug(f"Failed to parse TRLP status: {e}")
         elif _is_not_found_error(result.stderr):
@@ -1429,7 +1459,7 @@ def _wait_for_token_rate_limit_policy(model_ref, model_namespace=MODEL_NAMESPACE
         time.sleep(3)
 
     raise TimeoutError(
-        f"TokenRateLimitPolicy {trlp_name} was not created and enforced in {model_namespace} within {timeout}s"
+        f"TokenRateLimitPolicy {trlp_name} was not created and enforced in {model_namespace} within {timeout}s: {last_snapshot}"
     )
 
 
@@ -1675,6 +1705,8 @@ def _wait_for_subscription_inference_ready(
         model_name,
         model_namespace=model_namespace,
         timeout=timeout,
+        subscription_name=subscription_name,
+        subscription_namespace=namespace,
     )
     return _wait_for_subscription_trlp_status(
         subscription_name,

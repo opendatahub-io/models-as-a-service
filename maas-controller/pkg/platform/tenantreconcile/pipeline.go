@@ -190,15 +190,17 @@ func RunPlatform(
 		return &RunResult{DeploymentPending: true, Detail: detail, Warnings: params.Warnings,
 			KuadrantDetectionWarning: params.KuadrantDetectionWarning}, nil
 	}
-	if !params.SkipIPP {
-		ready, detail, err = PayloadProcessingEnvoyFilterReady(ctx, c, params.GatewayNamespace, params.GatewayName, tenantID)
-		if err != nil {
-			return nil, fmt.Errorf("payload-processing EnvoyFilter status: %w", err)
-		}
-		if !ready {
-			return &RunResult{DeploymentPending: true, Detail: detail, Warnings: params.Warnings,
-				KuadrantDetectionWarning: params.KuadrantDetectionWarning}, nil
-		}
+	// Shared EnvoyFilter shape check for both legacy IPP and praxis (AGC).
+	// Praxis tenants skip *applying* IPP resources (SkipIPP) but still wait on
+	// the same gateway-namespace EnvoyFilter AGC owns — do not gate this on
+	// SkipIPP or Ready deadlocks with AGC's former Active requirement.
+	ready, detail, err = PayloadProcessingEnvoyFilterReady(ctx, c, params.GatewayNamespace, params.GatewayName, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("payload-processing EnvoyFilter status: %w", err)
+	}
+	if !ready {
+		return &RunResult{DeploymentPending: true, Detail: detail, Warnings: params.Warnings,
+			KuadrantDetectionWarning: params.KuadrantDetectionWarning}, nil
 	}
 	return &RunResult{Warnings: params.Warnings, KuadrantDetectionWarning: params.KuadrantDetectionWarning}, nil
 }
