@@ -3151,6 +3151,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#status-flowcontrolstatuses" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Status: flowControlStatuses
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#annotations" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3305,6 +3316,17 @@
     <span class="md-ellipsis">
       
         TokenRateLimit
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#status-flowcontrolstatuses" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Status: flowControlStatuses
       
     </span>
   </a>
@@ -3481,6 +3503,122 @@
 </tr>
 </tbody>
 </table>
+<h2 id="status-flowcontrolstatuses">Status: flowControlStatuses</h2>
+<p><code>status.flowControlStatuses</code> lists, for each referenced model, the InferencePool and InferenceObjective used for <code>inferencePriority</code>. The objective name is published even when <code>inferencePriority</code> is unset, so request headers can always carry it.</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>name</td>
+<td>string</td>
+<td>Name of the MaaSModelRef</td>
+</tr>
+<tr>
+<td>namespace</td>
+<td>string</td>
+<td>Namespace of the MaaSModelRef. The InferencePool and InferenceObjective live in this namespace, alongside the LLMInferenceService.</td>
+</tr>
+<tr>
+<td>inferencePool</td>
+<td>LocalObjectReference</td>
+<td>InferencePool (<code>group</code>, <code>kind</code>, <code>name</code>) observed in the LLMInferenceService's <code>status.router.scheduler.inferencePool</code></td>
+</tr>
+<tr>
+<td>objectiveName</td>
+<td>string</td>
+<td>InferenceObjective name for this subscription and pool, in the pool's namespace. Set whenever the pool is known, including when <code>inferencePriority</code> is unset. It does not change when <code>inferencePriority</code> changes.</td>
+</tr>
+<tr>
+<td>ready</td>
+<td>bool</td>
+<td><code>true</code> when no request-priority reconciliation is left for this model (see reasons below). It does not report whether the model's backend is ready; see <code>modelRefStatuses</code>.</td>
+</tr>
+<tr>
+<td>reason</td>
+<td>string</td>
+<td>Machine-readable reason for <code>ready</code> (see below). New reasons may be added.</td>
+</tr>
+<tr>
+<td>message</td>
+<td>string</td>
+<td>Human-readable detail for the reason</td>
+</tr>
+</tbody>
+</table>
+<table>
+<thead>
+<tr>
+<th>Reason</th>
+<th>ready</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ObjectiveReconciled</code></td>
+<td><code>true</code></td>
+<td>The InferenceObjective is observed with the priority from <code>inferencePriority</code></td>
+</tr>
+<tr>
+<td><code>PriorityUnset</code></td>
+<td><code>true</code></td>
+<td><code>inferencePriority</code> is unset: no InferenceObjective is created and the scheduler applies priority <code>0</code></td>
+</tr>
+<tr>
+<td><code>NotApplicable</code></td>
+<td><code>true</code></td>
+<td>The model is not served through an inference scheduler, so no InferenceObjective is required. ExternalModels always report this; their readiness is in the ExternalModel's <code>status.phase</code> and conditions.</td>
+</tr>
+<tr>
+<td><code>Unmanaged</code></td>
+<td><code>true</code></td>
+<td>The InferenceObjective has <code>opendatahub.io/managed: "false"</code>; its priority is owned by the user</td>
+</tr>
+<tr>
+<td><code>PoolPending</code></td>
+<td><code>false</code></td>
+<td>The model's InferencePool or HTTPRoute has not been observed yet</td>
+</tr>
+<tr>
+<td><code>ObjectivePending</code></td>
+<td><code>false</code></td>
+<td>The InferenceObjective is not observed with the desired priority yet</td>
+</tr>
+<tr>
+<td><code>Unsupported</code></td>
+<td><code>false</code></td>
+<td>Request priority cannot be applied, for example because traffic is split across a routing group</td>
+</tr>
+<tr>
+<td><code>NotOnTenantGateway</code></td>
+<td><code>false</code></td>
+<td>The model's HTTPRoute is not attached to the subscription's tenant Gateway</td>
+</tr>
+<tr>
+<td><code>ObjectiveConflict</code></td>
+<td><code>false</code></td>
+<td>Another object holds the InferenceObjective name</td>
+</tr>
+<tr>
+<td><code>InferenceObjectiveAPIUnavailable</code></td>
+<td><code>false</code></td>
+<td>The InferenceObjective API (<code>llm-d.ai</code>) is not installed</td>
+</tr>
+<tr>
+<td><code>ReconcileFailed</code></td>
+<td><code>false</code></td>
+<td>Reconciling request priority for the model failed; it is retried</td>
+</tr>
+</tbody>
+</table>
+<p>When <code>inferencePriority</code> is set, the <code>InferenceObjectivesReady</code> condition summarizes these entries. It is <code>True</code> when every model is ready; otherwise it is <code>False</code> with the most severe reason. The condition is removed when <code>inferencePriority</code> is unset.</p>
+<p>Request priority never fails a subscription. When <code>inferencePriority</code> is set and a model reports <code>ReconcileFailed</code>, <code>ObjectiveConflict</code>, <code>NotOnTenantGateway</code>, or <code>Unsupported</code>, an otherwise <code>Active</code> subscription becomes <code>Degraded</code>, which keeps access. Pending states and a missing InferenceObjective API do not change the phase. The status reports controller progress, not confirmation that the inference scheduler has applied the priority.</p>
 <h2 id="annotations">Annotations</h2>
 <p>MaaSSubscription supports standard Kubernetes and OpenShift annotations for use by <code>kubectl</code>, the OpenShift console, and other tooling.</p>
 <table>
@@ -3538,7 +3676,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="October 6, 2026 14:47:31 UTC">October 6, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="October 8, 2026 14:30:30 UTC">October 8, 2026</span>
   </span>
 
     
