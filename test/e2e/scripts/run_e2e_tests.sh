@@ -10,7 +10,7 @@
 #   Pass 2: serial cluster mutators (-m "serial and not legacy_ipp", single worker)
 #   Pass 3 (optional): -m nightly when MAAS_PYTEST_INCLUDE_NIGHTLY=true (e.g. EXTERNAL_OIDC deploys)
 #
-# PR /group-test sets MAAS_EXCLUDE_NIGHTLY_TESTS=true so passes 1–2 skip @pytest.mark.nightly.
+# Passes 1–2 always exclude @pytest.mark.nightly; the flag below only gates pass 3.
 #
 # Called by:
 #   - prow_run_smoke_test.sh (CI: deploy → validate → THIS)
@@ -29,7 +29,6 @@
 #   E2E_MULTITENANCY_PHASE_TIMEOUT seconds (default: 180, parallel only)
 #   E2E_RECONCILE_WAIT            seconds between reconcile polls (default: 4)
 #   ARTIFACTS_DIR                 output directory for JUnit/HTML (default: test/e2e/reports)
-#   MAAS_EXCLUDE_NIGHTLY_TESTS    When true, passes 1–2 add "and not nightly" (group-test default)
 #   MAAS_PYTEST_INCLUDE_NIGHTLY   When true, run pass 3 (-m nightly) after serial pass
 #
 # Usage:
@@ -113,11 +112,9 @@ xml_serial="${xml%.xml}-serial.xml"
 xml_nightly="${xml%.xml}-nightly.xml"
 
 # ── Marker tiers ─────────────────────────────────────────────────────────
-_nightly_exclude=""
+# Nightly tests always run in pass 3 only (when enabled), never in passes 1–2.
+_nightly_exclude=" and not nightly"
 _include_nightly_pass=false
-case "${MAAS_EXCLUDE_NIGHTLY_TESTS:-false}" in
-    1 | true | TRUE | yes | YES) _nightly_exclude=" and not nightly" ;;
-esac
 case "${MAAS_PYTEST_INCLUDE_NIGHTLY:-false}" in
     1 | true | TRUE | yes | YES) _include_nightly_pass=true ;;
 esac

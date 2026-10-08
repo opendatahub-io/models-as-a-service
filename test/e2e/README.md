@@ -94,11 +94,16 @@ External OIDC runs require `EXTERNAL_OIDC=true` and `OIDC_ISSUER_URL`, `OIDC_TOK
 
 ## Nightly tier (`@pytest.mark.nightly`)
 
-Tests marked `nightly` (for example `test_external_oidc.py` and per-tenant OIDC discovery) are **excluded from PR `/group-test` passes 1–2** when `MAAS_EXCLUDE_NIGHTLY_TESTS=true` (default in `prow_run_smoke_test.sh`).
+Tests marked `nightly` (for example `test_external_oidc.py` and per-tenant OIDC discovery) are **always excluded from passes 1–2**. They run only in **pass 3** (`-m nightly`) when `MAAS_PYTEST_INCLUDE_NIGHTLY=true` (set automatically when `EXTERNAL_OIDC=true` in prow, or explicitly on the ODH MaaS nightly in shepard). PR `/group-test` does not set that flag, so nightly tests are skipped there.
 
-Extended OIDC coverage runs in **pass 3** (`-m nightly`) when `MAAS_PYTEST_INCLUDE_NIGHTLY=true` (set automatically when `EXTERNAL_OIDC=true` in prow, or explicitly on the ODH MaaS nightly in shepard).
+Local opt-in via the runner:
 
-Local opt-in:
+```bash
+MAAS_PYTEST_INCLUDE_NIGHTLY=true EXTERNAL_OIDC=true \
+  ./test/e2e/scripts/run_e2e_tests.sh
+```
+
+Or target nightly tests directly:
 
 ```bash
 EXTERNAL_OIDC=true OIDC_ISSUER_URL=... OIDC_TOKEN_URL=... \
