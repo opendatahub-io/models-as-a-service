@@ -133,10 +133,35 @@ func RunPlatform(
 		switch payloadProcessingStatus(tenant) {
 		case PayloadProcessingStatusCleanupComplete:
 			// Already signaled; do not re-cleanup.
+			if err := setPayloadProcessingMigrationAnnotation(ctx, c, tenant, ""); err != nil {
+				return nil, fmt.Errorf("clear payload-processing migration annotation: %w", err)
+			}
 		case "":
-			// Absent: legacy still owned the names — clean up, then signal.
+			// Absent: legacy still owned the names — gate on known-good plugins
+			// ConfigMap fingerprints before deleting (RHOAIENG-98846).
+			gate, gateErr := evaluatePluginsConfigMapMigration(ctx, c, params, tenant)
+			if gateErr != nil {
+				return nil, fmt.Errorf("evaluate plugins ConfigMap migration: %w", gateErr)
+			}
+			if gate.Decision == pluginsMigrationBlock {
+				log.Info("blocking IPP→Praxis migration for non-standard plugins ConfigMap",
+					"reason", gate.Reason,
+					"forceAnnotation", AnnotationForcePayloadProcessingMigration+"=true")
+				if err := setPayloadProcessingMigrationAnnotation(ctx, c, tenant, PayloadProcessingMigrationBlocked); err != nil {
+					return nil, fmt.Errorf("mark payload-processing migration blocked: %w", err)
+				}
+				return &RunResult{
+					DeploymentPending: true,
+					Detail:            gate.Reason,
+					Warnings:          []string{gate.Reason},
+				}, nil
+			}
+			log.Info("plugins ConfigMap migration gate allow", "baseline", gate.Baseline, "reason", gate.Reason)
 			if err := cleanupIPPResources(ctx, c, params, mcfg.UID, log); err != nil {
 				return nil, fmt.Errorf("cleanup IPP resources: %w", err)
+			}
+			if err := setPayloadProcessingMigrationAnnotation(ctx, c, tenant, ""); err != nil {
+				return nil, fmt.Errorf("clear payload-processing migration annotation: %w", err)
 			}
 			if err := markPayloadProcessingCleanupComplete(ctx, c, tenant); err != nil {
 				return nil, fmt.Errorf("mark payload-processing cleanup complete: %w", err)

@@ -34,6 +34,7 @@ See [Upgrade to 3.6](../migration/upgrade-to-3.6.md) for full guidance. Summary:
 - **Recommended short downtime** when upgrading from 3.5 → 3.6 while AuthPolicy / TRLP / maas-api adopt short subscription rate-limit IDs (avoids a brief rate-limit fail-open window).
 - **Token rate-limit counters reset** on upgrade (limit keys become rate-grouped `tokens-*`, counters use `selected_subscription_id`). Limitador enforcement budgets start fresh for the current window.
 - **Prometheus and Loki usage history are unaffected** — telemetry still labels by subscription name (`selected_subscription` / `X-MaaS-Subscription`), not the rate-limit ID.
+- **IPP → Praxis plugins ConfigMap migration is gated:** product-default ConfigMaps (and default + response `api-translation`) auto-migrate; customized ConfigMaps block until `maas.opendatahub.io/force-payload-processing-migration=true` is set on `MaasTenantConfig` (see [Upgrade to 3.6](../migration/upgrade-to-3.6.md)).
 
 ### Key Fixes
 

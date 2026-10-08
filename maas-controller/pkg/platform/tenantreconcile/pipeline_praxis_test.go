@@ -267,6 +267,89 @@ func TestRunPlatform_PraxisCleansUpExistingIPPResources(t *testing.T) {
 	assert.Equal(t, PayloadProcessingStatusCleanupComplete, gotTenant.Annotations[AnnotationPayloadProcessingStatus])
 }
 
+func TestRunPlatform_PraxisBlocksCleanupForNonStandardPluginsConfigMap(t *testing.T) {
+	const (
+		tenantName = "praxis-team"
+		appNs      = "ai-tenant-praxis-team"
+		gwNS       = "openshift-ingress"
+		gwName     = "praxis-gateway"
+	)
+	scheme := praxisTestScheme(t)
+	tenant := praxisTenantConfig(appNs, tenantName)
+	mcfg := &maasv1alpha1.Config{
+		ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName, UID: types.UID("cfg-uid")},
+	}
+	gateway := &gwapiv1.Gateway{
+		ObjectMeta: metav1.ObjectMeta{Name: gwName, Namespace: gwNS},
+	}
+	ippDeployment := unstructuredIPPObject(GVKDeployment, gwNS, PayloadProcessingDeploymentName(tenantName), nil)
+	setConfigControllerOwnerRef(ippDeployment, mcfg.UID)
+	pluginsCM := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      PayloadProcessingPluginsConfigMapForTenant(tenantName),
+			Namespace: gwNS,
+		},
+		Data: map[string]string{
+			ippPreProcessingConfigKey: defaultPreProcessingYAML,
+			ippProcessingConfigKey: `apiVersion: llm-d.ai/v1alpha1
+kind: PayloadProcessorConfig
+plugins:
+- type: custom-only
+profiles:
+- name: default
+  plugins:
+    request:
+    - pluginRef: custom-only
+    response: []
+`,
+		},
+	}
+	platformContext := PlatformContext{
+		GatewayRef: maasv1alpha1.TenantGatewayRef{Namespace: gwNS, Name: gwName},
+		SkipIPP:    true,
+		Source:     "aitenant",
+	}
+
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(
+		mcfg, gateway, tenant, readyMaaSAPIDeployment(appNs, tenantName), ippDeployment, pluginsCM,
+	).Build()
+
+	result, err := RunPlatform(
+		context.Background(),
+		logr.Discard(),
+		cl,
+		scheme,
+		tenant,
+		platformContext,
+		platformOverlayManifestPath(t),
+		appNs,
+		"controller-ns",
+		"https://kubernetes.default.svc",
+		"opendatahub",
+		mcfg,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.True(t, result.DeploymentPending)
+	assert.Contains(t, result.Detail, AnnotationForcePayloadProcessingMigration)
+
+	// IPP Deployment must remain until force annotation is applied.
+	dep := &unstructured.Unstructured{}
+	dep.SetGroupVersionKind(GVKDeployment)
+	require.NoError(t, cl.Get(context.Background(), types.NamespacedName{
+		Namespace: gwNS,
+		Name:      PayloadProcessingDeploymentName(tenantName),
+	}, dep))
+
+	gotTenant := &maasv1alpha1.MaasTenantConfig{}
+	require.NoError(t, cl.Get(context.Background(), types.NamespacedName{
+		Namespace: appNs,
+		Name:      maasv1alpha1.MaasTenantConfigInstanceName,
+	}, gotTenant))
+	assert.Equal(t, PayloadProcessingMigrationBlocked, gotTenant.Annotations[AnnotationPayloadProcessingMigration])
+	assert.Empty(t, gotTenant.Annotations[AnnotationPayloadProcessingStatus])
+}
+
 func TestRunPlatform_PraxisMigrationCleanupSkipsPraxisOwnedResources(t *testing.T) {
 	const (
 		tenantName = "praxis-team"

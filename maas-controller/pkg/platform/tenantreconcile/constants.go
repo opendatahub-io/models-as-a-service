@@ -66,6 +66,21 @@ const (
 	// selected party may claim.
 	PayloadProcessingStatusCleanupComplete = "cleanup-complete"
 
+	// AnnotationForcePayloadProcessingMigration is the operator opt-in that allows
+	// IPP→Praxis migration when the live payload-processing-plugins ConfigMap is
+	// non-standard (RHOAIENG-98846). Value must be "true".
+	AnnotationForcePayloadProcessingMigration = "maas.opendatahub.io/force-payload-processing-migration"
+
+	// AnnotationPayloadProcessingMigration surfaces migration-gate state on
+	// MaasTenantConfig. Value PayloadProcessingMigrationBlocked means automatic
+	// migration is paused until the force annotation is applied (or the
+	// ConfigMap is restored to a known-good baseline).
+	AnnotationPayloadProcessingMigration = "maas.opendatahub.io/payload-processing-migration"
+
+	// PayloadProcessingMigrationBlocked is the AnnotationPayloadProcessingMigration
+	// value when the plugins ConfigMap gate refuses automatic migration.
+	PayloadProcessingMigrationBlocked = "blocked"
+
 	// ComponentName is the ODH component label key suffix (app.opendatahub.io/<name>).
 	// This is the DSC component identifier, not a standalone CR kind.
 	ComponentName = "modelsasservice"
