@@ -15,6 +15,7 @@ import (
 	netwv1 "k8s.io/api/networking/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/labels"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -299,6 +300,12 @@ func TestBuildCacheOptions_SingleNamespaceMode(t *testing.T) {
 	if crbEntry.Label == nil {
 		t.Fatal("ClusterRoleBinding: label selector is nil")
 	}
+	if !crbEntry.Label.Matches(labels.Set{"app.kubernetes.io/managed-by": "maas-controller"}) {
+		t.Errorf("ClusterRoleBinding: selector should match managed-by=maas-controller, got %s", crbEntry.Label)
+	}
+	if crbEntry.Label.Matches(labels.Set{}) {
+		t.Error("ClusterRoleBinding: selector should reject unlabeled bindings")
+	}
 	if crbEntry.Namespaces != nil {
 		t.Error("ClusterRoleBinding: cluster-scoped type should have nil Namespaces")
 	}
@@ -331,17 +338,22 @@ func TestBuildCacheOptions_MultiTenantMode(t *testing.T) {
 		}
 	}
 
-	// Non-MaaS types should remain scoped even in multi-tenant mode.
-	depEntry := findByObjectEntry(t, opts, "Deployment", &appsv1.Deployment{})
-	if _, ok := depEntry.Namespaces[cache.AllNamespaces]; ok {
-		t.Error("Deployment: should NOT be all-namespaces in multi-tenant mode")
+	assertNamespaces := func(t *testing.T, label string, obj client.Object, want []string) {
+		t.Helper()
+		entry := findByObjectEntry(t, opts, label, obj)
+		if len(entry.Namespaces) != len(want) {
+			t.Fatalf("%s: got %d namespaces %v, want %d %v", label, len(entry.Namespaces), keys(entry.Namespaces), len(want), want)
+		}
+		for _, ns := range want {
+			if _, ok := entry.Namespaces[ns]; !ok {
+				t.Errorf("%s: missing namespace %q in %v", label, ns, keys(entry.Namespaces))
+			}
+		}
 	}
 
-	// Secret always scoped to infra.
-	secretEntry := findByObjectEntry(t, opts, "Secret", &corev1.Secret{})
-	if len(secretEntry.Namespaces) != 1 {
-		t.Errorf("Secret: expected 1 namespace, got %d", len(secretEntry.Namespaces))
-	}
+	// Non-MaaS types should remain scoped even in multi-tenant mode.
+	assertNamespaces(t, "Deployment", &appsv1.Deployment{}, []string{"opendatahub", "maas-infra"})
+	assertNamespaces(t, "Secret", &corev1.Secret{}, []string{"maas-infra"})
 }
 
 func TestBuildCacheOptions_DeduplicatesNamespaces(t *testing.T) {
