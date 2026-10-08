@@ -681,8 +681,8 @@ func renderedMaaSAPIEgressBaseline(rendered []unstructured.Unstructured) ([]any,
 }
 
 // composePreservedMaaSAPIEgressRules builds a stable pre-configuration baseline from
-// the live operand policy, excluding rules that will be re-applied from
-// networkPolicyAdditionalEgressRules and orphaned additional rules after removal.
+// the live operand policy. Rules matching networkPolicyAdditionalEgressRules are
+// excluded here and re-applied during patch to avoid duplicates on reconcile.
 func composePreservedMaaSAPIEgressRules(liveEgress []any, baseline []any, additional []netwv1.NetworkPolicyEgressRule) []any {
 	additionalUnstructured, err := networkPolicyEgressRulesToUnstructured(additional)
 	if err != nil {
@@ -698,9 +698,6 @@ func composePreservedMaaSAPIEgressRules(liveEgress []any, baseline []any, additi
 	}
 	for _, rule := range liveWithoutAdditional {
 		if egressRuleInList(rule, baseline) || egressRuleInList(rule, additionalUnstructured) {
-			continue
-		}
-		if len(additional) == 0 && !isLegacyBundledPostgresEgressRule(rule) {
 			continue
 		}
 		if !egressRuleInList(rule, preserved) {
@@ -743,66 +740,6 @@ func egressRulesEqual(a, b any) bool {
 		return false
 	}
 	return string(aJSON) == string(bJSON)
-}
-
-func networkPolicyRuleHasPort(rule map[string]any, port int64) bool {
-	ports, ok := rule["ports"].([]any)
-	if !ok {
-		return false
-	}
-	for _, portRaw := range ports {
-		portMap, ok := portRaw.(map[string]any)
-		if !ok {
-			continue
-		}
-		switch v := portMap["port"].(type) {
-		case int64:
-			if v == port {
-				return true
-			}
-		case int:
-			if int64(v) == port {
-				return true
-			}
-		case float64:
-			if int64(v) == port {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func isLegacyBundledPostgresEgressRule(rule any) bool {
-	ruleMap, ok := rule.(map[string]any)
-	if !ok {
-		return false
-	}
-	if !networkPolicyRuleHasPort(ruleMap, 5432) {
-		return false
-	}
-	to, ok := ruleMap["to"].([]any)
-	if !ok {
-		return false
-	}
-	for _, peerRaw := range to {
-		peer, ok := peerRaw.(map[string]any)
-		if !ok {
-			continue
-		}
-		podSelector, ok := peer["podSelector"].(map[string]any)
-		if !ok {
-			continue
-		}
-		matchLabels, ok := podSelector["matchLabels"].(map[string]any)
-		if !ok {
-			continue
-		}
-		if matchLabels["app"] == "postgres" {
-			return true
-		}
-	}
-	return false
 }
 
 func hasAllowAllEgressRule(egress []any) bool {

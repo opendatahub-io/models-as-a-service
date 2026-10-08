@@ -318,9 +318,9 @@ func TestComposePreservedMaaSAPIEgressRules(t *testing.T) {
 	assert.False(t, egressRuleInList(additionalRule, preserved))
 
 	preserved = composePreservedMaaSAPIEgressRules(live, baseline, nil)
-	require.Len(t, preserved, 3)
+	require.Len(t, preserved, 4)
 	assert.True(t, egressRuleInList(postgresRule, preserved))
-	assert.False(t, egressRuleInList(additionalRule, preserved))
+	assert.True(t, egressRuleInList(additionalRule, preserved))
 }
 
 func TestApplyMaaSAPIPreserveEgressConfig(t *testing.T) {
