@@ -36,6 +36,12 @@ type SelectResponse struct {
 	// copies it to auth.identity.selected_subscription_id for TokenRateLimitPolicy
 	// when-predicates so the WASM shim does not embed long subscription keys.
 	RateLimitID string `json:"rateLimitId,omitempty"`
+	// Objective is the InferenceObjective name for ResolvedModel from the subscription's
+	// status.flowControlStatuses. AuthPolicy injects it as the llm-d objective header; empty
+	// when the model has none, so the scheduler applies priority 0.
+	Objective string `json:"objective,omitempty"`
+	// FairnessID is the tenant name. AuthPolicy injects it as the llm-d fairness ID header.
+	FairnessID string `json:"fairnessId,omitempty"`
 
 	// Access control (populated from MaaSAuthPolicy check)
 	AccessAllowed bool `json:"accessAllowed"` // no omitempty — false is a meaningful denial signal

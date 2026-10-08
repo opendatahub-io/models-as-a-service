@@ -7,6 +7,9 @@ description: Proposed integration of subscription request priorities with llm-d 
 
 !!! note "Proposed design"
     This document describes planned behavior and follow-up extensions. It is not documentation of an implemented feature.
+    InferenceObjective reconciliation, the per-model mapping in `MaaSSubscription.status.flowControlStatuses`, and
+    header injection from maas-api subscription selection are implemented; see
+    [Authentication internals](../authentication-internals.md#identity-headers-and-defense-in-depth).
 
 **Author:** Pierangelo Di Pilato
 
