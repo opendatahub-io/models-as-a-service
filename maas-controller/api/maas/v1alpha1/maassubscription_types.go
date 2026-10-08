@@ -18,6 +18,7 @@ package v1alpha1
 
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 )
 
 // MaaSSubscriptionSpec defines the desired state of MaaSSubscription
@@ -166,6 +167,79 @@ type TokenRateLimitStatus struct {
 	Model string `json:"model"`
 }
 
+// ConditionInferenceObjectivesReady reports whether the InferenceObjectives for
+// spec.inferencePriority are reconciled. It is only set when spec.inferencePriority is set.
+const ConditionInferenceObjectivesReady = "InferenceObjectivesReady"
+
+// FlowControlReason is a machine-readable reason for a model's request-priority status.
+// It is intentionally not an enum in the CRD so reasons can be added without a CRD update.
+// +kubebuilder:validation:MaxLength=64
+type FlowControlReason string
+
+const (
+	// FlowControlReasonObjectiveReconciled indicates the model's InferenceObjective matches
+	// spec.inferencePriority. Ready is true.
+	FlowControlReasonObjectiveReconciled FlowControlReason = "ObjectiveReconciled"
+	// FlowControlReasonPriorityUnset indicates spec.inferencePriority is unset, so no
+	// InferenceObjective is required and the scheduler applies priority 0. Ready is true.
+	FlowControlReasonPriorityUnset FlowControlReason = "PriorityUnset"
+	// FlowControlReasonNotApplicable indicates the model is not served through an inference
+	// scheduler (for example, an ExternalModel), so request priority does not apply. Ready is true.
+	FlowControlReasonNotApplicable FlowControlReason = "NotApplicable"
+	// FlowControlReasonUnmanaged indicates the InferenceObjective opted out of management
+	// (opendatahub.io/managed: "false"); its priority is owned by the user. Ready is true.
+	FlowControlReasonUnmanaged FlowControlReason = "Unmanaged"
+	// FlowControlReasonPoolPending indicates the model's InferencePool or HTTPRoute has not
+	// been observed yet.
+	FlowControlReasonPoolPending FlowControlReason = "PoolPending"
+	// FlowControlReasonObjectivePending indicates the InferenceObjective is not reconciled yet.
+	FlowControlReasonObjectivePending FlowControlReason = "ObjectivePending"
+	// FlowControlReasonUnsupported indicates request priority cannot be applied to the model, for
+	// example because its traffic is split across multiple InferencePools.
+	FlowControlReasonUnsupported FlowControlReason = "Unsupported"
+	// FlowControlReasonNotOnTenantGateway indicates the model's HTTPRoute is not attached to the
+	// subscription's tenant Gateway.
+	FlowControlReasonNotOnTenantGateway FlowControlReason = "NotOnTenantGateway"
+	// FlowControlReasonObjectiveConflict indicates another object holds the InferenceObjective name.
+	FlowControlReasonObjectiveConflict FlowControlReason = "ObjectiveConflict"
+	// FlowControlReasonAPIUnavailable indicates the InferenceObjective API is not installed.
+	FlowControlReasonAPIUnavailable FlowControlReason = "InferenceObjectiveAPIUnavailable"
+	// FlowControlReasonReconcileFailed indicates reconciling the model's request priority failed.
+	FlowControlReasonReconcileFailed FlowControlReason = "ReconcileFailed"
+)
+
+// ModelFlowControlStatus maps a referenced model to its InferencePool and InferenceObjective.
+type ModelFlowControlStatus struct {
+	// Name of the MaaSModelRef
+	// +kubebuilder:validation:MaxLength=253
+	Name string `json:"name"`
+	// Namespace of the MaaSModelRef. The InferencePool and InferenceObjective live in this
+	// namespace, alongside the model's LLMInferenceService.
+	// +kubebuilder:validation:MaxLength=63
+	Namespace string `json:"namespace"`
+	// InferencePool is the pool observed in the model's LLMInferenceService status
+	// +optional
+	InferencePool *gwapiv1.LocalObjectReference `json:"inferencePool,omitempty"`
+	// ObjectiveName is the InferenceObjective name for this subscription and pool, in the pool's
+	// namespace. It is set whenever the pool is known, including when spec.inferencePriority is unset
+	// and no InferenceObjective is created.
+	// +kubebuilder:validation:MaxLength=63
+	// +optional
+	ObjectiveName string `json:"objectiveName,omitempty"`
+	// Ready is true when no request-priority reconciliation is left for this model: its
+	// InferenceObjective matches spec.inferencePriority, spec.inferencePriority is unset, request
+	// priority does not apply, or the InferenceObjective opted out of management. It does not
+	// report backend readiness; see ModelRefStatuses.
+	Ready bool `json:"ready"`
+	// Reason is a machine-readable reason for Ready
+	// +optional
+	Reason FlowControlReason `json:"reason,omitempty"`
+	// Message is a human-readable description of the reason
+	// +kubebuilder:validation:MaxLength=1024
+	// +optional
+	Message string `json:"message,omitempty"`
+}
+
 // MaaSSubscriptionStatus defines the observed state of MaaSSubscription
 type MaaSSubscriptionStatus struct {
 	// Phase represents the current phase of the subscription
@@ -182,6 +256,11 @@ type MaaSSubscriptionStatus struct {
 	// TokenRateLimitStatuses reports the status of each generated TokenRateLimitPolicy
 	// +optional
 	TokenRateLimitStatuses []TokenRateLimitStatus `json:"tokenRateLimitStatuses,omitempty"`
+
+	// FlowControlStatuses reports, for each referenced model, the InferencePool and
+	// InferenceObjective used for request priority, and their reconciliation state
+	// +optional
+	FlowControlStatuses []ModelFlowControlStatus `json:"flowControlStatuses,omitempty"`
 }
 
 //+kubebuilder:object:root=true

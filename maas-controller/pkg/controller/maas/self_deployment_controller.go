@@ -790,11 +790,16 @@ const (
 const conditionMessageMaxLen = 32768
 
 func truncateConditionMessage(msg string) string {
-	if len(msg) <= conditionMessageMaxLen {
+	return truncateMessage(msg, conditionMessageMaxLen)
+}
+
+// truncateMessage truncates msg to at most maxLen bytes on a UTF-8 boundary, suffixed with "…".
+func truncateMessage(msg string, maxLen int) string {
+	if len(msg) <= maxLen {
 		return msg
 	}
 	const suffix = "…"
-	limit := conditionMessageMaxLen - len(suffix)
+	limit := maxLen - len(suffix)
 	truncated := msg[:limit]
 	// Walk back until the prefix is valid UTF-8. This handles both continuation
 	// bytes and incomplete leading bytes (e.g. 0xE2 without its two following

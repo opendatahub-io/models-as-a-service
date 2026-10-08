@@ -476,12 +476,18 @@ func (r *MaaSSubscriptionReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	modelStatuses := r.validateModelRefs(ctx, subscription)
 	subscription.Status.ModelRefStatuses = modelStatuses
 
-	// Reconcile InferenceObjectives for spec.inferencePriority before TokenRateLimitPolicies,
-	// so a TokenRateLimitPolicy failure does not block request priority. Request priority is
-	// optional: its errors are retried but never change the subscription phase.
-	ioConflict, ioErr := r.reconcileInferenceObjectives(ctx, log, subscription)
+	// Reconcile InferenceObjectives before TokenRateLimitPolicies, so a TokenRateLimitPolicy
+	// failure does not block them, and set their status for every status write below.
+	io, ioErr := r.reconcileInferenceObjectives(ctx, log, subscription)
 	if ioErr != nil {
 		log.Error(ioErr, "failed to reconcile InferenceObjectives, will retry")
+	}
+	subscription.Status.FlowControlStatuses = io.Statuses
+	ioCondition, ioDegraded, ioRequested := inferenceObjectivesCondition(subscription, io.Statuses)
+	if ioRequested {
+		apimeta.SetStatusCondition(&subscription.Status.Conditions, ioCondition)
+	} else {
+		apimeta.RemoveStatusCondition(&subscription.Status.Conditions, maasv1alpha1.ConditionInferenceObjectivesReady)
 	}
 
 	// Check if we have any valid models to proceed with TRLP reconciliation
@@ -545,11 +551,15 @@ func (r *MaaSSubscriptionReconciler) Reconcile(ctx context.Context, req ctrl.Req
 
 	// Derive final phase based on model and TRLP health
 	phase, message := deriveFinalPhase(modelStatuses, trlpStatuses)
+	// Request priority can degrade an Active subscription but never fail it.
+	if phase == maasv1alpha1.PhaseActive && ioDegraded {
+		phase, message = maasv1alpha1.PhaseDegraded, ioCondition.Message
+	}
 	if err := errors.Join(r.updateStatus(ctx, subscription, phase, message, statusSnapshot), ioErr); err != nil {
 		// controller-runtime ignores the result when an error is returned.
 		return ctrl.Result{}, err
 	}
-	if ioConflict {
+	if io.Conflict {
 		// A foreign object holds an InferenceObjective name; the watch does not see it.
 		return ctrl.Result{RequeueAfter: inferenceObjectiveConflictRequeue}, nil
 	}
@@ -952,7 +962,7 @@ func (r *MaaSSubscriptionReconciler) handleDeletion(ctx context.Context, log log
 		// Delete every InferenceObjective this subscription owns. Label-based only, so a
 		// broken tenant or gateway config cannot block deletion.
 		if !r.inferenceObjectivesUnavailable.Load() {
-			if err := r.deleteOwnedInferenceObjectives(ctx, log, subscription, nil); err != nil {
+			if err := r.deleteOwnedInferenceObjectives(ctx, log, subscription); err != nil {
 				log.Error(err, "failed to delete InferenceObjectives during deletion, will retry")
 				return ctrl.Result{}, err
 			}
