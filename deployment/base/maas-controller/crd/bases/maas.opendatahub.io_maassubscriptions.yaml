@@ -349,6 +349,81 @@ spec:
                   - type
                   type: object
                 type: array
+              flowControlStatuses:
+                description: |-
+                  FlowControlStatuses reports, for each referenced model, the InferencePool and
+                  InferenceObjective used for request priority, and their reconciliation state
+                items:
+                  description: ModelFlowControlStatus maps a referenced model to its
+                    InferencePool and InferenceObjective.
+                  properties:
+                    inferencePool:
+                      description: InferencePool is the pool observed in the model's
+                        LLMInferenceService status
+                      properties:
+                        group:
+                          description: |-
+                            Group is the group of the referent. For example, "gateway.networking.k8s.io".
+                            When unspecified or empty string, core API group is inferred.
+                          maxLength: 253
+                          pattern: ^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                          type: string
+                        kind:
+                          description: Kind is kind of the referent. For example "HTTPRoute"
+                            or "Service".
+                          maxLength: 63
+                          minLength: 1
+                          pattern: ^[a-zA-Z]([-a-zA-Z0-9]*[a-zA-Z0-9])?$
+                          type: string
+                        name:
+                          description: Name is the name of the referent.
+                          maxLength: 253
+                          minLength: 1
+                          type: string
+                      required:
+                      - group
+                      - kind
+                      - name
+                      type: object
+                    message:
+                      description: Message is a human-readable description of the
+                        reason
+                      maxLength: 1024
+                      type: string
+                    name:
+                      description: Name of the MaaSModelRef
+                      maxLength: 253
+                      type: string
+                    namespace:
+                      description: |-
+                        Namespace of the MaaSModelRef. The InferencePool and InferenceObjective live in this
+                        namespace, alongside the model's LLMInferenceService.
+                      maxLength: 63
+                      type: string
+                    objectiveName:
+                      description: |-
+                        ObjectiveName is the InferenceObjective name for this subscription and pool, in the pool's
+                        namespace. It is set whenever the pool is known, including when spec.inferencePriority is unset
+                        and no InferenceObjective is created.
+                      maxLength: 63
+                      type: string
+                    ready:
+                      description: |-
+                        Ready is true when no request-priority reconciliation is left for this model: its
+                        InferenceObjective matches spec.inferencePriority, spec.inferencePriority is unset, request
+                        priority does not apply, or the InferenceObjective opted out of management. It does not
+                        report backend readiness; see ModelRefStatuses.
+                      type: boolean
+                    reason:
+                      description: Reason is a machine-readable reason for Ready
+                      maxLength: 64
+                      type: string
+                  required:
+                  - name
+                  - namespace
+                  - ready
+                  type: object
+                type: array
               modelRefStatuses:
                 description: ModelRefStatuses reports the status of each referenced
                   MaaSModelRef

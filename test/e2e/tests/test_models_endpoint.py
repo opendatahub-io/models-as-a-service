@@ -2253,6 +2253,7 @@ class TestModelsEndpoint:
                 model_ref,
                 model_namespace=MODEL_NAMESPACE,
                 timeout=180,
+                subscription_name=subscription_name,
             )
             _wait_for_subscription_trlp_status(
                 subscription_name,

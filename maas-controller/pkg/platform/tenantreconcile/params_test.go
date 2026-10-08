@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -535,6 +536,51 @@ func TestAPIKeyCleanupCronJobUserPerPlatform(t *testing.T) {
 			assert.EqualValues(t, tc.wantUser, podSecurity["runAsUser"])
 		})
 	}
+}
+
+// The maas-api ClusterRoles carry an OpenShift-only rule (config.openshift.io/apiservers)
+// for honoring the cluster-wide TLS security profile. That API group does not exist on
+// xKS, so the maas-controller SA can never hold the permission and the RBAC escalation
+// guard denies the server-side apply of the ClusterRole, failing every tenant platform
+// reconcile. Only the OpenShift overlay may carry the rule.
+func TestMaasAPIClusterRoleOpenshiftRulesPerPlatform(t *testing.T) {
+	clusterRoleGVK := schema.GroupVersionKind{
+		Group: "rbac.authorization.k8s.io", Version: "v1", Kind: "ClusterRole",
+	}
+	for _, tc := range []struct {
+		overlay  string
+		wantRule bool
+	}{
+		{overlay: "odh", wantRule: true},
+		{overlay: "xks", wantRule: false},
+	} {
+		t.Run(tc.overlay, func(t *testing.T) {
+			resources := renderPlatformOverlayResources(t, tc.overlay, "tenant-ns")
+			for _, name := range []string{"maas-api", "maas-api-supplemental"} {
+				role := requireResource(t, resources, clusterRoleGVK, name)
+				assert.Equal(t, tc.wantRule, clusterRoleHasAPIGroup(t, role, "config.openshift.io"),
+					"ClusterRole %s must %s the config.openshift.io rule on the %s overlay",
+					name, map[bool]string{true: "keep", false: "drop"}[tc.wantRule], tc.overlay)
+			}
+		})
+	}
+}
+
+func clusterRoleHasAPIGroup(t *testing.T, role *unstructured.Unstructured, group string) bool {
+	t.Helper()
+	rules, found, err := unstructured.NestedSlice(role.Object, "rules")
+	require.NoError(t, err)
+	require.True(t, found)
+	for _, rule := range rules {
+		ruleMap, ok := rule.(map[string]any)
+		require.True(t, ok)
+		groups, found, err := unstructured.NestedStringSlice(ruleMap, "apiGroups")
+		require.NoError(t, err)
+		if found && slices.Contains(groups, group) {
+			return true
+		}
+	}
+	return false
 }
 
 func TestApplyPlatformParamsWithReplicaOverrides(t *testing.T) {

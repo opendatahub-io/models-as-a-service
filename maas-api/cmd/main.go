@@ -17,6 +17,7 @@ import (
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/client-go/rest"
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/api_keys"
@@ -51,6 +52,7 @@ const (
 
 var (
 	fetchClusterTLSSettings = tlsprofile.FetchTLSSettings
+	configAPIAvailable      = tlsprofile.ConfigAPIAvailable
 	tlsProfileRetryDelay    = tlsProfileFetchRetryDelay
 	newTLSProfileWatcher    = func(restConfig *rest.Config, initial tlsprofile.Settings, onChange func(oldSettings, newSettings tlsprofile.Settings)) (tlsProfileWatcher, error) {
 		return tlsprofile.NewWatcher(restConfig, initial, onChange)
@@ -423,11 +425,31 @@ func setupTLSProfile(ctx context.Context, log *logger.Logger, cfg *config.Config
 
 // fetchTLSSettingsWithRetry attempts to fetch the OpenShift TLS security profile
 // and adherence policy.
-// If the config.openshift.io API doesn't exist (non-OpenShift), returns
-// watchSettings=false with nil error. For transient errors on OpenShift, retries
-// a few times before logging and returning the default Intermediate profile with
-// watchSettings=true, allowing the watcher to self-heal when the API recovers.
+// The platform is determined via API discovery first: when config.openshift.io is
+// not served (non-OpenShift), returns watchSettings=false with nil error without
+// requesting the profile at all — a direct request for an unserved group can fail
+// with 404 or 403 depending on cluster specifics, so its error must not be used to
+// detect the platform. Authorization errors are returned to the caller: against a
+// group discovery confirmed as served they indicate missing RBAC; when discovery
+// failed the platform is unknown, since an unserved group also answers 403. Other
+// transient errors are retried a few times before logging and returning the default
+// Intermediate profile with watchSettings=true, allowing the watcher to self-heal
+// when the API recovers.
 func fetchTLSSettingsWithRetry(ctx context.Context, log *logger.Logger, restConfig *rest.Config) (tlsprofile.Settings, bool, error) {
+	discoveryCtx, discoveryCancel := context.WithTimeout(ctx, tlsProfileFetchTimeout)
+	available, discoveryErr := configAPIAvailable(discoveryCtx, restConfig)
+	discoveryCancel()
+	if discoveryErr != nil {
+		// Discovery itself failed (e.g. transient apiserver unavailability).
+		// Fall back to probing the profile directly; IsAPIUnavailable still
+		// recognizes an unserved group from the probe error.
+		log.Info("API discovery failed, probing the cluster TLS profile directly", "error", discoveryErr)
+	} else if !available {
+		log.Info("config.openshift.io API group not served, using default Intermediate TLS profile " +
+			"(expected on non-OpenShift clusters)")
+		return tlsprofile.DefaultSettings(), false, nil
+	}
+
 	var lastErr error
 	for attempt := range tlsProfileFetchMaxRetries {
 		fetchCtx, fetchCancel := context.WithTimeout(ctx, tlsProfileFetchTimeout)
@@ -442,6 +464,20 @@ func fetchTLSSettingsWithRetry(ctx context.Context, log *logger.Logger, restConf
 			log.Info("config.openshift.io API not available, using default Intermediate TLS profile "+
 				"(expected on non-OpenShift clusters)", "error", err)
 			return tlsprofile.DefaultSettings(), false, nil
+		}
+
+		if apierrors.IsForbidden(err) {
+			// Preserve the authorization error instead of retrying into a watcher
+			// whose informer can never sync. A 403 only proves missing RBAC when
+			// discovery confirmed the group is served; otherwise the group may be
+			// unserved (authorization is evaluated before routing).
+			if discoveryErr != nil {
+				return tlsprofile.DefaultSettings(), false, fmt.Errorf(
+					"cannot determine whether config.openshift.io is served: API discovery failed (%w) "+
+						"and the cluster TLS profile request was forbidden: %w", discoveryErr, err)
+			}
+			return tlsprofile.DefaultSettings(), false, fmt.Errorf(
+				"cluster TLS profile is not readable (config.openshift.io is served but access is forbidden, check the maas-api RBAC): %w", err)
 		}
 
 		lastErr = err

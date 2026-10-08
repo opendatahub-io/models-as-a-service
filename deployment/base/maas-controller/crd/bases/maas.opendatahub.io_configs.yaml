@@ -71,6 +71,14 @@ spec:
                   Enabling this logs identity attributes (user_id, key_name, groups,
                   subscription) per request — ensure GDPR/privacy compliance before enabling.
                 type: boolean
+              usageMetricsDashboard:
+                default: false
+                description: |-
+                  UsageMetricsDashboard deploys the legacy Prometheus-based Perses usage dashboard
+                  (dashboard-3-maas-usage-admin). When disabled (the default), the controller
+                  removes any controller-owned copy of that dashboard.
+                  Prefer the logs-based usage dashboards gated by usageLogging.
+                type: boolean
             type: object
           status:
             description: ConfigStatus defines the observed state of Config.

@@ -10,6 +10,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/rest"
 )
 
@@ -90,4 +91,35 @@ func IsAPIUnavailable(err error) bool {
 		return false
 	}
 	return apierrors.IsNotFound(err) || apimeta.IsNoMatchError(err)
+}
+
+// ConfigAPIAvailable reports whether the cluster serves the config.openshift.io
+// API group, using standard API discovery.
+//
+// Discovery (/apis) is authorized for every authenticated service account, so it
+// works without any config.openshift.io RBAC. It is the authoritative platform
+// check: a direct request for an unserved group can fail with 404 or 403
+// depending on cluster specifics (authorization is evaluated before routing on
+// some versions, and the group may even be served by CRDs without the RBAC to
+// read it), so the probe's error must not be used to detect the platform.
+func ConfigAPIAvailable(ctx context.Context, restConfig *rest.Config) (bool, error) {
+	if restConfig == nil {
+		return false, errors.New("restConfig must not be nil")
+	}
+
+	discoveryClient, err := discovery.NewDiscoveryClientForConfig(restConfig)
+	if err != nil {
+		return false, fmt.Errorf("creating discovery client: %w", err)
+	}
+
+	groupList, err := discoveryClient.ServerGroupsWithContext(ctx)
+	if err != nil {
+		return false, fmt.Errorf("discovering API groups: %w", err)
+	}
+	for i := range groupList.Groups {
+		if groupList.Groups[i].Name == confv1.GroupName {
+			return true, nil
+		}
+	}
+	return false, nil
 }

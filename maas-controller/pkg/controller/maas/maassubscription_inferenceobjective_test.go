@@ -175,7 +175,7 @@ func newIOEnv(t *testing.T, funcs *interceptor.Funcs, objs ...client.Object) *io
 }
 
 // reconcileIO runs the InferenceObjective pass for the stored subscription.
-func (e *ioEnv) reconcileIO(t *testing.T) (bool, error) {
+func (e *ioEnv) reconcileIO(t *testing.T) (inferenceObjectivesResult, error) {
 	t.Helper()
 	sub := &maasv1alpha1.MaaSSubscription{}
 	if err := e.c.Get(context.Background(), types.NamespacedName{Namespace: ioNS, Name: ioSubName}, sub); err != nil {
@@ -708,11 +708,11 @@ func TestReconcileInferenceObjectives_OtherSubscriptionsObjectIsNotTouched(t *te
 	theirs := ownedObjective(other, key, "llama-pool", 9)
 
 	env := newIOEnv(t, nil, append(poolModel("llama", "llama-pool"), newPrioritySubscription(ptrInt32(1), "llama"), theirs)...)
-	conflict, err := env.reconcileIO(t)
+	res, err := env.reconcileIO(t)
 	if err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
-	if !conflict {
+	if !res.Conflict {
 		t.Error("expected conflict for an objective owned by another subscription")
 	}
 	got := env.objectives(t)[key]
@@ -865,13 +865,6 @@ func TestReconcile_TransientErrorOnOneModelKeepsItsObjective(t *testing.T) {
 	objs = append(objs, sub, ownedObjective(sub, flakyKey, "flaky-pool", 1))
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Namespace: ioNS, Name: ioSubName}}
 
-	// Baseline phase without the transient error.
-	baseline := newIOEnv(t, nil, objs...)
-	if _, err := baseline.r.Reconcile(context.Background(), req); err != nil {
-		t.Fatalf("baseline Reconcile: %v", err)
-	}
-	wantPhase := subscriptionPhase(t, baseline.c)
-
 	env := newIOEnv(t, failLLMISvcGets("flaky-svc"), objs...)
 	if _, err := env.r.Reconcile(context.Background(), req); err == nil {
 		t.Fatal("Reconcile: expected the transient error to be returned for retry")
@@ -883,8 +876,12 @@ func TestReconcile_TransientErrorOnOneModelKeepsItsObjective(t *testing.T) {
 	if _, ok := got[defaultObjectiveKey("llama-pool")]; !ok {
 		t.Error("healthy model's objective was not created")
 	}
-	if phase := subscriptionPhase(t, env.c); phase != wantPhase {
-		t.Errorf("phase = %q, want %q (request priority must not change the phase)", phase, wantPhase)
+	stored := storedSubscription(t, env.c)
+	if s := findFlowControlStatus(t, stored, "flaky"); s.Reason != maasv1alpha1.FlowControlReasonReconcileFailed {
+		t.Errorf("flaky reason = %q, want %q", s.Reason, maasv1alpha1.FlowControlReasonReconcileFailed)
+	}
+	if s := findFlowControlStatus(t, stored, "llama"); s.Reason != maasv1alpha1.FlowControlReasonObjectiveReconciled {
+		t.Errorf("llama reason = %q, want %q", s.Reason, maasv1alpha1.FlowControlReasonObjectiveReconciled)
 	}
 }
 
@@ -1011,7 +1008,7 @@ func TestReconcileInferenceObjectives_APIMissing(t *testing.T) {
 		if phase := subscriptionPhase(t, env.c); phase == "" {
 			t.Error("status was not reconciled")
 		}
-		if err := env.r.deleteOwnedInferenceObjectives(context.Background(), logr.Discard(), sub, nil); err != nil {
+		if err := env.r.deleteOwnedInferenceObjectives(context.Background(), logr.Discard(), sub); err != nil {
 			t.Errorf("deleteOwnedInferenceObjectives: %v, want nil when the API is not served", err)
 		}
 	})
