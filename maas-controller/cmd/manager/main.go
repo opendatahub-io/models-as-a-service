@@ -870,8 +870,8 @@ func buildCacheOptions(p cacheParams) cache.Options {
 	// --- Deployment: only the controller's own + infra (for teardown check) ---
 	deployNsCfg := uniqueNamespaceConfigs(p.controllerNamespace, p.infraNamespace)
 
-	// --- ConfigMap: monitoring (usage-logs) + aitenant (gateway claims) ---
-	configMapNsCfg := uniqueNamespaceConfigs(p.monitoringNamespace, p.aitenantNamespace)
+	// --- ConfigMap: monitoring (usage-logs) + aitenant (gateway claims) + infra (maas-parameters) ---
+	configMapNsCfg := uniqueNamespaceConfigs(p.monitoringNamespace, p.aitenantNamespace, p.infraNamespace)
 
 	// --- Gateway: only in gateway namespace ---
 	gatewayNsCfg := map[string]cache.Config{p.gatewayNamespace: {}}

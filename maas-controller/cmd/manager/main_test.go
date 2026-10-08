@@ -280,8 +280,8 @@ func TestBuildCacheOptions_SingleNamespaceMode(t *testing.T) {
 	// Deployment scoped to controller + infra namespaces.
 	assertNamespaces(t, "Deployment", &appsv1.Deployment{}, []string{"opendatahub", "maas-infra"})
 
-	// ConfigMap scoped to monitoring + aitenant namespaces.
-	assertNamespaces(t, "ConfigMap", &corev1.ConfigMap{}, []string{"opendatahub", "ai-tenants"})
+	// ConfigMap scoped to monitoring + aitenant + infra namespaces.
+	assertNamespaces(t, "ConfigMap", &corev1.ConfigMap{}, []string{"opendatahub", "ai-tenants", "maas-infra"})
 
 	// Gateway scoped to gateway namespace.
 	assertNamespaces(t, "Gateway", &gatewayapiv1.Gateway{}, []string{"openshift-ingress"})
