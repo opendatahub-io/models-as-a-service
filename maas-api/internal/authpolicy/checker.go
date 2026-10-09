@@ -1,6 +1,8 @@
 package authpolicy
 
 import (
+	"errors"
+	"fmt"
 	"strings"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -49,17 +51,18 @@ type ModelKey struct {
 }
 
 // AuthorizedModels returns the set of models the user is authorized to access.
-// Callers should build this set once per request and test membership via map lookup.
-func (c *Checker) AuthorizedModels(groups []string, username string) map[ModelKey]bool {
+// An empty set means the policy evaluation succeeded but granted no models.
+// An error means the policy evaluation could not be completed.
+func (c *Checker) AuthorizedModels(groups []string, username string) (map[ModelKey]bool, error) {
 	if c.lister == nil {
 		c.logger.Error("MaaSAuthPolicy lister is nil; denying model access check")
-		return nil
+		return nil, errors.New("MaaSAuthPolicy lister is nil")
 	}
 
 	policies, err := c.lister.List()
 	if err != nil {
 		c.logger.Error("Failed to list MaaSAuthPolicy CRs for model access check", "error", err)
-		return nil
+		return nil, fmt.Errorf("failed to list MaaSAuthPolicy CRs: %w", err)
 	}
 
 	authorized := make(map[ModelKey]bool)
@@ -87,14 +90,14 @@ func (c *Checker) AuthorizedModels(groups []string, username string) map[ModelKe
 			}
 		}
 	}
-	return authorized
+	return authorized, nil
 }
 
 // IsModelAccessible returns true if any MaaSAuthPolicy grants the user or
 // any of their groups access to the specified model (name + namespace).
 func (c *Checker) IsModelAccessible(groups []string, username string, modelName, modelNamespace string) bool {
-	authorized := c.AuthorizedModels(groups, username)
-	if authorized == nil {
+	authorized, err := c.AuthorizedModels(groups, username)
+	if err != nil {
 		return false
 	}
 	return authorized[ModelKey{Namespace: modelNamespace, Name: modelName}]

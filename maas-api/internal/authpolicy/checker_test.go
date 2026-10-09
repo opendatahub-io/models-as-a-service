@@ -172,7 +172,10 @@ func TestAuthorizedModels(t *testing.T) {
 			lister := &fakeLister{policies: tt.policies}
 			checker := authpolicy.NewChecker(log, lister)
 
-			result := checker.AuthorizedModels(tt.groups, tt.username)
+			result, err := checker.AuthorizedModels(tt.groups, tt.username)
+			if err != nil {
+				t.Fatalf("AuthorizedModels() error = %v", err)
+			}
 
 			for _, key := range tt.expectedModels {
 				if !result[key] {
@@ -192,7 +195,10 @@ func TestAuthorizedModels_NilLister(t *testing.T) {
 	log := logger.New(false)
 	checker := authpolicy.NewChecker(log, nil)
 
-	result := checker.AuthorizedModels([]string{"team-a"}, "alice")
+	result, err := checker.AuthorizedModels([]string{"team-a"}, "alice")
+	if err == nil {
+		t.Fatal("expected error with nil lister")
+	}
 	if result != nil {
 		t.Errorf("expected nil result with nil lister, got %v", result)
 	}
@@ -203,7 +209,10 @@ func TestAuthorizedModels_ListerError(t *testing.T) {
 	lister := &fakeLister{err: errors.New("connection refused")}
 	checker := authpolicy.NewChecker(log, lister)
 
-	result := checker.AuthorizedModels([]string{"team-a"}, "alice")
+	result, err := checker.AuthorizedModels([]string{"team-a"}, "alice")
+	if err == nil {
+		t.Fatal("expected error on lister failure")
+	}
 	if result != nil {
 		t.Errorf("expected nil result on lister error, got %v", result)
 	}
