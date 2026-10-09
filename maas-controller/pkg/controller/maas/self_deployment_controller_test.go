@@ -104,6 +104,7 @@ func TestLifecycleReconciler_CreatesConfigWhenMissing(t *testing.T) {
 	cl := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&maasv1alpha1.Config{}).WithObjects(dep).Build()
 	r := &LifecycleReconciler{
 		Client:                      cl,
+		APIReader:                   cl,
 		Scheme:                      s,
 		DeploymentName:              "maas-controller",
 		DeploymentNS:                depNS,
@@ -159,6 +160,7 @@ func TestLifecycleReconciler_DoesNotRecreateConfigWhenTeardownRequested(t *testi
 	cl := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&maasv1alpha1.Config{}).WithObjects(dep).Build()
 	r := &LifecycleReconciler{
 		Client:                      cl,
+		APIReader:                   cl,
 		Scheme:                      s,
 		DeploymentName:              "maas-controller",
 		DeploymentNS:                depNS,
@@ -215,6 +217,7 @@ func TestLifecycleReconciler_TeardownRequestedDeletesConfigAndMarksCompleted(t *
 	cl := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&maasv1alpha1.Config{}).WithObjects(dep, cfg, aitenantNS).Build()
 	r := &LifecycleReconciler{
 		Client:            cl,
+		APIReader:         cl,
 		Scheme:            s,
 		DeploymentName:    "maas-controller",
 		DeploymentNS:      depNS,
@@ -259,7 +262,7 @@ func TestLifecycleReconciler_MarkTeardownCompletedIsIdempotent(t *testing.T) {
 	}
 
 	cl := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&maasv1alpha1.Config{}).WithObjects(dep).Build()
-	r := &LifecycleReconciler{Client: cl, Scheme: s}
+	r := &LifecycleReconciler{Client: cl, Scheme: s, APIReader: cl}
 
 	g.Expect(r.markTeardownCompleted(context.Background(), dep)).To(Succeed())
 
@@ -299,6 +302,7 @@ func TestLifecycleReconciler_TeardownRequestedWithoutConfigRequestsOrphanCleanup
 	cl := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&maasv1alpha1.Config{}).WithRuntimeObjects(dep, aitenant).Build()
 	r := &LifecycleReconciler{
 		Client:            cl,
+		APIReader:         cl,
 		Scheme:            s,
 		DeploymentName:    "maas-controller",
 		DeploymentNS:      depNS,
@@ -346,7 +350,7 @@ func TestLifecycleReconciler_TeardownClearsBootstrapMarkerBeforeAITenantCleanupC
 	)
 
 	cl := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&maasv1alpha1.Config{}).WithRuntimeObjects(cfg, aitenant).Build()
-	r := &LifecycleReconciler{Client: cl, Scheme: s}
+	r := &LifecycleReconciler{Client: cl, Scheme: s, APIReader: cl}
 
 	res, err := r.handleRequestedTeardown(context.Background(), nil, cfg)
 	g.Expect(err).NotTo(HaveOccurred())
@@ -386,6 +390,7 @@ func TestLifecycleReconciler_NormalReconcileDoesNotSetDeploymentOwnerReference(t
 	cl := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&maasv1alpha1.Config{}).WithObjects(dep, cfg).Build()
 	r := &LifecycleReconciler{
 		Client:                      cl,
+		APIReader:                   cl,
 		Scheme:                      s,
 		DeploymentName:              "maas-controller",
 		DeploymentNS:                depNS,
@@ -448,6 +453,7 @@ func TestLifecycleReconciler_StripsLegacyDeploymentConfigOwnerReferenceOnNormalR
 	cl := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&maasv1alpha1.Config{}).WithObjects(dep, cfg).Build()
 	r := &LifecycleReconciler{
 		Client:                cl,
+		APIReader:             cl,
 		Scheme:                s,
 		DeploymentName:        "maas-controller",
 		DeploymentNS:          depNS,
@@ -504,6 +510,7 @@ func TestLifecycleReconciler_TeardownStripsLegacyOwnerReferenceBeforeDeletingCon
 	cl := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&maasv1alpha1.Config{}).WithObjects(dep, cfg).Build()
 	r := &LifecycleReconciler{
 		Client:         cl,
+		APIReader:      cl,
 		Scheme:         s,
 		DeploymentName: "maas-controller",
 		DeploymentNS:   depNS,
@@ -574,6 +581,7 @@ func TestLifecycleReconciler_LinksDefaultTenantToConfig(t *testing.T) {
 	cl := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&maasv1alpha1.Config{}).WithObjects(dep, cfg, tenant).Build()
 	r := &LifecycleReconciler{
 		Client:                      cl,
+		APIReader:                   cl,
 		Scheme:                      s,
 		DeploymentName:              "maas-controller",
 		DeploymentNS:                depNS,
@@ -637,6 +645,7 @@ func TestLifecycleReconciler_LinksDefaultAITenantToConfig(t *testing.T) {
 	cl := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&maasv1alpha1.Config{}).WithObjects(dep, cfg, aitenant).Build()
 	r := &LifecycleReconciler{
 		Client:                cl,
+		APIReader:             cl,
 		Scheme:                s,
 		DeploymentName:        tenantreconcile.MaaSControllerDeploymentName,
 		DeploymentNS:          depNS,
@@ -688,6 +697,7 @@ func TestLifecycleReconciler_LimitadorServiceMonitorDefaultInterval(t *testing.T
 	cl := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&maasv1alpha1.Config{}).WithObjects(cfg).Build()
 	r := &LifecycleReconciler{
 		Client:              cl,
+		APIReader:           cl,
 		Scheme:              s,
 		MonitoringNamespace: monitoringNS,
 	}
@@ -736,6 +746,7 @@ func TestLifecycleReconciler_LimitadorServiceMonitorCustomInterval(t *testing.T)
 	cl := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&maasv1alpha1.Config{}).WithObjects(cfg).Build()
 	r := &LifecycleReconciler{
 		Client:              cl,
+		APIReader:           cl,
 		Scheme:              s,
 		MonitoringNamespace: monitoringNS,
 	}
@@ -813,6 +824,7 @@ func TestEnsureUsageLogs(t *testing.T) {
 		cl := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&maasv1alpha1.Config{}).WithObjects(cfg, otelCR, crb).Build()
 		r := &LifecycleReconciler{
 			Client:                cl,
+			APIReader:             cl,
 			Scheme:                s,
 			MonitoringNamespace:   monitoringNS,
 			UsageLogsManifestPath: usageLogsPath,
@@ -856,6 +868,7 @@ func TestEnsureUsageLogs(t *testing.T) {
 		cl := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&maasv1alpha1.Config{}).WithObjects(cfg, foreignOtelCR, foreignCRB).Build()
 		r := &LifecycleReconciler{
 			Client:                cl,
+			APIReader:             cl,
 			Scheme:                s,
 			MonitoringNamespace:   monitoringNS,
 			UsageLogsManifestPath: usageLogsPath,
@@ -890,6 +903,7 @@ func TestEnsureUsageLogs(t *testing.T) {
 		cl := newSSAFakeClientBuilder(s).WithStatusSubresource(&maasv1alpha1.Config{}).WithObjects(cfg).Build()
 		r := &LifecycleReconciler{
 			Client:                cl,
+			APIReader:             cl,
 			Scheme:                s,
 			MonitoringNamespace:   monitoringNS,
 			UsageLogsManifestPath: usageLogsPath,
@@ -959,6 +973,7 @@ func TestEnsureUsageDashboard(t *testing.T) {
 		r := &LifecycleReconciler{
 			Client:                     cl,
 			Scheme:                     s,
+			APIReader:                  cl,
 			MonitoringNamespace:        monitoringNS,
 			ObservabilityManifestsPath: dashboardsPath,
 		}
@@ -996,6 +1011,7 @@ func TestEnsureUsageDashboard(t *testing.T) {
 		r := &LifecycleReconciler{
 			Client:                     cl,
 			Scheme:                     s,
+			APIReader:                  cl,
 			MonitoringNamespace:        monitoringNS,
 			ObservabilityManifestsPath: dashboardsPath,
 		}
@@ -1030,6 +1046,7 @@ func TestEnsureUsageDashboard(t *testing.T) {
 		r := &LifecycleReconciler{
 			Client:                     cl,
 			Scheme:                     s,
+			APIReader:                  cl,
 			MonitoringNamespace:        monitoringNS,
 			ObservabilityManifestsPath: dashboardsPath,
 		}
@@ -1058,6 +1075,7 @@ func TestEnsureUsageDashboard(t *testing.T) {
 		r := &LifecycleReconciler{
 			Client:                     cl,
 			Scheme:                     s,
+			APIReader:                  cl,
 			MonitoringNamespace:        monitoringNS,
 			ObservabilityManifestsPath: dashboardsPath,
 		}
@@ -1081,6 +1099,7 @@ func TestEnsureObservability_EmptyMonitoringNamespace(t *testing.T) {
 		cl := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&maasv1alpha1.Config{}).Build()
 		r := &LifecycleReconciler{
 			Client:              cl,
+			APIReader:           cl,
 			Scheme:              s,
 			MonitoringNamespace: "",
 		}
@@ -1096,6 +1115,7 @@ func TestEnsureObservability_EmptyMonitoringNamespace(t *testing.T) {
 		cl := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&maasv1alpha1.Config{}).Build()
 		r := &LifecycleReconciler{
 			Client:              cl,
+			APIReader:           cl,
 			Scheme:              s,
 			MonitoringNamespace: "nonexistent-ns",
 		}
@@ -1413,6 +1433,7 @@ func TestSyncModuleStatus(t *testing.T) {
 			WithObjects(cfg, at, tc).Build()
 		r := &LifecycleReconciler{
 			Client:                      cl,
+			APIReader:                   cl,
 			Scheme:                      s,
 			AITenantNamespace:           aitenantNS,
 			TenantSubscriptionNamespace: subscriptionNS,
@@ -1435,6 +1456,7 @@ func TestSyncModuleStatus(t *testing.T) {
 			WithObjects(cfg, at, tc).Build()
 		r := &LifecycleReconciler{
 			Client:                      cl,
+			APIReader:                   cl,
 			Scheme:                      s,
 			AITenantNamespace:           aitenantNS,
 			TenantSubscriptionNamespace: subscriptionNS,
@@ -1458,6 +1480,7 @@ func TestSyncModuleStatus(t *testing.T) {
 			WithObjects(cfg, at, tc).Build()
 		r := &LifecycleReconciler{
 			Client:                      cl,
+			APIReader:                   cl,
 			Scheme:                      s,
 			AITenantNamespace:           aitenantNS,
 			TenantSubscriptionNamespace: subscriptionNS,
@@ -1482,6 +1505,7 @@ func TestSyncModuleStatus(t *testing.T) {
 			WithObjects(cfg, at, tc).Build()
 		r := &LifecycleReconciler{
 			Client:                      cl,
+			APIReader:                   cl,
 			Scheme:                      s,
 			AITenantNamespace:           aitenantNS,
 			TenantSubscriptionNamespace: subscriptionNS,
@@ -1523,6 +1547,7 @@ func TestSyncModuleStatus(t *testing.T) {
 			WithObjects(cfg, tc).Build()
 		r := &LifecycleReconciler{
 			Client:                      cl,
+			APIReader:                   cl,
 			Scheme:                      s,
 			AITenantNamespace:           aitenantNS,
 			TenantSubscriptionNamespace: subscriptionNS,
@@ -1572,7 +1597,7 @@ func TestSyncTenantsHealth(t *testing.T) {
 		cl := fake.NewClientBuilder().WithScheme(s).
 			WithStatusSubresource(&maasv1alpha1.Config{}).
 			WithObjects(cfg).Build()
-		r := &LifecycleReconciler{Client: cl, Scheme: s}
+		r := &LifecycleReconciler{Client: cl, Scheme: s, APIReader: cl}
 		g.Expect(r.syncTenantsHealth(context.Background(), cfg)).To(Succeed())
 		var updated maasv1alpha1.Config
 		g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: maasv1alpha1.ConfigInstanceName}, &updated)).To(Succeed())
@@ -1590,7 +1615,7 @@ func TestSyncTenantsHealth(t *testing.T) {
 		cl := fake.NewClientBuilder().WithScheme(s).
 			WithStatusSubresource(&maasv1alpha1.Config{}).
 			WithObjects(cfg, at1, at2).Build()
-		r := &LifecycleReconciler{Client: cl, Scheme: s}
+		r := &LifecycleReconciler{Client: cl, Scheme: s, APIReader: cl}
 		g.Expect(r.syncTenantsHealth(context.Background(), cfg)).To(Succeed())
 		var updated maasv1alpha1.Config
 		g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: maasv1alpha1.ConfigInstanceName}, &updated)).To(Succeed())
@@ -1609,7 +1634,7 @@ func TestSyncTenantsHealth(t *testing.T) {
 		cl := fake.NewClientBuilder().WithScheme(s).
 			WithStatusSubresource(&maasv1alpha1.Config{}).
 			WithObjects(cfg, at1, at2).Build()
-		r := &LifecycleReconciler{Client: cl, Scheme: s}
+		r := &LifecycleReconciler{Client: cl, Scheme: s, APIReader: cl}
 		g.Expect(r.syncTenantsHealth(context.Background(), cfg)).To(Succeed())
 		var updated maasv1alpha1.Config
 		g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: maasv1alpha1.ConfigInstanceName}, &updated)).To(Succeed())
@@ -1629,7 +1654,7 @@ func TestSyncTenantsHealth(t *testing.T) {
 		cl := fake.NewClientBuilder().WithScheme(s).
 			WithStatusSubresource(&maasv1alpha1.Config{}).
 			WithObjects(cfg, at1, at2).Build()
-		r := &LifecycleReconciler{Client: cl, Scheme: s}
+		r := &LifecycleReconciler{Client: cl, Scheme: s, APIReader: cl}
 		g.Expect(r.syncTenantsHealth(context.Background(), cfg)).To(Succeed())
 		var updated maasv1alpha1.Config
 		g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: maasv1alpha1.ConfigInstanceName}, &updated)).To(Succeed())
@@ -1647,7 +1672,7 @@ func TestSyncTenantsHealth(t *testing.T) {
 		cl := fake.NewClientBuilder().WithScheme(s).
 			WithStatusSubresource(&maasv1alpha1.Config{}).
 			WithObjects(cfg, at).Build()
-		r := &LifecycleReconciler{Client: cl, Scheme: s}
+		r := &LifecycleReconciler{Client: cl, Scheme: s, APIReader: cl}
 		g.Expect(r.syncTenantsHealth(context.Background(), cfg)).To(Succeed())
 		var updated maasv1alpha1.Config
 		g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: maasv1alpha1.ConfigInstanceName}, &updated)).To(Succeed())
@@ -1660,7 +1685,7 @@ func TestSyncTenantsHealth(t *testing.T) {
 	t.Run("nil Config is a no-op", func(t *testing.T) {
 		g := NewWithT(t)
 		cl := fake.NewClientBuilder().WithScheme(s).Build()
-		r := &LifecycleReconciler{Client: cl, Scheme: s}
+		r := &LifecycleReconciler{Client: cl, Scheme: s, APIReader: cl}
 		g.Expect(r.syncTenantsHealth(context.Background(), nil)).To(Succeed())
 	})
 
@@ -1672,7 +1697,7 @@ func TestSyncTenantsHealth(t *testing.T) {
 		cl := fake.NewClientBuilder().WithScheme(s).
 			WithStatusSubresource(&maasv1alpha1.Config{}).
 			WithObjects(cfg).Build()
-		r := &LifecycleReconciler{Client: cl, Scheme: s}
+		r := &LifecycleReconciler{Client: cl, Scheme: s, APIReader: cl}
 		g.Expect(r.syncTenantsHealth(context.Background(), cfg)).To(Succeed())
 		var updated maasv1alpha1.Config
 		g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: maasv1alpha1.ConfigInstanceName}, &updated)).To(Succeed())

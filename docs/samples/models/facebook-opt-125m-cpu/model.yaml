@@ -23,6 +23,9 @@ spec:
         # securityContext.runAsUser, or runAsNonRoot: false as KServe's own sample does.
         image: docker.io/vllm/vllm-openai-cpu:v0.23.0
         env:
+          # --enable-force-include-usage required for token rate limiting: https://docs.vllm.ai/en/stable/cli/serve/#-enable-force-include-usage-no-enable-force-include-usage
+          - name: VLLM_ADDITIONAL_ARGS
+            value: "--enable-force-include-usage"
           - name: VLLM_LOGGING_LEVEL
             value: INFO
           # KV cache size in GiB.

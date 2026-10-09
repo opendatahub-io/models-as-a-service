@@ -491,10 +491,20 @@ func crdExists(ctx context.Context, reader client.Reader, crdName string) bool {
 	return false
 }
 
+// crdPartialMetadata returns a PartialObjectMetadata stub for the CRD GVK.
+// Using metadata-only informers avoids caching full CRD objects (50–200KB each
+// due to OpenAPI schemas), which is the single biggest memory contributor on
+// large clusters with 600+ CRDs.
+func crdPartialMetadata() *metav1.PartialObjectMetadata {
+	m := &metav1.PartialObjectMetadata{}
+	m.SetGroupVersionKind(apiextensionsv1.SchemeGroupVersion.WithKind("CustomResourceDefinition"))
+	return m
+}
+
 // registerWatchWhenCRDAppears dynamically registers a resource watch the first time
-// the target CRD becomes available. It watches CRD objects (always available) and
-// calls makeSource() exactly once via sync.Once when the named CRD is detected —
-// so multiple CRD update events never produce duplicate watchers. No pod restart needed.
+// the target CRD becomes available. It watches CRD metadata (to avoid caching full
+// objects) and calls makeSource() exactly once via sync.Once when the named CRD is
+// detected — so multiple CRD update events never produce duplicate watchers.
 func registerWatchWhenCRDAppears(
 	c controller.Controller,
 	mgr ctrl.Manager,
@@ -506,9 +516,9 @@ func registerWatchWhenCRDAppears(
 	var once sync.Once
 	return c.Watch(source.Kind(
 		mgr.GetCache(),
-		&apiextensionsv1.CustomResourceDefinition{},
-		handler.TypedEnqueueRequestsFromMapFunc[*apiextensionsv1.CustomResourceDefinition](
-			func(ctx context.Context, crd *apiextensionsv1.CustomResourceDefinition) []reconcile.Request {
+		crdPartialMetadata(),
+		handler.TypedEnqueueRequestsFromMapFunc[*metav1.PartialObjectMetadata](
+			func(ctx context.Context, crd *metav1.PartialObjectMetadata) []reconcile.Request {
 				if crd.Name != crdName {
 					return nil
 				}
@@ -529,6 +539,9 @@ func registerWatchWhenCRDAppears(
 // follow-up hook. Once the named CRD reports Established=True, it registers the watch and
 // then runs onEstablished, enqueuing the requests it returns on c. Unlike
 // registerWatchWhenCRDAppears, both steps are retried with backoff until they succeed.
+//
+// The CRD informer uses metadata-only objects to avoid caching full CRD specs.
+// The Established condition is checked via a live API read when the CRD name matches.
 func registerWatchWhenCRDEstablished(
 	c controller.Controller,
 	mgr ctrl.Manager,
@@ -536,17 +549,18 @@ func registerWatchWhenCRDEstablished(
 	makeSource func() source.Source,
 	onEstablished func(context.Context) ([]reconcile.Request, error),
 ) error {
+	reader := mgr.GetAPIReader()
 	b := newCRDBootstrap(crdName, func() error { return c.Watch(makeSource()) }, onEstablished)
 	b.log.Info("CRD not yet registered at startup; will register watch when it is established")
 	return c.Watch(source.Kind(
 		mgr.GetCache(),
-		&apiextensionsv1.CustomResourceDefinition{},
-		handler.TypedFuncs[*apiextensionsv1.CustomResourceDefinition, reconcile.Request]{
-			CreateFunc: func(ctx context.Context, e event.TypedCreateEvent[*apiextensionsv1.CustomResourceDefinition], q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
-				b.handle(ctx, e.Object, q)
+		crdPartialMetadata(),
+		handler.TypedFuncs[*metav1.PartialObjectMetadata, reconcile.Request]{
+			CreateFunc: func(ctx context.Context, e event.TypedCreateEvent[*metav1.PartialObjectMetadata], q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
+				b.handleMetadata(ctx, e.Object.Name, reader, q)
 			},
-			UpdateFunc: func(ctx context.Context, e event.TypedUpdateEvent[*apiextensionsv1.CustomResourceDefinition], q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
-				b.handle(ctx, e.ObjectNew, q)
+			UpdateFunc: func(ctx context.Context, e event.TypedUpdateEvent[*metav1.PartialObjectMetadata], q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
+				b.handleMetadata(ctx, e.ObjectNew.Name, reader, q)
 			},
 		},
 	))
@@ -578,18 +592,33 @@ func newCRDBootstrap(crdName string, register func() error, onEstablished func(c
 	}
 }
 
-// handle starts the bootstrap on the first event for the established CRD.
-func (b *crdBootstrap) handle(ctx context.Context, crd *apiextensionsv1.CustomResourceDefinition, q workqueue.TypedInterface[reconcile.Request]) {
-	if crd.Name != b.crdName || !crdEstablished(crd) || !b.started.CompareAndSwap(false, true) {
+// handleMetadata starts the bootstrap when a metadata-only CRD event matches.
+// It claims ownership via CompareAndSwap on the first matching event and polls
+// for the Established condition with bounded retry, so transient API failures
+// don't stall bootstrap indefinitely.
+func (b *crdBootstrap) handleMetadata(ctx context.Context, name string, reader client.Reader, q workqueue.TypedInterface[reconcile.Request]) {
+	if name != b.crdName || !b.started.CompareAndSwap(false, true) {
 		return
 	}
 	// The event handler's context is cancelled when the handler returns, so the retries
 	// run on a context that keeps its values but not its cancellation.
-	go b.run(context.WithoutCancel(ctx), q)
+	go b.waitForEstablishedAndRun(context.WithoutCancel(ctx), reader, q)
 }
 
-func (b *crdBootstrap) run(ctx context.Context, q workqueue.TypedInterface[reconcile.Request]) {
+func (b *crdBootstrap) waitForEstablishedAndRun(ctx context.Context, reader client.Reader, q workqueue.TypedInterface[reconcile.Request]) {
 	defer close(b.done)
+	if !b.retry(ctx, "check CRD established", func() error {
+		var crd apiextensionsv1.CustomResourceDefinition
+		if err := reader.Get(ctx, types.NamespacedName{Name: b.crdName}, &crd); err != nil {
+			return fmt.Errorf("read CRD: %w", err)
+		}
+		if !crdEstablished(&crd) {
+			return fmt.Errorf("CRD %s not yet established", b.crdName)
+		}
+		return nil
+	}) {
+		return
+	}
 	if !b.retry(ctx, "register watch", b.register) {
 		return
 	}

@@ -5,14 +5,18 @@ import (
 	"crypto/tls"
 	"errors"
 	"os"
+	"reflect"
 	"testing"
 	"time"
 
 	confv1 "github.com/openshift/api/config/v1"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	netwv1 "k8s.io/api/networking/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -20,10 +24,12 @@ import (
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	controllerfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
+	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/controller/maas"
@@ -224,6 +230,156 @@ func TestBuildMetricsServerOptions(t *testing.T) {
 			t.Fatalf("NextProtos len = %d, want 2", got)
 		}
 	})
+}
+
+// findByObjectEntry looks up a cache.ByObject entry by the concrete type of the key,
+// since the map uses pointer identity (two &T{} are different keys).
+func findByObjectEntry(t *testing.T, opts cache.Options, label string, target client.Object) cache.ByObject {
+	t.Helper()
+	targetType := reflect.TypeOf(target)
+	for k, v := range opts.ByObject {
+		if reflect.TypeOf(k) == targetType {
+			return v
+		}
+	}
+	t.Fatalf("%s: not found in ByObject (looking for %T)", label, target)
+	return cache.ByObject{}
+}
+
+func TestBuildCacheOptions_SingleNamespaceMode(t *testing.T) {
+	opts := buildCacheOptions(cacheParams{
+		controllerNamespace:   "opendatahub",
+		infraNamespace:        "maas-infra",
+		monitoringNamespace:   "opendatahub",
+		aitenantNamespace:     "ai-tenants",
+		gatewayNamespace:      "openshift-ingress",
+		subscriptionNamespace: "models-as-a-service",
+		enableTenantDiscovery: false,
+		subscriptionNSExists:  true,
+	})
+
+	assertNamespaces := func(t *testing.T, label string, obj client.Object, want []string) {
+		t.Helper()
+		entry := findByObjectEntry(t, opts, label, obj)
+		if len(entry.Namespaces) != len(want) {
+			t.Fatalf("%s: got %d namespaces %v, want %d %v", label, len(entry.Namespaces), keys(entry.Namespaces), len(want), want)
+		}
+		for _, ns := range want {
+			if _, ok := entry.Namespaces[ns]; !ok {
+				t.Errorf("%s: missing namespace %q in %v", label, ns, keys(entry.Namespaces))
+			}
+		}
+	}
+
+	// MaaS CRs scoped to subscription namespace.
+	assertNamespaces(t, "MaaSAuthPolicy", &maasv1alpha1.MaaSAuthPolicy{}, []string{"models-as-a-service"})
+	assertNamespaces(t, "MaaSSubscription", &maasv1alpha1.MaaSSubscription{}, []string{"models-as-a-service"})
+
+	// Secret scoped to infra namespace.
+	assertNamespaces(t, "Secret", &corev1.Secret{}, []string{"maas-infra"})
+
+	// Deployment scoped to controller + infra namespaces.
+	assertNamespaces(t, "Deployment", &appsv1.Deployment{}, []string{"opendatahub", "maas-infra"})
+
+	// ConfigMap scoped to monitoring + aitenant + infra namespaces.
+	assertNamespaces(t, "ConfigMap", &corev1.ConfigMap{}, []string{"opendatahub", "ai-tenants", "maas-infra"})
+
+	// Gateway scoped to gateway namespace.
+	assertNamespaces(t, "Gateway", &gatewayapiv1.Gateway{}, []string{"openshift-ingress"})
+
+	// NetworkPolicy scoped to all platform namespaces.
+	npEntry := findByObjectEntry(t, opts, "NetworkPolicy", &netwv1.NetworkPolicy{})
+	for _, ns := range []string{"opendatahub", "maas-infra", "models-as-a-service", "openshift-ingress"} {
+		if _, ok := npEntry.Namespaces[ns]; !ok {
+			t.Errorf("NetworkPolicy: missing namespace %q", ns)
+		}
+	}
+
+	// ClusterRoleBinding scoped by label, no namespace.
+	crbEntry := findByObjectEntry(t, opts, "ClusterRoleBinding", &rbacv1.ClusterRoleBinding{})
+	if crbEntry.Label == nil {
+		t.Fatal("ClusterRoleBinding: label selector is nil")
+	}
+	if !crbEntry.Label.Matches(labels.Set{"app.kubernetes.io/managed-by": "maas-controller"}) {
+		t.Errorf("ClusterRoleBinding: selector should match managed-by=maas-controller, got %s", crbEntry.Label)
+	}
+	if crbEntry.Label.Matches(labels.Set{}) {
+		t.Error("ClusterRoleBinding: selector should reject unlabeled bindings")
+	}
+	if crbEntry.Namespaces != nil {
+		t.Error("ClusterRoleBinding: cluster-scoped type should have nil Namespaces")
+	}
+}
+
+func TestBuildCacheOptions_MultiTenantMode(t *testing.T) {
+	opts := buildCacheOptions(cacheParams{
+		controllerNamespace:   "opendatahub",
+		infraNamespace:        "maas-infra",
+		monitoringNamespace:   "opendatahub",
+		aitenantNamespace:     "ai-tenants",
+		gatewayNamespace:      "openshift-ingress",
+		subscriptionNamespace: "models-as-a-service",
+		enableTenantDiscovery: true,
+		subscriptionNSExists:  true,
+	})
+
+	// MaaS CRs should be all-namespaces in tenant discovery mode.
+	for _, tc := range []struct {
+		label string
+		obj   client.Object
+	}{
+		{"MaasTenantConfig", &maasv1alpha1.MaasTenantConfig{}},
+		{"MaaSAuthPolicy", &maasv1alpha1.MaaSAuthPolicy{}},
+		{"MaaSSubscription", &maasv1alpha1.MaaSSubscription{}},
+	} {
+		entry := findByObjectEntry(t, opts, tc.label, tc.obj)
+		if _, ok := entry.Namespaces[cache.AllNamespaces]; !ok {
+			t.Errorf("%s: expected all-namespaces config, got %v", tc.label, keys(entry.Namespaces))
+		}
+	}
+
+	assertNamespaces := func(t *testing.T, label string, obj client.Object, want []string) {
+		t.Helper()
+		entry := findByObjectEntry(t, opts, label, obj)
+		if len(entry.Namespaces) != len(want) {
+			t.Fatalf("%s: got %d namespaces %v, want %d %v", label, len(entry.Namespaces), keys(entry.Namespaces), len(want), want)
+		}
+		for _, ns := range want {
+			if _, ok := entry.Namespaces[ns]; !ok {
+				t.Errorf("%s: missing namespace %q in %v", label, ns, keys(entry.Namespaces))
+			}
+		}
+	}
+
+	// Non-MaaS types should remain scoped even in multi-tenant mode.
+	assertNamespaces(t, "Deployment", &appsv1.Deployment{}, []string{"opendatahub", "maas-infra"})
+	assertNamespaces(t, "Secret", &corev1.Secret{}, []string{"maas-infra"})
+}
+
+func TestBuildCacheOptions_DeduplicatesNamespaces(t *testing.T) {
+	opts := buildCacheOptions(cacheParams{
+		controllerNamespace:   "opendatahub",
+		infraNamespace:        "opendatahub",
+		monitoringNamespace:   "opendatahub",
+		aitenantNamespace:     "opendatahub",
+		gatewayNamespace:      "opendatahub",
+		subscriptionNamespace: "opendatahub",
+		enableTenantDiscovery: false,
+		subscriptionNSExists:  true,
+	})
+
+	depEntry := findByObjectEntry(t, opts, "Deployment", &appsv1.Deployment{})
+	if len(depEntry.Namespaces) != 1 {
+		t.Errorf("Deployment: expected 1 deduplicated namespace, got %d: %v", len(depEntry.Namespaces), keys(depEntry.Namespaces))
+	}
+}
+
+func keys[K comparable, V any](m map[K]V) []K {
+	result := make([]K, 0, len(m))
+	for k := range m {
+		result = append(result, k)
+	}
+	return result
 }
 
 func TestEnsureDefaultAITenantBootstrapCreatesAITenantFromExistingTenant(t *testing.T) {

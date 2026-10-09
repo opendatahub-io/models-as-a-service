@@ -31,7 +31,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	netwv1 "k8s.io/api/networking/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
-	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -81,6 +80,7 @@ const usageLogsTenancyProxyContainerName = "proxy"
 type LifecycleReconciler struct {
 	client.Client
 	Scheme                      *runtime.Scheme
+	APIReader                   client.Reader
 	DeploymentName              string
 	DeploymentNS                string
 	TenantSubscriptionNamespace string
@@ -629,7 +629,7 @@ func (r *LifecycleReconciler) ensureUsageLogs(ctx context.Context, log logr.Logg
 		crb.SetGroupVersionKind(gvkClusterRoleBinding)
 		crb.SetName("usage-collector-application-logs-write")
 
-		if err := r.Get(ctx, client.ObjectKeyFromObject(crb), crb); err != nil {
+		if err := r.APIReader.Get(ctx, client.ObjectKeyFromObject(crb), crb); err != nil {
 			if !apierrors.IsNotFound(err) {
 				return fmt.Errorf("get orphaned ClusterRoleBinding after collector skip: %w", err)
 			}
@@ -660,7 +660,7 @@ func (r *LifecycleReconciler) deleteOwnedRenderedResources(
 		existing := &unstructured.Unstructured{}
 		existing.SetGroupVersionKind(res.GroupVersionKind())
 
-		if err := r.Get(ctx, key, existing); err != nil {
+		if err := r.APIReader.Get(ctx, key, existing); err != nil {
 			if apierrors.IsNotFound(err) || apimeta.IsNoMatchError(err) {
 				continue
 			}
@@ -1045,8 +1045,9 @@ func (r *LifecycleReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		).
 		// Re-reconcile when optional operator CRDs (e.g. Perses from COO) are installed
 		// so that resources previously skipped due to missing CRDs are applied immediately.
-		Watches(
-			&extv1.CustomResourceDefinition{},
+		// Metadata-only: avoids caching full CRD objects (50–200KB each with OpenAPI schemas).
+		WatchesMetadata(
+			crdPartialMetadata(),
 			handler.EnqueueRequestsFromMapFunc(func(_ context.Context, _ client.Object) []reconcile.Request {
 				return []reconcile.Request{{NamespacedName: types.NamespacedName{
 					Namespace: r.DeploymentNS,
