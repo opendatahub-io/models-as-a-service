@@ -10,13 +10,16 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 
+	"github.com/opendatahub-io/models-as-a-service/maas-discovery/internal/auth"
 	"github.com/opendatahub-io/models-as-a-service/maas-discovery/internal/cache"
 	"github.com/opendatahub-io/models-as-a-service/maas-discovery/internal/cert"
 	"github.com/opendatahub-io/models-as-a-service/maas-discovery/internal/handler"
@@ -46,9 +49,14 @@ func run() error {
 	kubeconfig := flag.String("kubeconfig", "", "path to kubeconfig file (out-of-cluster only)")
 	tenantNamespace := flag.String("aitenant-namespace", "ai-tenants", "namespace where AITenant CRs are created")
 	gatewayNamespace := flag.String("gateway-namespace", "openshift-ingress", "namespace of Gateway resources")
+	logLevel := flag.String("log-level", "info", "log level: debug, info, warn, error")
 	flag.Parse()
 
-	log := slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	level, err := parseLogLevel(*logLevel)
+	if err != nil {
+		return err
+	}
+	log := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -76,7 +84,7 @@ func run() error {
 		return fmt.Errorf("creating cache: %w", err)
 	}
 
-	h := handler.New(tc)
+	h := handler.NewWithLogger(tc, log)
 
 	gin.SetMode(gin.ReleaseMode)
 	engine := gin.New()
@@ -86,7 +94,16 @@ func run() error {
 	engine.Use(gin.Recovery())
 	engine.Use(middleware.RequestID())
 	engine.Use(middleware.AccessLogger(log))
-	h.RegisterRoutes(engine)
+
+	var authMiddleware []gin.HandlerFunc
+	if restConfig != nil {
+		kubeClient, clientErr := kubernetes.NewForConfig(restConfig)
+		if clientErr != nil {
+			return fmt.Errorf("creating kubernetes client for auth: %w", clientErr)
+		}
+		authMiddleware = append(authMiddleware, auth.TokenReviewMiddleware(log, kubeClient, *tenantNamespace))
+	}
+	h.RegisterRoutes(engine, authMiddleware...)
 
 	srv := &http.Server{
 		Addr:              *addr,
@@ -129,6 +146,21 @@ func run() error {
 	}
 	log.Info("server stopped")
 	return nil
+}
+
+func parseLogLevel(raw string) (slog.Level, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "debug":
+		return slog.LevelDebug, nil
+	case "", "info":
+		return slog.LevelInfo, nil
+	case "warn", "warning":
+		return slog.LevelWarn, nil
+	case "error":
+		return slog.LevelError, nil
+	default:
+		return 0, fmt.Errorf("invalid --log-level %q: use debug, info, warn, or error", raw)
+	}
 }
 
 //nolint:ireturn // returns Stub or InformerCache depending on environment

@@ -29,7 +29,7 @@
 #   --maas-api-image <image>      Custom MaaS API container image
 #   --maas-discovery-image <image> Custom MaaS discovery service image
 #   --enable-discovery            Enable the MaaS discovery service
-#   --maas-discovery-replicas <n> Discovery service replica count (default: 2)
+#   --maas-discovery-replicas <n> Discovery service replica count (default: 1)
 #   --ai-gateway-operator-image <image> Custom ai-gateway-operator image (operator mode only)
 #   --channel <channel>           Operator channel override
 #
@@ -38,7 +38,7 @@
 #   MAAS_CONTROLLER_IMAGE     Custom MaaS controller container image
 #   MAAS_DISCOVERY_IMAGE      Custom MaaS discovery service image
 #   MAAS_DISCOVERY_ENABLED    Enable discovery service (true/false, default: false)
-#   MAAS_DISCOVERY_REPLICAS   Discovery service replica count (default: 2)
+#   MAAS_DISCOVERY_REPLICAS   Discovery service replica count (default: 1)
 #   AI_GATEWAY_OPERATOR_IMAGE Custom ai-gateway-operator image (operator mode only; patches ODH CSV
 #                             RELATED_IMAGE_ODH_AI_GATEWAY_OPERATOR_IMAGE and enables the AIGateway
 #                             DSC component)
@@ -255,7 +255,7 @@ ADVANCED OPTIONS (PR Testing):
       Sets maas-discovery-enabled=true in the maas-parameters ConfigMap
 
   --maas-discovery-replicas <n>
-      Number of discovery service replicas (default: 2)
+      Number of discovery service replicas (default: 1)
 
   --ai-gateway-operator-image <image>
       Custom ai-gateway-operator image (PR/stable testing, operator mode only)
@@ -276,7 +276,7 @@ ENVIRONMENT VARIABLES:
   MAAS_CONTROLLER_IMAGE     Custom MaaS controller container image
   MAAS_DISCOVERY_IMAGE      Custom MaaS discovery service image
   MAAS_DISCOVERY_ENABLED    Enable discovery service (true/false, default: false)
-  MAAS_DISCOVERY_REPLICAS   Discovery service replica count (default: 2)
+  MAAS_DISCOVERY_REPLICAS   Discovery service replica count (default: 1)
   AI_GATEWAY_OPERATOR_IMAGE Custom ai-gateway-operator image (operator mode only)
   OPERATOR_CATALOG          Custom operator catalog
   OPERATOR_IMAGE            Custom operator image
@@ -829,6 +829,7 @@ EOF
     if [[ -n "${MAAS_DISCOVERY_REPLICAS:-}" ]]; then
       [[ "$first" == "false" ]] && patch_json+=","
       patch_json+="\"maas-discovery-replicas\":\"${MAAS_DISCOVERY_REPLICAS}\""
+      first=false
     fi
     patch_json+="}}"
     local patch_attempt

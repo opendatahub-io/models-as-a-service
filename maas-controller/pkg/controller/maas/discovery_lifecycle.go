@@ -36,10 +36,11 @@ import (
 )
 
 const (
-	discoveryDeploymentName = "maas-discovery"
-	discoveryContainerName  = "maas-discovery"
-	discoveryAITenantRBAC   = "maas-discovery-aitenants"
-	discoveryGatewayRBAC    = "maas-discovery-gateway"
+	discoveryDeploymentName    = "maas-discovery"
+	discoveryContainerName     = "maas-discovery"
+	discoveryAITenantRBAC      = "maas-discovery-aitenants"
+	discoveryGatewayRBAC       = "maas-discovery-gateway"
+	discoveryNetworkPolicyName = "maas-discovery-ingress-from-gateway"
 )
 
 func (r *LifecycleReconciler) ensureDiscoveryService(ctx context.Context, log logr.Logger) error {
@@ -64,6 +65,7 @@ func (r *LifecycleReconciler) ensureDiscoveryService(ctx context.Context, log lo
 	if !r.DiscoveryEnabled {
 		resources := buildDiscoveryStaticResources(discoveryNS)
 		resources = append(resources, buildDiscoveryCrossNamespaceRBAC(discoveryNS, r.AITenantNamespace, r.GatewayNamespace)...)
+		resources = append(resources, buildDiscoveryIngressNetworkPolicy(discoveryNS, r.GatewayName, r.GatewayNamespace))
 		return r.teardownDiscoveryResources(ctx, log, &cfg, resources)
 	}
 
@@ -75,13 +77,15 @@ func (r *LifecycleReconciler) ensureDiscoveryService(ctx context.Context, log lo
 	crossNS := buildDiscoveryCrossNamespaceRBAC(discoveryNS, r.AITenantNamespace, r.GatewayNamespace)
 	resources = append(resources, crossNS...)
 
+	np := buildDiscoveryIngressNetworkPolicy(discoveryNS, r.GatewayName, r.GatewayNamespace)
+	resources = append(resources, np)
 	for i := range resources {
 		res := &resources[i]
 
 		if err := patchDiscoveryImage(res, r.DiscoveryImage); err != nil {
 			return fmt.Errorf("patch discovery image: %w", err)
 		}
-		if err := patchDiscoveryArgs(res, r.AITenantNamespace, r.GatewayNamespace); err != nil {
+		if err := patchDiscoveryArgs(res, r.AITenantNamespace, r.GatewayNamespace, r.DiscoveryLogLevel); err != nil {
 			return fmt.Errorf("patch discovery args: %w", err)
 		}
 		patchDiscoveryReplicas(res, r.DiscoveryReplicas)
@@ -160,7 +164,7 @@ func patchDiscoveryImage(res *unstructured.Unstructured, image string) error {
 	return errors.New("maas-discovery container not found in deployment")
 }
 
-func patchDiscoveryArgs(res *unstructured.Unstructured, aitenantNS, gatewayNS string) error {
+func patchDiscoveryArgs(res *unstructured.Unstructured, aitenantNS, gatewayNS, logLevel string) error {
 	if res.GetKind() != "Deployment" || res.GetName() != discoveryDeploymentName {
 		return nil
 	}
@@ -178,26 +182,19 @@ func patchDiscoveryArgs(res *unstructured.Unstructured, aitenantNS, gatewayNS st
 		if !ok || cm["name"] != discoveryContainerName {
 			continue
 		}
-		rawArgs, ok := cm["args"]
-		if !ok {
-			return nil
-		}
-		args, ok := rawArgs.([]any)
-		if !ok {
-			return nil
+		var args []any
+		if rawArgs, ok := cm["args"]; ok {
+			a, ok := rawArgs.([]any)
+			if !ok {
+				return errors.New("maas-discovery container args has unexpected type")
+			}
+			args = a
 		}
 
-		for j, arg := range args {
-			s, ok := arg.(string)
-			if !ok {
-				continue
-			}
-			if len(s) > len("--aitenant-namespace=") && s[:len("--aitenant-namespace=")] == "--aitenant-namespace=" {
-				args[j] = "--aitenant-namespace=" + aitenantNS
-			}
-			if len(s) > len("--gateway-namespace=") && s[:len("--gateway-namespace=")] == "--gateway-namespace=" {
-				args[j] = "--gateway-namespace=" + gatewayNS
-			}
+		args = setOrAppendArg(args, "--aitenant-namespace=", aitenantNS)
+		args = setOrAppendArg(args, "--gateway-namespace=", gatewayNS)
+		if logLevel != "" {
+			args = setOrAppendArg(args, "--log-level=", logLevel)
 		}
 
 		cm["args"] = args
@@ -206,6 +203,22 @@ func patchDiscoveryArgs(res *unstructured.Unstructured, aitenantNS, gatewayNS st
 	}
 
 	return nil
+}
+
+func setOrAppendArg(args []any, prefix, value string) []any {
+	want := prefix + value
+	for j, arg := range args {
+		s, ok := arg.(string)
+		if !ok {
+			continue
+		}
+		if len(s) > len(prefix) && s[:len(prefix)] == prefix {
+			args[j] = want
+			return args
+		}
+	}
+
+	return append(args, want)
 }
 
 func patchDiscoveryReplicas(res *unstructured.Unstructured, replicas *int32) {
@@ -220,6 +233,7 @@ func buildDiscoveryStaticResources(discoveryNS string) []unstructured.Unstructur
 		newDiscoveryResource("apps/v1", "Deployment", discoveryNS, discoveryDeploymentName),
 		newDiscoveryResource("v1", "Service", discoveryNS, discoveryDeploymentName),
 		newDiscoveryResource("v1", "ServiceAccount", discoveryNS, discoveryDeploymentName),
+		newDiscoveryResource("networking.k8s.io/v1", "NetworkPolicy", discoveryNS, discoveryNetworkPolicyName),
 		newDiscoveryResource("rbac.authorization.k8s.io/v1", "ClusterRole", "", discoveryDeploymentName),
 		newDiscoveryResource("rbac.authorization.k8s.io/v1", "ClusterRoleBinding", "", discoveryDeploymentName),
 	}
@@ -286,6 +300,11 @@ func buildDiscoveryCrossNamespaceRBAC(controllerNS, aitenantNS, gatewayNS string
 				Resources: []string{"gateways"},
 				Verbs:     []string{"get", "list", "watch"},
 			},
+			{
+				APIGroups: []string{"route.openshift.io"},
+				Resources: []string{"routes"},
+				Verbs:     []string{"get", "list", "watch"},
+			},
 		},
 	})
 
@@ -304,6 +323,49 @@ func buildDiscoveryCrossNamespaceRBAC(controllerNS, aitenantNS, gatewayNS string
 	})
 
 	return []unstructured.Unstructured{aiTenantRole, aiTenantBinding, gatewayRole, gatewayBinding}
+}
+
+func buildDiscoveryIngressNetworkPolicy(discoveryNS, gatewayName, gatewayNS string) unstructured.Unstructured {
+	return unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "networking.k8s.io/v1",
+		"kind":       "NetworkPolicy",
+		"metadata": map[string]any{
+			"name":      discoveryNetworkPolicyName,
+			"namespace": discoveryNS,
+		},
+		"spec": map[string]any{
+			"podSelector": map[string]any{
+				"matchLabels": map[string]any{
+					"app.kubernetes.io/name": discoveryDeploymentName,
+				},
+			},
+			"policyTypes": []any{"Ingress"},
+			"ingress": []any{
+				map[string]any{
+					"from": []any{
+						map[string]any{
+							"namespaceSelector": map[string]any{
+								"matchLabels": map[string]any{
+									"kubernetes.io/metadata.name": gatewayNS,
+								},
+							},
+							"podSelector": map[string]any{
+								"matchLabels": map[string]any{
+									"gateway.networking.k8s.io/gateway-name": gatewayName,
+								},
+							},
+						},
+					},
+					"ports": []any{
+						map[string]any{
+							"protocol": "TCP",
+							"port":     int64(8443),
+						},
+					},
+				},
+			},
+		},
+	}}
 }
 
 func toUnstructured(obj any) unstructured.Unstructured {
