@@ -15,6 +15,7 @@ markers = [
     "tenant_auto_resolve: MaaSModelRef tenant auto-resolution",
     "legacy_ipp: legacy maas-controller IPP dataplane; excluded from default e2e passes (run with -m legacy_ipp)",
     "external: external OIDC and ExternalModel integrations",
+    "nightly: extended E2E (external OIDC, slow paths); excluded from PR /group-test; run on scheduled nightly only",
 ]
 addopts = "--strict-markers"
 

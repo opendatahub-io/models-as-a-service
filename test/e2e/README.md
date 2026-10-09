@@ -92,6 +92,24 @@ The S24/S4 suites are in the smoke list but intentionally skip until their backi
 
 External OIDC runs require `EXTERNAL_OIDC=true` and `OIDC_ISSUER_URL`, `OIDC_TOKEN_URL`, `OIDC_CLIENT_ID`, `OIDC_USERNAME`, `OIDC_PASSWORD` per your deploy/test setup.
 
+## Nightly tier (`@pytest.mark.nightly`)
+
+Tests marked `nightly` (for example `test_external_oidc.py` and per-tenant OIDC discovery) are **always excluded from passes 1–2**. They run only in **pass 3** (`-m nightly`) when `MAAS_PYTEST_INCLUDE_NIGHTLY=true` (set automatically when `EXTERNAL_OIDC=true` in prow, or explicitly on the ODH MaaS nightly in shepard). PR `/group-test` does not set that flag, so nightly tests are skipped there.
+
+Local opt-in via the runner:
+
+```bash
+MAAS_PYTEST_INCLUDE_NIGHTLY=true EXTERNAL_OIDC=true \
+  ./test/e2e/scripts/run_e2e_tests.sh
+```
+
+Or target nightly tests directly:
+
+```bash
+EXTERNAL_OIDC=true OIDC_ISSUER_URL=... OIDC_TOKEN_URL=... \
+  pytest tests/ -m nightly -v
+```
+
 ## Parallel execution (pytest-xdist)
 
 By default, `run_e2e_tests.sh` runs tests in **two marker-filtered passes** (default: 7 xdist workers on pass 1). `--serial-only` runs pass 2 (`-m "serial and not legacy_ipp"`) only and skips non-serial tests:
