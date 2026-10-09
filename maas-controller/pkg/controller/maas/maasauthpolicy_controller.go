@@ -1122,13 +1122,13 @@ allow {
 						"metrics":  false,
 						"priority": int64(0),
 					},
-					// Clear client-supplied llm-d flow-control headers, canonical and legacy, so
-					// clients cannot pick an InferenceObjective or fairness ID. Keys are lowercase
-					// so they replace every client copy.
-					"x-llm-d-inference-objective":     clearedRequestHeader(),
-					"x-gateway-inference-objective":   clearedRequestHeader(),
-					"x-llm-d-inference-fairness-id":   clearedRequestHeader(),
-					"x-gateway-inference-fairness-id": clearedRequestHeader(),
+					// llm-d flow-control headers, canonical and legacy, from the subscription selected
+					// by maas-api. They are always set, empty when unknown, so client-supplied values
+					// never reach the scheduler. Keys are lowercase so they replace every client copy.
+					"x-llm-d-inference-objective":     subscriptionInfoHeader("objective"),
+					"x-gateway-inference-objective":   subscriptionInfoHeader("objective"),
+					"x-llm-d-inference-fairness-id":   subscriptionInfoHeader("fairnessId"),
+					"x-gateway-inference-fairness-id": subscriptionInfoHeader("fairnessId"),
 				},
 				"filters": map[string]any{
 					"identity": map[string]any{
@@ -1247,14 +1247,21 @@ allow {
 	}
 }
 
-// clearedRequestHeader is a success response header that sets the request header to an
-// empty value, replacing any client-supplied value.
-func clearedRequestHeader() map[string]any {
+// subscriptionInfoHeader is a success response header set from a subscription-info field, or
+// to an empty value when the field is absent. The expression never fails: subscription-info is
+// not fetched for every request, and a failing header drops the others in its priority group.
+func subscriptionInfoHeader(field string) map[string]any {
 	return map[string]any{
-		"plain":    map[string]any{"value": ""},
+		"plain":    map[string]any{"expression": subscriptionInfoFieldExpr(field)},
 		"metrics":  false,
 		"priority": int64(0),
 	}
+}
+
+// subscriptionInfoFieldExpr is a CEL expression for a subscription-info field, or "" when absent.
+func subscriptionInfoFieldExpr(field string) string {
+	return fmt.Sprintf(`has(auth.metadata) && "subscription-info" in auth.metadata && `+
+		`has(auth.metadata["subscription-info"].%[1]s) ? auth.metadata["subscription-info"].%[1]s : ""`, field)
 }
 
 func (r *MaaSAuthPolicyReconciler) gatewayAuthPolicyName(gatewayNamespace, gatewayName string) string {

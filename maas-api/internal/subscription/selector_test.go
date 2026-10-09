@@ -1500,3 +1500,90 @@ func TestSelector_ResolvedModelFromAlias(t *testing.T) {
 		})
 	}
 }
+
+// createSubscriptionWithFlowControl returns a subscription for models ns1/model-a and
+// ns1/model-b with the given status.flowControlStatuses.
+func createSubscriptionWithFlowControl(t *testing.T, statuses ...map[string]any) *unstructured.Unstructured {
+	t.Helper()
+	sub := createSubscriptionWithModelRefs("sub1", []string{"g1"}, []map[string]any{
+		{"name": "model-a", "namespace": "ns1"},
+		{"name": "model-b", "namespace": "ns1"},
+	})
+	rows := make([]any, len(statuses))
+	for i, s := range statuses {
+		rows[i] = s
+	}
+	if err := unstructured.SetNestedSlice(sub.Object, rows, "status", "flowControlStatuses"); err != nil {
+		t.Fatalf("SetNestedSlice: %v", err)
+	}
+	return sub
+}
+
+func flowControlRow(model, objective, reason string) map[string]any {
+	return map[string]any{"name": model, "namespace": "ns1", "objectiveName": objective, "reason": reason, "ready": true}
+}
+
+func TestSelect_FlowControlObjectiveAndFairnessID(t *testing.T) {
+	log := logger.New(false)
+	sub := createSubscriptionWithFlowControl(t,
+		flowControlRow("model-a", "maas-tenant-sub1-pool-a-0123456789", "ObjectiveReconciled"),
+		flowControlRow("model-b", "maas-tenant-sub1-pool-b-0123456789", "ObjectiveConflict"),
+	)
+	aliased := createMaaSModelRef("model-a", "ns1", "LLMInferenceService")
+	if err := unstructured.SetNestedField(aliased.Object, "publishers/ns1/models/a", "status", "resolvedModelAlias"); err != nil {
+		t.Fatalf("SetNestedField: %v", err)
+	}
+	selector := subscription.NewSelector(log, &fakeLister{subscriptions: []*unstructured.Unstructured{sub}},
+		&fakeModelLister{items: []*unstructured.Unstructured{aliased}}, nil, subscription.WithTenantName("acme"))
+
+	tests := []struct {
+		name          string
+		model         string
+		wantObjective string
+	}{
+		{name: "namespace/name", model: "ns1/model-a", wantObjective: "maas-tenant-sub1-pool-a-0123456789"},
+		{name: "bare name", model: "model-a", wantObjective: "maas-tenant-sub1-pool-a-0123456789"},
+		{name: "body-routed alias", model: "publishers/ns1/models/a", wantObjective: "maas-tenant-sub1-pool-a-0123456789"},
+		{name: "objective held by a foreign object is not returned", model: "ns1/model-b"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			//nolint:unqueryvet,nolintlint // False positive - not a SQL query
+			resp, err := selector.Select([]string{"g1"}, "", "", tc.model)
+			if err != nil {
+				t.Fatalf("Select: %v", err)
+			}
+			if resp.Objective != tc.wantObjective {
+				t.Errorf("Objective = %q, want %q", resp.Objective, tc.wantObjective)
+			}
+			if resp.FairnessID != "acme" {
+				t.Errorf("FairnessID = %q, want acme", resp.FairnessID)
+			}
+		})
+	}
+}
+
+func TestSelect_FlowControlObjectiveMissing(t *testing.T) {
+	log := logger.New(false)
+	tests := []struct {
+		name string
+		sub  *unstructured.Unstructured
+	}{
+		{name: "no flowControlStatuses", sub: createSubscriptionWithFlowControl(t)},
+		{name: "no row for the model", sub: createSubscriptionWithFlowControl(t, flowControlRow("model-b", "maas-b", "PriorityUnset"))},
+		{name: "row without an objective name", sub: createSubscriptionWithFlowControl(t, flowControlRow("model-a", "", "NotApplicable"))},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			selector := subscription.NewSelector(log, &fakeLister{subscriptions: []*unstructured.Unstructured{tc.sub}}, nil, nil)
+			//nolint:unqueryvet,nolintlint // False positive - not a SQL query
+			resp, err := selector.Select([]string{"g1"}, "", "", "ns1/model-a")
+			if err != nil {
+				t.Fatalf("Select: %v", err)
+			}
+			if resp.Objective != "" || resp.FairnessID != "" {
+				t.Errorf("Objective = %q, FairnessID = %q; want both empty", resp.Objective, resp.FairnessID)
+			}
+		})
+	}
+}

@@ -1603,14 +1603,16 @@ func TestMaaSAuthPolicyReconciler_IdentityHeadersUpstream(t *testing.T) {
 		}
 	})
 
-	t.Run("client flow-control headers cleared", func(t *testing.T) {
+	t.Run("flow-control headers set from subscription-info", func(t *testing.T) {
 		headers, _, err := unstructured.NestedMap(gwPolicy.Object, "spec", "defaults", "rules", "response", "success", "headers")
 		if err != nil {
 			t.Fatalf("Error checking headers: %v", err)
 		}
-		for _, header := range []string{
-			"x-llm-d-inference-objective", "x-gateway-inference-objective",
-			"x-llm-d-inference-fairness-id", "x-gateway-inference-fairness-id",
+		for header, field := range map[string]string{
+			"x-llm-d-inference-objective":     "objective",
+			"x-gateway-inference-objective":   "objective",
+			"x-llm-d-inference-fairness-id":   "fairnessId",
+			"x-gateway-inference-fairness-id": "fairnessId",
 		} {
 			cfg, ok := headers[header].(map[string]any)
 			if !ok {
@@ -1623,8 +1625,8 @@ func TestMaaSAuthPolicyReconciler_IdentityHeadersUpstream(t *testing.T) {
 			if _, hasWhen := cfg["when"]; hasWhen {
 				t.Errorf("header %q must apply to every authorized request, got when %v", header, cfg["when"])
 			}
-			if value, found, _ := unstructured.NestedFieldNoCopy(cfg, "plain", "value"); !found || value != "" {
-				t.Errorf("header %q plain.value = %v (found %t), want empty string", header, value, found)
+			if expr, _, _ := unstructured.NestedString(cfg, "plain", "expression"); expr != subscriptionInfoFieldExpr(field) {
+				t.Errorf("header %q plain.expression = %q, want the subscription-info %s expression", header, expr, field)
 			}
 		}
 	})
