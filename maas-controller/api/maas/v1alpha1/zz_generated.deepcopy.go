@@ -6,6 +6,7 @@ package v1alpha1
 
 import (
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	apisv1 "sigs.k8s.io/gateway-api/apis/v1"
@@ -277,6 +278,20 @@ func (in *ConfigSpec) DeepCopyInto(out *ConfigSpec) {
 		in, out := &in.UsageLogging, &out.UsageLogging
 		*out = new(bool)
 		**out = **in
+	}
+	if in.NetworkPolicyEgressRules != nil {
+		in, out := &in.NetworkPolicyEgressRules, &out.NetworkPolicyEgressRules
+		*out = make([]networkingv1.NetworkPolicyEgressRule, len(*in))
+		for i := range *in {
+			(*in)[i].DeepCopyInto(&(*out)[i])
+		}
+	}
+	if in.NetworkPolicyAdditionalEgressRules != nil {
+		in, out := &in.NetworkPolicyAdditionalEgressRules, &out.NetworkPolicyAdditionalEgressRules
+		*out = make([]networkingv1.NetworkPolicyEgressRule, len(*in))
+		for i := range *in {
+			(*in)[i].DeepCopyInto(&(*out)[i])
+		}
 	}
 	if in.UsageMetricsDashboard != nil {
 		in, out := &in.UsageMetricsDashboard, &out.UsageMetricsDashboard

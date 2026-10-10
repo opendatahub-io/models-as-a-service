@@ -30,6 +30,14 @@ func PostRender(ctx context.Context, log logr.Logger, tenant client.Object, reso
 			continue
 		}
 
+		if params.MaaSAPIEgressNetworkPolicyDisabled &&
+			resource.GroupVersionKind() == GVKNetworkPolicy &&
+			resource.GetName() == baseMaaSAPIEgressRestrictNetworkPolicyName {
+			log.V(1).Info("Skipping maas-api egress NetworkPolicy; maasApiEgressNetworkPolicy is Disabled",
+				"name", resource.GetName(), "namespace", resource.GetNamespace())
+			continue
+		}
+
 		annotations := resource.GetAnnotations()
 		if annotations != nil && annotations[AnnotationManaged] == "false" {
 			log.V(2).Info("Skipping resource due to opendatahub.io/managed=false annotation",

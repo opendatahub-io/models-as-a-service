@@ -31,6 +31,7 @@ For dependency version requirements (OCP, Kuadrant/RHCL, Gateway API), see [Vers
 
 See [Upgrade to 3.6](../migration/upgrade-to-3.6.md) for full guidance. Summary:
 
+- **`maas-api` egress default changed:** When `networkPolicyEgressRules` is empty, new installs get DNS, Kubernetes API, and allow-all (`egress: - {}`). **Upgrades preserve** an existing restrictive operand policy (no allow-all rule) until an administrator sets `networkPolicyEgressRules` or deletes the policy. To adopt allow-all after upgrade, delete `maas-api-egress-restrict` and let the controller recreate it. `networkPolicyAdditionalEgressRules` does not remove allow-all. See [PostgreSQL egress](../install/maas-setup.md#postgresql-egress).
 - **Recommended short downtime** when upgrading from 3.5 → 3.6 while AuthPolicy / TRLP / maas-api adopt short subscription rate-limit IDs (avoids a brief rate-limit fail-open window).
 - **Token rate-limit counters reset** on upgrade (limit keys become rate-grouped `tokens-*`, counters use `selected_subscription_id`). Limitador enforcement budgets start fresh for the current window.
 - **Prometheus and Loki usage history are unaffected** — telemetry still labels by subscription name (`selected_subscription` / `X-MaaS-Subscription`), not the rate-limit ID.

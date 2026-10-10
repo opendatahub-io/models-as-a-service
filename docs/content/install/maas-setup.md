@@ -382,41 +382,110 @@ MaaS operand NetworkPolicies follow [ODH-ADR-Operator-0016](https://github.com/o
 | `maas-api-allow-gateway` | `maas-api` | Ingress | Gateway pods in `openshift-ingress` → `:8443` |
 | `maas-authorino-allow` | `maas-api` | Ingress | Authorino pods in Kuadrant/RHCL namespaces → `:8443` |
 | `maas-api-allow-monitoring` | `maas-api` | Ingress | `redhat-ods-monitoring` → `:9090` |
-| `maas-api-egress-restrict` | `maas-api` | Egress | OpenShift CoreDNS; Kubernetes API; bundled Postgres (`app=postgres`) when `maas-db-config` targets in-cluster Postgres |
+| `maas-api-egress-restrict` | `maas-api` | Egress | OpenShift CoreDNS; Kubernetes API; allow-all by default (overridable or opt-out via `maasconfig/default`; see [PostgreSQL egress](#postgresql-egress)) |
 | `usage-logs-collector-egress-restrict` | usage-logs collector | Egress | CoreDNS; LokiStack gateway pods (`app.kubernetes.io/name=lokistack`, `app.kubernetes.io/instance=usage`, `app.kubernetes.io/component=lokistack-gateway`) → `:8080` (when `usageLogging=true`) |
 | `usage-tenancy-proxy-allow-perses` | tenancy proxy | Ingress | Perses pods and kubelet probes (`host-network`) → `:8443` (when `usageLogging=true`) |
 | `usage-tenancy-proxy-egress-restrict` | tenancy proxy | Egress | CoreDNS; Kubernetes API; LokiStack gateway pods (`app.kubernetes.io/name=lokistack`, `app.kubernetes.io/instance=usage`, `app.kubernetes.io/component=lokistack-gateway`) → `:8080` (when `usageLogging=true`) |
 
-### External PostgreSQL
+### PostgreSQL egress
 
-When `maas-db-config` points at an external database (for example `--postgres-connection` or RDS), `maas-api-egress-restrict` does **not** include the `app=postgres` peer. Apply a companion egress policy in the infrastructure namespace with `ipBlock` CIDRs for your database endpoint:
+`maas-api` connects using `maas-db-config` only. PostgreSQL is **customer-provided**: bundled POC Postgres from
+`scripts/setup-database.sh`, shared in-cluster instances (any namespace or labels), and external databases (for example
+RDS) are all valid. MaaS does **not** require `app=postgres` on database pods and does **not** infer database topology
+from `maas-db-config`.
+
+#### Default egress (no `maasconfig` overrides)
+
+`maas-controller` reconciles `maas-api-egress-restrict` with explicit egress per
+[ODH-ADR-Operator-0016](https://github.com/opendatahub-io/architecture-decision-records/blob/main/architecture-decision-records/operator/ODH-ADR-Operator-0016-networkpolicy-platform-contract.md#explicit-egress-behavior):
+
+1. DNS to OpenShift CoreDNS (ports `53` and `5353`)
+2. Kubernetes API (TCP `443` and `6443`, port-only rule — see below)
+3. **Allow-all** remaining egress (`egress: - {}`)
+
+This works for any database topology without extra configuration. A separate companion `NetworkPolicy` **cannot**
+narrow egress while allow-all is present (NetworkPolicies are unioned).
+
+#### Restricting egress (recommended for production)
+
+For least-privilege egress, configure `maasconfig/default` (same pattern as the
+[MLflow operator](https://github.com/opendatahub-io/mlflow-operator)). MaaS does not guess your database labels or
+namespaces — you declare the peers explicitly.
+
+**Replace the default egress block** with `spec.networkPolicyEgressRules`. You are responsible for including DNS,
+Kubernetes API, and database destinations:
 
 ```yaml
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: Config
 metadata:
-  name: maas-api-egress-external-postgres
-  labels:
-    app.opendatahub.io/modelsasservice: "true"
-    app.kubernetes.io/part-of: maas
+  name: default
 spec:
-  podSelector:
-    matchLabels:
-      app.kubernetes.io/name: maas-api
-      app.kubernetes.io/component: api
-      app.kubernetes.io/part-of: models-as-a-service
-  policyTypes:
-    - Egress
-  egress:
+  networkPolicyEgressRules:
     - to:
-        - ipBlock:
-            cidr: 10.0.0.0/16   # replace with your database subnet/CIDR
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: openshift-dns
+          podSelector:
+            matchLabels:
+              dns.operator.openshift.io/daemonset-dns: default
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+        - protocol: UDP
+          port: 5353
+        - protocol: TCP
+          port: 5353
+    - ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 6443
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: <postgres-namespace>
+          podSelector:
+            matchLabels:
+              app: <postgres-app-label>
       ports:
         - protocol: TCP
           port: 5432
 ```
 
-Per [ODH-ADR-Operator-0016](https://github.com/opendatahub-io/architecture-decision-records/blob/main/architecture-decision-records/operator/ODH-ADR-Operator-0016-networkpolicy-platform-contract.md), external destinations with stable address ranges use the narrowest applicable CIDR; DNS-named endpoints cannot be selected by standard NetworkPolicy.
+Replace `<postgres-namespace>` and `<postgres-app-label>` with your Postgres workload labels. For external databases
+with stable CIDRs, use `ipBlock` instead of `namespaceSelector`/`podSelector`.
+
+**Append rules** while keeping the default allow-all block with `spec.networkPolicyAdditionalEgressRules` (for example
+a non-standard database port). This does not remove allow-all; use `networkPolicyEgressRules` when you need a
+restrictive policy.
+
+After changing `maasconfig/default`, `maas-controller` updates `maas-api-egress-restrict` on the next reconcile (or
+delete the NetworkPolicy to force immediate recreation).
+
+#### Customer-owned egress (opt-out)
+
+When your platform team manages `maas-api` egress NetworkPolicies separately (for example namespace-level lock-down
+or bespoke database peers), set `spec.maasApiEgressNetworkPolicy: Disabled` on `maasconfig/default`. MaaS stops
+reconciling `maas-api-egress-restrict` and deletes any Config-owned instance on the next reconcile. You must not set
+`networkPolicyEgressRules` or `networkPolicyAdditionalEgressRules` when opting out.
+
+If no other egress `NetworkPolicy` selects the `maas-api` pods, Kubernetes allows all outbound
+traffic from them.
+
+```yaml
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: Config
+metadata:
+  name: default
+spec:
+  maasApiEgressNetworkPolicy: Disabled
+```
+
+Apply your own egress `NetworkPolicy`(ies) targeting the `maas-api` pods. Other MaaS operand policies (ingress,
+usage logging, and so on) continue to be reconciled by `maas-controller`.
 
 ### Kubernetes API egress (port-only rule)
 

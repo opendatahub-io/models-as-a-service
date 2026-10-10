@@ -17,6 +17,7 @@ limitations under the License.
 package v1alpha1
 
 import (
+	netwv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -30,6 +31,19 @@ const (
 	// to report the aggregate health of all AITenant CRs across the cluster.
 	// It follows the ADR ODH-ADR-MS-0003 three-state model (Healthy/Degraded/Blocked).
 	ConfigConditionTenantsHealthy = "TenantsHealthy"
+)
+
+// MaaSAPIEgressNetworkPolicyMode controls maas-controller reconciliation of
+// maas-api-egress-restrict.
+// +kubebuilder:validation:Enum=Managed;Disabled
+type MaaSAPIEgressNetworkPolicyMode string
+
+const (
+	// MaaSAPIEgressNetworkPolicyManaged applies maas-api-egress-restrict (default).
+	MaaSAPIEgressNetworkPolicyManaged MaaSAPIEgressNetworkPolicyMode = "Managed"
+	// MaaSAPIEgressNetworkPolicyDisabled stops reconciling maas-api-egress-restrict
+	// so customers can manage egress NetworkPolicies themselves.
+	MaaSAPIEgressNetworkPolicyDisabled MaaSAPIEgressNetworkPolicyMode = "Disabled"
 )
 
 // +kubebuilder:object:root=true
@@ -52,6 +66,12 @@ type Config struct {
 }
 
 // ConfigSpec defines the desired state of Config.
+// Admission CEL keeps a low-cost shape check; strict restricted-egress validation
+// (both to and ports, except the Kubernetes API port-only rule) runs at reconcile
+// time in tenantreconcile.validateRestrictedEgressRules.
+// +kubebuilder:validation:XValidation:rule="!has(self.networkPolicyEgressRules) || self.networkPolicyEgressRules.all(r, (has(r.ports) && size(r.ports) > 0) || (has(r.to) && size(r.to) > 0))",message="each networkPolicyEgressRules entry must specify at least one port or one destination"
+// +kubebuilder:validation:XValidation:rule="!has(self.networkPolicyAdditionalEgressRules) || self.networkPolicyAdditionalEgressRules.all(r, (has(r.ports) && size(r.ports) > 0) || (has(r.to) && size(r.to) > 0))",message="each networkPolicyAdditionalEgressRules entry must specify at least one port or one destination"
+// +kubebuilder:validation:XValidation:rule="!has(self.maasApiEgressNetworkPolicy) || self.maasApiEgressNetworkPolicy != 'Disabled' || ((!has(self.networkPolicyEgressRules) || size(self.networkPolicyEgressRules) == 0) && (!has(self.networkPolicyAdditionalEgressRules) || size(self.networkPolicyAdditionalEgressRules) == 0))",message="networkPolicyEgressRules and networkPolicyAdditionalEgressRules must be unset when maasApiEgressNetworkPolicy is Disabled"
 type ConfigSpec struct {
 	// LimitadorScrapeInterval defines the scrape interval for Limitador metrics in the ServiceMonitor.
 	// Defaults to "30s" if not specified.
@@ -70,6 +90,30 @@ type ConfigSpec struct {
 	// +kubebuilder:default=false
 	// +kubebuilder:validation:Optional
 	UsageLogging *bool `json:"usageLogging,omitempty"`
+
+	// MaasAPIEgressNetworkPolicy controls whether maas-controller reconciles
+	// maas-api-egress-restrict. Managed (default) applies the operand egress policy;
+	// Disabled deletes it so customers can manage egress NetworkPolicies themselves.
+	// +optional
+	// +kubebuilder:validation:Enum=Managed;Disabled
+	// +kubebuilder:default=Managed
+	MaasAPIEgressNetworkPolicy MaaSAPIEgressNetworkPolicyMode `json:"maasApiEgressNetworkPolicy,omitempty"`
+
+	// NetworkPolicyEgressRules, when non-empty, replaces the default egress block of
+	// maas-api-egress-restrict. The caller must include DNS, Kubernetes API, database,
+	// and any other required destinations. When empty, the operator applies DNS, API
+	// ports, and allow-all egress for customer-provided dependencies.
+	// Rules from NetworkPolicyAdditionalEgressRules are appended after this list.
+	// +optional
+	// +kubebuilder:validation:MaxItems=32
+	NetworkPolicyEgressRules []netwv1.NetworkPolicyEgressRule `json:"networkPolicyEgressRules,omitempty"`
+
+	// NetworkPolicyAdditionalEgressRules specifies egress rules appended after the
+	// base egress block (either defaults or NetworkPolicyEgressRules). Use for
+	// non-standard ports or extra database peers when retaining default allow-all.
+	// +optional
+	// +kubebuilder:validation:MaxItems=32
+	NetworkPolicyAdditionalEgressRules []netwv1.NetworkPolicyEgressRule `json:"networkPolicyAdditionalEgressRules,omitempty"`
 
 	// UsageMetricsDashboard deploys the legacy Prometheus-based Perses usage dashboard
 	// (dashboard-3-maas-usage-admin). When disabled (the default), the controller

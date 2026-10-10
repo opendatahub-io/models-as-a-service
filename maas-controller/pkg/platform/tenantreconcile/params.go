@@ -5,11 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
+	netwv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -96,13 +98,19 @@ type PlatformParams struct {
 	// and the Kuadrant anchors were kept.
 	KuadrantDetectionWarning string
 
-	// BundledPostgres is true when maas-db-config points at in-cluster Postgres. When false
-	// (external database), maas-api-egress-restrict omits the app=postgres egress peer.
-	BundledPostgres bool
-	// BundledPostgresNamespace is the Kubernetes namespace of in-cluster Postgres, derived
-	// from maas-db-config (e.g. postgres.postgres.svc.cluster.local → "postgres"). Empty when
-	// BundledPostgres is false; defaults to AppNamespace for short hostnames like "postgres".
-	BundledPostgresNamespace string
+	// MaaSAPIEgressRules replaces the default maas-api egress block when non-empty.
+	MaaSAPIEgressRules []netwv1.NetworkPolicyEgressRule
+	// MaaSAPIAdditionalEgressRules are appended after the base egress block.
+	MaaSAPIAdditionalEgressRules []netwv1.NetworkPolicyEgressRule
+	// MaaSAPIEgressNetworkPolicyDisabled omits maas-api-egress-restrict from the
+	// rendered set and deletes any Config-owned instance on reconcile.
+	MaaSAPIEgressNetworkPolicyDisabled bool
+	// MaaSAPIPreserveEgressOnUpgrade keeps the live restrictive egress block when
+	// networkPolicyEgressRules is unset and the operand policy has no allow-all rule.
+	MaaSAPIPreserveEgressOnUpgrade bool
+	// MaaSAPIPreservedEgressRules is the live egress slice (allow-all stripped) used
+	// when MaaSAPIPreserveEgressOnUpgrade is true.
+	MaaSAPIPreservedEgressRules []any
 }
 
 // BuildPlatformParams resolves all runtime parameters from the tenant config object,
@@ -601,11 +609,9 @@ func patchDeploymentNSNetworkPolicy(r *unstructured.Unstructured, controllerName
 	return unstructured.SetNestedSlice(r.Object, ingress, "spec", "ingress")
 }
 
-// patchMaaSAPIEgressRestrictNetworkPolicy adds bundled-postgres egress peers when
-// maas-db-config targets in-cluster Postgres. External databases are omitted so
-// administrators can apply a companion egress policy with ipBlock CIDRs. When infra
-// and controller namespaces differ (upgrade path), postgres in the controller namespace
-// is also allowed.
+// patchMaaSAPIEgressRestrictNetworkPolicy applies maasconfig egress overrides to
+// maas-api-egress-restrict. Default: DNS + API + allow-all. networkPolicyEgressRules
+// on Config replaces the default block; networkPolicyAdditionalEgressRules appends.
 func patchMaaSAPIEgressRestrictNetworkPolicy(r *unstructured.Unstructured, params PlatformParams) error {
 	egress, found, err := unstructured.NestedSlice(r.Object, "spec", "egress")
 	if err != nil {
@@ -615,22 +621,99 @@ func patchMaaSAPIEgressRestrictNetworkPolicy(r *unstructured.Unstructured, param
 		return errors.New("maas-api egress NP missing egress rules")
 	}
 
-	egress = removePostgresEgressRules(egress)
-	if params.BundledPostgres {
-		egress = append(egress, bundledPostgresEgressRule(params))
+	restrictiveBase := len(params.MaaSAPIEgressRules) > 0
+
+	switch {
+	case restrictiveBase:
+		if err := validateRestrictedEgressRules(params.MaaSAPIEgressRules); err != nil {
+			return fmt.Errorf("validate custom maas-api egress rules: %w", err)
+		}
+		egress, err = networkPolicyEgressRulesToUnstructured(params.MaaSAPIEgressRules)
+		if err != nil {
+			return fmt.Errorf("convert custom maas-api egress rules: %w", err)
+		}
+	case params.MaaSAPIPreserveEgressOnUpgrade:
+		egress = params.MaaSAPIPreservedEgressRules
+	default:
+		egress = removeAllowAllEgressRules(egress)
+		egress = append(egress, map[string]any{})
 	}
+
+	if len(params.MaaSAPIAdditionalEgressRules) > 0 {
+		if restrictiveBase || params.MaaSAPIPreserveEgressOnUpgrade {
+			if err := validateRestrictedEgressRules(params.MaaSAPIAdditionalEgressRules); err != nil {
+				return fmt.Errorf("validate additional maas-api egress rules: %w", err)
+			}
+		}
+		additional, err := networkPolicyEgressRulesToUnstructured(params.MaaSAPIAdditionalEgressRules)
+		if err != nil {
+			return fmt.Errorf("convert additional maas-api egress rules: %w", err)
+		}
+		egress = append(egress, additional...)
+	}
+
 	return unstructured.SetNestedSlice(r.Object, egress, "spec", "egress")
 }
 
-func removePostgresEgressRules(egress []any) []any {
-	filtered := make([]any, 0, len(egress))
-	for _, ruleRaw := range egress {
-		rule, ok := ruleRaw.(map[string]any)
-		if !ok {
-			filtered = append(filtered, ruleRaw)
+func networkPolicyDeclaresEgress(np *unstructured.Unstructured) bool {
+	policyTypes, found, err := unstructured.NestedStringSlice(np.Object, "spec", "policyTypes")
+	if err != nil || !found {
+		return false
+	}
+	return slices.Contains(policyTypes, "Egress")
+}
+
+func renderedMaaSAPIEgressBaseline(rendered []unstructured.Unstructured) ([]any, error) {
+	for i := range rendered {
+		if rendered[i].GroupVersionKind() != GVKNetworkPolicy || rendered[i].GetName() != baseMaaSAPIEgressRestrictNetworkPolicyName {
 			continue
 		}
-		if networkPolicyRuleHasPort(rule, 5432) {
+		egress, found, err := unstructured.NestedSlice(rendered[i].Object, "spec", "egress")
+		if err != nil {
+			return nil, err
+		}
+		if !found {
+			return []any{}, nil
+		}
+		return removeAllowAllEgressRules(egress), nil
+	}
+	return []any{}, nil
+}
+
+// composePreservedMaaSAPIEgressRules builds a stable pre-configuration baseline from
+// the live operand policy. Rules matching networkPolicyAdditionalEgressRules are
+// excluded here and re-applied during patch to avoid duplicates on reconcile.
+func composePreservedMaaSAPIEgressRules(liveEgress []any, baseline []any, additional []netwv1.NetworkPolicyEgressRule) []any {
+	additionalUnstructured, err := networkPolicyEgressRulesToUnstructured(additional)
+	if err != nil {
+		return liveEgress
+	}
+
+	liveWithoutAdditional := removeMatchingEgressRules(liveEgress, additionalUnstructured)
+	preserved := make([]any, 0, len(baseline)+len(liveWithoutAdditional))
+	for _, rule := range baseline {
+		if !egressRuleInList(rule, preserved) {
+			preserved = append(preserved, rule)
+		}
+	}
+	for _, rule := range liveWithoutAdditional {
+		if egressRuleInList(rule, baseline) || egressRuleInList(rule, additionalUnstructured) {
+			continue
+		}
+		if !egressRuleInList(rule, preserved) {
+			preserved = append(preserved, rule)
+		}
+	}
+	return preserved
+}
+
+func removeMatchingEgressRules(egress []any, rulesToRemove []any) []any {
+	if len(rulesToRemove) == 0 {
+		return egress
+	}
+	filtered := make([]any, 0, len(egress))
+	for _, ruleRaw := range egress {
+		if egressRuleInList(ruleRaw, rulesToRemove) {
 			continue
 		}
 		filtered = append(filtered, ruleRaw)
@@ -638,75 +721,112 @@ func removePostgresEgressRules(egress []any) []any {
 	return filtered
 }
 
-func bundledPostgresEgressRule(params PlatformParams) map[string]any {
-	// Same-namespace peer covers short hostname "postgres" and co-located DBs.
-	to := []any{
-		map[string]any{
-			"podSelector": map[string]any{
-				"matchLabels": map[string]any{
-					"app": "postgres",
-				},
-			},
-		},
-	}
-	addNamespacedPeer := func(ns string) {
-		if ns == "" || ns == params.AppNamespace {
-			return
-		}
-		to = append(to, map[string]any{
-			"namespaceSelector": map[string]any{
-				"matchLabels": map[string]any{
-					"kubernetes.io/metadata.name": ns,
-				},
-			},
-			"podSelector": map[string]any{
-				"matchLabels": map[string]any{
-					"app": "postgres",
-				},
-			},
-		})
-	}
-	// DSN-derived namespace (e.g. postgres.postgres.svc.cluster.local).
-	addNamespacedPeer(params.BundledPostgresNamespace)
-	// Upgrade path: also allow postgres in the controller namespace when separated.
-	addNamespacedPeer(params.ControllerNamespace)
-	return map[string]any{
-		"to": to,
-		"ports": []any{
-			map[string]any{
-				"protocol": "TCP",
-				"port":     int64(5432),
-			},
-		},
-	}
-}
-
-func networkPolicyRuleHasPort(rule map[string]any, port int64) bool {
-	ports, ok := rule["ports"].([]any)
-	if !ok {
-		return false
-	}
-	for _, portRaw := range ports {
-		portObj, ok := portRaw.(map[string]any)
-		if !ok {
-			continue
-		}
-		switch v := portObj["port"].(type) {
-		case int64:
-			if v == port {
-				return true
-			}
-		case int:
-			if int64(v) == port {
-				return true
-			}
-		case float64:
-			if int64(v) == port {
-				return true
-			}
+func egressRuleInList(rule any, rules []any) bool {
+	for _, candidate := range rules {
+		if egressRulesEqual(rule, candidate) {
+			return true
 		}
 	}
 	return false
+}
+
+func egressRulesEqual(a, b any) bool {
+	aJSON, err := json.Marshal(a)
+	if err != nil {
+		return false
+	}
+	bJSON, err := json.Marshal(b)
+	if err != nil {
+		return false
+	}
+	return string(aJSON) == string(bJSON)
+}
+
+func hasAllowAllEgressRule(egress []any) bool {
+	for _, ruleRaw := range egress {
+		rule, ok := ruleRaw.(map[string]any)
+		if ok && len(rule) == 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func removeAllowAllEgressRules(egress []any) []any {
+	filtered := make([]any, 0, len(egress))
+	for _, ruleRaw := range egress {
+		rule, ok := ruleRaw.(map[string]any)
+		if !ok {
+			filtered = append(filtered, ruleRaw)
+			continue
+		}
+		if len(rule) == 0 {
+			continue
+		}
+		filtered = append(filtered, ruleRaw)
+	}
+	return filtered
+}
+
+// validateRestrictedEgressRules enforces ODH-ADR-Operator-0016 restricted egress:
+// each rule must specify both destinations and ports, except the documented
+// Kubernetes API port-only rule (TCP 443 and 6443 with no to peers).
+func validateRestrictedEgressRules(rules []netwv1.NetworkPolicyEgressRule) error {
+	for i, rule := range rules {
+		if isKubernetesAPIPortOnlyEgressRule(rule) {
+			continue
+		}
+		if len(rule.To) == 0 {
+			return fmt.Errorf("egress rule %d: restricted rules require at least one destination (to)", i)
+		}
+		if len(rule.Ports) == 0 {
+			return fmt.Errorf("egress rule %d: restricted rules require at least one port", i)
+		}
+	}
+	return nil
+}
+
+func isKubernetesAPIPortOnlyEgressRule(rule netwv1.NetworkPolicyEgressRule) bool {
+	if len(rule.To) > 0 {
+		return false
+	}
+	if len(rule.Ports) != 2 {
+		return false
+	}
+	has443, has6443 := false, false
+	for _, p := range rule.Ports {
+		if p.Protocol == nil || *p.Protocol != corev1.ProtocolTCP {
+			return false
+		}
+		if p.Port == nil {
+			return false
+		}
+		switch p.Port.IntValue() {
+		case 443:
+			has443 = true
+		case 6443:
+			has6443 = true
+		default:
+			return false
+		}
+	}
+	return has443 && has6443
+}
+
+func networkPolicyEgressRulesToUnstructured(rules []netwv1.NetworkPolicyEgressRule) ([]any, error) {
+	out := make([]any, 0, len(rules))
+	for _, rule := range rules {
+		data, err := json.Marshal(rule)
+		if err != nil {
+			return nil, err
+		}
+		var converted map[string]any
+		if err := json.Unmarshal(data, &converted); err != nil {
+			return nil, err
+		}
+		out = append(out, converted)
+	}
+	return out, nil
 }
 
 // patchMaaSAPIServingCert remaps the Certificate's secretName and dnsNames to use
