@@ -115,6 +115,8 @@ spec:
               - replace_pattern(attributes["subscription"], "\"", "")
               - replace_pattern(attributes["key_name"], "\"", "")
               - replace_pattern(attributes["groups"], "\"", "")
+              - replace_pattern(attributes["organization_id"], "\"", "")
+              - replace_pattern(attributes["cost_center"], "\"", "")
       groupbyattrs:
         keys:
         - subscription

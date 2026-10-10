@@ -103,6 +103,12 @@ func appendUsageLogsResourceAttribute(accessLogEntry map[string]any, key, value 
 	return nil
 }
 
+type usageLogsIdentityCapture struct {
+	header        string
+	metadataKey   string
+	requestHeader string
+}
+
 // PatchUsageLogsUserID injects user_id capture into an EnvoyFilter loaded from the
 // base manifest (which omits user_id by default). It:
 //  1. Prepends the X-MaaS-Username → user_id rule to every header_to_metadata
@@ -110,6 +116,24 @@ func appendUsageLogsResourceAttribute(accessLogEntry map[string]any, key, value 
 //  2. Prepends a user_id attribute to the NETWORK_FILTER OTel access log
 //     attributes list.
 func PatchUsageLogsUserID(ef *unstructured.Unstructured) error {
+	return patchUsageLogsIdentityCapture(ef, usageLogsIdentityCapture{
+		header:        "X-MaaS-Username",
+		metadataKey:   "user_id",
+		requestHeader: "x-maas-username",
+	})
+}
+
+// PatchUsageLogsOrganizationID injects organization_id capture into an EnvoyFilter
+// loaded from the base manifest (which omits organization_id by default).
+func PatchUsageLogsOrganizationID(ef *unstructured.Unstructured) error {
+	return patchUsageLogsIdentityCapture(ef, usageLogsIdentityCapture{
+		header:        "X-MaaS-Organization-Id",
+		metadataKey:   "organization_id",
+		requestHeader: "x-maas-organization-id",
+	})
+}
+
+func patchUsageLogsIdentityCapture(ef *unstructured.Unstructured, capture usageLogsIdentityCapture) error {
 	configPatches, found, err := unstructured.NestedSlice(ef.Object, "spec", "configPatches")
 	if err != nil {
 		return fmt.Errorf("read configPatches: %w", err)
@@ -118,18 +142,21 @@ func PatchUsageLogsUserID(ef *unstructured.Unstructured) error {
 		return errors.New("configPatches not found")
 	}
 
-	userIDRule := map[string]any{
-		"header": "X-MaaS-Username",
+	rule := map[string]any{
+		"header": capture.header,
 		"on_header_present": map[string]any{
 			"metadata_namespace": "envoy.filters.http.header_to_metadata",
-			"key":                "user_id",
+			"key":                capture.metadataKey,
 			"type":               "STRING",
 		},
 	}
-	userIDAttr := map[string]any{
-		"key": "user_id",
+	attr := map[string]any{
+		"key": capture.metadataKey,
 		"value": map[string]any{
-			"string_value": `%CEL("envoy.filters.http.header_to_metadata" in metadata.filter_metadata ? metadata.filter_metadata["envoy.filters.http.header_to_metadata"]["user_id"] : request.headers["x-maas-username"])%`,
+			"string_value": fmt.Sprintf(
+				`%%CEL("envoy.filters.http.header_to_metadata" in metadata.filter_metadata ? metadata.filter_metadata["envoy.filters.http.header_to_metadata"]["%s"] : request.headers["%s"])%%`,
+				capture.metadataKey, capture.requestHeader,
+			),
 		},
 	}
 
@@ -150,7 +177,7 @@ func PatchUsageLogsUserID(ef *unstructured.Unstructured) error {
 			if err != nil {
 				return fmt.Errorf("read request_rules from configPatch %d: %w", i, err)
 			}
-			rules = append([]any{userIDRule}, rules...)
+			rules = append([]any{rule}, rules...)
 			if err := unstructured.SetNestedSlice(patch, rules, "patch", "value", "typed_config", "request_rules"); err != nil {
 				return fmt.Errorf("set request_rules in configPatch %d: %w", i, err)
 			}
@@ -172,7 +199,7 @@ func PatchUsageLogsUserID(ef *unstructured.Unstructured) error {
 			if err != nil {
 				return fmt.Errorf("read attributes.values: %w", err)
 			}
-			attrs = append([]any{userIDAttr}, attrs...)
+			attrs = append([]any{attr}, attrs...)
 			if err := unstructured.SetNestedSlice(al, attrs, "typed_config", "attributes", "values"); err != nil {
 				return fmt.Errorf("set attributes.values: %w", err)
 			}

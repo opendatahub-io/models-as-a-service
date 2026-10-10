@@ -146,6 +146,13 @@ type TenantLogsConfig struct {
 	// +kubebuilder:default=false
 	// +kubebuilder:validation:Optional
 	CaptureUser *bool `json:"captureUser,omitempty"`
+
+	// CaptureOrganization includes the subscription organization ID as
+	// organization_id on usage logs. Defaults to true. Independent of
+	// metrics.captureOrganization.
+	// +kubebuilder:default=true
+	// +kubebuilder:validation:Optional
+	CaptureOrganization *bool `json:"captureOrganization,omitempty"`
 }
 
 // TenantAPIKeysConfig defines configuration options for API key management.

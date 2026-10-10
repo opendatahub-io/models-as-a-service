@@ -182,6 +182,7 @@ spec:
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
 | captureUser | bool | No | `false` | Include the authenticated user ID as `user_id` on usage logs. Independent of `metrics.captureUser`. May have privacy implications; ensure compliance before enabling. |
+| captureOrganization | bool | No | `true` | Include the subscription organization ID as `organization_id` on usage logs. Independent of `metrics.captureOrganization`. |
 
 ---
 
@@ -286,6 +287,7 @@ spec:
       captureModelUsage: true
     logs:
       captureUser: false
+      captureOrganization: true
 ```
 
 ---

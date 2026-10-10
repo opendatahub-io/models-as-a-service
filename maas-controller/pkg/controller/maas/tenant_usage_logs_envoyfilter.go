@@ -150,6 +150,18 @@ func (r *TenantReconciler) applyUsageLogsEnvoyFilter(
 		}
 	}
 
+	captureOrganization := true
+	if tenant.Spec.Telemetry != nil &&
+		tenant.Spec.Telemetry.Logs != nil &&
+		tenant.Spec.Telemetry.Logs.CaptureOrganization != nil {
+		captureOrganization = *tenant.Spec.Telemetry.Logs.CaptureOrganization
+	}
+	if captureOrganization {
+		if err := tenantreconcile.PatchUsageLogsOrganizationID(ef); err != nil {
+			return false, fmt.Errorf("patch organization_id into EnvoyFilter: %w", err)
+		}
+	}
+
 	collectorAddress := fmt.Sprintf("usage-logs-collector.%s.svc", r.MonitoringNamespace)
 	if err := tenantreconcile.PatchUsageLogsClusterAddress(ef, collectorAddress); err != nil {
 		return false, fmt.Errorf("patch collector address in EnvoyFilter: %w", err)
