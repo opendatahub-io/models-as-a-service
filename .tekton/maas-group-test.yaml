@@ -22,8 +22,10 @@ spec:
   params:
   - name: group-components
     value: '{ "odh-maas-api-ci": "opendatahub/maas-api", "odh-maas-controller-ci": "opendatahub/maas-controller", "odh-maas-discovery-ci": "opendatahub/odh-maas-discovery" }'
+  # TEMP: collect must-gather on success so we can verify praxis is the default
+  # dataplane after #1579. Revert to 'false' before merging / after validation.
   - name: gather-on-success
-    value: 'false'
+    value: 'true'
   pipelineRef:
     resolver: git
     params:

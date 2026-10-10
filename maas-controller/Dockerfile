@@ -1,4 +1,5 @@
 ARG GOLANG_VERSION=1.26
+# CI: rebuild trigger to validate praxis-as-default dataplane (#1579) + must-gather
 
 ARG BUILDPLATFORM
 ARG TARGETPLATFORM
