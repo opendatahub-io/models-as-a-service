@@ -3,16 +3,6 @@ kind: ClusterRole
 metadata:
   name: maas-discovery
 rules:
-# Namespace read access for future RBAC filtering
-- apiGroups: [""]
-  resources: ["namespaces"]
-  verbs: ["get", "list", "watch"]
-
-# SubjectAccessReview for future RBAC filtering
-- apiGroups: ["authorization.k8s.io"]
-  resources: ["subjectaccessreviews"]
-  verbs: ["create"]
-
 # OpenShift cluster TLS security profile
 - apiGroups: ["config.openshift.io"]
   resources: ["apiservers"]

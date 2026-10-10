@@ -1603,14 +1603,16 @@ func TestMaaSAuthPolicyReconciler_IdentityHeadersUpstream(t *testing.T) {
 		}
 	})
 
-	t.Run("client flow-control headers cleared", func(t *testing.T) {
+	t.Run("flow-control headers set from subscription-info", func(t *testing.T) {
 		headers, _, err := unstructured.NestedMap(gwPolicy.Object, "spec", "defaults", "rules", "response", "success", "headers")
 		if err != nil {
 			t.Fatalf("Error checking headers: %v", err)
 		}
-		for _, header := range []string{
-			"x-llm-d-inference-objective", "x-gateway-inference-objective",
-			"x-llm-d-inference-fairness-id", "x-gateway-inference-fairness-id",
+		for header, field := range map[string]string{
+			"x-llm-d-inference-objective":     "objective",
+			"x-gateway-inference-objective":   "objective",
+			"x-llm-d-inference-fairness-id":   "fairnessId",
+			"x-gateway-inference-fairness-id": "fairnessId",
 		} {
 			cfg, ok := headers[header].(map[string]any)
 			if !ok {
@@ -1623,8 +1625,8 @@ func TestMaaSAuthPolicyReconciler_IdentityHeadersUpstream(t *testing.T) {
 			if _, hasWhen := cfg["when"]; hasWhen {
 				t.Errorf("header %q must apply to every authorized request, got when %v", header, cfg["when"])
 			}
-			if value, found, _ := unstructured.NestedFieldNoCopy(cfg, "plain", "value"); !found || value != "" {
-				t.Errorf("header %q plain.value = %v (found %t), want empty string", header, value, found)
+			if expr, _, _ := unstructured.NestedString(cfg, "plain", "expression"); expr != subscriptionInfoFieldExpr(field) {
+				t.Errorf("header %q plain.expression = %q, want the subscription-info %s expression", header, expr, field)
 			}
 		}
 	})
@@ -2299,8 +2301,7 @@ func TestFetchOIDCConfig_TTLExtraction(t *testing.T) {
 			}
 			if got == nil {
 				t.Fatal("expected non-nil oidcConfig, got nil")
-			}
-			if got.TTL != tc.wantTTL {
+			} else if got.TTL != tc.wantTTL {
 				t.Errorf("TTL = %d, want %d", got.TTL, tc.wantTTL)
 			}
 		})
@@ -2385,8 +2386,7 @@ func TestMaaSAuthPolicyReconciler_MissingModelRef_FailedPhase(t *testing.T) {
 	readyCond := apimeta.FindStatusCondition(policy.Status.Conditions, "Ready")
 	if readyCond == nil {
 		t.Fatal("Ready condition not found")
-	}
-	if readyCond.Status != metav1.ConditionFalse {
+	} else if readyCond.Status != metav1.ConditionFalse {
 		t.Errorf("expected Ready=False, got %v", readyCond.Status)
 	}
 }
@@ -2445,12 +2445,13 @@ func TestMaaSAuthPolicyReconciler_PartialModelRefs_DegradedPhase(t *testing.T) {
 	readyCond := apimeta.FindStatusCondition(policy.Status.Conditions, "Ready")
 	if readyCond == nil {
 		t.Fatal("Ready condition not found")
-	}
-	if readyCond.Status != metav1.ConditionFalse {
-		t.Errorf("expected Ready=False, got %v", readyCond.Status)
-	}
-	if readyCond.Reason != "PartialFailure" {
-		t.Errorf("expected reason PartialFailure, got %q", readyCond.Reason)
+	} else {
+		if readyCond.Status != metav1.ConditionFalse {
+			t.Errorf("expected Ready=False, got %v", readyCond.Status)
+		}
+		if readyCond.Reason != "PartialFailure" {
+			t.Errorf("expected reason PartialFailure, got %q", readyCond.Reason)
+		}
 	}
 }
 
@@ -2527,8 +2528,7 @@ func TestMaaSAuthPolicyReconciler_AllValidModelRefs_ActivePhase(t *testing.T) {
 	readyCond := apimeta.FindStatusCondition(policy.Status.Conditions, "Ready")
 	if readyCond == nil {
 		t.Fatal("Ready condition not found")
-	}
-	if readyCond.Status != metav1.ConditionTrue {
+	} else if readyCond.Status != metav1.ConditionTrue {
 		t.Errorf("expected Ready=True, got %v", readyCond.Status)
 	}
 
@@ -2576,15 +2576,16 @@ func TestMaaSAuthPolicyReconciler_NoSpec(t *testing.T) {
 	ready := apimeta.FindStatusCondition(got.Status.Conditions, "Ready")
 	if ready == nil {
 		t.Fatal("Ready condition not found")
-	}
-	if ready.Status != metav1.ConditionFalse {
-		t.Errorf("Ready.Status = %q, want %q", ready.Status, metav1.ConditionFalse)
-	}
-	if ready.Reason != string(maasv1alpha1.ReasonInvalidSpec) {
-		t.Errorf("Ready.Reason = %q, want %q", ready.Reason, maasv1alpha1.ReasonInvalidSpec)
-	}
-	if !strings.Contains(ready.Message, "spec is required") {
-		t.Errorf("Ready.Message = %q, expected it to contain %q", ready.Message, "spec is required")
+	} else {
+		if ready.Status != metav1.ConditionFalse {
+			t.Errorf("Ready.Status = %q, want %q", ready.Status, metav1.ConditionFalse)
+		}
+		if ready.Reason != string(maasv1alpha1.ReasonInvalidSpec) {
+			t.Errorf("Ready.Reason = %q, want %q", ready.Reason, maasv1alpha1.ReasonInvalidSpec)
+		}
+		if !strings.Contains(ready.Message, "spec is required") {
+			t.Errorf("Ready.Message = %q, expected it to contain %q", ready.Message, "spec is required")
+		}
 	}
 }
 
