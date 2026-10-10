@@ -37,6 +37,7 @@ from test_helper import (
     _delete_cr,
     _get_cr,
     _ns,
+    _request_with_gateway_retry,
     _wait_for_httproute_accepted,
     _wait_for_maas_auth_policy_phase,
     _wait_for_maas_subscription_phase,
@@ -125,8 +126,9 @@ def _check_external_endpoint_reachable():
     return False
 
 
+_LEGACY_IPP = pytest.mark.legacy_ipp
+
 pytestmark = [
-    pytest.mark.legacy_ipp,
     pytest.mark.skipif(
         not _check_external_endpoint_reachable(),
         reason=f"External endpoint {EXTERNAL_ENDPOINT} is not reachable (disconnected environment?)",
@@ -295,6 +297,8 @@ def external_models_setup(gateway_url, headers, api_keys_base_url):
 # ─── Tests: Discovery ───────────────────────────────────────────────────────
 
 class TestExternalModelDiscovery:
+    pytestmark = _LEGACY_IPP
+
     """Verify ExternalModel reconciler creates the expected Istio resources."""
 
     def test_maasmodelref_created(self, external_models_setup):
@@ -316,6 +320,8 @@ class TestExternalModelDiscovery:
 # ─── Tests: Auth ─────────────────────────────────────────────────────────────
 
 class TestExternalModelAuth:
+    pytestmark = _LEGACY_IPP
+
     """Verify auth enforcement for external model routes."""
 
     @pytest.mark.parametrize(
@@ -338,6 +344,8 @@ class TestExternalModelAuth:
 # ─── Tests: Egress ───────────────────────────────────────────────────────────
 
 class TestExternalModelEgress:
+    pytestmark = _LEGACY_IPP
+
     """Verify requests are forwarded to the external endpoint."""
 
     def test_request_forwarded_returns_200(self, external_models_setup):
@@ -367,6 +375,8 @@ class TestExternalModelEgress:
 # ─── Tests: Cleanup ─────────────────────────────────────────────────────────
 
 class TestExternalModelCleanup:
+    pytestmark = _LEGACY_IPP
+
     """Verify resource cleanup when external models are deleted."""
 
     def test_delete_removes_httproute(self, external_models_setup):
@@ -416,6 +426,8 @@ class TestExternalModelCleanup:
 
 
 class TestExternalModelPathRouting:
+    pytestmark = _LEGACY_IPP
+
     """Verify path-based routing for external model endpoints.
 
     The URL path ``/{namespace}/{model}/v1/...`` determines which model
@@ -450,6 +462,8 @@ requires_ipp = pytest.mark.skipif(
 
 @requires_ipp
 class TestLegacyExternalModelMigration:
+    pytestmark = _LEGACY_IPP
+
     """Verify IPP migration is reflected on the retained legacy CR."""
 
     def test_migration_sets_legacy_status_and_removes_networking(self):
@@ -532,6 +546,8 @@ class TestLegacyExternalModelMigration:
 
 @requires_ipp
 class TestExternalModelBodyRouting:
+    pytestmark = _LEGACY_IPP
+
     """Verify body-based routing for external models.
 
     IPP pre-processing extracts the ``model`` field from the JSON body and
@@ -594,3 +610,132 @@ class TestExternalModelBodyRouting:
             "a 200 means body routing may not be active."
         )
         log.info("Body routing (%s): HTTP %d", case_name, r.status_code)
+
+
+# ─── Tests: Shared Provider (multi-model) ────────────────────────────────────
+
+SECOND_EXTERNAL_MODEL_NAME = "e2e-external-model-shared"
+
+
+def _cleanup_second_external_model():
+    _patch_cr("maasmodelref", SECOND_EXTERNAL_MODEL_NAME, MODEL_NAMESPACE,
+              {"metadata": {"finalizers": []}})
+    _delete_cr("maasmodelref", SECOND_EXTERNAL_MODEL_NAME, MODEL_NAMESPACE)
+    _delete_cr(EXTERNAL_MODEL_KIND, SECOND_EXTERNAL_MODEL_NAME, MODEL_NAMESPACE)
+
+
+def _post_external_chat(gateway_url: str, model_name: str, api_key: str):
+    """POST chat/completions and assert the gateway routed past auth (not 401/403/503/404)."""
+    url = f"{gateway_url}/{MODEL_NAMESPACE}/{model_name}/v1/chat/completions"
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {api_key}",
+    }
+    body = {"model": model_name, "messages": [{"role": "user", "content": "hello"}]}
+    r = _request_with_gateway_retry(
+        requests.post, url, headers=headers, json=body, timeout=30, verify=TLS_VERIFY,
+    )
+    assert r.status_code not in (401, 403, 503), (
+        f"Model {model_name} returned {r.status_code} (auth or gateway outage)"
+    )
+    assert r.status_code != 404, (
+        f"Model {model_name} returned 404 — likely a missing/broken gateway HTTPRoute"
+    )
+    return r
+
+
+class TestSharedProviderMultiModel:
+    pytestmark = pytest.mark.external
+
+    """Verify two ExternalModels sharing one ExternalProvider both route correctly.
+
+    Regression test for RHOAIENG-98005: ai-gateway-controller produced
+    duplicate stable_id values in the routing overlay when two models
+    referenced the same provider, causing Praxis to reject the overlay
+    and the second model to return 404/503.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _setup_second_model(self, external_models_setup):
+        """Create a second ExternalModel pointing at the shared provider."""
+        self._setup = external_models_setup
+        external_applied = False
+        try:
+            _apply_cr({
+                "apiVersion": "inference.opendatahub.io/v1alpha1",
+                "kind": "ExternalModel",
+                "metadata": {"name": SECOND_EXTERNAL_MODEL_NAME, "namespace": MODEL_NAMESPACE},
+                "spec": {
+                    "externalProviderRefs": [
+                        {
+                            "ref": {"name": EXTERNAL_PROVIDER_NAME},
+                            "targetModel": TARGET_MODEL,
+                            "apiFormat": "openai-chat",
+                            "path": "/v1/chat/completions",
+                        },
+                    ],
+                },
+            })
+            external_applied = True
+
+            _apply_cr({
+                "apiVersion": "maas.opendatahub.io/v1alpha1",
+                "kind": "MaaSModelRef",
+                "metadata": {
+                    "name": SECOND_EXTERNAL_MODEL_NAME,
+                    "namespace": MODEL_NAMESPACE,
+                    "annotations": {
+                        "maas.opendatahub.io/endpoint": EXTERNAL_ENDPOINT,
+                        "maas.opendatahub.io/provider": "openai",
+                    },
+                },
+                "spec": {
+                    "modelRef": {"kind": "ExternalModel", "name": SECOND_EXTERNAL_MODEL_NAME},
+                },
+            })
+
+            try:
+                _wait_for_model_ready(
+                    SECOND_EXTERNAL_MODEL_NAME,
+                    namespace=MODEL_NAMESPACE,
+                    timeout=120,
+                )
+            except (TimeoutError, RuntimeError) as exc:
+                pytest.fail(f"Second model did not reach Ready: {exc}")
+
+            yield
+        finally:
+            if external_applied:
+                _cleanup_second_external_model()
+
+    def test_second_model_reaches_ready(self):
+        """A second ExternalModel referencing the same provider reaches Ready."""
+        cr = _get_cr(EXTERNAL_MODEL_KIND, SECOND_EXTERNAL_MODEL_NAME, MODEL_NAMESPACE)
+        assert cr is not None, f"ExternalModel {SECOND_EXTERNAL_MODEL_NAME} not found"
+        phase = cr.get("status", {}).get("phase", "")
+        assert phase == "Ready", (
+            f"Second ExternalModel phase = {phase!r}, want Ready. "
+            "If Failed, the shared-provider stable_id bug may still be present."
+        )
+
+    def test_first_model_still_routes(self):
+        """The original model continues routing after the second is added."""
+        setup = self._setup
+        r = _post_external_chat(setup["gateway_url"], EXTERNAL_MODEL_NAME, setup["api_key"])
+        log.info("Shared provider (first model): HTTP %d", r.status_code)
+
+    def test_both_models_have_distinct_httproutes(self):
+        """Both models have their own HTTPRoute resources."""
+        route1 = _get_cr("httproute", EXTERNAL_MODEL_NAME, MODEL_NAMESPACE)
+        route2 = _get_cr("httproute", SECOND_EXTERNAL_MODEL_NAME, MODEL_NAMESPACE)
+        assert route1 is not None, f"HTTPRoute for {EXTERNAL_MODEL_NAME} not found"
+        assert route2 is not None, f"HTTPRoute for {SECOND_EXTERNAL_MODEL_NAME} not found"
+
+    def test_delete_second_model_preserves_first(self):
+        """Deleting the second model does not break the first model's routing."""
+        _delete_cr(EXTERNAL_MODEL_KIND, SECOND_EXTERNAL_MODEL_NAME, MODEL_NAMESPACE)
+        time.sleep(RECONCILE_WAIT)
+
+        setup = self._setup
+        r = _post_external_chat(setup["gateway_url"], EXTERNAL_MODEL_NAME, setup["api_key"])
+        log.info("Shared provider (after delete): HTTP %d", r.status_code)
