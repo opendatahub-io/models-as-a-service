@@ -68,7 +68,7 @@ spec:
             - endpoint:
                 address:
                   socket_address:
-                    address: usage-logs-collector.opendatahub.svc
+                    address: data-science-usage-logs-collector.opendatahub.svc
                     port_value: 4317
 
   # ── Identity header capture: header_to_metadata ───────────────────────────

@@ -61,12 +61,11 @@ type ConfigSpec struct {
 	// +kubebuilder:validation:MaxLength=16
 	LimitadorScrapeInterval string `json:"limitadorScrapeInterval,omitempty"`
 
-	// UsageLogging enables cluster-wide per-request structured OTel access logging
-	// for usage tracking (token counts, identity, model). When enabled, the
-	// controller deploys an EnvoyFilter on the shared gateway that emits
-	// structured usage logs via OTel Access Log Service.
-	// Enabling this logs identity attributes (user_id, key_name, groups,
-	// subscription) per request — ensure GDPR/privacy compliance before enabling.
+	// UsageLogging is retained for compatibility and does not gate deployment.
+	// When true, the gateway EnvoyFilter exports usage logs to usage-logs-collector.
+	// When false or unset, it exports to data-science-usage-logs-collector.
+	// User identity (user_id) is included in those logs only when
+	// MaasTenantConfig.spec.telemetry.logs.captureUser is true.
 	// +kubebuilder:default=false
 	// +kubebuilder:validation:Optional
 	UsageLogging *bool `json:"usageLogging,omitempty"`
@@ -74,7 +73,7 @@ type ConfigSpec struct {
 	// UsageMetricsDashboard deploys the legacy Prometheus-based Perses usage dashboard
 	// (dashboard-3-maas-usage-admin). When disabled (the default), the controller
 	// removes any controller-owned copy of that dashboard.
-	// Prefer the logs-based usage dashboards gated by usageLogging.
+	// Prefer the logs-based usage dashboards, which are deployed with the usage-log resources.
 	// +kubebuilder:default=false
 	// +kubebuilder:validation:Optional
 	UsageMetricsDashboard *bool `json:"usageMetricsDashboard,omitempty"`

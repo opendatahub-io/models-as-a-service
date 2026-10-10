@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -61,6 +62,9 @@ const CleanupFinalizer = "maas.opendatahub.io/cleanup"
 
 // usageLogsCollectorName is the OpenTelemetryCollector resource for gateway usage logs.
 const usageLogsCollectorName = "usage-logs"
+
+// usageLogsDsciManagedKustomizeDir is the kustomization rendered when usageLogging is false or omitted.
+const usageLogsDsciManagedKustomizeDir = "dsci-managed"
 
 // usageLogsTenancyProxyDeploymentName is the Deployment for the Loki query tenancy proxy.
 const usageLogsTenancyProxyDeploymentName = "usage-logs-tenancy-proxy"
@@ -559,8 +563,9 @@ func (r *LifecycleReconciler) ensureUsageDashboard(ctx context.Context, log logr
 	return nil
 }
 
-// ensureUsageLogs deploys or removes OTel collector and RBAC for usage logging based on
-// the Config's usageLogging feature gate.
+// ensureUsageLogs deploys usage-log dashboards, the tenancy proxy, and related RBAC.
+// When Config.spec.usageLogging is true, it renders usage-logs, which also deploys
+// the usage-logs collector. Otherwise it renders dsci-managed.
 func (r *LifecycleReconciler) ensureUsageLogs(ctx context.Context, log logr.Logger) error {
 	if r.UsageLogsManifestPath == "" {
 		log.Info("WARNING: Usage logs manifest path not configured; skipping usage logs")
@@ -575,13 +580,10 @@ func (r *LifecycleReconciler) ensureUsageLogs(ctx context.Context, log logr.Logg
 		return err
 	}
 
-	resources, err := tenantreconcile.RenderKustomize(r.UsageLogsManifestPath, r.MonitoringNamespace)
+	manifestPath := usageLogsKustomizeDir(r.UsageLogsManifestPath, ptr.Deref(cfg.Spec.UsageLogging, false))
+	resources, err := tenantreconcile.RenderKustomize(manifestPath, r.MonitoringNamespace)
 	if err != nil {
 		return fmt.Errorf("render usage logs: %w", err)
-	}
-
-	if !ptr.Deref(cfg.Spec.UsageLogging, false) {
-		return r.deleteOwnedRenderedResources(ctx, log, cfg, resources, "usageLogging")
 	}
 
 	// Track if the collector is skipped due to missing CRD (CWE-863).
@@ -642,6 +644,15 @@ func (r *LifecycleReconciler) ensureUsageLogs(ctx context.Context, log logr.Logg
 	}
 
 	return nil
+}
+
+// usageLogsKustomizeDir selects the usage-logs kustomization.
+// usageLogging true uses the usage-logs directory; false and omitted use dsci-managed.
+func usageLogsKustomizeDir(base string, usageLogging bool) string {
+	if usageLogging {
+		return base
+	}
+	return filepath.Join(base, usageLogsDsciManagedKustomizeDir)
 }
 
 // deleteOwnedRenderedResources deletes resources from a rendered kustomize bundle

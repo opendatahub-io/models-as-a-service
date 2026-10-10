@@ -158,8 +158,8 @@ func (r *TenantReconciler) reconcile(ctx context.Context, req ctrl.Request) (ctr
 	// Surface the infrastructure namespace so operators know where maas-db-config lives.
 	tenant.Status.InfraNamespace = r.appNamespaceForTenant()
 
-	if err := r.deleteUsageLogsEnvoyFilterIfDisabled(ctx, log, &tenant); err != nil {
-		log.Error(err, "failed to delete usage-logs EnvoyFilter after usageLogging disabled")
+	if err := r.deleteUsageLogsEnvoyFilterIfTelemetryDisabled(ctx, log, &tenant); err != nil {
+		log.Error(err, "failed to delete usage-logs EnvoyFilter after telemetry disabled")
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 

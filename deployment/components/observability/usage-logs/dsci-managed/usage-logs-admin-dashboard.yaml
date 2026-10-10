@@ -563,7 +563,7 @@ spec:
         proxy:
           kind: HTTPProxy
           spec:
-            url: 'https://usage-gateway-http:8080/api/logs/v1/application'
+            url: 'https://data-science-lokistack-gateway-http:8080/api/logs/v1/application'
             allowedEndpoints:
               - endpointPattern: "/loki/api/v1/query"
                 method: GET
@@ -582,5 +582,5 @@ spec:
       insecureSkipVerify: false
       caCert:
         type: configmap
-        name: usage-gateway-ca-bundle
+        name: data-science-lokistack-gateway-ca-bundle
         certPath: service-ca.crt

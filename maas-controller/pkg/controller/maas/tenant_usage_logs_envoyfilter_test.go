@@ -60,6 +60,11 @@ func usageLogsTenantConfig(namespace string, tenantName string, aitenantNS strin
 				tenantreconcile.AnnotationAITenantNamespace: aitenantNS,
 			},
 		},
+		Spec: maasv1alpha1.MaasTenantConfigSpec{
+			Telemetry: &maasv1alpha1.TenantTelemetryConfig{
+				Enabled: ptr.To(true),
+			},
+		},
 	}
 }
 
@@ -82,6 +87,50 @@ func newUsageLogsReconciler(t *testing.T, s *runtime.Scheme, cl client.Client, m
 		mutate(r)
 	}
 	return r
+}
+
+func usageLogsCollectorAddressOf(ef *unstructured.Unstructured) (string, error) {
+	configPatches, found, err := unstructured.NestedSlice(ef.Object, "spec", "configPatches")
+	if err != nil {
+		return "", err
+	}
+	if !found || len(configPatches) == 0 {
+		return "", errors.New("configPatches not found")
+	}
+	patch, ok := configPatches[0].(map[string]any)
+	if !ok {
+		return "", errors.New("configPatches[0] is not an object")
+	}
+	endpoints, found, err := unstructured.NestedSlice(patch, "patch", "value", "load_assignment", "endpoints")
+	if err != nil {
+		return "", err
+	}
+	if !found || len(endpoints) == 0 {
+		return "", errors.New("endpoints not found")
+	}
+	ep0, ok := endpoints[0].(map[string]any)
+	if !ok {
+		return "", errors.New("endpoints[0] is not an object")
+	}
+	lbEndpoints, found, err := unstructured.NestedSlice(ep0, "lb_endpoints")
+	if err != nil {
+		return "", err
+	}
+	if !found || len(lbEndpoints) == 0 {
+		return "", errors.New("lb_endpoints not found")
+	}
+	lbe0, ok := lbEndpoints[0].(map[string]any)
+	if !ok {
+		return "", errors.New("lb_endpoints[0] is not an object")
+	}
+	addr, found, err := unstructured.NestedString(lbe0, "endpoint", "address", "socket_address", "address")
+	if err != nil {
+		return "", err
+	}
+	if !found {
+		return "", errors.New("collector address not found")
+	}
+	return addr, nil
 }
 
 func defaultUsageLogsPlatformContext() tenantreconcile.PlatformContext {
@@ -136,7 +185,7 @@ func TestTenantEnsureUsageLogsEnvoyFilter(t *testing.T) {
 		return "", errors.New("service.namespace resource attribute not found in EnvoyFilter")
 	}
 
-	t.Run("disabled by default", func(t *testing.T) {
+	t.Run("creates filter when usageLogging is false", func(t *testing.T) {
 		g := NewWithT(t)
 		s := tenantTestScheme(t)
 
@@ -144,7 +193,9 @@ func TestTenantEnsureUsageLogsEnvoyFilter(t *testing.T) {
 		tenant := usageLogsTenantConfig(usageLogsTestDefaultTenant, tenantreconcile.DefaultAITenantName, usageLogsTestAITenantNS)
 
 		cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cfg, tenant).Build()
-		r := newUsageLogsReconciler(t, s, cl, nil)
+		r := newUsageLogsReconciler(t, s, cl, func(r *TenantReconciler) {
+			r.UsageLogsManifestPath = testUsageLogsManifestPath(t)
+		})
 
 		warning, err := r.ensureUsageLogsEnvoyFilter(context.Background(), ctrl.Log, tenant, defaultUsageLogsPlatformContext(), cfg)
 		g.Expect(err).NotTo(HaveOccurred())
@@ -152,8 +203,38 @@ func TestTenantEnsureUsageLogsEnvoyFilter(t *testing.T) {
 
 		ef := &unstructured.Unstructured{}
 		ef.SetGroupVersionKind(tenantreconcile.GVKEnvoyFilter)
-		err = cl.Get(context.Background(), client.ObjectKey{Name: tenantreconcile.UsageLogsEnvoyFilterName(""), Namespace: usageLogsTestGatewayNS}, ef)
-		g.Expect(apierrors.IsNotFound(err)).To(BeTrue())
+		g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: tenantreconcile.UsageLogsEnvoyFilterName(""), Namespace: usageLogsTestGatewayNS}, ef)).
+			To(Succeed())
+		addr, err := usageLogsCollectorAddressOf(ef)
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(addr).To(Equal("data-science-usage-logs-collector.opendatahub.svc"))
+	})
+
+	t.Run("usageLogging unset uses data-science collector", func(t *testing.T) {
+		g := NewWithT(t)
+		s := tenantTestScheme(t)
+
+		cfg := &maasv1alpha1.Config{
+			ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName, UID: types.UID("cfg-uid")},
+		}
+		tenant := usageLogsTenantConfig(usageLogsTestDefaultTenant, tenantreconcile.DefaultAITenantName, usageLogsTestAITenantNS)
+
+		cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cfg, tenant).Build()
+		r := newUsageLogsReconciler(t, s, cl, func(r *TenantReconciler) {
+			r.UsageLogsManifestPath = testUsageLogsManifestPath(t)
+		})
+
+		warning, err := r.ensureUsageLogsEnvoyFilter(context.Background(), ctrl.Log, tenant, defaultUsageLogsPlatformContext(), cfg)
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(warning).To(BeEmpty())
+
+		ef := &unstructured.Unstructured{}
+		ef.SetGroupVersionKind(tenantreconcile.GVKEnvoyFilter)
+		g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: tenantreconcile.UsageLogsEnvoyFilterName(""), Namespace: usageLogsTestGatewayNS}, ef)).
+			To(Succeed())
+		addr, err := usageLogsCollectorAddressOf(ef)
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(addr).To(Equal("data-science-usage-logs-collector.opendatahub.svc"))
 	})
 
 	t.Run("monitoring namespace empty skips without warning", func(t *testing.T) {
@@ -173,7 +254,7 @@ func TestTenantEnsureUsageLogsEnvoyFilter(t *testing.T) {
 		g.Expect(warning).To(BeEmpty())
 	})
 
-	t.Run("deletes existing when disabled and monitoring namespace empty", func(t *testing.T) {
+	t.Run("monitoring namespace empty retains existing filter when usageLogging is false", func(t *testing.T) {
 		g := NewWithT(t)
 		s := tenantTestScheme(t)
 
@@ -192,11 +273,8 @@ func TestTenantEnsureUsageLogsEnvoyFilter(t *testing.T) {
 		warning, err := r.ensureUsageLogsEnvoyFilter(context.Background(), ctrl.Log, tenant, defaultUsageLogsPlatformContext(), cfg)
 		g.Expect(err).NotTo(HaveOccurred())
 		g.Expect(warning).To(BeEmpty())
-
-		ef := &unstructured.Unstructured{}
-		ef.SetGroupVersionKind(tenantreconcile.GVKEnvoyFilter)
-		err = cl.Get(context.Background(), client.ObjectKey{Name: tenantreconcile.UsageLogsEnvoyFilterName(""), Namespace: usageLogsTestGatewayNS}, ef)
-		g.Expect(apierrors.IsNotFound(err)).To(BeTrue())
+		g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: tenantreconcile.UsageLogsEnvoyFilterName(""), Namespace: usageLogsTestGatewayNS}, existingEF)).
+			To(Succeed())
 	})
 
 	t.Run("monitoring namespace empty retains existing filter", func(t *testing.T) {
@@ -311,7 +389,7 @@ func TestTenantEnsureUsageLogsEnvoyFilter(t *testing.T) {
 		g.Expect(namespace).To(Equal("ai-tenant-redteam"))
 	})
 
-	t.Run("deletes existing when disabled", func(t *testing.T) {
+	t.Run("applies over existing filter when usageLogging is false", func(t *testing.T) {
 		g := NewWithT(t)
 		s := tenantTestScheme(t)
 
@@ -323,7 +401,9 @@ func TestTenantEnsureUsageLogsEnvoyFilter(t *testing.T) {
 		existingEF.SetNamespace(usageLogsTestGatewayNS)
 
 		cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cfg, tenant, existingEF).Build()
-		r := newUsageLogsReconciler(t, s, cl, nil)
+		r := newUsageLogsReconciler(t, s, cl, func(r *TenantReconciler) {
+			r.UsageLogsManifestPath = testUsageLogsManifestPath(t)
+		})
 
 		warning, err := r.ensureUsageLogsEnvoyFilter(context.Background(), ctrl.Log, tenant, defaultUsageLogsPlatformContext(), cfg)
 		g.Expect(err).NotTo(HaveOccurred())
@@ -331,8 +411,8 @@ func TestTenantEnsureUsageLogsEnvoyFilter(t *testing.T) {
 
 		ef := &unstructured.Unstructured{}
 		ef.SetGroupVersionKind(tenantreconcile.GVKEnvoyFilter)
-		err = cl.Get(context.Background(), client.ObjectKey{Name: tenantreconcile.UsageLogsEnvoyFilterName(""), Namespace: usageLogsTestGatewayNS}, ef)
-		g.Expect(apierrors.IsNotFound(err)).To(BeTrue())
+		g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: tenantreconcile.UsageLogsEnvoyFilterName(""), Namespace: usageLogsTestGatewayNS}, ef)).
+			To(Succeed())
 	})
 
 	t.Run("returns warning when manifest not found", func(t *testing.T) {
@@ -416,7 +496,7 @@ func TestTenantEnsureUsageLogsEnvoyFilter_CaptureUser(t *testing.T) {
 
 		cfg := usageLogsConfig(true)
 		tenant := usageLogsTenantConfig(usageLogsTestDefaultTenant, tenantreconcile.DefaultAITenantName, usageLogsTestAITenantNS)
-		// Telemetry nil → logs.captureUser defaults to false
+		// logs.captureUser omitted → defaults to false
 
 		cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cfg, tenant).Build()
 		r := newUsageLogsReconciler(t, s, cl, func(r *TenantReconciler) {
@@ -441,6 +521,7 @@ func TestTenantEnsureUsageLogsEnvoyFilter_CaptureUser(t *testing.T) {
 		cfg := usageLogsConfig(true)
 		tenant := usageLogsTenantConfig(usageLogsTestDefaultTenant, tenantreconcile.DefaultAITenantName, usageLogsTestAITenantNS)
 		tenant.Spec.Telemetry = &maasv1alpha1.TenantTelemetryConfig{
+			Enabled: ptr.To(true),
 			Metrics: &maasv1alpha1.TenantMetricsConfig{
 				CaptureUser: ptr.To(true),
 			},
@@ -469,6 +550,7 @@ func TestTenantEnsureUsageLogsEnvoyFilter_CaptureUser(t *testing.T) {
 		cfg := usageLogsConfig(true)
 		tenant := usageLogsTenantConfig(usageLogsTestDefaultTenant, tenantreconcile.DefaultAITenantName, usageLogsTestAITenantNS)
 		tenant.Spec.Telemetry = &maasv1alpha1.TenantTelemetryConfig{
+			Enabled: ptr.To(true),
 			Logs: &maasv1alpha1.TenantLogsConfig{
 				CaptureUser: ptr.To(true),
 			},
@@ -517,6 +599,46 @@ func TestTenantCleanup_RemovesUsageLogsEnvoyFilter(t *testing.T) {
 		Namespace: usageLogsTestGatewayNS,
 	}, ef)
 	g.Expect(apierrors.IsNotFound(err)).To(BeTrue())
+}
+
+func TestEnsureUsageLogsEnvoyFilterDeletesWhenTelemetryDisabled(t *testing.T) {
+	cases := []struct {
+		name      string
+		telemetry *maasv1alpha1.TenantTelemetryConfig
+	}{
+		{name: "telemetry omitted", telemetry: nil},
+		{name: "enabled omitted", telemetry: &maasv1alpha1.TenantTelemetryConfig{}},
+		{name: "enabled false", telemetry: &maasv1alpha1.TenantTelemetryConfig{Enabled: ptr.To(false)}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			g := NewWithT(t)
+			s := tenantTestScheme(t)
+
+			cfg := usageLogsConfig(false)
+			tenant := usageLogsTenantConfig(usageLogsTestDefaultTenant, tenantreconcile.DefaultAITenantName, usageLogsTestAITenantNS)
+			tenant.Spec.Telemetry = tc.telemetry
+			existingEF := &unstructured.Unstructured{}
+			existingEF.SetGroupVersionKind(tenantreconcile.GVKEnvoyFilter)
+			existingEF.SetName(tenantreconcile.UsageLogsEnvoyFilterName(""))
+			existingEF.SetNamespace(usageLogsTestGatewayNS)
+
+			cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cfg, tenant, existingEF).Build()
+			r := newUsageLogsReconciler(t, s, cl, func(r *TenantReconciler) {
+				r.MonitoringNamespace = ""
+			})
+
+			warning, err := r.ensureUsageLogsEnvoyFilter(context.Background(), ctrl.Log, tenant, defaultUsageLogsPlatformContext(), cfg)
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(warning).To(BeEmpty())
+
+			got := &unstructured.Unstructured{}
+			got.SetGroupVersionKind(tenantreconcile.GVKEnvoyFilter)
+			err = cl.Get(context.Background(), client.ObjectKey{Name: tenantreconcile.UsageLogsEnvoyFilterName(""), Namespace: usageLogsTestGatewayNS}, got)
+			g.Expect(apierrors.IsNotFound(err)).To(BeTrue())
+		})
+	}
 }
 
 func TestTenantReconcile_ConfigChangeEnqueuesAllMaasTenantConfigs(t *testing.T) {

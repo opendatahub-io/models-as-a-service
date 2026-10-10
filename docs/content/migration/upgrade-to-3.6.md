@@ -32,4 +32,4 @@ kubectl patch configs.maas.opendatahub.io default --type=merge \
   -p '{"spec":{"usageMetricsDashboard":true}}'
 ```
 
-Prefer the logs-based usage dashboards gated by `usageLogging`. See [Setup](../observability/setup.md).
+Prefer the logs-based usage dashboards. The operator deploys them with the usage-log resources. See [Setup](../observability/setup.md).

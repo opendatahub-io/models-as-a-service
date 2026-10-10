@@ -341,7 +341,10 @@ def initialize():
         logger.fatal("NAMESPACE environment variable is required")
         sys.exit(1)
 
-    loki_upstream = f"https://usage-gateway-http.{namespace}.svc:8080/api/logs/v1/application"
+    # LOKI_GATEWAY_SERVICE overrides the Loki gateway Service name. The default
+    # matches the in-cluster usage gateway.
+    gateway_service = os.getenv("LOKI_GATEWAY_SERVICE")
+    loki_upstream = f"https://{gateway_service}.{namespace}.svc:8080/api/logs/v1/application"
     logger.info(f"Loki upstream: {loki_upstream}")
 
     # Create SSL context with CA certificates
