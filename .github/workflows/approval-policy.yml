@@ -1,0 +1,225 @@
+# Enforces 1 vs 2 approving GitHub reviews by changed paths (see CONTRIBUTING.md).
+# Intended for PRs into opendatahub-io/models-as-a-service (upstream branches).
+
+name: Approval policy
+
+on:
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
+      - labeled
+      - unlabeled
+  pull_request_review:
+    types: [submitted, dismissed]
+
+jobs:
+  approval-policy:
+    name: approval-policy
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: write
+      statuses: write
+
+    steps:
+      - name: Evaluate approving review count
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const baseRepo = `${owner}/${repo}`;
+            const pr = context.payload.pull_request;
+            const pull_number = pr.number;
+            const headSha = pr.head.sha;
+            const author = pr.user.login;
+
+            if (pr.head.repo.full_name !== baseRepo) {
+              core.notice(
+                `Skipping approval-policy: PR head is ${pr.head.repo.full_name}; policy applies to branches on ${baseRepo} only.`,
+              );
+              return;
+            }
+
+            const policyLabels = ['maas/policy-lightweight', 'maas/policy-standard'];
+            const singleReviewOverrideLabel = 'override-approval-policy';
+            const approvalPolicyWorkflow = '.github/workflows/approval-policy.yml';
+            const maxListFiles = 3000;
+
+            /** @returns {'docs'|'ci'|'test'|'other'} */
+            function classifyPath(filename) {
+              if (filename.startsWith('docs/')) return 'docs';
+              if (/^(CONTRIBUTING|README|AGENTS|CLAUDE)\.md$/.test(filename)) return 'docs';
+              if (
+                filename.startsWith('.github/') ||
+                filename.startsWith('.tekton/') ||
+                filename.startsWith('scripts/ci/')
+              ) {
+                return 'ci';
+              }
+              if (
+                filename.startsWith('test/') ||
+                filename.endsWith('_test.go') ||
+                filename.includes('/testdata/')
+              ) {
+                return 'test';
+              }
+              return 'other';
+            }
+
+            function pathsForFile(file) {
+              const paths = [file.filename];
+              if (file.previous_filename) {
+                paths.push(file.previous_filename);
+              }
+              return paths;
+            }
+
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              owner,
+              repo,
+              pull_number,
+            });
+
+            const fileListTruncated = files.length >= maxListFiles;
+
+            let touchesApprovalPolicy = false;
+            const touched = new Set();
+            let hasOther = false;
+
+            for (const f of files) {
+              for (const path of pathsForFile(f)) {
+                if (path === approvalPolicyWorkflow) {
+                  touchesApprovalPolicy = true;
+                }
+                const bucket = classifyPath(path);
+                touched.add(bucket);
+                if (bucket === 'other') {
+                  hasOther = true;
+                }
+              }
+            }
+            touched.delete('other');
+
+            const lightweight =
+              files.length > 0 &&
+              !hasOther &&
+              !touchesApprovalPolicy &&
+              !fileListTruncated;
+            let required = lightweight ? 1 : 2;
+
+            const { data: issueForOverride } = await github.rest.issues.get({
+              owner,
+              repo,
+              issue_number: pull_number,
+            });
+            const singleReviewOverride = issueForOverride.labels.some(
+              (label) => label.name === singleReviewOverrideLabel,
+            );
+            if (singleReviewOverride && required === 2) {
+              required = 1;
+            }
+
+            const categoryOrder = ['docs', 'ci', 'test'];
+            const parts = categoryOrder.filter((c) => touched.has(c));
+            let tier;
+            if (fileListTruncated) {
+              tier = 'standard (file list truncated at 3000 paths)';
+            } else if (touchesApprovalPolicy) {
+              tier = 'standard (approval-policy workflow changed)';
+            } else if (lightweight) {
+              tier = parts.length === 0 ? 'lightweight' : `lightweight (${parts.join('+')})`;
+            } else if (parts.length === 0) {
+              tier = 'standard';
+            } else {
+              tier = `standard (includes ${parts.join('+')} plus production paths)`;
+            }
+            if (singleReviewOverride && !lightweight) {
+              tier = `${tier}; ${singleReviewOverrideLabel} label`;
+            }
+
+            const reviews = await github.paginate(github.rest.pulls.listReviews, {
+              owner,
+              repo,
+              pull_number,
+            });
+
+            const latestByUser = new Map();
+            for (const review of reviews) {
+              if (!review.user) continue;
+              latestByUser.set(review.user.login, review);
+            }
+
+            let approvingCount = 0;
+            for (const [login, review] of latestByUser) {
+              if (login === author) continue;
+              if (review.state !== 'APPROVED') continue;
+              if (review.user.type === 'Bot') continue;
+              approvingCount++;
+            }
+
+            const pass = approvingCount >= required;
+            const description = `${approvingCount}/${required} approving reviews (${tier})`;
+
+            await github.rest.repos.createCommitStatus({
+              owner,
+              repo,
+              sha: headSha,
+              state: pass ? 'success' : 'failure',
+              context: 'approval-policy',
+              description:
+                description.length <= 140
+                  ? description
+                  : `${approvingCount}/${required} (${required === 1 ? 'one review' : 'two reviews'})`,
+              target_url: pr.html_url,
+            });
+
+            const desiredLabel = lightweight
+              ? 'maas/policy-lightweight'
+              : 'maas/policy-standard';
+            const { data: issue } = await github.rest.issues.get({
+              owner,
+              repo,
+              issue_number: pull_number,
+            });
+            const currentLabels = issue.labels.map((l) => l.name);
+
+            for (const name of policyLabels) {
+              if (name !== desiredLabel && currentLabels.includes(name)) {
+                await github.rest.issues.removeLabel({
+                  owner,
+                  repo,
+                  issue_number: pull_number,
+                  name,
+                });
+              }
+            }
+            const { data: issueAfterRemove } = await github.rest.issues.get({
+              owner,
+              repo,
+              issue_number: pull_number,
+            });
+            const labelsNow = issueAfterRemove.labels.map((l) => l.name);
+            if (!labelsNow.includes(desiredLabel)) {
+              await github.rest.issues.addLabels({
+                owner,
+                repo,
+                issue_number: pull_number,
+                labels: [desiredLabel],
+              });
+            }
+
+            core.summary.addHeading('Approval policy');
+            core.summary.addRaw(
+              `Tier: **${tier}** → requires **${required}** approving GitHub review(s) (author and bots excluded).\n\n` +
+                `**Lightweight (1 review)** — every file is only in docs / ci / test buckets (see CONTRIBUTING.md).\n\n` +
+                `**Standard (2 reviews)** — production paths, renames from production paths, 3000+ listed files, empty file list, or edit to \`${approvalPolicyWorkflow}\`.\n\n` +
+                `**Override:** label \`${singleReviewOverrideLabel}\` on a standard PR lowers the requirement to **1** approving review (maintainers only; see CONTRIBUTING.md).\n\n` +
+                `Current: **${approvingCount}** approving review(s). Status: **${pass ? 'pass' : 'fail'}**.`,
+            );
+            await core.summary.write();
