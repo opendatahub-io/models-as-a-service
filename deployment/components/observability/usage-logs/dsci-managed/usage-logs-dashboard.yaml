@@ -131,6 +131,78 @@ spec:
                     | unwrap tokens_total [$__range]))
                     or vector(0)
 
+    tokenSplit:
+      kind: Panel
+      spec:
+        display:
+          name: "Tokens per type"
+          description: >-
+            Total tokens split into prompt, completion, and cached, from
+            successful requests (2xx) over the selected time window.
+        plugin:
+          kind: Table
+          spec:
+            density: "compact"
+            transforms:
+              - kind: "MergeSeries"
+                spec: {}
+            columnSettings:
+              - name: "timestamp"
+                hide: true
+              - name: "type"
+                header: "Type"
+                align: "left"
+                enableSorting: true
+              - name: "value"
+                header: "Tokens"
+                align: "right"
+                enableSorting: true
+                sort: "desc"
+                format:
+                  unit: decimal
+                  shortValues: true
+        queries:
+          # One query, three aggregations unioned with `or`: each stamps a `type`
+          # label via label_format and keeps it through sum by (type), so the
+          # result has three series ({type="prompt"}, {type="completion"},
+          # {type="cached"}) in a single value column. A window with no
+          # tokens_cached samples still gets a zero {type="cached"} row.
+          # MergeSeries then renders one named row per type.
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: LokiTimeSeriesQuery
+                spec:
+                  datasource:
+                    kind: LokiDatasource
+                    name: usage-logs-multi-tenancy
+                  query: >-
+                    sum by (type) (sum_over_time({service_name="models-as-a-service",
+                    subscription=~"$subscription", model=~"$model", response_type="hit"}
+                    | label_format __ak_sel="${api_key:regexliteral}"
+                    | label_format __ak_keep="{{if eq .__ak_sel \"(\\\\.\\\\*)\"}}true{{else if (count (printf \"^%s$\" .__ak_sel) .key_name)}}true{{else}}false{{end}}"
+                    | __ak_keep="true"
+                    | label_format type="prompt"
+                    | unwrap tokens_prompt [$__range]))
+                    or
+                    sum by (type) (sum_over_time({service_name="models-as-a-service",
+                    subscription=~"$subscription", model=~"$model", response_type="hit"}
+                    | label_format __ak_sel="${api_key:regexliteral}"
+                    | label_format __ak_keep="{{if eq .__ak_sel \"(\\\\.\\\\*)\"}}true{{else if (count (printf \"^%s$\" .__ak_sel) .key_name)}}true{{else}}false{{end}}"
+                    | __ak_keep="true"
+                    | label_format type="completion"
+                    | unwrap tokens_completion [$__range]))
+                    or
+                    sum by (type) (sum_over_time({service_name="models-as-a-service",
+                    subscription=~"$subscription", model=~"$model", response_type="hit"}
+                    | label_format __ak_sel="${api_key:regexliteral}"
+                    | label_format __ak_keep="{{if eq .__ak_sel \"(\\\\.\\\\*)\"}}true{{else if (count (printf \"^%s$\" .__ak_sel) .key_name)}}true{{else}}false{{end}}"
+                    | __ak_keep="true"
+                    | label_format type="cached"
+                    | unwrap tokens_cached [$__range]))
+                    or
+                    label_replace(vector(0), "type", "cached", "", "")
+
     totalRequests:
       kind: Panel
       spec:
@@ -242,8 +314,8 @@ spec:
           # [2h] is the minimal stable step. Loki split_queries_by_interval is 30m; 1h still produces
           # gaps at chunk boundaries. 2h is the lowest value that returns consistent results.
           description: >-
-            Tokens from successful requests (2xx) over time by model, subscription,
-            or API key. **View by** drives the chart grouping.
+            Total tokens from successful requests (2xx) over time by model,
+            subscription, or API key. **View by** drives the chart grouping.
         plugin:
           kind: TimeSeriesChart
           spec:
@@ -311,10 +383,31 @@ spec:
                 align: "left"
                 enableSorting: true
               - name: "value #1"
-                header: "Tokens used"
+                header: "Total tokens"
                 align: "right"
                 enableSorting: true
                 sort: "desc"
+                format:
+                  unit: decimal
+                  shortValues: true
+              - name: "value #5"
+                header: "Prompt tokens"
+                align: "right"
+                enableSorting: true
+                format:
+                  unit: decimal
+                  shortValues: true
+              - name: "value #6"
+                header: "Completion tokens"
+                align: "right"
+                enableSorting: true
+                format:
+                  unit: decimal
+                  shortValues: true
+              - name: "value #7"
+                header: "Cached tokens"
+                align: "right"
+                enableSorting: true
                 format:
                   unit: decimal
                   shortValues: true
@@ -405,6 +498,57 @@ spec:
                     | __ak_keep="true"
                     | label_format is_error=`{{ if eq .response_type "error" }}1{{ else }}0{{ end }}`
                     | unwrap is_error [$__range]))
+          # value #5 — prompt tokens (hit-only, mirrors the total-tokens query).
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: LokiTimeSeriesQuery
+                spec:
+                  datasource:
+                    kind: LokiDatasource
+                    name: usage-logs-multi-tenancy
+                  query: >-
+                    sum by (model, subscription, key_name) (sum_over_time(
+                    {service_name="models-as-a-service", subscription=~"$subscription", subscription!="-", model=~"$model"}
+                    | label_format __ak_sel="${api_key:regexliteral}"
+                    | label_format __ak_keep="{{if eq .__ak_sel \"(\\\\.\\\\*)\"}}true{{else if (count (printf \"^%s$\" .__ak_sel) .key_name)}}true{{else}}false{{end}}"
+                    | __ak_keep="true"
+                    | label_format prompt_tokens=`{{ if eq .response_type "hit" }}{{ .tokens_prompt }}{{ else }}0{{ end }}`
+                    | unwrap prompt_tokens [$__range]))
+          # value #6 — completion tokens (hit-only, mirrors the total-tokens query).
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: LokiTimeSeriesQuery
+                spec:
+                  datasource:
+                    kind: LokiDatasource
+                    name: usage-logs-multi-tenancy
+                  query: >-
+                    sum by (model, subscription, key_name) (sum_over_time(
+                    {service_name="models-as-a-service", subscription=~"$subscription", subscription!="-", model=~"$model"}
+                    | label_format __ak_sel="${api_key:regexliteral}"
+                    | label_format __ak_keep="{{if eq .__ak_sel \"(\\\\.\\\\*)\"}}true{{else if (count (printf \"^%s$\" .__ak_sel) .key_name)}}true{{else}}false{{end}}"
+                    | __ak_keep="true"
+                    | label_format completion_tokens=`{{ if eq .response_type "hit" }}{{ .tokens_completion }}{{ else }}0{{ end }}`
+                    | unwrap completion_tokens [$__range]))
+          # value #7 — cached tokens (hit-only, mirrors the total-tokens query).
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: LokiTimeSeriesQuery
+                spec:
+                  datasource:
+                    kind: LokiDatasource
+                    name: usage-logs-multi-tenancy
+                  query: >-
+                    sum by (model, subscription, key_name) (sum_over_time(
+                    {service_name="models-as-a-service", subscription=~"$subscription", subscription!="-", model=~"$model"}
+                    | label_format __ak_sel="${api_key:regexliteral}"
+                    | label_format __ak_keep="{{if eq .__ak_sel \"(\\\\.\\\\*)\"}}true{{else if (count (printf \"^%s$\" .__ak_sel) .key_name)}}true{{else}}false{{end}}"
+                    | __ak_keep="true"
+                    | label_format cached_tokens=`{{ if and (eq .response_type "hit") .tokens_cached }}{{ .tokens_cached }}{{ else }}0{{ end }}`
+                    | unwrap cached_tokens [$__range]))
   layouts:
     - kind: Grid
       spec:
@@ -447,7 +591,13 @@ spec:
         items:
           - x: 0
             "y": 0
-            width: 24
+            width: 5
+            height: 10
+            content:
+              "$ref": "#/spec/panels/tokenSplit"
+          - x: 5
+            "y": 0
+            width: 19
             height: 10
             content:
               "$ref": "#/spec/panels/tokenConsumptionOverTime"

@@ -327,7 +327,7 @@ E2E_CURL_IMAGE = os.environ.get("E2E_CURL_IMAGE", "registry.access.redhat.com/ub
 # responses carry usage.total_tokens; --mode echo responses do not.
 LLM_D_INFERENCE_SIM_IMAGE = (
     "ghcr.io/llm-d/llm-d-inference-sim@"
-    "sha256:c3ba435081a4d032676b218ea34eb3a1c54507da0fade2f6297f9c37894fe0d1"
+    "sha256:c6838d8616c9818f4cdb0e9ef7597e483a71c081b869d34c7eafac1481d76c60"
 )
 E2E_CURL_CA_CONFIGMAP = os.environ.get("E2E_CURL_CA_CONFIGMAP", "")
 E2E_CURL_CA_CONFIGMAP_KEY = os.environ.get("E2E_CURL_CA_CONFIGMAP_KEY", "service-ca.crt")
@@ -2654,6 +2654,7 @@ def _create_llmis(
                 "containers": [
                     {
                         "name": "main",
+
                         "image": LLM_D_INFERENCE_SIM_IMAGE,
                         "command": ["/app/llm-d-inference-sim"],
                         "args": [
@@ -2680,7 +2681,7 @@ def _create_llmis(
                         },
                         "readinessProbe": {
                             "httpGet": {
-                                "path": "/ready",
+                                "path": "/health/ready",
                                 "port": "https",
                                 "scheme": "HTTPS",
                             }
