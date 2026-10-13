@@ -4,8 +4,11 @@ import pytest
 import requests
 
 from conftest import TLS_VERIFY
+from multitenancy_helpers import deployment_log_snapshot
 from test_helper import (
     MODEL_NAME as SERVED_MODEL_NAME,
+    MODEL_NAMESPACE,
+    MODEL_REF,
     assert_inference_response,
     assert_openai_sse_chat_stream,
     chat,
@@ -84,10 +87,22 @@ def test_models_catalog(model_catalog: dict):
     if "ready" in first:
         print(f"[models] first model ready={first['ready']}")
 
-def test_chat_completions_gateway_alive(model_v1: str, api_key_headers: dict):
+def test_chat_completions_gateway_alive(model_v1: str, api_key_headers: dict, api_key: str):
     """
     Given a governed model and valid API key, a non-streaming request returns
     HTTP 200 with non-whitespace assistant content.
+
+    Also verifies the client's MaaS API key never reaches the backend's own received-request
+    logs. The `maas-headers-guard` IPP plugin strips `Authorization`/`x-api-key` from every
+    request before forwarding upstream, regardless of model kind (RHOAIENG-94276) - the
+    provider-credential re-injection half of that same chain is ExternalModel-specific and is
+    already covered live by ai-gateway-controller's own E2E suite (test/overlay-e2e/run.sh,
+    test/openshift-env/e2e.sh), so it's out of scope here. Requires `--log-http` on the
+    simulator (test/e2e/fixtures kustomize patch) and llm-d-inference-sim >= v0.9.0 (see
+    llm-d/llm-d-inference-sim#470); empty logs, or logs missing header content, fail the test
+    rather than skip it, so a broken/disabled log pipeline can't silently mask a leak (an
+    empty-of-headers log would otherwise trivially "pass" the leak check for the wrong reason -
+    the key is absent because nothing was captured at all, not because it was actually stripped).
     """
     r = requests.post(
         f"{model_v1}/chat/completions",
@@ -107,6 +122,20 @@ def test_chat_completions_gateway_alive(model_v1: str, api_key_headers: dict):
     log.info(msg)
     print(msg)
     assert_inference_response(r)
+
+    logs = deployment_log_snapshot(f"{MODEL_REF}-kserve", namespace=MODEL_NAMESPACE)
+    assert logs.strip(), (
+        "No logs captured from the backend deployment; cannot verify header stripping "
+        "(--log-http may be disabled or unsupported on this build)"
+    )
+    # The request always sends Content-Type, a header maas-headers-guard never strips - its
+    # presence confirms --log-http actually captured request headers (as opposed to only
+    # unrelated startup/probe log lines), so the absence check below is meaningful.
+    assert "content-type" in logs.lower(), (
+        "Backend logs don't show request headers were captured; --log-http may not be "
+        "in effect on this build (expected the request's content-type header in the logs)"
+    )
+    assert api_key not in logs, "Client MaaS API key leaked into the backend's received-request logs"
 
 
 def test_chat_completions_streaming_sse(model_v1: str, api_key_headers: dict):
