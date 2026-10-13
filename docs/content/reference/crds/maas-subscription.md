@@ -8,18 +8,25 @@ When a `MaaSSubscription` is deleted, its finalizer waits for a subscription-sco
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| owner | OwnerSpec | Yes | Who owns this subscription |
+| owner | OwnerSpec | Yes | Users and groups entitled to select this subscription; not Kubernetes ownership or RBAC |
+| organization | SubscriptionOrganization | No | Stable organization association for delegated administration. `organization.id` is a non-empty string, may be set only once, and cannot be replaced or removed. It does not change inference access or billing attribution. |
 | modelRefs | []ModelSubscriptionRef | Yes | Models included with per-model token rate limits (each specifies `name` and `namespace`) |
 | tokenMetadata | TokenMetadata | No | Metadata for token attribution and metering |
 | priority | int32 | No | Subscription priority when user has multiple (higher = higher priority; default: 0) |
 | inferencePriority | int32 | No | Scheduling priority for inference requests made under this subscription (signed; higher = scheduled first, negative = below the scheduler default). Independent of `priority`, which only selects among subscriptions. Omitting the field creates no InferenceObjective and the scheduler applies priority `0`; setting it explicitly to `0` creates an InferenceObjective with priority `0`. |
 
+## SubscriptionOrganization
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| id | string | Yes | Non-empty organization identifier. Legacy subscriptions may gain this field once, after their existing key and history association has been verified. The association is then immutable. |
+
 ## OwnerSpec
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| groups | []GroupReference | No | Kubernetes group names that own this subscription |
-| users | []string | No | Kubernetes user names that own this subscription |
+| groups | []GroupReference | No | Identity group names entitled to select this subscription; matched exactly |
+| users | []string | No | Identity user names entitled to select this subscription; matched exactly |
 
 ## ModelSubscriptionRef
 

@@ -118,6 +118,98 @@ func TestMaaSSubscriptionUnlimitedRefSerializesWithinRules(t *testing.T) {
 	}
 }
 
+func TestMaaSSubscriptionOrganizationSchema(t *testing.T) {
+	schemaValidator := maaSSubscriptionSchemaValidator(t)
+
+	tests := []struct {
+		name    string
+		id      any
+		wantErr string
+	}{
+		{name: "non-UUID string accepted", id: "grid-org-a"},
+		{name: "UUID-shaped string accepted", id: "42c3e46f-2477-44d7-a85b-d3b43f6b31fa"},
+		{name: "empty id rejected", id: "", wantErr: "spec.organization.id"},
+		{name: "id longer than 253 characters rejected", id: strings.Repeat("a", 254), wantErr: "spec.organization.id"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			obj := maaSSubscriptionOrganizationObject(tt.id)
+
+			errs := validation.ValidateCustomResource(nil, obj, schemaValidator)
+			if tt.wantErr == "" {
+				if len(errs) > 0 {
+					t.Fatalf("expected no validation errors, got %v", errs.ToAggregate())
+				}
+				return
+			}
+			if len(errs) == 0 || !strings.Contains(errs.ToAggregate().Error(), tt.wantErr) {
+				t.Fatalf("expected error containing %q, got %v", tt.wantErr, errs.ToAggregate())
+			}
+		})
+	}
+}
+
+func TestMaaSSubscriptionOrganizationStableAssociation(t *testing.T) {
+	schema, validator := maaSSubscriptionValidator(t)
+
+	tests := []struct {
+		name    string
+		oldID   any
+		newID   any
+		wantErr bool
+	}{
+		{name: "legacy subscription can be adopted once", oldID: nil, newID: "grid-org-a"},
+		{name: "existing association is unchanged", oldID: "grid-org-a", newID: "grid-org-a"},
+		{name: "existing association cannot change", oldID: "grid-org-a", newID: "grid-org-b", wantErr: true},
+		{name: "existing association cannot be removed", oldID: "grid-org-a", newID: nil, wantErr: true},
+		{name: "legacy subscription can remain unmarked", oldID: nil, newID: nil},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			errs, _ := validator.Validate(
+				t.Context(),
+				nil,
+				schema,
+				maaSSubscriptionOrganizationObject(tt.newID),
+				maaSSubscriptionOrganizationObject(tt.oldID),
+				celconfig.RuntimeCELCostBudget,
+			)
+
+			if tt.wantErr && len(errs) == 0 {
+				t.Fatal("expected organization.id immutability error, got none")
+			}
+			if !tt.wantErr && len(errs) > 0 {
+				t.Fatalf("expected no validation errors, got %v", errs.ToAggregate())
+			}
+			if tt.wantErr && !strings.Contains(errs.ToAggregate().Error(), "organization.id is immutable") {
+				t.Fatalf("expected organization.id immutability error, got %v", errs.ToAggregate())
+			}
+		})
+	}
+}
+
+func TestMaaSSubscriptionOrganizationFieldSurvivesPruning(t *testing.T) {
+	schema, _ := maaSSubscriptionValidator(t)
+	obj := maaSSubscriptionOrganizationObject("grid-org-a")
+
+	pruned := runtime.DeepCopyJSON(obj)
+	pruning.Prune(pruned, schema, true)
+
+	spec, ok := pruned["spec"].(map[string]any)
+	if !ok {
+		t.Fatal("pruned object is missing spec")
+	}
+	organization, ok := spec["organization"].(map[string]any)
+	if !ok {
+		t.Fatal("spec.organization was pruned — field missing from generated CRD schema")
+	}
+	if organization["id"] != "grid-org-a" {
+		t.Fatalf("spec.organization.id = %v, want grid-org-a", organization["id"])
+	}
+}
+
 // Covers the guardrails attachment example: subscription-wide guardrails plus a
 // per-model guardrails entry must be recognized by the generated CRD schema
 // (survive pruning) and satisfy its CEL rules.
@@ -306,6 +398,18 @@ func maaSSubscriptionObject(ref map[string]any) map[string]any {
 			"modelRefs": []any{ref},
 		},
 	}
+}
+
+func maaSSubscriptionOrganizationObject(id any) map[string]any {
+	obj := maaSSubscriptionObject(map[string]any{"name": "model", "namespace": "llm", "unlimited": true})
+	spec, ok := obj["spec"].(map[string]any)
+	if !ok {
+		panic("subscription object is missing spec")
+	}
+	if id != nil {
+		spec["organization"] = map[string]any{"id": id}
+	}
+	return obj
 }
 
 func maaSSubscriptionValidator(t *testing.T) (*structuralschema.Structural, *cel.Validator) {
