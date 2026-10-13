@@ -307,6 +307,13 @@ spec:
                     description: TenantLogsConfig defines optional usage-log identity
                       dimensions.
                     properties:
+                      captureOrganization:
+                        default: true
+                        description: |-
+                          CaptureOrganization includes the subscription organization ID as
+                          organization_id on usage logs. Defaults to true. Independent of
+                          metrics.captureOrganization.
+                        type: boolean
                       captureUser:
                         default: false
                         description: |-

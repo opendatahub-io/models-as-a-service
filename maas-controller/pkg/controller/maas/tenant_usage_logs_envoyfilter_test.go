@@ -489,6 +489,194 @@ func TestTenantEnsureUsageLogsEnvoyFilter_CaptureUser(t *testing.T) {
 	})
 }
 
+func TestTenantEnsureUsageLogsEnvoyFilter_CaptureOrganization(t *testing.T) {
+	inspectCaptureOrganization := func(ef *unstructured.Unstructured) (hasOrgAttr, hasOrgRule bool) {
+		identityWithOrg := 0
+		patches, _, _ := unstructured.NestedSlice(ef.Object, "spec", "configPatches")
+		for _, p := range patches {
+			patch, ok := p.(map[string]any)
+			if !ok {
+				continue
+			}
+			switch patch["applyTo"] {
+			case "NETWORK_FILTER":
+				patchVal, _ := patch["patch"].(map[string]any)
+				value, _ := patchVal["value"].(map[string]any)
+				typedConfig, _ := value["typed_config"].(map[string]any)
+				accessLogs, _ := typedConfig["access_log"].([]any)
+				for _, al := range accessLogs {
+					alMap, _ := al.(map[string]any)
+					alTC, _ := alMap["typed_config"].(map[string]any)
+					attrs, _ := alTC["attributes"].(map[string]any)
+					values, _ := attrs["values"].([]any)
+					for _, v := range values {
+						entry, _ := v.(map[string]any)
+						if entry["key"] == "organization_id" {
+							hasOrgAttr = true
+						}
+					}
+				}
+			case "HTTP_FILTER":
+				name, _, _ := unstructured.NestedString(patch, "patch", "value", "name")
+				if name != "envoy.filters.http.header_to_metadata.identity" {
+					continue
+				}
+				rules, _, _ := unstructured.NestedSlice(patch, "patch", "value", "typed_config", "request_rules")
+				for _, item := range rules {
+					rule, ok := item.(map[string]any)
+					if !ok {
+						continue
+					}
+					if rule["header"] == "X-MaaS-Organization-Id" {
+						identityWithOrg++
+						break
+					}
+				}
+			}
+		}
+		return hasOrgAttr, identityWithOrg > 0
+	}
+	hasCostCenter := func(ef *unstructured.Unstructured) (hasAttr, hasRule bool) {
+		identityWithCost := 0
+		patches, _, _ := unstructured.NestedSlice(ef.Object, "spec", "configPatches")
+		for _, p := range patches {
+			patch, ok := p.(map[string]any)
+			if !ok {
+				continue
+			}
+			switch patch["applyTo"] {
+			case "NETWORK_FILTER":
+				patchVal, _ := patch["patch"].(map[string]any)
+				value, _ := patchVal["value"].(map[string]any)
+				typedConfig, _ := value["typed_config"].(map[string]any)
+				accessLogs, _ := typedConfig["access_log"].([]any)
+				for _, al := range accessLogs {
+					alMap, _ := al.(map[string]any)
+					alTC, _ := alMap["typed_config"].(map[string]any)
+					attrs, _ := alTC["attributes"].(map[string]any)
+					values, _ := attrs["values"].([]any)
+					for _, v := range values {
+						entry, _ := v.(map[string]any)
+						if entry["key"] == "cost_center" {
+							hasAttr = true
+						}
+					}
+				}
+			case "HTTP_FILTER":
+				name, _, _ := unstructured.NestedString(patch, "patch", "value", "name")
+				if name != "envoy.filters.http.header_to_metadata.identity" {
+					continue
+				}
+				rules, _, _ := unstructured.NestedSlice(patch, "patch", "value", "typed_config", "request_rules")
+				for _, item := range rules {
+					rule, ok := item.(map[string]any)
+					if !ok {
+						continue
+					}
+					if rule["header"] == "X-MaaS-Cost-Center" {
+						identityWithCost++
+						break
+					}
+				}
+			}
+		}
+		return hasAttr, identityWithCost > 0
+	}
+
+	applyFilter := func(t *testing.T, tenant *maasv1alpha1.MaasTenantConfig) *unstructured.Unstructured {
+		t.Helper()
+		g := NewWithT(t)
+		s := tenantTestScheme(t)
+		cfg := usageLogsConfig(true)
+		cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cfg, tenant).Build()
+		r := newUsageLogsReconciler(t, s, cl, func(r *TenantReconciler) {
+			r.UsageLogsManifestPath = testUsageLogsManifestPath(t)
+		})
+		_, err := r.ensureUsageLogsEnvoyFilter(context.Background(), ctrl.Log, tenant, defaultUsageLogsPlatformContext(), cfg)
+		g.Expect(err).NotTo(HaveOccurred())
+		ef := &unstructured.Unstructured{}
+		ef.SetGroupVersionKind(tenantreconcile.GVKEnvoyFilter)
+		g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: tenantreconcile.UsageLogsEnvoyFilterName(""), Namespace: usageLogsTestGatewayNS}, ef)).To(Succeed())
+		return ef
+	}
+
+	t.Run("default includes organization_id in filter", func(t *testing.T) {
+		g := NewWithT(t)
+		tenant := usageLogsTenantConfig(usageLogsTestDefaultTenant, tenantreconcile.DefaultAITenantName, usageLogsTestAITenantNS)
+		ef := applyFilter(t, tenant)
+		hasOrgAttr, hasOrgRule := inspectCaptureOrganization(ef)
+		g.Expect(hasOrgAttr).To(BeTrue(), "organization_id attribute should be present when logs.captureOrganization is unset")
+		g.Expect(hasOrgRule).To(BeTrue(), "X-MaaS-Organization-Id request_rule should be present when logs.captureOrganization is unset")
+		hasCostAttr, hasCostRule := hasCostCenter(ef)
+		g.Expect(hasCostAttr).To(BeTrue(), "cost_center is not gated by captureOrganization")
+		g.Expect(hasCostRule).To(BeTrue(), "X-MaaS-Cost-Center request_rule is not gated by captureOrganization")
+
+		patches, _, _ := unstructured.NestedSlice(ef.Object, "spec", "configPatches")
+		foundCEL := false
+		for _, p := range patches {
+			patch, ok := p.(map[string]any)
+			if !ok || patch["applyTo"] != "NETWORK_FILTER" {
+				continue
+			}
+			patchVal, _ := patch["patch"].(map[string]any)
+			value, _ := patchVal["value"].(map[string]any)
+			typedConfig, _ := value["typed_config"].(map[string]any)
+			accessLogs, _ := typedConfig["access_log"].([]any)
+			for _, al := range accessLogs {
+				alMap, _ := al.(map[string]any)
+				alTC, _ := alMap["typed_config"].(map[string]any)
+				attrs, _ := alTC["attributes"].(map[string]any)
+				values, _ := attrs["values"].([]any)
+				for _, v := range values {
+					entry, _ := v.(map[string]any)
+					if entry["key"] != "organization_id" {
+						continue
+					}
+					val, _ := entry["value"].(map[string]any)
+					cel, _ := val["string_value"].(string)
+					g.Expect(cel).To(HavePrefix("%CEL("))
+					g.Expect(cel).To(HaveSuffix(")%"))
+					g.Expect(cel).To(ContainSubstring(`["organization_id"]`))
+					g.Expect(cel).To(ContainSubstring(`request.headers["x-maas-organization-id"]`))
+					foundCEL = true
+				}
+			}
+		}
+		g.Expect(foundCEL).To(BeTrue())
+	})
+
+	t.Run("logs captureOrganization false omits organization_id from filter", func(t *testing.T) {
+		g := NewWithT(t)
+		tenant := usageLogsTenantConfig(usageLogsTestDefaultTenant, tenantreconcile.DefaultAITenantName, usageLogsTestAITenantNS)
+		tenant.Spec.Telemetry = &maasv1alpha1.TenantTelemetryConfig{
+			Logs: &maasv1alpha1.TenantLogsConfig{
+				CaptureOrganization: ptr.To(false),
+			},
+		}
+		ef := applyFilter(t, tenant)
+		hasOrgAttr, hasOrgRule := inspectCaptureOrganization(ef)
+		g.Expect(hasOrgAttr).To(BeFalse(), "organization_id attribute should be absent when logs.captureOrganization is false")
+		g.Expect(hasOrgRule).To(BeFalse(), "X-MaaS-Organization-Id request_rule should be absent when logs.captureOrganization is false")
+		hasCostAttr, hasCostRule := hasCostCenter(ef)
+		g.Expect(hasCostAttr).To(BeTrue(), "cost_center is not gated by captureOrganization")
+		g.Expect(hasCostRule).To(BeTrue(), "X-MaaS-Cost-Center request_rule is not gated by captureOrganization")
+	})
+
+	t.Run("metrics captureOrganization false does not disable log organization_id", func(t *testing.T) {
+		g := NewWithT(t)
+		tenant := usageLogsTenantConfig(usageLogsTestDefaultTenant, tenantreconcile.DefaultAITenantName, usageLogsTestAITenantNS)
+		tenant.Spec.Telemetry = &maasv1alpha1.TenantTelemetryConfig{
+			Metrics: &maasv1alpha1.TenantMetricsConfig{
+				CaptureOrganization: ptr.To(false),
+			},
+		}
+		ef := applyFilter(t, tenant)
+		hasOrgAttr, hasOrgRule := inspectCaptureOrganization(ef)
+		g.Expect(hasOrgAttr).To(BeTrue(), "metrics.captureOrganization must not gate organization_id on usage logs")
+		g.Expect(hasOrgRule).To(BeTrue(), "metrics.captureOrganization must not gate X-MaaS-Organization-Id on usage logs")
+	})
+}
+
 func TestTenantCleanup_RemovesUsageLogsEnvoyFilter(t *testing.T) {
 	g := NewWithT(t)
 	s := tenantTestScheme(t)

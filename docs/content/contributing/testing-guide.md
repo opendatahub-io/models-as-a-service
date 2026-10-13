@@ -65,7 +65,7 @@ Tests are organized into **xdist groups** for parallel execution. All tests in a
 | `tenant_isolation` | `test_tenant_rate_limit_isolation.py` | Per-tenant rate limit independence |
 | `tenant_isolation` | `test_tenant_subscription_isolation.py` | Per-tenant subscription scoping |
 | `tenant_isolation` | `test_tenant_discovery_isolation.py` | Per-tenant /v1/tenants isolation |
-| `tenant_inference` | `test_tenant_model_inference.py` | Cross-gateway inference isolation |
+| `tenant_inference` | `test_tenant_model_inference.py` | Cross-gateway auth isolation and per-Gateway AuthPolicy EnvoyFilter selectors |
 | `tenant_ipp` | `test_per_tenant_ipp_isolation.py` | Per-tenant IPP stacks, routing isolation |
 | `tenant_auto_resolve` | `test_tenant_auto_resolve.py` | MaaSModelRef tenant auto-resolution from the gateway parentRef |
 | `external` | `test_external_oidc.py` | External OIDC token flows (skipped unless `EXTERNAL_OIDC=true`) |
@@ -173,11 +173,23 @@ The E2E framework auto-discovers most values from the cluster. These are the mos
 | `ADMIN_OC_TOKEN` | Admin token; admin tests skip if unset |
 | `E2E_SKIP_TLS_VERIFY` | Set `true` to skip TLS verification |
 | `MODEL_NAME` | Override model ID (defaults to first from catalog) |
+| `E2E_MODEL_PATH` | Override the model route path used by inference tests (for example, `/llm/facebook-opt-125m-simulated`; omit `/v1`) |
 | `EXTERNAL_OIDC` | Set `true` to enable external OIDC tests |
 | `E2E_PARALLEL_WORKERS` | pytest-xdist worker count for pass 1 (default `7`). Set to `1` for single-worker pass 1 without xdist; pass 2 stays serial. |
 | `LLMISVC_CONTROLLER_CPU_REQUEST` / `LLMISVC_CONTROLLER_CPU_LIMIT` | CPU that `deploy-platform.sh` gives `llmisvc-controller-manager` on the test cluster (defaults `1` / `2`; shipped is 100m). Set the limit empty to keep the shipped resources. |
 
 See `test/e2e/tests/conftest.py` and individual test module docstrings for the full set of supported variables.
+
+The non-streaming chat response regression is covered by
+`tests/test_smoke.py::test_chat_completions_gateway_alive`. It uses the governed
+`facebook-opt-125m-simulated` LLMInferenceService and MaaSModelRef deployed by
+`scripts/deploy-models.sh`, plus the `simulator-subscription` API key created by
+the `api_key_headers` fixture. `MODEL_NAME` selects the route/catalog model,
+while `E2E_MODEL_NAME` sets the ID sent in the inference request body (default
+`facebook/opt-125m`). The full CI runner sets `GATEWAY_HOST` and `MODEL_NAME`;
+for a local run, set `GATEWAY_HOST` to the gateway hostname and `MODEL_NAME` to
+the catalog model ID. Set `E2E_MODEL_PATH` when the catalog URL does not identify
+the model route.
 
 ### Parallel E2E (pytest-xdist)
 

@@ -195,6 +195,7 @@ After creating the database Secret and Gateways, create or update your DataScien
     | `spec.telemetry.metrics.captureGroup` | Include group labels on metrics (default `false`; higher cardinality). |
     | `spec.telemetry.metrics.captureModelUsage` | Include model labels on usage metrics (default `true`). |
     | `spec.telemetry.logs.captureUser` | Include `user_id` on usage logs (default `false`; privacy-sensitive). Independent of `metrics.captureUser`. |
+    | `spec.telemetry.logs.captureOrganization` | Include `organization_id` on usage logs (default `true`). Independent of `metrics.captureOrganization`. |
 
     Example (patch common values):
 
@@ -215,6 +216,7 @@ After creating the database Secret and Gateways, create or update your DataScien
           captureGroup: false
         logs:
           captureUser: false
+          captureOrganization: true
     ```
 
     ```bash
