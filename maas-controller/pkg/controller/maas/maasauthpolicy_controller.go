@@ -53,6 +53,7 @@ import (
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
+	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/authpolicy"
 	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/platform/tenantreconcile"
 )
 
@@ -101,9 +102,12 @@ type MaaSAuthPolicyReconciler struct {
 
 // oidcConfig holds resolved OIDC configuration from AITenant or a legacy Tenant CR.
 type oidcConfig struct {
-	IssuerURL string
-	ClientID  string
-	TTL       int
+	IssuerURL               string
+	ClientID                string
+	Audience                string
+	AccessTokenPurposeClaim string
+	AccessTokenPurpose      string
+	TTL                     int
 }
 
 // authzCacheTTL returns the safe TTL for authorization caches that depend on metadata.
@@ -243,6 +247,11 @@ func (r *MaaSAuthPolicyReconciler) fetchOIDCConfig(ctx context.Context, log logr
 		return nil
 	}
 
+	if (oidc.AccessTokenPurposeClaim == "") != (oidc.AccessTokenPurpose == "") {
+		log.Error(nil, "Tenant external OIDC access-token purpose claim and value must be configured together")
+		return nil
+	}
+
 	const (
 		defaultOIDCJWKSTTL = 300
 		minOIDCJWKSTTL     = 30
@@ -263,13 +272,18 @@ func (r *MaaSAuthPolicyReconciler) fetchOIDCConfig(ctx context.Context, log logr
 	log.Info("OIDC configuration loaded from tenant platform context",
 		"issuerUrl", oidc.IssuerURL,
 		"clientId", oidc.ClientID,
+		"audience", oidc.Audience,
+		"accessTokenPurposeClaim", oidc.AccessTokenPurposeClaim,
 		"ttl", ttl,
 		"source", platformContext.Source)
 
 	return &oidcConfig{
-		IssuerURL: oidc.IssuerURL,
-		ClientID:  oidc.ClientID,
-		TTL:       ttl,
+		IssuerURL:               oidc.IssuerURL,
+		ClientID:                oidc.ClientID,
+		Audience:                oidc.Audience,
+		AccessTokenPurposeClaim: oidc.AccessTokenPurposeClaim,
+		AccessTokenPurpose:      oidc.AccessTokenPurpose,
+		TTL:                     ttl,
 	}
 }
 
@@ -879,6 +893,12 @@ func (r *MaaSAuthPolicyReconciler) buildGatewayAuthPolicySpec(oidc *oidcConfig, 
 					map[string]any{
 						"predicate": `!("x-maas-cost-center" in request.headers)`,
 					},
+					map[string]any{
+						"predicate": `!("x-maas-identity" in request.headers)`,
+					},
+					map[string]any{
+						"predicate": `!("x-maas-admin-scope" in request.headers)`,
+					},
 				},
 			},
 		},
@@ -964,28 +984,21 @@ allow {
 }`,
 			},
 		}
-		// oidc-client-bound enforces that OIDC JWTs were issued to the configured
-		// OAuth client (azp claim). The has(auth.identity.azp) guard is required so
-		// that OpenShift TokenReview identities (which carry no azp claim) are not
-		// matched by this rule and denied with 403.
+		// oidc-client-bound enforces the external-JWT issuer and OAuth client.
+		// TokenReview identities have a user object rather than a top-level iss
+		// claim and therefore remain on their existing authorization path.
 		authorizationRules["oidc-client-bound"] = map[string]any{
-			"when": []any{
-				map[string]any{
-					"predicate": celIsNotAPIKey +
-						` && request.headers.authorization.matches("^Bearer [^.]+\\.[^.]+\\.[^.]+$")` +
-						` && has(auth.identity.azp)`,
-				},
-			},
+			"when":     authpolicy.OIDCTokenBoundWhen(celIsNotAPIKey),
 			"metrics":  false,
 			"priority": int64(1),
 			"patternMatching": map[string]any{
-				"patterns": []any{
-					map[string]any{
-						"selector": "auth.identity.azp",
-						"operator": "eq",
-						"value":    oidc.ClientID,
-					},
-				},
+				"patterns": authpolicy.OIDCTokenBoundPatterns(
+					oidc.IssuerURL,
+					oidc.ClientID,
+					oidc.Audience,
+					oidc.AccessTokenPurposeClaim,
+					oidc.AccessTokenPurpose,
+				),
 			},
 		}
 	}

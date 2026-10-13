@@ -22,6 +22,9 @@ spec:
   oidc:
     issuerUrl: "https://keycloak.example.com/realms/maas"
     clientId: maas-api
+    audience: maas-api
+    accessTokenPurposeClaim: token_use
+    accessTokenPurpose: access
     ttl: 300  # optional: JWKS cache TTL in seconds (default 300, minimum 30)
 ```
 
@@ -29,11 +32,50 @@ spec:
 |-------|----------|-------------|
 | `issuerUrl` | Yes | OIDC issuer URL (must be HTTPS). Must serve `/.well-known/openid-configuration`. |
 | `clientId` | Yes | OAuth2 client ID. Incoming tokens must carry an `azp` claim matching this value. |
+| `audience` | No | Exact value required as the token `aud` string or as one element of its `aud` array. Required for delegated Grid administration. |
+| `accessTokenPurposeClaim` | No | Simple claim name carrying the access-token purpose, such as `token_use`. Must be set with `accessTokenPurpose`; required for delegated Grid administration. |
+| `accessTokenPurpose` | No | Exact value required in `accessTokenPurposeClaim`. Must be set with `accessTokenPurposeClaim`; required for delegated Grid administration. |
 | `ttl` | No | JWKS cache duration in seconds (default `300`, minimum `30`). |
 
 The controller propagates this configuration to the tenant's gateway-level `maas-gateway-auth` AuthPolicy in the gateway namespace. OIDC is **not** configured by patching route-level auth policies.
 
 For **legacy unmanaged tenants** (not backed by an `AITenant`), configure `Tenant.spec.externalOIDC` with the same field semantics. During upgrade, existing `Tenant/default-tenant.spec.externalOIDC` values are migrated to `AITenant/models-as-a-service.spec.oidc` automatically.
+
+### Audience and token purpose
+
+`audience` and the access-token-purpose fields provide different, complementary
+guarantees:
+
+- `audience` requires MaaS to be an intended recipient of the token. It rejects
+  otherwise valid tokens issued for another API or resource.
+- `accessTokenPurposeClaim` and `accessTokenPurpose` require the JWT to be an
+  access token rather than an ID token or another purpose-specific JWT. This
+  protects against token-type confusion when a provider, shared audience, or
+  misconfiguration allows more than one token type to carry the MaaS audience.
+- `clientId` (`azp`) binds the token to the configured OAuth client, while
+  `issuerUrl` (`iss`) binds it to the configured identity authority.
+
+In a standard OIDC deployment, an ID token normally has the OAuth client as its
+audience and an access token has the resource API as its audience. The purpose
+check is therefore defense in depth and an explicit provider contract: it fails
+closed if the configured purpose claim is missing or has the wrong value.
+
+The purpose fields have these limits:
+
+- They check a **JWT payload claim**, not the JOSE header. If a provider only
+  expresses token type in the header, such as a header-only `typ` value, MaaS
+  cannot enforce it with these fields; the provider must emit an equivalent
+  mapper-controlled payload claim.
+- The claim must be controlled by the IdP. A user-editable profile field or
+  client-controlled value provides no security guarantee.
+- The check does not replace signature, expiry, issuer, audience, or client
+  validation, and it does not provide revocation, freshness, organization-role
+  authorization, or theft protection.
+
+Delegated Grid administration requires both an explicit audience and a purpose
+claim/value pair. Legacy OIDC deployments may omit the optional fields during
+migration, but those tokens do not satisfy the delegated-administration token
+contract.
 
 See [Authentication Modes](../concepts/auth-modes.md) for the full field alignment between `AITenant.spec.oidc` and `Tenant.spec.externalOIDC`, and [AITenant CRD](../reference/crds/ai-tenant.md) for the authoritative schema.
 
@@ -144,7 +186,8 @@ This table covers the non-functional security requirements (NFRs) raised during 
 |-----|-------------|---------|
 | **JWKS cache policy** | MaaS controller + Authorino | `ttl` is propagated from the `AITenant` (or legacy `Tenant`) CR to Authorino's `jwt.ttl` field. Minimum 30 s enforced server-side in the controller (independent of CRD admission validation). See [JWKS Cache TTL](#jwks-cache-ttl) above. |
 | **Client secret handling** | Not applicable | MaaS external OIDC uses **JWT bearer validation only**. Tokens are validated against the IdP's public JWKS. No `client_secret` is required or stored at runtime. The `clientId` field is configuration, not a credential. |
-| **OAuth client binding (`azp` claim)** | MaaS controller (gateway AuthPolicy) | The generated `maas-gateway-auth` AuthPolicy includes an `oidc-client-bound` rule that checks `auth.identity.azp == clientId`. Tokens issued to a different OAuth client are rejected with 403, even if they share the same issuer. An `has(auth.identity.azp)` guard ensures OpenShift TokenReview identities (which carry no `azp` claim) are unaffected. |
+| **Issuer and OAuth client binding (`iss`/`azp` claims)** | MaaS controller (gateway AuthPolicy) | The generated `maas-gateway-auth` AuthPolicy requires `auth.identity.iss == issuerUrl` and `auth.identity.azp == clientId` for external JWTs. Tokens from another issuer or OAuth client are rejected with 403. OpenShift TokenReview identities use their existing user-object path and are not selected by this rule. |
+| **Audience and token purpose (`aud`/purpose claim)** | MaaS controller (gateway AuthPolicy) | When configured, the same rule requires the intended `aud` value and configured access-token purpose. Delegated Grid administration requires both checks. Legacy OIDC deployments can omit these optional fields during migration. |
 | **OIDC group claim sanitization** | MaaS controller (gateway AuthPolicy) | The `oidc-groups-safe` authorization rule rejects OIDC tokens whose `groups` claim contains characters outside `[A-Za-z0-9:._/-]`. This prevents malformed group names from reaching subscription selection or being serialized into identity headers. Ensure IdP group names match this pattern and your `MaaSSubscription` / `MaaSAuthPolicy` group entries. |
 | **SSRF on issuer URL** | CRD validation + Authorino HTTP client | The CRD enforces `^https://\S+$` on `issuerUrl`, blocking plain HTTP and empty URLs at admission time. Blocking of private IPs and loopback addresses in JWKS fetch is the responsibility of the Authorino HTTP client (outside MaaS). Operators in restricted environments should use network policies to constrain Authorino's egress. |
 | **Rate limiting on auth paths** | Kuadrant TokenRateLimitPolicy (model inference only) | The `gateway-default-deny` TRLP enforces a 0-token default on model inference routes and **explicitly excludes** `/maas-api` management paths. Authorino's internal JWKS refresh is not exposed as an external endpoint and is not subject to per-request rate limiting. If high-volume IdP calls are a concern, increase `ttl` to reduce refresh frequency. |

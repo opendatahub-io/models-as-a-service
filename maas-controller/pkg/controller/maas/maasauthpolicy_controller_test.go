@@ -1884,7 +1884,7 @@ func TestBuildGatewayAuthPolicySpec_DenyClientIdentityHeaders(t *testing.T) {
 		"spec", "defaults", "rules", "authorization", "deny-client-identity-headers", "patternMatching", "patterns",
 	)
 
-	if err != nil || !found || len(patterns) != 6 {
+	if err != nil || !found || len(patterns) != 8 {
 		t.Fatalf("deny-client-identity-headers patterns missing: found=%v len=%d err=%v", found, len(patterns), err)
 	}
 
@@ -1908,6 +1908,8 @@ func TestBuildGatewayAuthPolicySpec_DenyClientIdentityHeaders(t *testing.T) {
 		`!("x-maas-subscription-rate-limit-id" in request.headers)`,
 		`!("x-maas-organization-id" in request.headers)`,
 		`!("x-maas-cost-center" in request.headers)`,
+		`!("x-maas-identity" in request.headers)`,
+		`!("x-maas-admin-scope" in request.headers)`,
 	}
 	if len(got) != len(want) {
 		t.Fatalf("deny-client-identity-headers predicates = %#v, want %#v", got, want)

@@ -15,6 +15,59 @@ import (
 
 func boolPtr(b bool) *bool { return &b }
 
+func TestPatchAuthPolicyWithOIDCRequiresPurposePair(t *testing.T) {
+	resource := &unstructured.Unstructured{Object: map[string]any{"spec": map[string]any{}}}
+	oidc := &maasv1alpha1.TenantExternalOIDCConfig{
+		IssuerURL:               "https://issuer.example.com/realms/test",
+		ClientID:                "maas-api",
+		AccessTokenPurposeClaim: "token_use",
+	}
+
+	err := patchAuthPolicyWithOIDC(logr.Discard(), resource, oidc)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "must be configured together")
+}
+
+func TestPatchAuthPolicyWithOIDCTokenContract(t *testing.T) {
+	resource := &unstructured.Unstructured{Object: map[string]any{"spec": map[string]any{}}}
+	oidc := &maasv1alpha1.TenantExternalOIDCConfig{
+		IssuerURL:               "https://issuer.example.com/realms/test",
+		ClientID:                "maas-api",
+		Audience:                "maas-api",
+		AccessTokenPurposeClaim: "token_use",
+		AccessTokenPurpose:      "access",
+	}
+
+	require.NoError(t, patchAuthPolicyWithOIDC(logr.Discard(), resource, oidc))
+	patterns, found, err := unstructured.NestedSlice(
+		resource.Object,
+		"spec", "rules", "authorization", "oidc-client-bound", "patternMatching", "patterns",
+	)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Len(t, patterns, 4)
+
+	expected := []map[string]string{
+		{"selector": "auth.identity.iss", "operator": "eq", "value": oidc.IssuerURL},
+		{"selector": "auth.identity.azp", "operator": "eq", "value": oidc.ClientID},
+		{"selector": "auth.identity.token_use", "operator": "eq", "value": oidc.AccessTokenPurpose},
+	}
+	for index, patternIndex := range []int{0, 1, 3} {
+		patternMap, ok := patterns[patternIndex].(map[string]any)
+		require.True(t, ok)
+		assert.Equal(t, expected[index]["selector"], patternMap["selector"])
+		assert.Equal(t, expected[index]["operator"], patternMap["operator"])
+		assert.Equal(t, expected[index]["value"], patternMap["value"])
+	}
+
+	audiencePattern, ok := patterns[2].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t,
+		`has(auth.identity.aud) && (auth.identity.aud == "maas-api" || "maas-api" in auth.identity.aud)`,
+		audiencePattern["predicate"],
+	)
+}
+
 func TestBuildTelemetryLabels(t *testing.T) {
 	tests := []struct {
 		name           string

@@ -154,8 +154,22 @@ class TestHeaderSpoofing:
                 "X-MaaS-Group",
             ),
             ({"X-MaaS-KeyName": "forged-prod-key"}, "X-MaaS-KeyName"),
+            (
+                {"X-MaaS-Identity": '{"source":"authorino","claims":{}}'},
+                "X-MaaS-Identity",
+            ),
+            (
+                {"X-MaaS-Admin-Scope": '{"organizationId":"00000000-0000-0000-0000-000000000000"}'},
+                "X-MaaS-Admin-Scope",
+            ),
         ],
-        ids=["username-only", "group-only", "keyname-only"],
+        ids=[
+            "username-only",
+            "group-only",
+            "keyname-only",
+            "identity-envelope",
+            "admin-scope",
+        ],
     )
     def test_forged_identity_headers_rejected_on_key_mint(self, forged_header, label):
         """POST /v1/api-keys with a forged X-MaaS identity header must be denied.

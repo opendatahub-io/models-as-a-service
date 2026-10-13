@@ -83,6 +83,7 @@ type TenantSpec struct {
 }
 
 // TenantExternalOIDCConfig defines the external OIDC provider settings.
+// +kubebuilder:validation:XValidation:rule="has(self.accessTokenPurposeClaim) == has(self.accessTokenPurpose)",message="accessTokenPurposeClaim and accessTokenPurpose must be set together"
 type TenantExternalOIDCConfig struct {
 	// IssuerURL is the OIDC issuer URL (e.g. https://keycloak.example.com/realms/maas).
 	// +kubebuilder:validation:MinLength=9
@@ -95,6 +96,32 @@ type TenantExternalOIDCConfig struct {
 	// +kubebuilder:validation:MaxLength=256
 	// +kubebuilder:validation:Pattern=`^\S+$`
 	ClientID string `json:"clientId"`
+
+	// Audience is the exact OIDC audience required in the token `aud` claim.
+	// It must be set for delegated Grid administration.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=256
+	// +kubebuilder:validation:Pattern=`^\S+$`
+	Audience string `json:"audience,omitempty"`
+
+	// AccessTokenPurposeClaim is the simple token claim name that carries the
+	// access-token purpose, such as token_use. It and AccessTokenPurpose must be
+	// set together and are required for delegated Grid administration.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=128
+	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9_-]+$`
+	AccessTokenPurposeClaim string `json:"accessTokenPurposeClaim,omitempty"`
+
+	// AccessTokenPurpose is the exact value required in AccessTokenPurposeClaim.
+	// It and AccessTokenPurposeClaim must be set together and are required for
+	// delegated Grid administration.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=128
+	// +kubebuilder:validation:Pattern=`^\S+$`
+	AccessTokenPurpose string `json:"accessTokenPurpose,omitempty"`
 
 	// TTL is the JWKS cache duration in seconds.
 	// +kubebuilder:validation:Optional
