@@ -47,6 +47,9 @@ func TestEnsureAITenantNamespaceWithClientCreatesNamespace(t *testing.T) {
 	if got := ns.Labels["app.kubernetes.io/managed-by"]; got != "maas-controller" {
 		t.Fatalf("managed-by label = %q, want maas-controller", got)
 	}
+	if _, exists := ns.Labels[nemoGuardrailsWorkloadLabel]; exists {
+		t.Fatalf("NeMo guardrails workload label was applied to the AITenant namespace")
+	}
 }
 
 func managerTestScheme(t *testing.T) *runtime.Scheme {
@@ -900,6 +903,9 @@ func TestEnsureManagedNamespaceAddsNetworkPolicyLabelWithoutOverwritingOwnership
 	if got := ns.Labels["opendatahub.io/generated-namespace"]; got != "true" {
 		t.Fatalf("generated-namespace label = %q, want true", got)
 	}
+	if got := ns.Labels[nemoGuardrailsWorkloadLabel]; got != "true" {
+		t.Fatalf("NeMo guardrails workload label = %q, want true", got)
+	}
 	if got := ns.Labels["app.kubernetes.io/managed-by"]; got != "ai-gateway-operator" {
 		t.Fatalf("managed-by label was overwritten to %q, want ai-gateway-operator preserved", got)
 	}
@@ -908,12 +914,13 @@ func TestEnsureManagedNamespaceAddsNetworkPolicyLabelWithoutOverwritingOwnership
 	}
 }
 
-func TestEnsureManagedNamespaceNoUpdateWhenNetworkPolicyLabelPresent(t *testing.T) {
+func TestEnsureManagedNamespaceNoUpdateWhenAllRequiredLabelsPresent(t *testing.T) {
 	existing := &corev1.Namespace{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "test-infra-ns",
 			Labels: map[string]string{
 				"opendatahub.io/generated-namespace": "true",
+				nemoGuardrailsWorkloadLabel:          "true",
 				"app.kubernetes.io/managed-by":       "ai-gateway-operator",
 				"app.kubernetes.io/part-of":          "ai-gateway",
 			},
@@ -931,6 +938,34 @@ func TestEnsureManagedNamespaceNoUpdateWhenNetworkPolicyLabelPresent(t *testing.
 	}
 	if got := ns.Labels["app.kubernetes.io/managed-by"]; got != "ai-gateway-operator" {
 		t.Fatalf("managed-by label changed to %q, want ai-gateway-operator unchanged", got)
+	}
+}
+
+func TestEnsureManagedNamespaceUpgradeAddsGuardrailsLabelWhenOnlyNetworkPolicyPresent(t *testing.T) {
+	existing := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "test-infra-ns",
+			Labels: map[string]string{
+				"opendatahub.io/generated-namespace": "true",
+				"app.kubernetes.io/managed-by":       "ai-gateway-operator",
+			},
+		},
+	}
+	clientset := clientsetfake.NewSimpleClientset(existing)
+
+	if err := ensureManagedNamespaceWithClient(context.Background(), "test-infra-ns", "infra", clientset); err != nil {
+		t.Fatalf("ensure managed namespace: %v", err)
+	}
+
+	ns, err := clientset.CoreV1().Namespaces().Get(context.Background(), "test-infra-ns", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get namespace: %v", err)
+	}
+	if got := ns.Labels[nemoGuardrailsWorkloadLabel]; got != "true" {
+		t.Fatalf("guardrails label = %q, want true", got)
+	}
+	if got := ns.Labels["app.kubernetes.io/managed-by"]; got != "ai-gateway-operator" {
+		t.Fatalf("managed-by label changed to %q, want ai-gateway-operator preserved", got)
 	}
 }
 
@@ -953,8 +988,79 @@ func TestEnsureManagedNamespacePatchesNilLabels(t *testing.T) {
 	if got := ns.Labels["opendatahub.io/generated-namespace"]; got != "true" {
 		t.Fatalf("generated-namespace label = %q, want true", got)
 	}
+	if got := ns.Labels[nemoGuardrailsWorkloadLabel]; got != "true" {
+		t.Fatalf("NeMo guardrails workload label = %q, want true", got)
+	}
 	if _, exists := ns.Labels["app.kubernetes.io/managed-by"]; exists {
 		t.Fatalf("managed-by label was added to namespace not created by maas-controller")
+	}
+}
+
+func TestEnsureInfraNamespaceCreatesNemoGuardrailsWorkloadLabel(t *testing.T) {
+	clientset := clientsetfake.NewSimpleClientset()
+
+	if err := ensureInfraNamespaceWithClient(context.Background(), "odh-ai-gateway-infra", clientset); err != nil {
+		t.Fatalf("ensure infra namespace: %v", err)
+	}
+
+	ns, err := clientset.CoreV1().Namespaces().Get(context.Background(), "odh-ai-gateway-infra", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get infra namespace: %v", err)
+	}
+	if got := ns.Labels[nemoGuardrailsWorkloadLabel]; got != "true" {
+		t.Fatalf("NeMo guardrails workload label = %q, want true", got)
+	}
+}
+
+func TestLabelInfraNamespaceAddsGuardrailsLabelOnly(t *testing.T) {
+	existing := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "opendatahub",
+			Labels: map[string]string{
+				"app.kubernetes.io/managed-by": "opendatahub-operator",
+			},
+		},
+	}
+	clientset := clientsetfake.NewSimpleClientset(existing)
+
+	if err := labelInfraNamespace(context.Background(), "opendatahub", clientset); err != nil {
+		t.Fatalf("label infra namespace: %v", err)
+	}
+
+	ns, err := clientset.CoreV1().Namespaces().Get(context.Background(), "opendatahub", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get namespace: %v", err)
+	}
+	if got := ns.Labels[nemoGuardrailsWorkloadLabel]; got != "true" {
+		t.Fatalf("guardrails label = %q, want true", got)
+	}
+	if got := ns.Labels["app.kubernetes.io/managed-by"]; got != "opendatahub-operator" {
+		t.Fatalf("managed-by label changed to %q, want opendatahub-operator", got)
+	}
+}
+
+func TestLabelInfraNamespaceIsIdempotent(t *testing.T) {
+	existing := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "opendatahub",
+			Labels: map[string]string{
+				nemoGuardrailsWorkloadLabel:          "true",
+				"opendatahub.io/generated-namespace": "true",
+			},
+		},
+	}
+	clientset := clientsetfake.NewSimpleClientset(existing)
+
+	if err := labelInfraNamespace(context.Background(), "opendatahub", clientset); err != nil {
+		t.Fatalf("label infra namespace: %v", err)
+	}
+
+	ns, err := clientset.CoreV1().Namespaces().Get(context.Background(), "opendatahub", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get namespace: %v", err)
+	}
+	if got := ns.Labels[nemoGuardrailsWorkloadLabel]; got != "true" {
+		t.Fatalf("guardrails label = %q, want true", got)
 	}
 }
 

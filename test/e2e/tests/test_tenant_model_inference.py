@@ -4,8 +4,8 @@ E2E tests for multi-tenant model inference routing.
 These tests validate that:
   - Models created in tenant namespaces route through tenant gateways
   - Inference requests work end-to-end through tenant gateways
-  - Tenant isolation is enforced (tenant A cannot access tenant B's models via B's gateway)
-  - Gateway-level AuthPolicy controls access
+  - Gateway auth accepts each tenant's key and rejects it at the other tenant's gateway
+  - AuthPolicy EnvoyFilters select only the workload for their Gateway
 
 Prerequisites:
   - AITenant CRD available
@@ -42,6 +42,7 @@ from multitenancy_helpers import (
     require_aitenant_crd,
     response_summary,
     wait_for_route_auth_enforced,
+    wait_for_json,
 )
 
 from test_helper import (
@@ -110,6 +111,33 @@ def _wait_for_chat_ok(case: dict, gateway_url: str, api_key: str) -> requests.Re
                 model_name=model_name,
             ),
         )
+
+
+def _create_tenant_api_key(gateway_url, case, *, name_prefix="e2e-body-routing"):
+    """Create an API key for a tenant and return it."""
+    oc_token = _get_cluster_token()
+    r = create_api_key_at(
+        f"{gateway_url}/maas-api",
+        oc_token,
+        f"{name_prefix}-{case['suffix']}",
+        subscription=f"{case['model_name']}-sub",
+    )
+    assert r.status_code in (200, 201), (
+        f"Failed to create tenant API key: {r.status_code} {redact_sensitive(r.text)}"
+    )
+    api_key = r.json().get("key")
+    assert api_key, f"API key missing in response: {redact_sensitive(r.json())}"
+    return api_key
+
+
+def _gateway_auth_envoyfilter(gateway_name: str) -> dict:
+    """Wait for the EnvoyFilter Kuadrant generates from a Gateway AuthPolicy."""
+    return wait_for_json(
+        "envoyfilter",
+        f"kuadrant-auth-{gateway_name}",
+        GATEWAY_NAMESPACE,
+        timeout=180,
+    )
 
 
 @pytest.fixture(scope="module")
@@ -195,38 +223,59 @@ class TestTenantModelInference:
         )
         assert status.get("httpRouteGatewayNamespace") == GATEWAY_NAMESPACE
 
-    def test_inference_succeeds_through_tenant_gateway(self, tenant_inference_cases):
-        """Happy path: inference request succeeds through tenant A's gateway."""
-        case_a, _ = tenant_inference_cases
+    @pytest.mark.parametrize("tenant_index", [0, 1], ids=["tenant_a", "tenant_b"])
+    def test_inference_succeeds_through_tenant_gateway(self, tenant_inference_cases, tenant_index):
+        """Each tenant's valid API key succeeds through its own gateway."""
+        case = tenant_inference_cases[tenant_index]
+        gateway_url = _get_tenant_gateway_url(case["gateway_name"])
+        api_key = _create_tenant_api_key(gateway_url, case, name_prefix="e2e-tenant-inference")
 
-        # Get tenant gateway URL
-        gateway_url = _get_tenant_gateway_url(case_a["gateway_name"])
-
-        # Create API key via tenant's maas-api
-        oc_token = _get_cluster_token()
-
-        api_key_response = create_api_key_at(
-            f"{gateway_url}/maas-api",
-            oc_token,
-            f"e2e-tenant-inference-{case_a['suffix']}",
-            subscription=f"{case_a['model_name']}-sub",
-        )
-
-        assert api_key_response.status_code in (200, 201), (
-            f"Failed to create API key: {api_key_response.status_code} "
-            f"{redact_sensitive(api_key_response.text)}"
-        )
-
-        api_key = api_key_response.json().get("key")
-        assert api_key, f"API key missing in response: {redact_sensitive(api_key_response.json())}"
-
-        # Send inference request through tenant gateway
-        response = _wait_for_chat_ok(case_a, gateway_url, api_key)
+        response = _wait_for_chat_ok(case, gateway_url, api_key)
 
         # Verify response structure
         data = response.json()
         assert "choices" in data, f"Response missing 'choices': {redact_sensitive(data)}"
         assert len(data["choices"]) > 0, f"Empty choices in response: {redact_sensitive(data)}"
+
+    def test_auth_envoyfilters_select_their_gateway_workloads(self, tenant_inference_cases):
+        """Each governed tenant Gateway has an auth filter scoped to its own workload."""
+        selector_key = "gateway.networking.k8s.io/gateway-name"
+        selected_gateways = set()
+
+        for case in tenant_inference_cases:
+            auth_policy_name = per_tenant_gateway_policy_names(
+                case["tenant_label_name"], case["gateway_name"]
+            )["gateway_authpolicy"]
+            auth_policy = get_json_or_none("authpolicy", auth_policy_name, GATEWAY_NAMESPACE)
+            assert auth_policy is not None, (
+                f"Gateway AuthPolicy {GATEWAY_NAMESPACE}/{auth_policy_name} is missing"
+            )
+            target = (auth_policy.get("spec") or {}).get("targetRef") or {}
+            assert target.get("name") == case["gateway_name"], (
+                f"{auth_policy_name} targets {target!r}, expected gateway {case['gateway_name']}"
+            )
+
+            resource = _gateway_auth_envoyfilter(case["gateway_name"])
+            selector = ((resource.get("spec") or {}).get("workloadSelector") or {}).get("labels") or {}
+            selected_gateway = selector.get(selector_key)
+            assert selected_gateway == case["gateway_name"], (
+                f"AuthPolicy EnvoyFilter {resource['metadata']['name']} workload selector targets "
+                f"{selected_gateway!r}, expected {case['gateway_name']!r}: {selector!r}"
+            )
+            owner_gateways = {
+                owner.get("name")
+                for owner in (resource.get("metadata") or {}).get("ownerReferences") or []
+                if owner.get("kind") == "Gateway"
+            }
+            assert case["gateway_name"] in owner_gateways, (
+                f"AuthPolicy EnvoyFilter {resource['metadata']['name']} is owned by "
+                f"{owner_gateways!r}, expected Gateway {case['gateway_name']!r}"
+            )
+            selected_gateways.add(selected_gateway)
+
+        assert len(selected_gateways) == len(tenant_inference_cases), (
+            f"Expected a distinct auth workload selector per tenant gateway, got {selected_gateways!r}"
+        )
 
     def test_tenant_isolation_cross_gateway_blocked(self, tenant_inference_cases):
         """Tenant isolation: tenant A cannot access tenant B's model via B's gateway."""
@@ -235,75 +284,39 @@ class TestTenantModelInference:
         # Get gateway URLs
         gateway_a_url = _get_tenant_gateway_url(case_a["gateway_name"])
         gateway_b_url = _get_tenant_gateway_url(case_b["gateway_name"])
-        model_b_url = f"{gateway_b_url}{case_b['model_path']}"
 
-        # Create API key for tenant A through tenant A's gateway
-        oc_token = _get_cluster_token()
+        api_key_a = _create_tenant_api_key(gateway_a_url, case_a, name_prefix="e2e-cross-tenant-a")
+        api_key_b = _create_tenant_api_key(gateway_b_url, case_b, name_prefix="e2e-cross-tenant-b")
 
-        api_key_response = create_api_key_at(
-            f"{gateway_a_url}/maas-api",
-            oc_token,
-            f"e2e-cross-tenant-{case_a['suffix']}",
-            subscription=f"{case_a['model_name']}-sub",
-        )
-        assert api_key_response.status_code in (200, 201), (
-            f"Failed to create API key: {api_key_response.status_code} "
-            f"{redact_sensitive(api_key_response.text)}"
-        )
-        api_key_body = api_key_response.json()
-        api_key = api_key_body.get("key")
-        assert api_key, (
-            "API key creation returned success without key material: "
-            f"{redact_sensitive(api_key_body)}"
-        )
+        # Both positive controls must pass before a cross-tenant denial can be
+        # attributed to the target gateway's tenant-specific auth configuration.
+        _wait_for_chat_ok(case_a, gateway_a_url, api_key_a)
+        _wait_for_chat_ok(case_b, gateway_b_url, api_key_b)
 
-        # Positive control: the key is served on A's own gateway, so a rejection
-        # on B below is about the tenant boundary, not a key that does not work yet.
-        _wait_for_chat_ok(case_a, gateway_a_url, api_key)
+        for source_case, target_case, target_gateway_url, foreign_key in (
+            (case_a, case_b, gateway_b_url, api_key_a),
+            (case_b, case_a, gateway_a_url, api_key_b),
+        ):
+            model_url = f"{target_gateway_url}{target_case['model_path']}"
+            with _tenant_gateway_auth_policy(target_case["gateway_name"]):
+                response = _request_with_gateway_retry(
+                    requests.post,
+                    f"{model_url}/chat/completions",
+                    headers={"Authorization": f"Bearer {foreign_key}"},
+                    json={
+                        "model": "facebook/opt-125m",
+                        "messages": [{"role": "user", "content": "Say hello"}],
+                    },
+                )
 
-        # A 200 below must mean a key-validation leak, not a route that B's
-        # gateway has not programmed auth for yet.
-        wait_for_route_auth_enforced(
-            model_b_url,
-            what=f"B route not enforcing auth yet: {model_b_url} kept accepting an unknown API key",
-        )
-
-        # Try to access tenant B's model through tenant B's gateway using tenant A's API key.
-        # Empty 401/403 are retried; the last reply is checked as B's verdict.
-        with _tenant_gateway_auth_policy(case_b["gateway_name"]):
-            response = _request_with_gateway_retry(
-                requests.post,
-                f"{model_b_url}/chat/completions",
-                headers={"Authorization": f"Bearer {api_key}"},
-                json={"model": "facebook/opt-125m", "messages": [{"role": "user", "content": "Say hello"}]},
+            assert is_gateway_auth_denial(response), (
+                f"Expected {target_case['tenant_ns']} auth to reject "
+                f"{source_case['tenant_ns']}'s key with 401/403, got {response.status_code}. "
+                f"Response: {response_summary(response, max_body=500)}"
             )
-
-        # Should be rejected (401 Unauthorized or 403 Forbidden) by B's auth
-        assert is_gateway_auth_denial(response), (
-            f"Expected B's auth to reject tenant A's key with 401/403, got {response.status_code}. "
-            f"Tenant A should not access tenant B's model via B's gateway. "
-            f"Response: {response_summary(response, max_body=500)}"
-        )
 
 
 # ─── Body-based routing ────────────────────────────────────────────────────
-
-
-def _create_tenant_api_key(gateway_url, case):
-    """Create an API key for a tenant and return (api_key, gateway_url)."""
-    oc_token = _get_cluster_token()
-    r = create_api_key_at(
-        f"{gateway_url}/maas-api",
-        oc_token,
-        f"e2e-body-routing-{case['suffix']}",
-        subscription=f"{case['model_name']}-sub",
-    )
-    assert r.status_code in (200, 201), (
-        f"Failed to create API key: {r.status_code} {redact_sensitive(r.text)}"
-    )
-    api_key = r.json().get("key")
-    assert api_key, f"API key missing in response: {redact_sensitive(r.json())}"
-    return api_key
 
 
 class TestTenantBodyRouting:

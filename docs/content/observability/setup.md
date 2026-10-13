@@ -94,6 +94,8 @@ We have introduced usage dashboards that are based on structured access logs rat
 !!! warning "Privacy"
     `usageLogging` records request attributes in access logs.
     User identity (`user_id`) is included only when `MaasTenantConfig.spec.telemetry.logs.captureUser` is `true`.
+    Organization ID (`organization_id`) is included by default when the field is set on the `MaaSSubscription`. Set `MaasTenantConfig.spec.telemetry.logs.captureOrganization` to `false` to omit it. Independent of `metrics.captureOrganization`.
+    Cost center is included when that field is set on the `MaaSSubscription`.
     Review GDPR/privacy requirements, retention, and dashboard access before enabling either setting.
 
 To enable this feature, you need to turn on `usageLogging` in the `Config`:
@@ -115,6 +117,13 @@ To include user identity (`user_id`) in those logs:
 ```bash
 kubectl patch maastenantconfig default-tenant -n models-as-a-service --type=merge \
   -p '{"spec":{"telemetry":{"logs":{"captureUser":true}}}}'
+```
+
+To omit organization ID (`organization_id`) from those logs:
+
+```bash
+kubectl patch maastenantconfig default-tenant -n models-as-a-service --type=merge \
+  -p '{"spec":{"telemetry":{"logs":{"captureOrganization":false}}}}'
 ```
 
 ### Option 2: Kustomize (Development)
