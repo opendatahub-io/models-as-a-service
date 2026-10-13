@@ -5,11 +5,15 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/constant"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/models"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/subscription"
@@ -95,8 +99,9 @@ func setupTestRouterWithMetrics(lister subscription.Lister, metrics subscription
 	log := logger.New(false)
 	selector := subscription.NewSelector(log, lister, nil, nil)
 	handler := subscription.NewHandler(log, selector, metrics)
+	tokenHandler := token.NewHandler(log, "tenant")
 
-	router.POST("/subscriptions/select", handler.SelectSubscription)
+	router.POST("/subscriptions/select", tokenHandler.RejectTrustedIdentityHeaders(), handler.SelectSubscription)
 	return router
 }
 
@@ -1656,4 +1661,180 @@ func TestHandler_SelectSubscription_RecordsRateLimitedForTRLPNotReady(t *testing
 	if metrics.rejections[0] != "rate-limited" {
 		t.Errorf("expected rejection reason 'rate-limited', got %s", metrics.rejections[0])
 	}
+}
+
+const validCallbackIdentity = `{
+  "source": "oidc",
+  "claims": {
+    "iss": "https://issuer.example.com",
+    "sub": "user-1",
+    "aud": "maas-api",
+    "azp": "maas-client",
+    "groups": [],
+    "https://redhat.com/maas/orgs": [
+      {
+        "organization_id": "42c3e46f-2477-44d7-a85b-d3b43f6b31fa",
+        "roles": ["admins"]
+      }
+    ]
+  }
+}`
+
+func postSelection(t *testing.T, router *gin.Engine, body string) map[string]any {
+	t.Helper()
+	request := httptest.NewRequest(http.MethodPost, "/subscriptions/select", bytes.NewBufferString(body))
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+	require.Equal(t, http.StatusOK, recorder.Code)
+
+	var response map[string]any
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &response))
+	return response
+}
+
+func TestHandler_SelectSubscription_ExplicitSelectPurposePreservesLegacyBehavior(t *testing.T) {
+	subscriptions := []*unstructured.Unstructured{
+		createTestSubscription("basic-sub", []string{"basic-users"}, 10, "org-basic", "cc-basic"),
+	}
+	router := setupTestRouter(&mockLister{subscriptions: subscriptions})
+
+	response := postSelection(t, router, `{
+		"purpose": "select",
+		"username": "alice",
+		"groups": ["basic-users"]
+	}`)
+
+	assert.Equal(t, "basic-sub", response["name"])
+	assert.Empty(t, response["purpose"])
+	assert.Equal(t, true, response["accessAllowed"])
+}
+
+func TestHandler_SelectSubscription_RejectsIdentityInSelectMode(t *testing.T) {
+	router := setupTestRouter(&mockLister{subscriptions: nil})
+
+	response := postSelection(t, router, `{
+		"purpose": "select",
+		"username": "alice",
+		"groups": ["basic-users"],
+		"identity": `+validCallbackIdentity+`
+	}`)
+
+	assert.Equal(t, "bad_request", response["error"])
+	assert.NotContains(t, response, "name")
+}
+
+func TestHandler_SelectSubscription_SubscriptionAdminFailsClosed(t *testing.T) {
+	router := setupTestRouter(&mockLister{subscriptions: nil})
+
+	response := postSelection(t, router, `{
+		"purpose": "subscription-admin",
+		"requestedSubscription": "basic-sub",
+		"identity": `+validCallbackIdentity+`
+	}`)
+
+	assert.Equal(t, subscription.PurposeSubscriptionAdmin, response["purpose"])
+	assert.Equal(t, "unsupported", response["error"])
+	assert.Equal(t, false, response["accessAllowed"])
+	assert.NotContains(t, response, "admin")
+}
+
+func TestHandler_SelectSubscription_SubscriptionAdminRejectsMalformedIdentity(t *testing.T) {
+	router := setupTestRouter(&mockLister{subscriptions: nil})
+
+	response := postSelection(t, router, `{
+		"purpose": "subscription-admin",
+		"requestedSubscription": "basic-sub",
+		"identity": {"source":"authorino","claims":{}}
+	}`)
+
+	assert.Equal(t, "invalid_identity", response["error"])
+	assert.Equal(t, false, response["accessAllowed"])
+}
+
+func TestHandler_SelectSubscription_SubscriptionAdminRejectsOversizedIdentity(t *testing.T) {
+	router := setupTestRouter(&mockLister{subscriptions: nil})
+	identity := strings.Replace(
+		validCallbackIdentity,
+		"https://issuer.example.com",
+		"https://"+strings.Repeat("a", token.MaxIdentityEnvelopeBytes),
+		1,
+	)
+
+	response := postSelection(t, router, `{
+		"purpose": "subscription-admin",
+		"requestedSubscription": "basic-sub",
+		"identity": `+identity+`
+	}`)
+
+	assert.Equal(t, "invalid_identity", response["error"])
+	assert.Equal(t, "trusted identity is too large", response["message"])
+	assert.Equal(t, false, response["accessAllowed"])
+	assert.NotContains(t, response, "admin")
+}
+
+func TestHandler_SelectSubscription_RejectsOversizedRequestBody(t *testing.T) {
+	router := setupTestRouter(&mockLister{subscriptions: nil})
+	body := `{"purpose":"subscription-admin","identity":"` +
+		strings.Repeat("a", 1<<20+1) + `"}`
+
+	response := postSelection(t, router, body)
+
+	assert.Equal(t, "bad_request", response["error"])
+	assert.Equal(t, "invalid request body", response["message"])
+	assert.NotContains(t, response, "admin")
+}
+
+func TestHandler_SelectSubscription_PreservesLargeLegacyGroups(t *testing.T) {
+	// Legacy selection forwards the complete provider group claim. Unlike the
+	// bounded admin identity envelope, that claim has no upstream count limit,
+	// so the callback must not impose a tighter limit than the API-wide body
+	// guard. This payload is intentionally larger than 64 KiB.
+	group := strings.Repeat("grid-users-", 6) + "0"
+	groups := make([]string, 2048)
+	for index := range groups {
+		groups[index] = group
+	}
+	subscriptions := []*unstructured.Unstructured{
+		createTestSubscription("large-groups-sub", []string{group}, 10, "org-large", "cc-large"),
+	}
+	router := setupTestRouter(&mockLister{subscriptions: subscriptions})
+
+	body, err := json.Marshal(map[string]any{
+		"username": "alice",
+		"groups":   groups,
+	})
+	require.NoError(t, err)
+	require.Greater(t, len(body), 64*1024)
+
+	response := postSelection(t, router, string(body))
+
+	assert.Equal(t, "large-groups-sub", response["name"])
+	assert.Equal(t, true, response["accessAllowed"])
+}
+
+func TestHandler_SelectSubscription_RejectsUnknownPurpose(t *testing.T) {
+	router := setupTestRouter(&mockLister{subscriptions: nil})
+
+	response := postSelection(t, router, `{
+		"purpose": "client-selected-admin",
+		"username": "alice"
+	}`)
+
+	assert.Equal(t, "bad_purpose", response["error"])
+}
+
+func TestHandler_SelectSubscription_RejectsDirectIdentityHeaderInjection(t *testing.T) {
+	router := setupTestRouter(&mockLister{subscriptions: nil})
+
+	request := httptest.NewRequest(http.MethodPost, "/subscriptions/select", bytes.NewBufferString(`{
+		"username": "alice"
+	}`))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set(constant.HeaderIdentity, validCallbackIdentity)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+
+	assert.Equal(t, http.StatusUnauthorized, recorder.Code)
+	assert.NotContains(t, recorder.Body.String(), "basic-sub")
 }
