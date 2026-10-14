@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import uuid
 
 import pytest
 import requests
@@ -176,6 +177,44 @@ class TestGridTenantAdminClaims:
         identity = response.json()
         assert identity["sub"] == expected_subject
         assert identity["https://redhat.com/maas/orgs"] == []
+
+    def test_me_rejects_inference_api_key(self, maas_api_base_url: str):
+        oidc_token = _request_grid_token("alice_lead")
+        key_name = f"e2e-me-api-key-{uuid.uuid4().hex[:8]}"
+
+        create_response = requests.post(
+            f"{maas_api_base_url}/v1/api-keys",
+            headers={"Authorization": f"Bearer {oidc_token}"},
+            json={"name": key_name},
+            timeout=30,
+            verify=TLS_VERIFY,
+        )
+        assert create_response.status_code in (200, 201), (
+            f"API key creation failed for /v1/me negative test: "
+            f"{create_response.status_code} {create_response.text}"
+        )
+        key_data = create_response.json()
+        api_key = key_data["key"]
+        key_id = key_data["id"]
+
+        try:
+            response = requests.get(
+                f"{maas_api_base_url}/v1/me",
+                headers={"Authorization": f"Bearer {api_key}"},
+                timeout=30,
+                verify=TLS_VERIFY,
+            )
+            assert response.status_code == 401, (
+                f"Expected /v1/me to reject an inference API key, got "
+                f"{response.status_code} {response.text}"
+            )
+        finally:
+            requests.delete(
+                f"{maas_api_base_url}/v1/api-keys/{key_id}",
+                headers={"Authorization": f"Bearer {oidc_token}"},
+                timeout=30,
+                verify=TLS_VERIFY,
+            )
 
     def test_me_requires_verified_sso_identity(self, maas_api_base_url: str):
         response = requests.get(
