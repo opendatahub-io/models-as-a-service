@@ -192,7 +192,7 @@ func (r *TenantReconciler) enqueueTenantForAITenant(_ context.Context, obj clien
 }
 
 // mapConfigToMaasTenantConfigs maps a Config change to reconcile requests for MaasTenantConfig
-// resources so usageLogging toggle changes propagate to every tenant's usage-logs EnvoyFilter.
+// resources so platform operands stay aligned with the cluster Config.
 func (r *TenantReconciler) mapConfigToMaasTenantConfigs(ctx context.Context, _ client.Object) []reconcile.Request {
 	if !r.TenantNamespaceDiscoveryEnabled {
 		return []reconcile.Request{{NamespacedName: types.NamespacedName{

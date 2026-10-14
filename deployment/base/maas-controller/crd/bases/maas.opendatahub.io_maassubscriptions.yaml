@@ -237,25 +237,47 @@ spec:
                     rule: '!(has(self.unlimited) && self.unlimited && has(self.tokenRateLimits))'
                 minItems: 1
                 type: array
+              organization:
+                description: |-
+                  Organization associates this subscription with exactly one organization.
+                  The identifier is stable for the subscription's lifetime and is not used
+                  as billing metadata or as an inference grant.
+                properties:
+                  id:
+                    description: |-
+                      ID is the organization identifier. It may be set once for a legacy subscription
+                      after its key and history association has been verified.
+                    maxLength: 253
+                    minLength: 1
+                    type: string
+                required:
+                - id
+                type: object
               owner:
-                description: Owner defines who owns this subscription
+                description: |-
+                  Owner defines the users and groups entitled to select this subscription.
+                  It does not represent Kubernetes ownership or grant RBAC permissions.
                 properties:
                   groups:
-                    description: Groups is a list of Kubernetes group names that own
-                      this subscription
+                    description: |-
+                      Groups is a list of identity group names entitled to select this
+                      subscription. Names are matched exactly and are not Kubernetes object names.
                     items:
-                      description: GroupReference references a Kubernetes group
+                      description: GroupReference references an identity group by
+                        its opaque name.
                       properties:
                         name:
-                          description: Name is the name of the group
+                          description: Name is the opaque group name used for exact-match
+                            authorization.
                           type: string
                       required:
                       - name
                       type: object
                     type: array
                   users:
-                    description: Users is a list of Kubernetes user names that own
-                      this subscription
+                    description: |-
+                      Users is a list of identity user names entitled to select this subscription.
+                      Names are matched exactly.
                     items:
                       type: string
                     type: array
@@ -288,6 +310,10 @@ spec:
             - modelRefs
             - owner
             type: object
+            x-kubernetes-validations:
+            - message: organization.id is immutable
+              rule: '!has(oldSelf.organization) || (has(self.organization) && oldSelf.organization.id
+                == self.organization.id)'
           status:
             description: MaaSSubscriptionStatus defines the observed state of MaaSSubscription
             properties:

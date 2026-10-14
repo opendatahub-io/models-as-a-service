@@ -22,9 +22,17 @@ import (
 )
 
 // MaaSSubscriptionSpec defines the desired state of MaaSSubscription
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.organization) || (has(self.organization) && oldSelf.organization.id == self.organization.id)",message="organization.id is immutable"
 type MaaSSubscriptionSpec struct {
-	// Owner defines who owns this subscription
+	// Owner defines the users and groups entitled to select this subscription.
+	// It does not represent Kubernetes ownership or grant RBAC permissions.
 	Owner OwnerSpec `json:"owner"`
+
+	// Organization associates this subscription with exactly one organization.
+	// The identifier is stable for the subscription's lifetime and is not used
+	// as billing metadata or as an inference grant.
+	// +optional
+	Organization *SubscriptionOrganization `json:"organization,omitempty"`
 
 	// ModelRefs defines which models are included with per-model token rate limits
 	// +kubebuilder:validation:MinItems=1
@@ -63,13 +71,34 @@ type MaaSSubscriptionSpec struct {
 	Guardrails []GuardrailAttachment `json:"guardrails,omitempty"`
 }
 
-// OwnerSpec defines the owner of the subscription
+// SubscriptionOrganization identifies the single organization that administers
+// a MaaSSubscription.
+type SubscriptionOrganization struct {
+	// ID is the organization identifier. It may be set once for a legacy subscription
+	// after its key and history association has been verified.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	ID string `json:"id"`
+}
+
+// OrganizationID returns the stable organization identifier, or an empty
+// string for a legacy subscription without an organization association.
+func (s *MaaSSubscriptionSpec) OrganizationID() string {
+	if s == nil || s.Organization == nil {
+		return ""
+	}
+	return s.Organization.ID
+}
+
+// OwnerSpec defines the users and groups entitled to select a subscription.
 type OwnerSpec struct {
-	// Groups is a list of Kubernetes group names that own this subscription
+	// Groups is a list of identity group names entitled to select this
+	// subscription. Names are matched exactly and are not Kubernetes object names.
 	// +optional
 	Groups []GroupReference `json:"groups,omitempty"`
 
-	// Users is a list of Kubernetes user names that own this subscription
+	// Users is a list of identity user names entitled to select this subscription.
+	// Names are matched exactly.
 	// +optional
 	Users []string `json:"users,omitempty"`
 }

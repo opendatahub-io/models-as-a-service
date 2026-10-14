@@ -230,6 +230,55 @@ spec:
                     maxItems: 128
                     type: array
                 type: object
+              responses:
+                description: |-
+                  Responses requests tenant-owned Responses and Conversations support.
+                  Omission disables both APIs. AI Gateway owns runtime and storage readiness.
+                properties:
+                  enabled:
+                    default: false
+                    description: Enabled enables Responses and Conversations together.
+                      Requires Praxis.
+                    type: boolean
+                  retention:
+                    description: |-
+                      Retention limits persisted Responses, conversation items and continuation state.
+                      Omission does not request a tenant-specific retention limit.
+                    properties:
+                      maxAge:
+                        description: MaxAge is a positive duration, for example "168h".
+                        maxLength: 32
+                        pattern: ^([0-9]+(\.[0-9]+)?(ms|s|m|h))+$
+                        type: string
+                        x-kubernetes-validations:
+                        - message: maxAge must be a positive duration
+                          rule: duration(self) > duration('0s')
+                    required:
+                    - maxAge
+                    type: object
+                  storage:
+                    default: {}
+                    description: |-
+                      Storage selects the separate platform Responses database binding.
+                      It never reuses the MaaS API-key database or provisions a database.
+                    properties:
+                      deletionPolicy:
+                        default: Retain
+                        description: |-
+                          DeletionPolicy retains content when Responses is disabled or the tenant is deleted.
+                          Externally managed databases are never deleted by tenant reconciliation.
+                        enum:
+                        - Retain
+                        type: string
+                      mode:
+                        default: PlatformDefault
+                        description: Mode selects the platform-provisioned Responses
+                          connection and CA binding.
+                        enum:
+                        - PlatformDefault
+                        type: string
+                    type: object
+                type: object
             type: object
           status:
             description: AITenantStatus defines the observed tenant bootstrap state.

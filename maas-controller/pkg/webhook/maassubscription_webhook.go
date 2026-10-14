@@ -60,7 +60,12 @@ func (v *MaaSSubscriptionValidator) ValidateCreate(ctx context.Context, sub *maa
 // ValidateUpdate validates MaaSSubscription on update.
 // Namespace cannot be changed on update (Kubernetes enforces this), so we don't need to validate.
 func (v *MaaSSubscriptionValidator) ValidateUpdate(ctx context.Context, oldObj, newObj *maasv1alpha1.MaaSSubscription) (admission.Warnings, error) {
-	// No validation needed - namespace is immutable
+	oldOrganizationID := oldObj.Spec.OrganizationID()
+	newOrganizationID := newObj.Spec.OrganizationID()
+	if oldOrganizationID != "" && oldOrganizationID != newOrganizationID {
+		return nil, errors.New("organization.id is immutable")
+	}
+
 	return nil, nil
 }
 
