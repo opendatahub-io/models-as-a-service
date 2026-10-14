@@ -60,3 +60,16 @@ func TestGetMeReturnsVerifiedIdentity(t *testing.T) {
 	assert.Equal(t, "coke", organization["organization_name"])
 	assert.Equal(t, []any{"admins"}, organization["roles"])
 }
+
+func TestGetMeRequiresVerifiedIdentity(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	router := gin.New()
+	router.GET("/v1/me", handlers.NewIdentityHandler(logger.New(false)).GetMe)
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/v1/me", nil)
+	router.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusUnauthorized, recorder.Code)
+}
