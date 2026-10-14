@@ -103,6 +103,12 @@ def test_chat_completions_gateway_alive(model_v1: str, api_key_headers: dict, ap
     rather than skip it, so a broken/disabled log pipeline can't silently mask a leak (an
     empty-of-headers log would otherwise trivially "pass" the leak check for the wrong reason -
     the key is absent because nothing was captured at all, not because it was actually stripped).
+
+    Known currently-failing on Praxis-based deployments: confirmed against a live cluster that
+    `maas-headers-guard` only exists in the legacy IPP plugin chain today - Praxis's default
+    post-auth config for a tenant with no ExternalModel is just a bare `request_id` filter, so
+    the client's key is not yet stripped there. This is intentionally left failing (not skipped)
+    until Praxis gets an equivalent guard, so the gap stays visible rather than masked.
     """
     r = requests.post(
         f"{model_v1}/chat/completions",
