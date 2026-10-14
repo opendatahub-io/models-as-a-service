@@ -157,3 +157,14 @@ class TestGridTenantAdminClaims:
                 "roles": ["users"],
             },
         ]
+
+    def test_me_requires_verified_sso_identity(self, maas_api_base_url: str):
+        response = requests.get(
+            f"{maas_api_base_url}/v1/me",
+            timeout=30,
+            verify=TLS_VERIFY,
+        )
+        assert response.status_code == 401, (
+            f"Expected unauthenticated /v1/me to return 401, got "
+            f"{response.status_code} {response.text}"
+        )
