@@ -738,6 +738,44 @@ paths:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/ErrorResponse'
+    /v1/me:
+        get:
+            tags:
+                - identity
+            summary: Return the caller's verified identity
+            description: |
+                Returns the bounded identity claims for the authenticated SSO caller.
+                Optional email and name fields are omitted when they are not present in
+                the verified token. Organization memberships are returned exactly as
+                verified and do not imply subscription permissions.
+            operationId: identity#get_me
+            responses:
+                "200":
+                    description: Verified caller identity.
+                    headers:
+                        Cache-Control:
+                            schema:
+                                type: string
+                            description: Always no-store.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/MeResponse'
+                            example:
+                                sub: 00u7a1b2c3d4e5f6g7h8
+                                email: alex@grid-tenant-1.com
+                                name: Alex Doe
+                                https://redhat.com/maas/orgs:
+                                    - organization_id: 42c3e46f-2477-44d7-a85b-d3b43f6b31fa
+                                      organization_name: coke
+                                      roles:
+                                        - admins
+                "401":
+                    description: Unauthorized. A verified SSO identity is required.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ErrorResponse'
     /v1/model/{model-id}/subscriptions:
         get:
             tags:
@@ -1360,6 +1398,55 @@ components:
                 - object
                 - data
                 - has_more
+
+        # Verified Caller Identity
+        MeResponse:
+            type: object
+            properties:
+                sub:
+                    type: string
+                    description: Verified subject identifier
+                    example: 00u7a1b2c3d4e5f6g7h8
+                email:
+                    type: string
+                    format: email
+                    description: Optional verified email claim
+                    example: alex@grid-tenant-1.com
+                name:
+                    type: string
+                    description: Optional verified display-name claim
+                    example: Alex Doe
+                https://redhat.com/maas/orgs:
+                    type: array
+                    items:
+                        $ref: '#/components/schemas/OrganizationMembership'
+                    description: Verified organization memberships and roles
+            required:
+                - sub
+                - https://redhat.com/maas/orgs
+
+        OrganizationMembership:
+            type: object
+            properties:
+                organization_id:
+                    type: string
+                    format: uuid
+                    description: Canonical organization UUID
+                    example: 42c3e46f-2477-44d7-a85b-d3b43f6b31fa
+                organization_name:
+                    type: string
+                    description: Optional organization display name
+                    example: coke
+                roles:
+                    type: array
+                    items:
+                        type: string
+                    description: Roles scoped to this organization membership
+                    example:
+                        - admins
+            required:
+                - organization_id
+                - roles
 
         # Tenant Discovery Response
         TenantsResponse:
