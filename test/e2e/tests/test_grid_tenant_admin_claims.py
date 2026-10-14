@@ -120,3 +120,40 @@ class TestGridTenantAdminClaims:
             assert isinstance(subscription["subscription_id_header"], str)
             assert isinstance(subscription["priority"], int)
             assert isinstance(subscription["model_refs"], list)
+
+    def test_me_returns_verified_identity(self, maas_api_base_url: str):
+        token = _request_grid_admin_token()
+        expected_subject = _decode_jwt_payload(token)["sub"]
+
+        response = requests.get(
+            f"{maas_api_base_url}/v1/me",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=30,
+            verify=TLS_VERIFY,
+        )
+        assert response.status_code == 200, (
+            f"GET /v1/me failed with Grid admin token: "
+            f"{response.status_code} {response.text}"
+        )
+        assert response.headers.get("Cache-Control") == "no-store"
+
+        identity = response.json()
+        assert set(identity) <= {
+            "sub",
+            "email",
+            "name",
+            "https://redhat.com/maas/orgs",
+        }
+        assert identity["sub"] == expected_subject
+
+        organizations = identity["https://redhat.com/maas/orgs"]
+        assert organizations == [
+            {
+                "organization_id": "42c3e46f-2477-44d7-a85b-d3b43f6b31fa",
+                "roles": ["admins"],
+            },
+            {
+                "organization_id": "53d4f57e-3588-55e8-b96c-4ec54a7c42fa",
+                "roles": ["users"],
+            },
+        ]
