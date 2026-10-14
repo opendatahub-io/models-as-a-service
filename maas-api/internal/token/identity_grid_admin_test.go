@@ -74,3 +74,33 @@ func TestParseIdentityEnvelope_GroupsDoNotConferOrganizationRoles(t *testing.T) 
 
 	assert.Empty(t, parsed.Claims.Organizations)
 }
+
+func TestParseIdentityEnvelope_RejectsDuplicateOrganizationIDs(t *testing.T) {
+	t.Parallel()
+
+	identity := token.VerifiedIdentity{
+		Source: "oidc",
+		Claims: token.VerifiedClaims{
+			Issuer:          "https://issuer.example.com",
+			Subject:         "user-1",
+			Audience:        token.Audience{Value: "maas-api"},
+			AuthorizedParty: "maas-client",
+			Organizations: []token.OrganizationMembership{
+				{
+					OrganizationID: "42c3e46f-2477-44d7-a85b-d3b43f6b31fa",
+					Roles:          []string{"admins"},
+				},
+				{
+					OrganizationID: "42c3e46f-2477-44d7-a85b-d3b43f6b31fa",
+					Roles:          []string{"users"},
+				},
+			},
+		},
+	}
+
+	encoded, err := json.Marshal(identity)
+	require.NoError(t, err)
+
+	_, err = token.ParseIdentityEnvelope(string(encoded))
+	assert.Error(t, err)
+}
