@@ -212,12 +212,16 @@ def _wait_for_central_models_in_subscription(
     timeout=90,
     poll_interval=5,
     extra_headers=None,
+    expected_model_ids=None,
 ):
-    """Poll central /v1/models until at least one model is tied to subscription_name.
+    """Poll central /v1/models until models are visible for subscription_name.
 
     ``api_key`` is sent as a bearer token, so an OpenShift token works too.
     maas-api lists only Ready MaaSModelRefs, read from an informer cache, so a
     model can be missing from the first listing after its governance is created.
+
+    When ``expected_model_ids`` is set, poll until every ID appears in the response.
+    Otherwise poll until at least one model is tied to ``subscription_name``.
     """
     headers = {"Authorization": f"Bearer {api_key}", **(extra_headers or {})}
     deadline = time.time() + timeout
@@ -237,12 +241,25 @@ def _wait_for_central_models_in_subscription(
             time.sleep(poll_interval)
             continue
 
-        in_subscription = _models_in_subscription(models_data, subscription_name)
-        if in_subscription:
-            return models_data, in_subscription
+        returned_model_ids = {m.get("id") for m in models_data.get("data") or []}
+        last_model_ids = sorted(returned_model_ids)
 
-        last_model_ids = [m.get("id") for m in models_data.get("data") or []]
+        if expected_model_ids is not None:
+            if expected_model_ids.issubset(returned_model_ids):
+                return models_data, sorted(expected_model_ids)
+        else:
+            in_subscription = _models_in_subscription(models_data, subscription_name)
+            if in_subscription:
+                return models_data, in_subscription
+
         time.sleep(poll_interval)
+
+    if expected_model_ids is not None:
+        raise AssertionError(
+            f"Expected model IDs {sorted(expected_model_ids)} in /v1/models "
+            f"within {timeout}s, but last response had {last_model_ids}. "
+            f"Last HTTP status: {last_status}"
+        )
 
     raise AssertionError(
         f"Expected at least 1 model tied to subscription '{subscription_name}' "
@@ -1169,19 +1186,14 @@ class TestModelsEndpoint:
 
             _wait_for_maas_auth_policy_phase(auth_policy_name, namespace=maas_ns, require_enforced=False)
 
-            # Query /v1/models (use retry helper for gateway/Authorino propagation)
+            # Poll until both models appear (maas-api informer cache can lag after governance).
             log.info(f"Querying /v1/models with subscription: {subscription_name}")
-            r = _request_with_gateway_retry(
-                requests.get,
-                f"{_maas_api_url()}/v1/models",
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "x-maas-subscription": subscription_name,
-                },
+            data, _ = _wait_for_central_models_in_subscription(
+                api_key,
+                subscription_name,
+                expected_model_ids={DISTINCT_MODEL_ID, DISTINCT_MODEL_2_ID},
+                extra_headers={"x-maas-subscription": subscription_name},
             )
-
-            assert r.status_code == 200, f"Expected 200, got {r.status_code}: {r.text}"
-            data = r.json()
             models = data.get("data") or []
 
             assert isinstance(models, list), "Models should be a list"

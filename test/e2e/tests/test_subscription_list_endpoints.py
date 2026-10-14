@@ -19,6 +19,7 @@ Environment variables:
 """
 
 import logging
+import time
 
 import pytest
 import requests
@@ -52,6 +53,45 @@ from test_helper import (
 log = logging.getLogger(__name__)
 
 pytestmark = [pytest.mark.xdist_group("api_keys"), pytest.mark.worker_tenant]
+
+
+def _wait_for_subscription_in_list(api_key, subscription_name, *, timeout=90, poll_interval=5):
+    """Poll GET /v1/subscriptions until subscription_name is listed.
+
+    maas-api builds the subscription list from an informer-backed cache, so a
+    subscription can be missing from the first response after discovery becomes Ready.
+    """
+    headers = {"Authorization": f"Bearer {api_key}"}
+    deadline = time.time() + timeout
+    last_status = None
+    last_names = []
+
+    while time.time() < deadline:
+        response = _request_with_gateway_retry(
+            requests.get,
+            f"{_maas_api_url()}/v1/subscriptions",
+            headers=headers,
+        )
+        last_status = response.status_code
+        if response.status_code != 200:
+            time.sleep(poll_interval)
+            continue
+
+        data = response.json()
+        last_names = [s.get("subscription_id_header") for s in data]
+        test_sub = next(
+            (s for s in data if s.get("subscription_id_header") == subscription_name),
+            None,
+        )
+        if test_sub is not None:
+            return data, test_sub
+
+        time.sleep(poll_interval)
+
+    raise AssertionError(
+        f"Expected subscription '{subscription_name}' in /v1/subscriptions "
+        f"within {timeout}s, but saw {last_names}. Last HTTP status: {last_status}"
+    )
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -509,22 +549,7 @@ class TestSubscriptionModelAccessFiltering:
 
             api_key = _create_api_key(sa_token, subscription=subscription_name)
 
-            url = f"{_maas_api_url()}/v1/subscriptions"
-            r = _request_with_gateway_retry(
-                requests.get,
-                url,
-                headers={"Authorization": f"Bearer {api_key}"},
-            )
-
-            assert r.status_code == 200
-            data = r.json()
-
-            test_sub = next(
-                (s for s in data if s["subscription_id_header"] == subscription_name),
-                None,
-            )
-            assert test_sub is not None, \
-                f"Test subscription '{subscription_name}' not found in {[s['subscription_id_header'] for s in data]}"
+            _data, test_sub = _wait_for_subscription_in_list(api_key, subscription_name)
 
             model_names = [ref["name"] for ref in test_sub["model_refs"]]
             assert MODEL_REF in model_names, \
