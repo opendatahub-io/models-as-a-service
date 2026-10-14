@@ -73,3 +73,23 @@ func TestGetMeRequiresVerifiedIdentity(t *testing.T) {
 
 	require.Equal(t, http.StatusUnauthorized, recorder.Code)
 }
+
+func TestGetMeRejectsLegacyIdentity(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	router := gin.New()
+	router.GET("/v1/me", func(c *gin.Context) {
+		c.Set("user", &token.UserContext{
+			Username: "legacy-user",
+			Groups:   []string{"system:authenticated"},
+			Tenant:   "grid-tenant",
+		})
+		c.Next()
+	}, handlers.NewIdentityHandler(logger.New(false)).GetMe)
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/v1/me", nil)
+	router.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusUnauthorized, recorder.Code)
+}
