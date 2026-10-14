@@ -28,20 +28,20 @@ def _required_env(name: str) -> str:
     return value
 
 
-def _request_grid_admin_token() -> str:
+def _request_grid_token(username: str) -> str:
     response = requests.post(
         _required_env("OIDC_TOKEN_URL"),
         data={
             "grant_type": "password",
             "client_id": _required_env("OIDC_CLIENT_ID"),
-            "username": "grid_admin",
+            "username": username,
             "password": "letmein",
         },
         timeout=30,
         verify=TLS_VERIFY,
     )
     assert response.status_code == 200, (
-        f"Keycloak token request failed for grid_admin: "
+        f"Keycloak token request failed for {username}: "
         f"{response.status_code} {response.text}"
     )
     token = response.json().get("access_token")
@@ -58,7 +58,7 @@ def _decode_jwt_payload(token: str) -> dict:
 
 class TestGridTenantAdminClaims:
     def test_keycloak_emits_organization_claims(self):
-        token = _request_grid_admin_token()
+        token = _request_grid_token("grid_admin")
         claims = _decode_jwt_payload(token)
 
         organizations = claims.get("https://redhat.com/maas/orgs")
@@ -79,7 +79,7 @@ class TestGridTenantAdminClaims:
         assert organizations[1]["roles"] == ["users"]
 
     def test_keycloak_groups_remain_organization_qualified(self):
-        token = _request_grid_admin_token()
+        token = _request_grid_token("grid_admin")
         claims = _decode_jwt_payload(token)
 
         groups = claims.get("groups")
@@ -98,7 +98,7 @@ class TestGridTenantAdminClaims:
         assert all(group.split("/", 1)[0] in organization_ids for group in groups)
 
     def test_subscription_listing_accepts_grid_admin_token(self, maas_api_base_url: str):
-        token = _request_grid_admin_token()
+        token = _request_grid_token("grid_admin")
 
         response = requests.get(
             f"{maas_api_base_url}/v1/subscriptions",
@@ -122,7 +122,7 @@ class TestGridTenantAdminClaims:
             assert isinstance(subscription["model_refs"], list)
 
     def test_me_returns_verified_identity(self, maas_api_base_url: str):
-        token = _request_grid_admin_token()
+        token = _request_grid_token("grid_admin")
         expected_subject = _decode_jwt_payload(token)["sub"]
 
         response = requests.get(
@@ -157,6 +157,25 @@ class TestGridTenantAdminClaims:
                 "roles": ["users"],
             },
         ]
+
+    def test_me_returns_empty_organizations_for_no_membership(self, maas_api_base_url: str):
+        token = _request_grid_token("grid_no_org")
+        expected_subject = _decode_jwt_payload(token)["sub"]
+
+        response = requests.get(
+            f"{maas_api_base_url}/v1/me",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=30,
+            verify=TLS_VERIFY,
+        )
+        assert response.status_code == 200, (
+            f"GET /v1/me failed for grid_no_org: "
+            f"{response.status_code} {response.text}"
+        )
+
+        identity = response.json()
+        assert identity["sub"] == expected_subject
+        assert identity["https://redhat.com/maas/orgs"] == []
 
     def test_me_requires_verified_sso_identity(self, maas_api_base_url: str):
         response = requests.get(

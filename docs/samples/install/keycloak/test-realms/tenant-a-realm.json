@@ -121,6 +121,14 @@
         "42c3e46f-2477-44d7-a85b-d3b43f6b31fa/ai-grid-admins",
         "53d4f57e-3588-55e8-b96c-4ec54a7c42fa/ai-grid-users"
       ]
+    },
+    {
+      "username": "grid_no_org",
+      "enabled": true,
+      "emailVerified": true,
+      "requiredActions": [],
+      "credentials": [{"type": "password", "value": "letmein", "temporary": false}],
+      "groups": []
     }
   ]
 }
