@@ -112,7 +112,7 @@ func (h *Handler) SelectSubscription(c *gin.Context) {
 			return
 		}
 	case PurposeSubscriptionAdmin:
-		h.rejectUnsupportedSubscriptionAdmin(c, req)
+		h.handleSubscriptionAdmin(c, req)
 		return
 	default:
 		// Never infer a callback mode from request shape. A typo or future mode
@@ -261,13 +261,11 @@ func decodeSelectRequest(c *gin.Context) (SelectRequest, error) {
 	return request, nil
 }
 
-func (h *Handler) rejectUnsupportedSubscriptionAdmin(c *gin.Context, request SelectRequest) {
-	// The admin resolver is not available yet. Validate the request shape and
-	// identity contract, but return an explicit unsupported result so mixed
-	// old/new rollouts can never turn this branch into a positive grant.
+func (h *Handler) handleSubscriptionAdmin(c *gin.Context, request SelectRequest) {
 	if request.Username != "" || len(request.Groups) != 0 || request.RequestedModel != "" {
 		c.JSON(http.StatusOK, SelectResponse{
 			Purpose: PurposeSubscriptionAdmin,
+			Admin:   &AdminDecision{Allowed: false, Reason: "bad_request"},
 			Error:   "bad_request",
 			Message: "legacy selection fields are not accepted for subscription-admin",
 		})
@@ -276,6 +274,7 @@ func (h *Handler) rejectUnsupportedSubscriptionAdmin(c *gin.Context, request Sel
 	if len(request.Identity) == 0 {
 		c.JSON(http.StatusOK, SelectResponse{
 			Purpose: PurposeSubscriptionAdmin,
+			Admin:   &AdminDecision{Allowed: false, Reason: "invalid_identity"},
 			Error:   "invalid_identity",
 			Message: "trusted identity is required",
 		})
@@ -284,14 +283,17 @@ func (h *Handler) rejectUnsupportedSubscriptionAdmin(c *gin.Context, request Sel
 	if len(request.Identity) > token.MaxIdentityEnvelopeBytes {
 		c.JSON(http.StatusOK, SelectResponse{
 			Purpose: PurposeSubscriptionAdmin,
+			Admin:   &AdminDecision{Allowed: false, Reason: "invalid_identity"},
 			Error:   "invalid_identity",
 			Message: "trusted identity is too large",
 		})
 		return
 	}
-	if _, err := token.ParseIdentityEnvelope(string(request.Identity)); err != nil {
+	identity, err := token.ParseIdentityEnvelope(string(request.Identity))
+	if err != nil {
 		c.JSON(http.StatusOK, SelectResponse{
 			Purpose: PurposeSubscriptionAdmin,
+			Admin:   &AdminDecision{Allowed: false, Reason: "invalid_identity"},
 			Error:   "invalid_identity",
 			Message: "trusted identity is invalid",
 		})
@@ -300,20 +302,51 @@ func (h *Handler) rejectUnsupportedSubscriptionAdmin(c *gin.Context, request Sel
 	if request.RequestedSubscription == "" {
 		c.JSON(http.StatusOK, SelectResponse{
 			Purpose: PurposeSubscriptionAdmin,
+			Admin:   &AdminDecision{Allowed: false, Reason: "bad_request"},
 			Error:   "bad_request",
 			Message: "requestedSubscription is required",
 		})
 		return
 	}
 
-	h.logger.Warn("Subscription-admin callback is not enabled",
+	scope, err := h.selector.ResolveSubscriptionAdmin(identity, request.RequestedSubscription)
+	if err != nil {
+		var adminErr *SubscriptionAdminError
+		if errors.As(err, &adminErr) {
+			c.JSON(http.StatusOK, SelectResponse{
+				Purpose: PurposeSubscriptionAdmin,
+				Admin:   &AdminDecision{Allowed: false, Reason: adminErr.Code},
+				Error:   adminErr.Code,
+				Message: adminErr.Message,
+			})
+			return
+		}
+
+		h.logger.Error("Subscription-admin resolution failed",
+			"error", err.Error(),
+			"requestedSubscription", request.RequestedSubscription,
+		)
+		c.JSON(http.StatusOK, SelectResponse{
+			Purpose: PurposeSubscriptionAdmin,
+			Admin:   &AdminDecision{Allowed: false, Reason: "internal_error"},
+			Error:   "internal_error",
+			Message: "failed to resolve subscription administration",
+		})
+		return
+	}
+
+	h.logger.Debug("Subscription-admin resolved",
 		"purpose", PurposeSubscriptionAdmin,
 		"requestedSubscription", request.RequestedSubscription,
+		"namespace", scope.Namespace,
+		"organizationId", scope.OrganizationID,
 	)
 	c.JSON(http.StatusOK, SelectResponse{
 		Purpose: PurposeSubscriptionAdmin,
-		Error:   "unsupported",
-		Message: "subscription-admin callback is not enabled",
+		Admin: &AdminDecision{
+			Allowed: true,
+			Scope:   scope,
+		},
 	})
 }
 

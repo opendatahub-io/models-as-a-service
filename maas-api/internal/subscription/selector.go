@@ -37,11 +37,12 @@ type ModelAccessChecker interface {
 
 // Selector handles subscription selection logic.
 type Selector struct {
-	lister        Lister
-	modelLister   models.MaaSModelRefLister
-	accessChecker ModelAccessChecker
-	logger        *logger.Logger
-	tenantName    string
+	lister                Lister
+	modelLister           models.MaaSModelRefLister
+	accessChecker         ModelAccessChecker
+	logger                *logger.Logger
+	tenantName            string
+	subscriptionNamespace string
 }
 
 // SelectorOption configures a Selector.
@@ -50,6 +51,13 @@ type SelectorOption func(*Selector)
 // WithTenantName sets the tenant name returned as the fairness ID of selected subscriptions.
 func WithTenantName(name string) SelectorOption {
 	return func(s *Selector) { s.tenantName = name }
+}
+
+// WithSubscriptionNamespace restricts administrative resolution to the namespace
+// watched by this API instance. The informer is already namespace-scoped; this is
+// an additional guard for callers that provide a broader test lister.
+func WithSubscriptionNamespace(namespace string) SelectorOption {
+	return func(s *Selector) { s.subscriptionNamespace = namespace }
 }
 
 // NewSelector creates a new subscription selector.
@@ -112,23 +120,24 @@ func (s *Selector) resolveModelAlias(requestedModel string) string {
 
 // subscription represents a parsed MaaSSubscription for selection.
 type subscription struct {
-	Name                   string
-	Namespace              string
-	DisplayName            string
-	Description            string
-	Groups                 []string
-	Users                  []string
-	Priority               int32
-	MaxLimit               int64
-	OrganizationID         string
-	CostCenter             string
-	Labels                 map[string]string
-	ModelRefs              []ModelRefInfo
-	Phase                  string                 // status.phase: "Active", "Failed", "Pending", or ""
-	Ready                  bool                   // computed from status.conditions Ready condition
-	DeletionTimestamp      *string                // metadata.deletionTimestamp (set when being deleted)
-	TokenRateLimitStatuses []TokenRateLimitStatus // per-model TRLP status from status.tokenRateLimitStatuses
-	Objectives             map[string]string      // "namespace/name" of a model -> InferenceObjective name, from status.flowControlStatuses
+	Name                     string
+	Namespace                string
+	DisplayName              string
+	Description              string
+	Groups                   []string
+	Users                    []string
+	Priority                 int32
+	MaxLimit                 int64
+	AssociatedOrganizationID string
+	OrganizationID           string
+	CostCenter               string
+	Labels                   map[string]string
+	ModelRefs                []ModelRefInfo
+	Phase                    string                 // status.phase: "Active", "Failed", "Pending", or ""
+	Ready                    bool                   // computed from status.conditions Ready condition
+	DeletionTimestamp        *string                // metadata.deletionTimestamp (set when being deleted)
+	TokenRateLimitStatuses   []TokenRateLimitStatus // per-model TRLP status from status.tokenRateLimitStatuses
+	Objectives               map[string]string      // "namespace/name" of a model -> InferenceObjective name, from status.flowControlStatuses
 }
 
 // GetAllAccessible returns all subscriptions the user has access to.
@@ -467,6 +476,14 @@ func parseSubscription(obj *unstructured.Unstructured) (subscription, error) {
 
 	// Parse tokenMetadata
 	parseTokenMetadata(spec, &sub)
+
+	// Parse the stable administrative organization association. This remains
+	// independent from tokenMetadata.organizationId, which is attribution data.
+	if organization, found, _ := unstructured.NestedMap(spec, "organization"); found {
+		if organizationID, ok := organization["id"].(string); ok {
+			sub.AssociatedOrganizationID = organizationID
+		}
+	}
 
 	// Parse status.phase with validation
 	if status, found, _ := unstructured.NestedMap(obj.Object, "status"); found {

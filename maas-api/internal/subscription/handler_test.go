@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/authpolicy"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/constant"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/models"
@@ -1680,6 +1681,103 @@ const validCallbackIdentity = `{
   }
 }`
 
+const (
+	organizationA = "42c3e46f-2477-44d7-a85b-d3b43f6b31fa"
+	organizationB = "53d4f57e-3588-55e8-b96c-4ec54a7c42fa"
+)
+
+func callbackIdentityFor(t *testing.T, organizations []token.OrganizationMembership, groups []string) string {
+	t.Helper()
+	identity := token.VerifiedIdentity{
+		Source: "oidc",
+		Claims: token.VerifiedClaims{
+			Issuer:          "https://issuer.example.com",
+			Subject:         "user-1",
+			Audience:        token.Audience{Value: "maas-api"},
+			AuthorizedParty: "maas-client",
+			Groups:          groups,
+			Organizations:   organizations,
+		},
+	}
+	data, err := json.Marshal(identity)
+	require.NoError(t, err)
+	return string(data)
+}
+
+func createSubscriptionForAdmin(t *testing.T, name, namespace, associatedOrganizationID, attributionOrganizationID, phase string, ownerGroups []string) *unstructured.Unstructured {
+	t.Helper()
+	subscriptionObject := createTestSubscription(name, ownerGroups, 10, attributionOrganizationID, "cost-center")
+	metadata, ok := subscriptionObject.Object["metadata"].(map[string]any)
+	require.True(t, ok)
+	metadata["namespace"] = namespace
+	spec, ok := subscriptionObject.Object["spec"].(map[string]any)
+	require.True(t, ok)
+	if associatedOrganizationID != "" {
+		spec["organization"] = map[string]any{"id": associatedOrganizationID}
+	}
+	status, ok := subscriptionObject.Object["status"].(map[string]any)
+	require.True(t, ok)
+	status["phase"] = phase
+	if phase != "Active" {
+		conditions, ok := status["conditions"].([]any)
+		require.True(t, ok)
+		condition, ok := conditions[0].(map[string]any)
+		require.True(t, ok)
+		condition["status"] = "False"
+	}
+	return subscriptionObject
+}
+
+func setupAdminTestRouter(lister subscription.Lister, accessChecker subscription.ModelAccessChecker) *gin.Engine {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	log := logger.New(false)
+	selector := subscription.NewSelector(log, lister, nil, accessChecker, subscription.WithTenantName("grid-tenant"))
+	handler := subscription.NewHandler(log, selector, nil)
+	tokenHandler := token.NewHandler(log, "grid-tenant")
+	router.POST("/subscriptions/select", tokenHandler.RejectTrustedIdentityHeaders(), handler.SelectSubscription)
+	return router
+}
+
+func subscriptionAdminRequest(t *testing.T, requestedSubscription, identity string) string {
+	t.Helper()
+	body, err := json.Marshal(map[string]any{
+		"purpose":               subscription.PurposeSubscriptionAdmin,
+		"requestedSubscription": requestedSubscription,
+		"identity":              json.RawMessage(identity),
+	})
+	require.NoError(t, err)
+	return string(body)
+}
+
+func adminDecision(t *testing.T, response map[string]any) map[string]any {
+	t.Helper()
+	admin, ok := response["admin"].(map[string]any)
+	require.True(t, ok, "expected admin decision")
+	return admin
+}
+
+func assertSubscriptionAdminAllowed(t *testing.T, response map[string]any, expectedSubscription string) {
+	t.Helper()
+	admin := adminDecision(t, response)
+	assert.Equal(t, true, admin["allowed"])
+	scope, ok := admin["scope"].(map[string]any)
+	require.True(t, ok, "expected positive admin scope")
+	assert.Equal(t, "grid-tenant", scope["tenant"])
+	assert.Equal(t, "test-ns", scope["namespace"])
+	assert.Equal(t, expectedSubscription, scope["subscription"])
+	assert.Equal(t, organizationA, scope["organizationId"])
+	assert.Equal(t, false, response["accessAllowed"])
+	assert.NotContains(t, response, "name")
+	assert.Empty(t, response["error"])
+}
+
+type panickingModelAccessChecker struct{}
+
+func (panickingModelAccessChecker) AuthorizedModels([]string, string) map[authpolicy.ModelKey]bool {
+	panic("inference model-access checker must not be used for subscription administration")
+}
+
 func postSelection(t *testing.T, router *gin.Engine, body string) map[string]any {
 	t.Helper()
 	request := httptest.NewRequest(http.MethodPost, "/subscriptions/select", bytes.NewBufferString(body))
@@ -1734,9 +1832,9 @@ func TestHandler_SelectSubscription_SubscriptionAdminFailsClosed(t *testing.T) {
 	}`)
 
 	assert.Equal(t, subscription.PurposeSubscriptionAdmin, response["purpose"])
-	assert.Equal(t, "unsupported", response["error"])
+	assert.Equal(t, "not_found", response["error"])
 	assert.Equal(t, false, response["accessAllowed"])
-	assert.NotContains(t, response, "admin")
+	assert.Equal(t, false, adminDecision(t, response)["allowed"])
 }
 
 func TestHandler_SelectSubscription_SubscriptionAdminRejectsMalformedIdentity(t *testing.T) {
@@ -1750,6 +1848,240 @@ func TestHandler_SelectSubscription_SubscriptionAdminRejectsMalformedIdentity(t 
 
 	assert.Equal(t, "invalid_identity", response["error"])
 	assert.Equal(t, false, response["accessAllowed"])
+	assert.Equal(t, false, adminDecision(t, response)["allowed"])
+}
+
+func TestHandler_SelectSubscription_SubscriptionAdminAllowsOrganizationAdmin(t *testing.T) {
+	adminIdentity := callbackIdentityFor(t, []token.OrganizationMembership{{
+		OrganizationID: organizationA,
+		Roles:          []string{"admins"},
+	}, {
+		OrganizationID: organizationB,
+		Roles:          []string{"users"},
+	}}, nil)
+
+	tests := []struct {
+		name   string
+		target string
+		phase  string
+	}{
+		{name: "qualified active subscription", target: "test-ns/grid-sub-a", phase: "Active"},
+		{name: "bare subscription alias", target: "grid-sub-a", phase: "Active"},
+		{name: "pending subscription", target: "grid-sub-a", phase: "Pending"},
+		{name: "failed subscription", target: "grid-sub-a", phase: "Failed"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			lister := &mockLister{subscriptions: []*unstructured.Unstructured{
+				createSubscriptionForAdmin(t, "grid-sub-a", "test-ns", organizationA, organizationB, test.phase, nil),
+			}}
+			router := setupAdminTestRouter(lister, nil)
+			response := postSelection(t, router, subscriptionAdminRequest(t, test.target, adminIdentity))
+			assertSubscriptionAdminAllowed(t, response, "grid-sub-a")
+		})
+	}
+}
+
+func TestHandler_SelectSubscription_SubscriptionAdminAllowsMultipleSubscriptionsPerOrganization(t *testing.T) {
+	adminIdentity := callbackIdentityFor(t, []token.OrganizationMembership{{
+		OrganizationID: organizationA,
+		Roles:          []string{"admins"},
+	}}, nil)
+	lister := &mockLister{subscriptions: []*unstructured.Unstructured{
+		createSubscriptionForAdmin(t, "grid-sub-a-1", "test-ns", organizationA, organizationB, "Active", nil),
+		createSubscriptionForAdmin(t, "grid-sub-a-2", "test-ns", organizationA, organizationB, "Pending", nil),
+	}}
+	router := setupAdminTestRouter(lister, nil)
+
+	for _, subscriptionName := range []string{"grid-sub-a-1", "grid-sub-a-2"} {
+		response := postSelection(t, router, subscriptionAdminRequest(t, subscriptionName, adminIdentity))
+		assertSubscriptionAdminAllowed(t, response, subscriptionName)
+	}
+}
+
+func TestHandler_SelectSubscription_SubscriptionAdminRequiresAdminForRequestedSubscription(t *testing.T) {
+	identity := callbackIdentityFor(t, []token.OrganizationMembership{{
+		OrganizationID: organizationA,
+		Roles:          []string{"admins"},
+	}, {
+		OrganizationID: organizationB,
+		Roles:          []string{"users"},
+	}}, nil)
+	lister := &mockLister{subscriptions: []*unstructured.Unstructured{
+		createSubscriptionForAdmin(t, "grid-sub-a", "test-ns", organizationA, organizationB, "Active", nil),
+		createSubscriptionForAdmin(t, "grid-sub-b", "test-ns", organizationB, organizationA, "Active", nil),
+	}}
+	router := setupAdminTestRouter(lister, nil)
+
+	response := postSelection(t, router, subscriptionAdminRequest(t, "grid-sub-a", identity))
+	assertSubscriptionAdminAllowed(t, response, "grid-sub-a")
+
+	response = postSelection(t, router, subscriptionAdminRequest(t, "grid-sub-b", identity))
+	admin := adminDecision(t, response)
+	assert.Equal(t, false, admin["allowed"])
+	assert.Nil(t, admin["scope"])
+	assert.Equal(t, "access_denied", admin["reason"])
+	assert.Equal(t, "access_denied", response["error"])
+}
+
+func TestHandler_SelectSubscription_SubscriptionAdminDeniesCrossOrganizationAndLegacyGrants(t *testing.T) {
+	adminGroup := organizationA + "/ai-grid-admins"
+	aAdmin := callbackIdentityFor(t, []token.OrganizationMembership{{
+		OrganizationID: organizationA,
+		Roles:          []string{"admins"},
+	}}, []string{adminGroup})
+	aUserWithAdminGroup := callbackIdentityFor(t, []token.OrganizationMembership{{
+		OrganizationID: organizationA,
+		Roles:          []string{"users"},
+	}}, []string{adminGroup})
+	aAdminBUser := callbackIdentityFor(t, []token.OrganizationMembership{{
+		OrganizationID: organizationA,
+		Roles:          []string{"admins"},
+	}, {
+		OrganizationID: organizationB,
+		Roles:          []string{"users"},
+	}}, nil)
+
+	tests := []struct {
+		name           string
+		identity       string
+		association    string
+		attribution    string
+		ownerGroups    []string
+		expectedReason string
+	}{
+		{
+			name:           "A admin is only a B user",
+			identity:       aAdminBUser,
+			association:    organizationB,
+			attribution:    organizationA,
+			ownerGroups:    []string{adminGroup},
+			expectedReason: "access_denied",
+		},
+		{
+			name:           "owner model and attribution groups do not grant admin",
+			identity:       aUserWithAdminGroup,
+			association:    organizationA,
+			attribution:    organizationA,
+			ownerGroups:    []string{adminGroup},
+			expectedReason: "access_denied",
+		},
+		{
+			name:           "missing organization association",
+			identity:       aAdmin,
+			association:    "",
+			attribution:    organizationA,
+			ownerGroups:    []string{adminGroup},
+			expectedReason: "unresolved_association",
+		},
+		{
+			name:           "invalid organization association",
+			identity:       aAdmin,
+			association:    "not-a-uuid",
+			attribution:    organizationA,
+			ownerGroups:    []string{adminGroup},
+			expectedReason: "unresolved_association",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			lister := &mockLister{subscriptions: []*unstructured.Unstructured{
+				createSubscriptionForAdmin(t, "grid-sub", "test-ns", test.association, test.attribution, "Active", test.ownerGroups),
+			}}
+			router := setupAdminTestRouter(lister, nil)
+			response := postSelection(t, router, subscriptionAdminRequest(t, "grid-sub", test.identity))
+
+			admin, ok := response["admin"].(map[string]any)
+			require.True(t, ok)
+			assert.Equal(t, false, admin["allowed"])
+			assert.Nil(t, admin["scope"])
+			assert.Equal(t, test.expectedReason, admin["reason"])
+			assert.Equal(t, test.expectedReason, response["error"])
+			assert.Equal(t, false, response["accessAllowed"])
+		})
+	}
+}
+
+func TestHandler_SelectSubscription_SubscriptionAdminDeniesAmbiguousBareName(t *testing.T) {
+	adminIdentity := callbackIdentityFor(t, []token.OrganizationMembership{{
+		OrganizationID: organizationA,
+		Roles:          []string{"admins"},
+	}}, nil)
+	lister := &mockLister{subscriptions: []*unstructured.Unstructured{
+		createSubscriptionForAdmin(t, "grid-sub", "test-ns", organizationA, organizationB, "Active", nil),
+		createSubscriptionForAdmin(t, "grid-sub", "other-ns", organizationA, organizationB, "Active", nil),
+	}}
+	router := setupAdminTestRouter(lister, nil)
+
+	response := postSelection(t, router, subscriptionAdminRequest(t, "grid-sub", adminIdentity))
+	admin := adminDecision(t, response)
+	assert.Equal(t, false, admin["allowed"])
+	assert.Equal(t, "ambiguous_subscription", response["error"])
+
+	response = postSelection(t, router, subscriptionAdminRequest(t, "test-ns/grid-sub", adminIdentity))
+	assertSubscriptionAdminAllowed(t, response, "grid-sub")
+}
+
+func TestHandler_SelectSubscription_SubscriptionAdminMissingRolesHasNoAdmin(t *testing.T) {
+	identity := `{
+		"source": "oidc",
+		"claims": {
+			"iss": "https://issuer.example.com",
+			"sub": "user-1",
+			"aud": "maas-api",
+			"azp": "maas-client",
+			"https://redhat.com/maas/orgs": [{"organization_id":"` + organizationA + `"}]
+		}
+	}`
+	lister := &mockLister{subscriptions: []*unstructured.Unstructured{
+		createSubscriptionForAdmin(t, "grid-sub", "test-ns", organizationA, organizationB, "Active", nil),
+	}}
+	router := setupAdminTestRouter(lister, nil)
+
+	response := postSelection(t, router, subscriptionAdminRequest(t, "grid-sub", identity))
+	admin := adminDecision(t, response)
+	assert.Equal(t, false, admin["allowed"])
+	assert.Nil(t, admin["scope"])
+	assert.Equal(t, "access_denied", admin["reason"])
+	assert.Equal(t, "access_denied", response["error"])
+}
+
+func TestHandler_SelectSubscription_SubscriptionAdminRejectsDuplicateOrganizationEntries(t *testing.T) {
+	identity := `{
+		"source": "oidc",
+		"claims": {
+			"iss": "https://issuer.example.com",
+			"sub": "user-1",
+			"aud": "maas-api",
+			"azp": "maas-client",
+			"https://redhat.com/maas/orgs": [
+				{"organization_id":"` + organizationA + `","roles":["users"]},
+				{"organization_id":"` + organizationA + `","roles":["admins"]}
+			]
+		}
+	}`
+	lister := &mockLister{subscriptions: []*unstructured.Unstructured{
+		createSubscriptionForAdmin(t, "grid-sub", "test-ns", organizationA, organizationB, "Active", nil),
+	}}
+	router := setupAdminTestRouter(lister, nil)
+
+	response := postSelection(t, router, subscriptionAdminRequest(t, "grid-sub", identity))
+	assert.Equal(t, "invalid_identity", response["error"])
+	assert.Equal(t, false, adminDecision(t, response)["allowed"])
+}
+
+func TestHandler_SelectSubscription_SubscriptionAdminDoesNotUseInferenceAccessChecker(t *testing.T) {
+	adminIdentity := callbackIdentityFor(t, []token.OrganizationMembership{{
+		OrganizationID: organizationA,
+		Roles:          []string{"admins"},
+	}}, nil)
+	lister := &mockLister{subscriptions: []*unstructured.Unstructured{
+		createSubscriptionForAdmin(t, "grid-sub", "test-ns", organizationA, organizationB, "Active", nil),
+	}}
+	router := setupAdminTestRouter(lister, panickingModelAccessChecker{})
+
+	response := postSelection(t, router, subscriptionAdminRequest(t, "grid-sub", adminIdentity))
+	assertSubscriptionAdminAllowed(t, response, "grid-sub")
 }
 
 func TestHandler_SelectSubscription_SubscriptionAdminRejectsOversizedIdentity(t *testing.T) {
@@ -1770,7 +2102,7 @@ func TestHandler_SelectSubscription_SubscriptionAdminRejectsOversizedIdentity(t 
 	assert.Equal(t, "invalid_identity", response["error"])
 	assert.Equal(t, "trusted identity is too large", response["message"])
 	assert.Equal(t, false, response["accessAllowed"])
-	assert.NotContains(t, response, "admin")
+	assert.Equal(t, false, adminDecision(t, response)["allowed"])
 }
 
 func TestHandler_SelectSubscription_RejectsOversizedRequestBody(t *testing.T) {

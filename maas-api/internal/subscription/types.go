@@ -66,6 +66,10 @@ type SelectResponse struct {
 	// Access control (populated from MaaSAuthPolicy check)
 	AccessAllowed bool `json:"accessAllowed"` // no omitempty — false is a meaningful denial signal
 
+	// Admin is populated only for the subscription-admin callback purpose. It is
+	// deliberately separate from AccessAllowed and inference-selection metadata.
+	Admin *AdminDecision `json:"admin,omitempty"`
+
 	// Health fields (populated from status and metadata)
 	Phase             string `json:"phase"`                       // Subscription phase: "Active", "Degraded", "Failed", "Pending", or "" (always serialized for Authorino OPA rules)
 	Ready             bool   `json:"ready"`                       // Whether subscription is ready (from Ready condition)
@@ -74,6 +78,24 @@ type SelectResponse struct {
 	// Error fields (populated when selection fails)
 	Error   string `json:"error,omitempty"`   // Error code (e.g., "bad_request", "not_found", "access_denied", "multiple_subscriptions")
 	Message string `json:"message,omitempty"` // Human-readable error message
+}
+
+// AdminDecision is the purpose-specific subscription-admin result.
+type AdminDecision struct {
+	Allowed bool        `json:"allowed"`
+	Scope   *AdminScope `json:"scope,omitempty"`
+	Reason  string      `json:"reason,omitempty"`
+}
+
+// AdminScope is the positive canonical scope returned only when organization
+// administration is allowed. Existing key bindings continue to use tenant and
+// subscription name, while namespace and organization ID make the resolved
+// target explicit for downstream authorization.
+type AdminScope struct {
+	Tenant         string `json:"tenant"`
+	Namespace      string `json:"namespace"`
+	Subscription   string `json:"subscription"`
+	OrganizationID string `json:"organizationId"`
 }
 
 // SubscriptionInfo represents a subscription in list responses.
