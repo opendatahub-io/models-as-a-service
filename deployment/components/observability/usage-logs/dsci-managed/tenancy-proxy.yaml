@@ -44,6 +44,8 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: metadata.namespace
+        - name: LOKI_GATEWAY_SERVICE
+          value: data-science-lokistack-gateway-http
         - name: PYTHONPATH
           value: "/opt/app-root/src/proxy"
         - name: PYTHONUNBUFFERED

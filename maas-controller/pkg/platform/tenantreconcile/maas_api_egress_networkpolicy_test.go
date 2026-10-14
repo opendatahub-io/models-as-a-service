@@ -530,8 +530,14 @@ func TestPostRender_SkipsMaaSAPIEgressWhenDisabled(t *testing.T) {
 		},
 	}
 	params := PlatformParams{MaaSAPIEgressNetworkPolicyDisabled: true}
+	tenant := &maasv1alpha1.MaasTenantConfig{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      maasv1alpha1.MaasTenantConfigInstanceName,
+			Namespace: "maas-system",
+		},
+	}
 
-	resources, err := PostRender(context.Background(), logr.Discard(), nil, rendered, params)
+	resources, err := PostRender(context.Background(), logr.Discard(), tenant, rendered, params)
 	require.NoError(t, err)
 
 	for _, r := range resources {

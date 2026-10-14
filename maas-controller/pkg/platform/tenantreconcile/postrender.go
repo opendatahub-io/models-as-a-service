@@ -7,6 +7,7 @@ import (
 
 	"github.com/go-logr/logr"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
@@ -265,19 +266,13 @@ func patchAuthPolicyWithOIDC(log logr.Logger, resource *unstructured.Unstructure
 	return nil
 }
 
-func isTelemetryEnabled(t *maasv1alpha1.TenantTelemetryConfig) bool {
-	if t == nil {
-		return false
-	}
-	if t.Enabled == nil {
-		return false
-	}
-	return *t.Enabled
+func IsTelemetryEnabled(t *maasv1alpha1.TenantTelemetryConfig) bool {
+	return t == nil || ptr.Deref(t.Enabled, true)
 }
 
 func configureTelemetryPolicyResources(log logr.Logger, tenant client.Object, resources *[]unstructured.Unstructured, params PlatformParams) error {
 	telemetry := telemetryConfigFor(tenant)
-	if !isTelemetryEnabled(telemetry) {
+	if !IsTelemetryEnabled(telemetry) {
 		return nil
 	}
 	// Caller should have checked CRD; still skip if API missing at apply time.
@@ -319,7 +314,7 @@ func configureTelemetryPolicyResources(log logr.Logger, tenant client.Object, re
 }
 
 func configureIstioTelemetryResources(log logr.Logger, tenant client.Object, resources *[]unstructured.Unstructured, params PlatformParams) error {
-	if !isTelemetryEnabled(telemetryConfigFor(tenant)) {
+	if !IsTelemetryEnabled(telemetryConfigFor(tenant)) {
 		return nil
 	}
 	gatewayNamespace := params.GatewayNamespace
