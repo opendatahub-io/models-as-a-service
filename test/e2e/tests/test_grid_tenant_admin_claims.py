@@ -96,3 +96,27 @@ class TestGridTenantAdminClaims:
         }
         assert all("/" in group for group in groups)
         assert all(group.split("/", 1)[0] in organization_ids for group in groups)
+
+    def test_subscription_listing_accepts_grid_admin_token(self, maas_api_base_url: str):
+        token = _request_grid_admin_token()
+
+        response = requests.get(
+            f"{maas_api_base_url}/v1/subscriptions",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=30,
+            verify=TLS_VERIFY,
+        )
+        assert response.status_code == 200, (
+            f"GET /v1/subscriptions failed with Grid admin token: "
+            f"{response.status_code} {response.text}"
+        )
+        assert response.headers.get("Cache-Control") == "no-store"
+
+        subscriptions = response.json()
+        assert isinstance(subscriptions, list), (
+            f"Expected subscription listing to be a list, got {type(subscriptions)}"
+        )
+        for subscription in subscriptions:
+            assert isinstance(subscription["subscription_id_header"], str)
+            assert isinstance(subscription["priority"], int)
+            assert isinstance(subscription["model_refs"], list)
