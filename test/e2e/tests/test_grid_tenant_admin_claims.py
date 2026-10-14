@@ -77,3 +77,22 @@ class TestGridTenantAdminClaims:
             "53d4f57e-3588-55e8-b96c-4ec54a7c42fa"
         )
         assert organizations[1]["roles"] == ["users"]
+
+    def test_keycloak_groups_remain_organization_qualified(self):
+        token = _request_grid_admin_token()
+        claims = _decode_jwt_payload(token)
+
+        groups = claims.get("groups")
+        assert isinstance(groups, list), f"Expected groups to be a list, got {type(groups)}"
+        assert set(groups) == {
+            "42c3e46f-2477-44d7-a85b-d3b43f6b31fa/ai-grid-admins",
+            "53d4f57e-3588-55e8-b96c-4ec54a7c42fa/ai-grid-users",
+        }
+
+        organizations = claims.get("https://redhat.com/maas/orgs")
+        assert organizations, "Expected organization memberships to remain present"
+        organization_ids = {
+            organization["organization_id"] for organization in organizations
+        }
+        assert all("/" in group for group in groups)
+        assert all(group.split("/", 1)[0] in organization_ids for group in groups)
