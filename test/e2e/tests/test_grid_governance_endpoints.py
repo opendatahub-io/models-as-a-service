@@ -186,3 +186,38 @@ class TestGridGovernanceAPIKeys:
             item["subscription"] == resources.governance_subscription
             for item in items
         )
+
+    def test_grid_admin_search_without_subscription_stays_self_service(
+        self, maas_api_base_url: str, governance_context: GridGovernanceContext
+    ):
+        token = request_grid_token("grid_admin")
+
+        response = _search_grid_api_keys(maas_api_base_url, token)
+        assert response.status_code == 200, (
+            f"Grid admin own-key search failed: "
+            f"{response.status_code} {response.text}"
+        )
+        returned_ids = {item["id"] for item in response.json()["data"]}
+        fixture_ids = {key.key_id for key in governance_context.keys}
+        assert fixture_ids.isdisjoint(returned_ids), (
+            f"Missing subscription must not broaden Grid admin search to "
+            f"administered users; unexpectedly returned {fixture_ids & returned_ids}"
+        )
+
+    def test_grid_admin_cannot_search_other_organization_keys(
+        self, maas_api_base_url: str, governance_context: GridGovernanceContext
+    ):
+        token = request_grid_token("grid_admin")
+
+        response = _search_grid_api_keys(
+            maas_api_base_url,
+            token,
+            subscription=(
+                governance_context.resources
+                .other_organization_governance_subscription
+            ),
+        )
+        assert response.status_code == 403, (
+            f"Grid admin must not search another organization's subscription, got "
+            f"{response.status_code} {response.text}"
+        )
