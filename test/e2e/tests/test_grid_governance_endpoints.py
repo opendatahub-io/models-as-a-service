@@ -262,3 +262,21 @@ class TestGridGovernanceAPIKeys:
             f"Grid admin must receive enumeration-safe 404 for another "
             f"organization's key, got {response.status_code} {response.text}"
         )
+
+    def test_grid_admin_revokes_authorized_key(
+        self, maas_api_base_url: str, governance_context: GridGovernanceContext
+    ):
+        token = request_grid_token("grid_admin")
+        key = governance_context.keys[1]
+
+        response = _request_with_gateway_retry(
+            requests.delete,
+            f"{maas_api_base_url}/v1/api-keys/{key.key_id}",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=30,
+        )
+        assert response.status_code == 200, (
+            f"Grid admin API-key revocation failed: "
+            f"{response.status_code} {response.text}"
+        )
+        assert response.json()["status"] == "revoked"
