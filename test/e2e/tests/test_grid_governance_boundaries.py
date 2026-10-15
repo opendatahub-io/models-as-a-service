@@ -127,3 +127,20 @@ class TestGridTenantDiscoveryBoundary:
             f"Grid OIDC token must not authorize Kubernetes tenant discovery, "
             f"got {status_code} {body}"
         )
+
+    def test_grid_tenant_discovery_remains_unroutable(
+        self, maas_api_base_url: str
+    ):
+        token = request_grid_token("grid_admin")
+        gateway_base_url = maas_api_base_url.removesuffix("/maas-api")
+
+        response = _request_with_gateway_retry(
+            requests.get,
+            f"{gateway_base_url}/v1/tenants",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=30,
+        )
+        assert response.status_code == 404, (
+            f"Root /v1/tenants route must remain unroutable, got "
+            f"{response.status_code} {response.text}"
+        )
