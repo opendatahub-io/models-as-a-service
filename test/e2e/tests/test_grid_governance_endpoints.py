@@ -221,3 +221,27 @@ class TestGridGovernanceAPIKeys:
             f"Grid admin must not search another organization's subscription, got "
             f"{response.status_code} {response.text}"
         )
+
+    def test_grid_admin_inspects_authorized_key_metadata(
+        self, maas_api_base_url: str, governance_context: GridGovernanceContext
+    ):
+        token = request_grid_token("grid_admin")
+        key = governance_context.keys[0]
+
+        response = _request_with_gateway_retry(
+            requests.get,
+            f"{maas_api_base_url}/v1/api-keys/{key.key_id}",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=30,
+        )
+        assert response.status_code == 200, (
+            f"Grid admin API-key inspection failed: "
+            f"{response.status_code} {response.text}"
+        )
+        payload = response.json()
+        assert payload["id"] == key.key_id
+        assert payload["username"] == key.username
+        assert payload["subscription"] == key.subscription
+        assert payload["status"] == "active"
+        assert "Engineering" in payload["groups"]
+        assert "key" not in payload
