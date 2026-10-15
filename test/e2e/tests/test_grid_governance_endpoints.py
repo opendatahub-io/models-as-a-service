@@ -489,3 +489,14 @@ class TestGridGovernanceIdentity:
         }
         assert identity["sub"]
         assert identity["https://redhat.com/maas/orgs"] == []
+
+    def test_me_requires_verified_sso_identity(self, maas_api_base_url: str):
+        response = _request_with_gateway_retry(
+            requests.get,
+            f"{maas_api_base_url}/v1/me",
+            timeout=30,
+        )
+        assert response.status_code == 401, (
+            f"Expected unauthenticated /v1/me to return 401, got "
+            f"{response.status_code} {response.text}"
+        )
