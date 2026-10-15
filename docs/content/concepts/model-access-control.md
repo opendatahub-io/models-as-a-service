@@ -81,6 +81,8 @@ MaaSSubscription resources grant **quota** and define rate limits. Each subscrip
 
 **API key binding**: When you create an API key, it binds to one subscription (explicit or highest priority). The bound subscription determines which models you can access and what rate limits apply.
 
+**Owner semantics**: `owner` means entitlement to select and bind the subscription. It is not a Kubernetes `ownerReference`, does not grant RBAC permissions, and is not exclusive. Group and user names are matched as opaque identity strings; a `/` in a group name is not interpreted as a namespace/name separator.
+
 ### Access Decision Flow
 
 For a user to access a model:

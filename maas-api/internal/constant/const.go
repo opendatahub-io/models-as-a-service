@@ -18,6 +18,7 @@ const (
 	// Header configuration constants.
 	HeaderUsername = "X-MaaS-Username"
 	HeaderGroup    = "X-MaaS-Group"
+	HeaderIdentity = "X-MaaS-Identity"
 
 	// API Key configuration defaults.
 	// DefaultAPIKeyMaxExpirationDays is the default maximum allowed expiration for API keys.

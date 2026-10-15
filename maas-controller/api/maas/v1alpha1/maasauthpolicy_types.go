@@ -50,7 +50,8 @@ type ModelRef struct {
 
 // SubjectSpec defines the subjects that have access
 type SubjectSpec struct {
-	// Groups is a list of Kubernetes group names
+	// Groups is a list of identity group names that may access the referenced
+	// models. Names are matched exactly and are not Kubernetes object names.
 	// +optional
 	Groups []GroupReference `json:"groups,omitempty"`
 
@@ -59,9 +60,9 @@ type SubjectSpec struct {
 	Users []string `json:"users,omitempty"`
 }
 
-// GroupReference references a Kubernetes group
+// GroupReference references an identity group by its opaque name.
 type GroupReference struct {
-	// Name is the name of the group
+	// Name is the opaque group name used for exact-match authorization.
 	Name string `json:"name"`
 }
 

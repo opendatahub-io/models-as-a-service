@@ -123,6 +123,8 @@ Operators who need per-user billing data enable the `user` label explicitly, acc
 
 Instead of encoding `user`, `organization_id`, and `cost_center` as metric labels (which create time series), emit them as structured log entries. Logs can be aggregated and queried via log analytics (e.g., OpenShift Logging, Loki) without creating Prometheus cardinality pressure.
 
+Usage logs include `organization_id` by default when that field is set on the subscription (`logs.captureOrganization` defaults to `true`). Set it to `false` to omit. That is independent of `metrics.captureOrganization`. `cost_center` is included when that field is set on the subscription.
+
 Metrics remain for aggregated operational visibility (per-model, per-tier). Logs handle per-user attribution and billing queries.
 
 ### Option 3: Enforce Hard Limits on Label Values

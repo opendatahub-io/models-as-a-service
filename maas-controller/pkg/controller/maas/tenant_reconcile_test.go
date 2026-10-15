@@ -965,6 +965,144 @@ func TestTenantReconcile_TeardownRequestedStillHandlesDeletion(t *testing.T) {
 	g.Expect(updated.Finalizers).NotTo(ContainElement(tenantFinalizer), "deletion cleanup should run during teardown")
 }
 
+func TestTenantReconcile_DeletionDefersCleanupWhileAITenantRevocationPending(t *testing.T) {
+	g := NewWithT(t)
+	s := tenantTestScheme(t)
+	ctx := context.Background()
+	now := metav1.NewTime(time.Now())
+
+	const tenantNS = "models-as-a-service"
+	const appNS = "odh-ai-gateway-infra"
+
+	// MaasTenantConfig owned by an AITenant that is deleting but has not
+	// finished API-key revocation yet (finalizer present, no APIKeysRevoked condition).
+	tenant := &maasv1alpha1.MaasTenantConfig{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              maasv1alpha1.MaasTenantConfigInstanceName,
+			Namespace:         tenantNS,
+			DeletionTimestamp: &now,
+			Finalizers:        []string{tenantFinalizer},
+			Labels: map[string]string{
+				tenantreconcile.LabelManagedByAITenant: "true",
+				tenantreconcile.LabelTenantName:        tenantreconcile.DefaultAITenantName,
+				tenantreconcile.LabelTenantNamespace:   tenantNS,
+			},
+			Annotations: map[string]string{
+				tenantreconcile.AnnotationAITenantName:      tenantreconcile.DefaultAITenantName,
+				tenantreconcile.AnnotationAITenantNamespace: tenantreconcile.DefaultAITenantNamespace,
+			},
+		},
+	}
+	aitenant := &maasv1alpha1.AITenant{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              tenantreconcile.DefaultAITenantName,
+			Namespace:         tenantreconcile.DefaultAITenantNamespace,
+			DeletionTimestamp: &now,
+			Finalizers:        []string{"maas.opendatahub.io/aitenant-cleanup"},
+		},
+	}
+	maasAPIDep := tenantTestUnstructured(tenantreconcile.GVKDeployment, appNS, tenantreconcile.MaaSAPIDeploymentName(""))
+	maasAPISvc := tenantTestUnstructured(tenantreconcile.GVKService, appNS, tenantreconcile.MaaSAPIServiceName(""))
+
+	cl := fake.NewClientBuilder().
+		WithScheme(s).
+		WithStatusSubresource(&maasv1alpha1.MaasTenantConfig{}, &maasv1alpha1.AITenant{}).
+		WithObjects(tenant, aitenant, maasAPIDep, maasAPISvc).
+		Build()
+
+	r := &TenantReconciler{
+		Client:           cl,
+		Scheme:           s,
+		AppNamespace:     appNS,
+		TenantNamespace:  tenantNS,
+		GatewayName:      testTenantGatewayName,
+		GatewayNamespace: testTenantGatewayNamespace,
+	}
+
+	res, err := r.Reconcile(ctx, ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: maasv1alpha1.MaasTenantConfigInstanceName, Namespace: tenantNS},
+	})
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(res.RequeueAfter).To(Equal(10*time.Second), "should requeue while waiting for AITenant revocation")
+
+	// maas-api resources must still exist — cleanup was deferred.
+	g.Expect(cl.Get(ctx, client.ObjectKeyFromObject(maasAPIDep), maasAPIDep)).To(Succeed(),
+		"maas-api Deployment must survive while AITenant revocation is pending")
+	g.Expect(cl.Get(ctx, client.ObjectKeyFromObject(maasAPISvc), maasAPISvc)).To(Succeed(),
+		"maas-api Service must survive while AITenant revocation is pending")
+	// Finalizer must still be present.
+	var updated maasv1alpha1.MaasTenantConfig
+	g.Expect(cl.Get(ctx, client.ObjectKey{Name: maasv1alpha1.MaasTenantConfigInstanceName, Namespace: tenantNS}, &updated)).To(Succeed())
+	g.Expect(updated.Finalizers).To(ContainElement(tenantFinalizer))
+}
+
+func TestTenantReconcile_DeletionProceedsAfterAITenantRevocationComplete(t *testing.T) {
+	g := NewWithT(t)
+	s := tenantTestScheme(t)
+	ctx := context.Background()
+	now := metav1.NewTime(time.Now())
+
+	const tenantNS = "models-as-a-service"
+	const appNS = "odh-ai-gateway-infra"
+
+	tenant := &maasv1alpha1.MaasTenantConfig{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              maasv1alpha1.MaasTenantConfigInstanceName,
+			Namespace:         tenantNS,
+			DeletionTimestamp: &now,
+			Finalizers:        []string{tenantFinalizer},
+			Labels: map[string]string{
+				tenantreconcile.LabelManagedByAITenant: "true",
+				tenantreconcile.LabelTenantName:        tenantreconcile.DefaultAITenantName,
+				tenantreconcile.LabelTenantNamespace:   tenantNS,
+			},
+			Annotations: map[string]string{
+				tenantreconcile.AnnotationAITenantName:      tenantreconcile.DefaultAITenantName,
+				tenantreconcile.AnnotationAITenantNamespace: tenantreconcile.DefaultAITenantNamespace,
+			},
+		},
+	}
+	// AITenant is deleting but revocation IS complete (annotation set).
+	aitenant := &maasv1alpha1.AITenant{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              tenantreconcile.DefaultAITenantName,
+			Namespace:         tenantreconcile.DefaultAITenantNamespace,
+			DeletionTimestamp: &now,
+			Finalizers:        []string{"maas.opendatahub.io/aitenant-cleanup"},
+			Annotations: map[string]string{
+				"maas.opendatahub.io/api-keys-revoked": "true",
+			},
+		},
+	}
+	maasAPIDep := tenantTestUnstructured(tenantreconcile.GVKDeployment, appNS, tenantreconcile.MaaSAPIDeploymentName(""))
+	maasAPISvc := tenantTestUnstructured(tenantreconcile.GVKService, appNS, tenantreconcile.MaaSAPIServiceName(""))
+
+	cl := fake.NewClientBuilder().
+		WithScheme(s).
+		WithStatusSubresource(&maasv1alpha1.MaasTenantConfig{}, &maasv1alpha1.AITenant{}).
+		WithObjects(tenant, aitenant, maasAPIDep, maasAPISvc).
+		Build()
+
+	r := &TenantReconciler{
+		Client:           cl,
+		Scheme:           s,
+		AppNamespace:     appNS,
+		TenantNamespace:  tenantNS,
+		GatewayName:      testTenantGatewayName,
+		GatewayNamespace: testTenantGatewayNamespace,
+	}
+
+	res, err := r.Reconcile(ctx, ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: maasv1alpha1.MaasTenantConfigInstanceName, Namespace: tenantNS},
+	})
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(res).To(Equal(ctrl.Result{}))
+
+	// maas-api resources should be cleaned up now.
+	err = cl.Get(ctx, client.ObjectKeyFromObject(maasAPIDep), maasAPIDep)
+	g.Expect(apierrors.IsNotFound(err)).To(BeTrue(), "maas-api Deployment should be deleted after revocation completes")
+}
+
 func TestTenantReconcile_InvalidTenantIdentifierFailsAfterDeletionCheck(t *testing.T) {
 	g := NewWithT(t)
 	s := tenantTestScheme(t)

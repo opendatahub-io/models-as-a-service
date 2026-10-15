@@ -4,7 +4,8 @@
 #
 # The when predicate below excludes /maas-api and the specific /v1/*
 # management endpoints (/v1/models, /v1/subscriptions, /v1/api-keys) so
-# this deny applies to all other paths, including model inference paths
+# State CRUD is also exempt; Responses creation remains denied without model limits.
+# This deny applies to all other paths, including model inference paths
 # (e.g. /llm/..., /production/..., /v1/chat/completions via body-routing).
 #
 # The PRIMARY default deny is maas-gateway-auth (AuthPolicy), which
@@ -36,7 +37,7 @@ spec:
     limits:
       deny-all-by-default:
         when:
-          - predicate: '!request.path.startsWith("/maas-api") && !request.path.startsWith("/v1/models") && !request.path.startsWith("/v1/subscriptions") && !request.path.startsWith("/v1/api-keys")'
+          - predicate: '!request.path.startsWith("/maas-api") && !request.path.startsWith("/v1/models") && !request.path.startsWith("/v1/subscriptions") && !request.path.startsWith("/v1/api-keys") && !((request.path == "/v1/conversations" || request.path.startsWith("/v1/conversations/")) && request.method in ["GET", "POST", "DELETE"]) && !(request.path.startsWith("/v1/responses/") && request.method in ["GET", "DELETE"])'
         rates:
           - limit: 0
             window: 1m

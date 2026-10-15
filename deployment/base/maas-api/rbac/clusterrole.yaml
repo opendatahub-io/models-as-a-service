@@ -9,16 +9,6 @@ rules:
   resourceNames: ["maas-db-config"]
   verbs: ["get"]
 
-# Namespace read access
-- apiGroups: [""]
-  resources: ["namespaces"]
-  verbs: ["get", "list", "watch"]
-
-# ServiceAccount read access (informer)
-- apiGroups: [""]
-  resources: ["serviceaccounts"]
-  verbs: ["get", "list", "watch"]
-
 # Token review for authentication
 - apiGroups: ["authentication.k8s.io"]
   resources: ["tokenreviews"]

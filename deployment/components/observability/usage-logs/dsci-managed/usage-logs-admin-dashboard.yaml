@@ -352,9 +352,10 @@ spec:
         display:
           name: "Usage breakdown"
           description: >-
-            All user/model/subscription pairs. **View by** changes the chart;
-            **By API key** also splits table rows per key and shows
-            `username (key name)` in the User column.
+            All user/model/subscription pairs, with organization ID and cost
+            center. **View by** changes the chart; **By API key** also splits
+            table rows per key and shows `username (key name)` in the User
+            column.
         plugin:
           kind: Table
           spec:
@@ -407,6 +408,14 @@ spec:
                 format:
                   unit: decimal
                   decimalPlaces: 0
+              - name: "cost_center"
+                header: "Cost center"
+                align: "left"
+                enableSorting: true
+              - name: "organization_id"
+                header: "Organization"
+                align: "left"
+                enableSorting: true
         queries:
           - kind: TimeSeriesQuery
             spec:
@@ -417,7 +426,7 @@ spec:
                     kind: LokiDatasource
                     name: usage-logs-all
                   query: >-
-                    sum by (user_id, model, subscription) (sum_over_time(
+                    sum by (user_id, model, subscription, organization_id, cost_center) (sum_over_time(
                     {service_name="models-as-a-service", subscription=~"$subscription", subscription!="-", model=~"$model"}
                     | user_id=~"$user"
                     | label_format api_key="{{.key_name}} ({{.user_id}})"
@@ -436,7 +445,7 @@ spec:
                     kind: LokiDatasource
                     name: usage-logs-all
                   query: >-
-                    sum by (user_id, model, subscription) (sum_over_time(
+                    sum by (user_id, model, subscription, organization_id, cost_center) (sum_over_time(
                     {service_name="models-as-a-service",
                     subscription=~"$subscription", subscription!="-", model=~"$model"}
                     | user_id=~"$user"
@@ -456,7 +465,7 @@ spec:
                     kind: LokiDatasource
                     name: usage-logs-all
                   query: >-
-                    sum by (user_id, model, subscription) (sum_over_time(
+                    sum by (user_id, model, subscription, organization_id, cost_center) (sum_over_time(
                     {service_name="models-as-a-service", subscription=~"$subscription", subscription!="-", model=~"$model"}
                     | user_id=~"$user"
                     | label_format api_key="{{.key_name}} ({{.user_id}})"
@@ -475,7 +484,7 @@ spec:
                     kind: LokiDatasource
                     name: usage-logs-all
                   query: >-
-                    sum by (user_id, model, subscription) (sum_over_time(
+                    sum by (user_id, model, subscription, organization_id, cost_center) (sum_over_time(
                     {service_name="models-as-a-service", subscription=~"$subscription", subscription!="-", model=~"$model"}
                     | user_id=~"$user"
                     | label_format api_key="{{.key_name}} ({{.user_id}})"
@@ -563,7 +572,7 @@ spec:
         proxy:
           kind: HTTPProxy
           spec:
-            url: 'https://usage-gateway-http:8080/api/logs/v1/application'
+            url: 'https://data-science-lokistack-gateway-http:8080/api/logs/v1/application'
             allowedEndpoints:
               - endpointPattern: "/loki/api/v1/query"
                 method: GET
@@ -582,5 +591,5 @@ spec:
       insecureSkipVerify: false
       caCert:
         type: configmap
-        name: usage-gateway-ca-bundle
+        name: data-science-lokistack-gateway-ca-bundle
         certPath: service-ca.crt

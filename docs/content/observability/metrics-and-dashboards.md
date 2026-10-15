@@ -167,13 +167,13 @@ histogram_quantile(0.5, sum by (subscription, le)
 
 ## Perses Dashboards
 
-Usage dashboards appear in the ODH/RHOAI observability console. Enable them with operator-managed telemetry (and optionally `usageLogging` / `usageMetricsDashboard`) — see [Setup](setup.md). Operator vs Kustomize ownership and cleanup: [Operations](operations.md#cleanup).
+Usage dashboards appear in the ODH/RHOAI observability console. The logs-based dashboards are deployed with the usage-log resources. The legacy metrics dashboard is optional via `usageMetricsDashboard`. See [Setup](setup.md). Operator vs Kustomize ownership and cleanup: [Operations](operations.md#cleanup).
 
 | Dashboard | When | Contents |
 |-----------|------|----------|
 | **Usage (legacy)** (`dashboard-3-maas-usage-admin`) | `usageMetricsDashboard: true` | Token consumption overview and per-user usage (Prometheus) |
-| **Usage** (`dashboard-4-maas-usage-logs-admin`) | `usageLogging: true` | Admin usage from structured access logs (Loki) |
-| **My Usage** (`dashboard-5-maas-usage-logs`) | `usageLogging: true` | User-scoped usage from structured access logs |
+| **Usage** (`dashboard-4-maas-usage-logs-admin`) | Always, while `Config/default` exists | Admin usage from structured access logs (Loki) |
+| **My Usage** (`dashboard-5-maas-usage-logs`) | Always, while `Config/default` exists | User-scoped usage from structured access logs |
 
 !!! note "Inference Success Rate"
     Dashboards use `rate()` on vLLM counters to handle pod restarts correctly. `NaN` (when no traffic) is filtered to default to 100%.

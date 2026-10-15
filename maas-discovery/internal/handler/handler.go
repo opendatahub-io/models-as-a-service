@@ -2,10 +2,12 @@
 package handler
 
 import (
+	"log/slog"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/opendatahub-io/models-as-a-service/maas-discovery/internal/auth"
 	"github.com/opendatahub-io/models-as-a-service/maas-discovery/internal/cache"
 	"github.com/opendatahub-io/models-as-a-service/maas-discovery/internal/types"
 )
@@ -13,19 +15,49 @@ import (
 // Handler serves tenant discovery endpoints.
 type Handler struct {
 	cache cache.TenantCache
+	log   *slog.Logger
 }
 
 // New creates a Handler backed by the given TenantCache.
 func New(tc cache.TenantCache) *Handler {
-	return &Handler{cache: tc}
+	return NewWithLogger(tc, nil)
+}
+
+// NewWithLogger creates a Handler backed by the given TenantCache and logger.
+func NewWithLogger(tc cache.TenantCache, log *slog.Logger) *Handler {
+	if log == nil {
+		log = slog.Default()
+	}
+	return &Handler{cache: tc, log: log}
 }
 
 // ListTenants handles GET /v1/tenants.
+// The TokenReviewMiddleware must run before this handler to populate the
+// auth.ContextKeyUsername, auth.ContextKeyGroups, and auth.ContextKeyIsAdmin values.
 func (h *Handler) ListTenants(c *gin.Context) {
-	tenants := h.cache.List()
+	username, _ := c.Get(auth.ContextKeyUsername)
+	groupsRaw, _ := c.Get(auth.ContextKeyGroups)
+	isAdminRaw, _ := c.Get(auth.ContextKeyIsAdmin)
+
+	user, _ := username.(string)
+	groups, _ := groupsRaw.([]string)
+	isAdmin, _ := isAdminRaw.(bool)
+
+	var tenants []types.TenantInfo
+	if isAdmin {
+		tenants = h.cache.List()
+	} else {
+		tenants = h.cache.ListForSubjects(user, groups)
+	}
 	if tenants == nil {
 		tenants = []types.TenantInfo{}
 	}
+	h.log.Debug("resolved visible tenants",
+		"username", user,
+		"isAdmin", isAdmin,
+		"groups_count", len(groups),
+		"tenant_count", len(tenants),
+	)
 	c.JSON(http.StatusOK, types.TenantsResponse{Tenants: tenants})
 }
 
@@ -45,8 +77,10 @@ func (h *Handler) Readyz(c *gin.Context) {
 }
 
 // RegisterRoutes wires up all routes on the given engine.
-func (h *Handler) RegisterRoutes(r *gin.Engine) {
-	r.GET("/v1/tenants", h.ListTenants)
+// authMiddleware is applied to authenticated endpoints (/v1/tenants).
+func (h *Handler) RegisterRoutes(r *gin.Engine, authMiddleware ...gin.HandlerFunc) {
+	handlers := append(authMiddleware, h.ListTenants) //nolint:gocritic // intentional append to variadic copy
+	r.GET("/v1/tenants", handlers...)
 	r.GET("/healthz", h.Healthz)
 	r.GET("/readyz", h.Readyz)
 }

@@ -2,18 +2,120 @@ package tenantreconcile
 
 import (
 	"context"
+	"os"
 	"testing"
 
 	"github.com/go-logr/logr"
+	"github.com/google/cel-go/cel"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"sigs.k8s.io/yaml"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 )
 
 func boolPtr(b bool) *bool { return &b }
+
+func TestPatchAuthPolicyWithOIDCRequiresPurposePair(t *testing.T) {
+	resource := &unstructured.Unstructured{Object: map[string]any{"spec": map[string]any{}}}
+	oidc := &maasv1alpha1.TenantExternalOIDCConfig{
+		IssuerURL:               "https://issuer.example.com/realms/test",
+		ClientID:                "maas-api",
+		AccessTokenPurposeClaim: "token_use",
+	}
+
+	err := patchAuthPolicyWithOIDC(logr.Discard(), resource, oidc)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "must be configured together")
+}
+
+func TestPatchAuthPolicyWithOIDCTokenContract(t *testing.T) {
+	resource := &unstructured.Unstructured{Object: map[string]any{"spec": map[string]any{}}}
+	oidc := &maasv1alpha1.TenantExternalOIDCConfig{
+		IssuerURL:               "https://issuer.example.com/realms/test",
+		ClientID:                "maas-api",
+		Audience:                "maas-api",
+		AccessTokenPurposeClaim: "token_use",
+		AccessTokenPurpose:      "access",
+	}
+
+	require.NoError(t, patchAuthPolicyWithOIDC(logr.Discard(), resource, oidc))
+	patterns, found, err := unstructured.NestedSlice(
+		resource.Object,
+		"spec", "rules", "authorization", "oidc-client-bound", "patternMatching", "patterns",
+	)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Len(t, patterns, 4)
+
+	expected := []map[string]string{
+		{"selector": "auth.identity.iss", "operator": "eq", "value": oidc.IssuerURL},
+		{"selector": "auth.identity.azp", "operator": "eq", "value": oidc.ClientID},
+		{"selector": "auth.identity.token_use", "operator": "eq", "value": oidc.AccessTokenPurpose},
+	}
+	for index, patternIndex := range []int{0, 1, 3} {
+		patternMap, ok := patterns[patternIndex].(map[string]any)
+		require.True(t, ok)
+		assert.Equal(t, expected[index]["selector"], patternMap["selector"])
+		assert.Equal(t, expected[index]["operator"], patternMap["operator"])
+		assert.Equal(t, expected[index]["value"], patternMap["value"])
+	}
+
+	audiencePattern, ok := patterns[2].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t,
+		`has(auth.identity.aud) && (auth.identity.aud == "maas-api" || "maas-api" in auth.identity.aud)`,
+		audiencePattern["predicate"],
+	)
+}
+
+func TestDefaultDenyStateOperations(t *testing.T) {
+	data, err := os.ReadFile("../../../../deployment/base/maas-controller/policies/gateway-default-deny.yaml")
+	require.NoError(t, err)
+	var policy map[string]any
+	require.NoError(t, yaml.Unmarshal(data, &policy))
+	when, found, err := unstructured.NestedSlice(policy, "spec", "defaults", "limits", "deny-all-by-default", "when")
+	require.NoError(t, err)
+	require.True(t, found)
+	require.NotEmpty(t, when)
+	entry, ok := when[0].(map[string]any)
+	require.True(t, ok)
+	predicate, ok := entry["predicate"].(string)
+	require.True(t, ok)
+	env, err := cel.NewEnv(cel.Variable("request", cel.DynType))
+	require.NoError(t, err)
+	ast, issues := env.Compile(predicate)
+	require.NoError(t, issues.Err())
+	program, err := env.Program(ast)
+	require.NoError(t, err)
+	for _, tt := range []struct {
+		method, path string
+		deny         bool
+	}{
+		{"POST", "/v1/conversations", false},
+		{"POST", "/v1/conversations/conv_test/items", false},
+		{"GET", "/v1/conversations/conv_test", false},
+		{"DELETE", "/v1/conversations/conv_test", false},
+		{"GET", "/v1/responses/resp_test", false},
+		{"GET", "/v1/responses/resp_test/input_items", false},
+		{"DELETE", "/v1/responses/resp_test", false},
+		{"POST", "/v1/responses", true},
+		{"POST", "/v1/responses/", true},
+		{"POST", "/v1/responses/resp_test/cancel", true},
+		{"POST", "/v1/conversations-forged", true},
+		{"PUT", "/v1/conversations/conv_test", true},
+		{"POST", "/tenant/model/v1/chat/completions", true},
+		{"GET", "/v1/models", false},
+	} {
+		t.Run(tt.method+tt.path, func(t *testing.T) {
+			out, _, err := program.Eval(map[string]any{"request": map[string]any{"method": tt.method, "path": tt.path}})
+			require.NoError(t, err)
+			assert.Equal(t, tt.deny, out.Value())
+		})
+	}
+}
 
 func TestBuildTelemetryLabels(t *testing.T) {
 	tests := []struct {

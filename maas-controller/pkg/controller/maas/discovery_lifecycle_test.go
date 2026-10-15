@@ -15,7 +15,6 @@ import (
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 
@@ -51,7 +50,7 @@ func TestEnsureDiscoveryService(t *testing.T) {
 		g := NewWithT(t)
 		s := lifecycleTestScheme(t)
 
-		cl := fake.NewClientBuilder().WithScheme(s).Build()
+		cl := newSSAFakeClientBuilder(s).Build()
 		r := &LifecycleReconciler{
 			Client:                cl,
 			Scheme:                s,
@@ -66,7 +65,7 @@ func TestEnsureDiscoveryService(t *testing.T) {
 		g := NewWithT(t)
 		s := lifecycleTestScheme(t)
 
-		cl := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&maasv1alpha1.Config{}).Build()
+		cl := newSSAFakeClientBuilder(s).WithStatusSubresource(&maasv1alpha1.Config{}).Build()
 		r := &LifecycleReconciler{
 			Client:                cl,
 			Scheme:                s,
@@ -91,7 +90,7 @@ func TestEnsureDiscoveryService(t *testing.T) {
 			ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName, UID: types.UID("cfg-uid")},
 		}
 
-		cl := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&maasv1alpha1.Config{}).WithObjects(cfg).Build()
+		cl := newSSAFakeClientBuilder(s).WithStatusSubresource(&maasv1alpha1.Config{}).WithObjects(cfg).Build()
 		r := &LifecycleReconciler{
 			Client:                cl,
 			Scheme:                s,
@@ -126,7 +125,7 @@ func TestEnsureDiscoveryService(t *testing.T) {
 			ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName, UID: types.UID("cfg-uid")},
 		}
 
-		cl := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&maasv1alpha1.Config{}).WithObjects(cfg).Build()
+		cl := newSSAFakeClientBuilder(s).WithStatusSubresource(&maasv1alpha1.Config{}).WithObjects(cfg).Build()
 		r := &LifecycleReconciler{
 			Client:                cl,
 			Scheme:                s,
@@ -164,7 +163,7 @@ func TestEnsureDiscoveryService(t *testing.T) {
 		}
 
 		replicas := int32(5)
-		cl := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&maasv1alpha1.Config{}).WithObjects(cfg).Build()
+		cl := newSSAFakeClientBuilder(s).WithStatusSubresource(&maasv1alpha1.Config{}).WithObjects(cfg).Build()
 		r := &LifecycleReconciler{
 			Client:                cl,
 			Scheme:                s,
@@ -199,7 +198,7 @@ func TestEnsureDiscoveryService(t *testing.T) {
 			ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName, UID: types.UID("cfg-uid")},
 		}
 
-		cl := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&maasv1alpha1.Config{}).WithObjects(cfg).Build()
+		cl := newSSAFakeClientBuilder(s).WithStatusSubresource(&maasv1alpha1.Config{}).WithObjects(cfg).Build()
 		r := &LifecycleReconciler{
 			Client:                cl,
 			Scheme:                s,
@@ -276,7 +275,7 @@ func TestEnsureDiscoveryService(t *testing.T) {
 			Controller: ptr.To(true),
 		}})
 
-		cl := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&maasv1alpha1.Config{}).WithObjects(cfg, ownedDep, ownedRole).Build()
+		cl := newSSAFakeClientBuilder(s).WithStatusSubresource(&maasv1alpha1.Config{}).WithObjects(cfg, ownedDep, ownedRole).Build()
 		r := &LifecycleReconciler{
 			Client:                cl,
 			Scheme:                s,
@@ -316,7 +315,7 @@ func TestEnsureDiscoveryService(t *testing.T) {
 		foreignDep.SetName(discoveryDeploymentName)
 		foreignDep.SetNamespace(discoveryNS)
 
-		cl := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&maasv1alpha1.Config{}).WithObjects(cfg, foreignDep).Build()
+		cl := newSSAFakeClientBuilder(s).WithStatusSubresource(&maasv1alpha1.Config{}).WithObjects(cfg, foreignDep).Build()
 		r := &LifecycleReconciler{
 			Client:                cl,
 			Scheme:                s,
@@ -358,7 +357,7 @@ func TestEnsureDiscoveryService(t *testing.T) {
 			Controller: ptr.To(true),
 		}})
 
-		cl := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&maasv1alpha1.Config{}).WithObjects(cfg, ownedDep).Build()
+		cl := newSSAFakeClientBuilder(s).WithStatusSubresource(&maasv1alpha1.Config{}).WithObjects(cfg, ownedDep).Build()
 		r := &LifecycleReconciler{
 			Client:                cl,
 			Scheme:                s,
@@ -446,6 +445,149 @@ func TestPatchDiscoveryImage(t *testing.T) {
 
 		err := patchDiscoveryImage(svc, "quay.io/test/discovery:v2")
 		g.Expect(err).NotTo(HaveOccurred())
+	})
+}
+
+func TestPatchDiscoveryArgs(t *testing.T) {
+	t.Run("patches namespace args and appends log-level when missing", func(t *testing.T) {
+		g := NewWithT(t)
+
+		dep := &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "apps/v1",
+			"kind":       "Deployment",
+			"metadata":   map[string]any{"name": discoveryDeploymentName},
+			"spec": map[string]any{
+				"template": map[string]any{
+					"spec": map[string]any{
+						"containers": []any{
+							map[string]any{
+								"name": discoveryContainerName,
+								"args": []any{
+									"--tls-cert=/tls/tls.crt",
+									"--aitenant-namespace=old-ai-tenants",
+									"--gateway-namespace=old-gateway",
+								},
+							},
+						},
+					},
+				},
+			},
+		}}
+
+		err := patchDiscoveryArgs(dep, "ai-tenants", "openshift-ingress", "debug")
+		g.Expect(err).NotTo(HaveOccurred())
+
+		containers, found, err := unstructured.NestedSlice(dep.Object, "spec", "template", "spec", "containers")
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(found).To(BeTrue())
+		cm, ok := containers[0].(map[string]any)
+		g.Expect(ok).To(BeTrue())
+		args, ok := cm["args"].([]any)
+		g.Expect(ok).To(BeTrue())
+
+		g.Expect(args).To(ContainElement("--aitenant-namespace=ai-tenants"))
+		g.Expect(args).To(ContainElement("--gateway-namespace=openshift-ingress"))
+		g.Expect(args).To(ContainElement("--log-level=debug"))
+	})
+
+	t.Run("replaces existing log-level", func(t *testing.T) {
+		g := NewWithT(t)
+
+		dep := &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "apps/v1",
+			"kind":       "Deployment",
+			"metadata":   map[string]any{"name": discoveryDeploymentName},
+			"spec": map[string]any{
+				"template": map[string]any{
+					"spec": map[string]any{
+						"containers": []any{
+							map[string]any{
+								"name": discoveryContainerName,
+								"args": []any{
+									"--aitenant-namespace=ai-tenants",
+									"--gateway-namespace=openshift-ingress",
+									"--log-level=info",
+								},
+							},
+						},
+					},
+				},
+			},
+		}}
+
+		err := patchDiscoveryArgs(dep, "ai-tenants", "openshift-ingress", "error")
+		g.Expect(err).NotTo(HaveOccurred())
+
+		containers, found, err := unstructured.NestedSlice(dep.Object, "spec", "template", "spec", "containers")
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(found).To(BeTrue())
+		cm, ok := containers[0].(map[string]any)
+		g.Expect(ok).To(BeTrue())
+		args, ok := cm["args"].([]any)
+		g.Expect(ok).To(BeTrue())
+
+		g.Expect(args).To(ContainElement("--log-level=error"))
+		g.Expect(args).NotTo(ContainElement("--log-level=info"))
+	})
+
+	t.Run("adds args when missing", func(t *testing.T) {
+		g := NewWithT(t)
+
+		dep := &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "apps/v1",
+			"kind":       "Deployment",
+			"metadata":   map[string]any{"name": discoveryDeploymentName},
+			"spec": map[string]any{
+				"template": map[string]any{
+					"spec": map[string]any{
+						"containers": []any{
+							map[string]any{"name": discoveryContainerName},
+						},
+					},
+				},
+			},
+		}}
+
+		err := patchDiscoveryArgs(dep, "ai-tenants", "openshift-ingress", "debug")
+		g.Expect(err).NotTo(HaveOccurred())
+
+		containers, found, err := unstructured.NestedSlice(dep.Object, "spec", "template", "spec", "containers")
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(found).To(BeTrue())
+		cm, ok := containers[0].(map[string]any)
+		g.Expect(ok).To(BeTrue())
+		args, ok := cm["args"].([]any)
+		g.Expect(ok).To(BeTrue())
+
+		g.Expect(args).To(ContainElement("--aitenant-namespace=ai-tenants"))
+		g.Expect(args).To(ContainElement("--gateway-namespace=openshift-ingress"))
+		g.Expect(args).To(ContainElement("--log-level=debug"))
+	})
+
+	t.Run("fails when args has unexpected type", func(t *testing.T) {
+		g := NewWithT(t)
+
+		dep := &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "apps/v1",
+			"kind":       "Deployment",
+			"metadata":   map[string]any{"name": discoveryDeploymentName},
+			"spec": map[string]any{
+				"template": map[string]any{
+					"spec": map[string]any{
+						"containers": []any{
+							map[string]any{
+								"name": discoveryContainerName,
+								"args": "--aitenant-namespace=ai-tenants",
+							},
+						},
+					},
+				},
+			},
+		}}
+
+		err := patchDiscoveryArgs(dep, "ai-tenants", "openshift-ingress", "debug")
+		g.Expect(err).To(HaveOccurred())
+		g.Expect(err.Error()).To(ContainSubstring("unexpected type"))
 	})
 }
 

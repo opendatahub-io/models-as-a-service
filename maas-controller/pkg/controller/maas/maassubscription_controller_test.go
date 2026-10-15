@@ -341,6 +341,129 @@ func TestMaaSSubscriptionReconciler_DuplicateReconciliation(t *testing.T) {
 	}
 }
 
+func TestMaaSSubscriptionReconciler_MultipleSubscriptionsShareOrganization(t *testing.T) {
+	const (
+		modelName = "organization-model"
+		namespace = "default"
+		orgID     = "grid-org-a"
+	)
+
+	model := newMaaSModelRef(modelName, namespace, "ExternalModel", modelName)
+	route := newHTTPRoute("maas-"+modelName, namespace)
+	subA := newMaaSSubscription("organization-sub-a", namespace, "team-a", modelName, 100)
+	subB := newMaaSSubscription("organization-sub-b", namespace, "team-b", modelName, 200)
+	subA.Spec.Organization = &maasv1alpha1.SubscriptionOrganization{ID: orgID}
+	subB.Spec.Organization = &maasv1alpha1.SubscriptionOrganization{ID: orgID}
+	trlp := newPreexistingTRLP("maas-trlp-"+modelName, namespace, modelName, map[string]string{
+		"maas.opendatahub.io/subscriptions": strings.Join([]string{subA.Name, subB.Name}, ","),
+	})
+	if err := unstructured.SetNestedSlice(trlp.Object, []any{
+		map[string]any{"type": "Accepted", "status": "True"},
+	}, "status", "conditions"); err != nil {
+		t.Fatalf("Set TRLP accepted status: %v", err)
+	}
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(testRESTMapper()).
+		WithObjects(model, route, subA, subB, trlp).
+		WithStatusSubresource(&maasv1alpha1.MaaSSubscription{}).
+		WithIndex(&maasv1alpha1.MaaSSubscription{}, "spec.modelRef", subscriptionModelRefIndexer).
+		Build()
+
+	r := &MaaSSubscriptionReconciler{Client: c, APIReader: c, Scheme: scheme}
+	for _, name := range []string{subA.Name, subB.Name} {
+		req := ctrl.Request{NamespacedName: types.NamespacedName{Name: name, Namespace: namespace}}
+		if _, err := r.Reconcile(context.Background(), req); err != nil {
+			t.Fatalf("Reconcile %s: %v", name, err)
+		}
+	}
+
+	for _, name := range []string{subA.Name, subB.Name} {
+		var sub maasv1alpha1.MaaSSubscription
+		if err := c.Get(context.Background(), types.NamespacedName{Name: name, Namespace: namespace}, &sub); err != nil {
+			t.Fatalf("Get subscription %s: %v", name, err)
+		}
+		if sub.Spec.OrganizationID() != orgID {
+			t.Errorf("subscription %s organization = %q, want %q", name, sub.Spec.OrganizationID(), orgID)
+		}
+		if sub.Status.Phase != maasv1alpha1.PhaseActive {
+			t.Errorf("subscription %s phase = %q, want Active", name, sub.Status.Phase)
+		}
+	}
+}
+
+func TestMaaSSubscriptionReconciler_PreservesOrganizationWhenModelsAreUnhealthy(t *testing.T) {
+	const (
+		modelName = "organization-unhealthy-model"
+		namespace = "default"
+		orgID     = "grid-org-a"
+	)
+
+	tests := []struct {
+		name      string
+		model     *maasv1alpha1.MaaSModelRef
+		route     *gatewayapiv1.HTTPRoute
+		extraRef  maasv1alpha1.ModelSubscriptionRef
+		wantPhase maasv1alpha1.Phase
+	}{
+		{
+			name:      "failed",
+			wantPhase: maasv1alpha1.PhaseFailed,
+		},
+		{
+			name:      "degraded",
+			model:     newMaaSModelRef(modelName, namespace, "ExternalModel", modelName),
+			route:     newHTTPRoute("maas-"+modelName, namespace),
+			extraRef:  maasv1alpha1.ModelSubscriptionRef{Name: "missing-model", Namespace: namespace, TokenRateLimits: []maasv1alpha1.TokenRateLimit{{Limit: 100, Window: "1m"}}},
+			wantPhase: maasv1alpha1.PhaseDegraded,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sub := newMaaSSubscription("organization-"+tt.name, namespace, "team-a", modelName, 100)
+			sub.Spec.Organization = &maasv1alpha1.SubscriptionOrganization{ID: orgID}
+			if tt.extraRef.Name != "" {
+				sub.Spec.ModelRefs = append(sub.Spec.ModelRefs, tt.extraRef)
+			}
+
+			objects := []client.Object{sub}
+			if tt.model != nil {
+				objects = append(objects, tt.model)
+			}
+			if tt.route != nil {
+				objects = append(objects, tt.route)
+			}
+
+			c := fake.NewClientBuilder().
+				WithScheme(scheme).
+				WithRESTMapper(testRESTMapper()).
+				WithObjects(objects...).
+				WithStatusSubresource(&maasv1alpha1.MaaSSubscription{}).
+				WithIndex(&maasv1alpha1.MaaSSubscription{}, "spec.modelRef", subscriptionModelRefIndexer).
+				Build()
+
+			r := &MaaSSubscriptionReconciler{Client: c, APIReader: c, Scheme: scheme}
+			req := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(sub)}
+			if _, err := r.Reconcile(context.Background(), req); err != nil {
+				t.Fatalf("Reconcile: %v", err)
+			}
+
+			var got maasv1alpha1.MaaSSubscription
+			if err := c.Get(context.Background(), req.NamespacedName, &got); err != nil {
+				t.Fatalf("Get subscription: %v", err)
+			}
+			if got.Spec.OrganizationID() != orgID {
+				t.Errorf("organization = %q, want %q", got.Spec.OrganizationID(), orgID)
+			}
+			if got.Status.Phase != tt.wantPhase {
+				t.Errorf("phase = %q, want %q", got.Status.Phase, tt.wantPhase)
+			}
+		})
+	}
+}
+
 func TestMaaSSubscriptionReconciler_MapGeneratedTRLPToParent_AllModelSubscriptions(t *testing.T) {
 	const (
 		modelName  = "llm"

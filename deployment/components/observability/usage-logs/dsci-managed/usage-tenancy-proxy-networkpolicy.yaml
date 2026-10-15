@@ -80,7 +80,7 @@ spec:
         - podSelector:
             matchLabels:
               app.kubernetes.io/component: lokistack-gateway
-              app.kubernetes.io/instance: usage
+              app.kubernetes.io/instance: data-science-lokistack
               app.kubernetes.io/name: lokistack
       ports:
         - protocol: TCP

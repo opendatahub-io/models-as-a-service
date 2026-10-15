@@ -55,6 +55,7 @@ log = logging.getLogger(__name__)
 
 
 pytestmark = [
+    pytest.mark.nightly,
     pytest.mark.skipif(
         os.environ.get("EXTERNAL_OIDC", "").lower() != "true",
         reason="EXTERNAL_OIDC is not true",
