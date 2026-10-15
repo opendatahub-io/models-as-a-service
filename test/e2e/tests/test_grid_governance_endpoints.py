@@ -500,3 +500,19 @@ class TestGridGovernanceIdentity:
             f"Expected unauthenticated /v1/me to return 401, got "
             f"{response.status_code} {response.text}"
         )
+
+    def test_me_rejects_inference_api_key(
+        self, maas_api_base_url: str, governance_context: GridGovernanceContext
+    ):
+        inference_key = governance_context.keys[2].secret
+
+        response = _request_with_gateway_retry(
+            requests.get,
+            f"{maas_api_base_url}/v1/me",
+            headers={"Authorization": f"Bearer {inference_key}"},
+            timeout=30,
+        )
+        assert response.status_code == 401, (
+            f"Expected /v1/me to reject an inference API key, got "
+            f"{response.status_code} {response.text}"
+        )
