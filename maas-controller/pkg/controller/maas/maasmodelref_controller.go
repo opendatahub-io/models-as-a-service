@@ -836,21 +836,23 @@ func routeRejectionsChanged(e event.UpdateEvent) bool {
 }
 
 // ippExternalModelChangedForModelRef drops inference ExternalModel status writes other
-// than status.httpRouteName, the only ExternalModel status MaaSModelRef reconcile reads.
+// than status.httpRouteName and the ready per-gateway routes, the only ExternalModel status
+// MaaSModelRef reconcile reads.
 func ippExternalModelChangedForModelRef() predicate.Predicate { //nolint:ireturn // source.Kind takes predicate.Predicate.
 	return predicate.Or(
 		predicate.GenerationChangedPredicate{},
-		predicate.Funcs{UpdateFunc: ippExternalModelRouteNameChanged},
+		predicate.Funcs{UpdateFunc: ippExternalModelRoutesChanged},
 	)
 }
 
-func ippExternalModelRouteNameChanged(e event.UpdateEvent) bool {
+func ippExternalModelRoutesChanged(e event.UpdateEvent) bool {
 	oldEM, okOld := e.ObjectOld.(*unstructured.Unstructured)
 	newEM, okNew := e.ObjectNew.(*unstructured.Unstructured)
 	if !okOld || !okNew {
 		return true
 	}
-	return ippExternalModelRouteName(oldEM) != ippExternalModelRouteName(newEM)
+	return ippExternalModelRouteName(oldEM) != ippExternalModelRouteName(newEM) ||
+		!maps.Equal(externalModelGatewayRoutes(oldEM), externalModelGatewayRoutes(newEM))
 }
 
 // ippExternalModelSource watches inference ExternalModels as unstructured: the type is

@@ -62,6 +62,7 @@ func TestRedactHeaders(t *testing.T) {
 		"Content-Type":    []string{"application/json"},
 		"X-Request-ID":    []string{"abc-123"},
 		"X-MaaS-Username": []string{"user@example.com"},
+		"X-MaaS-Identity": []string{`{"source":"oidc","claims":{"sub":"secret"}}`},
 	}
 
 	redacted := logger.RedactHeaders(headers, false)
@@ -79,6 +80,8 @@ func TestRedactHeaders(t *testing.T) {
 		"X-Request-ID should pass through")
 	assert.Equal(t, "present", redacted["X-Maas-Username"],
 		"X-MaaS-Username should be redacted (PII)")
+	assert.Equal(t, "present", redacted["X-Maas-Identity"],
+		"X-MaaS-Identity should be redacted")
 }
 
 func TestRedactHeaders_WithHashPrefix(t *testing.T) {

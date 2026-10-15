@@ -55,6 +55,7 @@ from test_helper import (
     _wait_for_maas_subscription_phase,
     _wait_for_cr_absent,
     _wait_for_model_ready,
+    assert_openai_sse_chat_stream,
     chat,
 )
 
@@ -385,13 +386,10 @@ class TestEndpointPickerTraffic:
             )
 
             with _chat(api_key, model, stream=True) as streamed:
-                assert streamed.status_code == 200, f"stream: {response_summary(streamed)}"
                 assert streamed.headers.get(EPP_RESPONSE_HEADER) == "true", (
                     f"stream skipped the endpoint picker: {dict(streamed.headers)}"
                 )
-                events = [line for line in streamed.iter_lines(decode_unicode=True) if line]
-            assert events and events[-1] == "data: [DONE]", f"stream did not finish: {events[-3:]}"
-            assert any(e.startswith("data: {") for e in events[:-1]), f"stream carried no chunks: {events}"
+                assert_openai_sse_chat_stream(streamed)
 
             authenticated = 2  # the plain and the streamed completion
 

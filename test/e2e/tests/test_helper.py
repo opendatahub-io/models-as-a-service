@@ -1209,6 +1209,33 @@ def chat(prompt: str, model_v1: str, headers: dict, model_name: str, *,
     return requests.post(url, headers=headers, json=body, timeout=30, verify=TLS_VERIFY, stream=stream)
 
 
+OPENAI_SSE_DONE_LINE = "data: [DONE]"
+
+
+def assert_openai_sse_chat_stream(response: requests.Response) -> list[str]:
+    """
+    Given a streaming chat/completions Response (stream=True), assert OpenAI-style SSE:
+    HTTP 200, text/event-stream, multiple parseable data: JSON chunks, and data: [DONE].
+    Returns non-empty event lines (including the terminal [DONE] line).
+    """
+    assert response.status_code == 200, (
+        f"expected streaming HTTP 200, got {response.status_code}: {(response.text or '')[:500]}"
+    )
+    content_type = response.headers.get("content-type", "")
+    assert "text/event-stream" in content_type, (
+        f"expected text/event-stream, got content-type={content_type!r}"
+    )
+    events = [line for line in response.iter_lines(decode_unicode=True) if line]
+    assert events, "streaming response contained no SSE lines"
+    assert events[-1] == OPENAI_SSE_DONE_LINE, f"stream did not end with [DONE]: {events[-3:]}"
+    data_chunks = [e for e in events[:-1] if e.startswith("data: {")]
+    assert data_chunks, f"stream carried no JSON data chunks: {events[:5]}"
+    for chunk in data_chunks:
+        payload = chunk[len("data: ") :]
+        json.loads(payload)
+    return events
+
+
 def completions(prompt: str, model_v1: str, headers: dict, model_name: str):
     url = f"{model_v1}/completions"
     body = {"model": model_name, "prompt": prompt, "max_tokens": 16}

@@ -248,7 +248,7 @@ class TestHeaderSpoofing:
                 _revoke_api_key(oc_token, control_key_id)
 
     def test_injected_identity_headers_rejected_on_inference(self):
-        """Client injects X-MaaS-Username/Group/KeyName — gateway rejects the request.
+        """Client injects X-MaaS identity headers — gateway rejects the request.
 
         With deny-client-identity-headers, forged identity headers are not
         overwritten and ignored; the request is denied at Authorino.
@@ -262,6 +262,7 @@ class TestHeaderSpoofing:
             "X-MaaS-Username": "cluster-admin",
             "X-MaaS-Group": "system:cluster-admins,system:masters",
             "X-MaaS-KeyName": "forged-prod-key",
+            "X-MaaS-Identity": '{"source":"oidc","claims":{}}',
             "X-MaaS-Key-Id": "fake-key-id-00000",
         }
 

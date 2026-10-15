@@ -81,7 +81,7 @@ func (r *LifecycleReconciler) ensureDiscoveryService(ctx context.Context, log lo
 		if err := patchDiscoveryImage(res, r.DiscoveryImage); err != nil {
 			return fmt.Errorf("patch discovery image: %w", err)
 		}
-		if err := patchDiscoveryArgs(res, r.AITenantNamespace, r.GatewayNamespace); err != nil {
+		if err := patchDiscoveryArgs(res, r.AITenantNamespace, r.GatewayNamespace, r.DiscoveryLogLevel); err != nil {
 			return fmt.Errorf("patch discovery args: %w", err)
 		}
 		patchDiscoveryReplicas(res, r.DiscoveryReplicas)
@@ -160,7 +160,7 @@ func patchDiscoveryImage(res *unstructured.Unstructured, image string) error {
 	return errors.New("maas-discovery container not found in deployment")
 }
 
-func patchDiscoveryArgs(res *unstructured.Unstructured, aitenantNS, gatewayNS string) error {
+func patchDiscoveryArgs(res *unstructured.Unstructured, aitenantNS, gatewayNS, logLevel string) error {
 	if res.GetKind() != "Deployment" || res.GetName() != discoveryDeploymentName {
 		return nil
 	}
@@ -178,26 +178,19 @@ func patchDiscoveryArgs(res *unstructured.Unstructured, aitenantNS, gatewayNS st
 		if !ok || cm["name"] != discoveryContainerName {
 			continue
 		}
-		rawArgs, ok := cm["args"]
-		if !ok {
-			return nil
-		}
-		args, ok := rawArgs.([]any)
-		if !ok {
-			return nil
+		var args []any
+		if rawArgs, ok := cm["args"]; ok {
+			a, ok := rawArgs.([]any)
+			if !ok {
+				return errors.New("maas-discovery container args has unexpected type")
+			}
+			args = a
 		}
 
-		for j, arg := range args {
-			s, ok := arg.(string)
-			if !ok {
-				continue
-			}
-			if len(s) > len("--aitenant-namespace=") && s[:len("--aitenant-namespace=")] == "--aitenant-namespace=" {
-				args[j] = "--aitenant-namespace=" + aitenantNS
-			}
-			if len(s) > len("--gateway-namespace=") && s[:len("--gateway-namespace=")] == "--gateway-namespace=" {
-				args[j] = "--gateway-namespace=" + gatewayNS
-			}
+		args = setOrAppendArg(args, "--aitenant-namespace=", aitenantNS)
+		args = setOrAppendArg(args, "--gateway-namespace=", gatewayNS)
+		if logLevel != "" {
+			args = setOrAppendArg(args, "--log-level=", logLevel)
 		}
 
 		cm["args"] = args
@@ -206,6 +199,22 @@ func patchDiscoveryArgs(res *unstructured.Unstructured, aitenantNS, gatewayNS st
 	}
 
 	return nil
+}
+
+func setOrAppendArg(args []any, prefix, value string) []any {
+	want := prefix + value
+	for j, arg := range args {
+		s, ok := arg.(string)
+		if !ok {
+			continue
+		}
+		if len(s) > len(prefix) && s[:len(prefix)] == prefix {
+			args[j] = want
+			return args
+		}
+	}
+
+	return append(args, want)
 }
 
 func patchDiscoveryReplicas(res *unstructured.Unstructured, replicas *int32) {
@@ -284,6 +293,11 @@ func buildDiscoveryCrossNamespaceRBAC(controllerNS, aitenantNS, gatewayNS string
 			{
 				APIGroups: []string{"gateway.networking.k8s.io"},
 				Resources: []string{"gateways"},
+				Verbs:     []string{"get", "list", "watch"},
+			},
+			{
+				APIGroups: []string{"route.openshift.io"},
+				Resources: []string{"routes"},
 				Verbs:     []string{"get", "list", "watch"},
 			},
 		},

@@ -214,16 +214,17 @@ def _wait_for_central_models_in_subscription(
     extra_headers=None,
     expected_model_ids=None,
 ):
-    """Poll central /v1/models until models are visible for subscription_name.
+    """Poll central /v1/models until the expected models are tied to the subscription.
 
     ``api_key`` is sent as a bearer token, so an OpenShift token works too.
     maas-api lists only Ready MaaSModelRefs, read from an informer cache, so a
     model can be missing from the first listing after its governance is created.
-
-    When ``expected_model_ids`` is set, poll until every ID appears in the response.
-    Otherwise poll until at least one model is tied to ``subscription_name``.
+    When ``expected_model_ids`` is omitted, wait for any model in the subscription.
     """
     headers = {"Authorization": f"Bearer {api_key}", **(extra_headers or {})}
+    expected_model_ids = (
+        set(expected_model_ids) if expected_model_ids is not None else None
+    )
     deadline = time.time() + timeout
     last_status = None
     last_model_ids = []
@@ -241,29 +242,27 @@ def _wait_for_central_models_in_subscription(
             time.sleep(poll_interval)
             continue
 
-        returned_model_ids = {m.get("id") for m in models_data.get("data") or []}
-        last_model_ids = sorted(returned_model_ids)
+        in_subscription = _models_in_subscription(models_data, subscription_name)
+        if expected_model_ids is None and in_subscription:
+            return models_data, in_subscription
+        if (
+            expected_model_ids is not None
+            and expected_model_ids.issubset(in_subscription)
+        ):
+            return models_data, in_subscription
 
-        if expected_model_ids is not None:
-            if expected_model_ids.issubset(returned_model_ids):
-                return models_data, sorted(expected_model_ids)
-        else:
-            in_subscription = _models_in_subscription(models_data, subscription_name)
-            if in_subscription:
-                return models_data, in_subscription
-
+        last_model_ids = [m.get("id") for m in models_data.get("data") or []]
         time.sleep(poll_interval)
 
-    if expected_model_ids is not None:
-        raise AssertionError(
-            f"Expected model IDs {sorted(expected_model_ids)} in /v1/models "
-            f"within {timeout}s, but last response had {last_model_ids}. "
-            f"Last HTTP status: {last_status}"
+    if expected_model_ids is None:
+        expected = f"at least 1 model tied to subscription '{subscription_name}'"
+    else:
+        expected = (
+            f"models {sorted(expected_model_ids)} tied to subscription "
+            f"'{subscription_name}'"
         )
-
     raise AssertionError(
-        f"Expected at least 1 model tied to subscription '{subscription_name}' "
-        f"within {timeout}s, but found none. "
+        f"Expected {expected} within {timeout}s, but did not find all expected models. "
         f"Last HTTP status: {last_status}, returned model IDs: {last_model_ids}"
     )
 
@@ -1186,14 +1185,17 @@ class TestModelsEndpoint:
 
             _wait_for_maas_auth_policy_phase(auth_policy_name, namespace=maas_ns, require_enforced=False)
 
-            # Poll until both models appear (maas-api informer cache can lag after governance).
+            # Poll until both models reach the MaaS API's informer-backed catalog.
             log.info(f"Querying /v1/models with subscription: {subscription_name}")
+            expected_ids = {DISTINCT_MODEL_ID, DISTINCT_MODEL_2_ID}
             data, _ = _wait_for_central_models_in_subscription(
                 api_key,
                 subscription_name,
-                expected_model_ids={DISTINCT_MODEL_ID, DISTINCT_MODEL_2_ID},
+                timeout=120,
                 extra_headers={"x-maas-subscription": subscription_name},
+                expected_model_ids=expected_ids,
             )
+
             models = data.get("data") or []
 
             assert isinstance(models, list), "Models should be a list"
@@ -1208,7 +1210,6 @@ class TestModelsEndpoint:
             log.info(f"   Subscription had: 2 modelRefs ({DISTINCT_MODEL_REF}, {DISTINCT_MODEL_2_REF})")
 
             # Verify we got BOTH expected model IDs
-            expected_ids = {DISTINCT_MODEL_ID, DISTINCT_MODEL_2_ID}
             assert unique_ids == expected_ids, \
                 f"Expected to find both distinct models {expected_ids}, but got {unique_ids}"
 

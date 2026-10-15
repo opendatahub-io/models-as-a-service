@@ -1171,6 +1171,7 @@ allow {
 					// values do not appear as identity headers.
 					"X-MaaS-Organization-Id": subscriptionInfoStringHeader("organizationId"),
 					"X-MaaS-Cost-Center":     subscriptionInfoStringHeader("costCenter"),
+					"X-MaaS-Identity":        verifiedIdentityHeader(oidc, celIsNotAPIKey),
 				},
 				"filters": map[string]any{
 					"identity": map[string]any{

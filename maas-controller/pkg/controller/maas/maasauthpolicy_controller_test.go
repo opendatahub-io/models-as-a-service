@@ -1529,8 +1529,8 @@ func TestMaaSAuthPolicyReconciler_CacheKeyModelIsolation(t *testing.T) {
 
 // TestMaaSAuthPolicyReconciler_IdentityHeadersUpstream verifies that identity headers
 // (X-MaaS-Username, X-MaaS-Group, X-MaaS-Subscription, X-MaaS-KeyName,
-// X-MaaS-Organization-Id, X-MaaS-Cost-Center) are injected into requests forwarded
-// to upstream workloads for the consolidated gateway-level auth policy.
+// X-MaaS-Organization-Id, X-MaaS-Cost-Center, X-MaaS-Identity) are injected into
+// requests forwarded to upstream workloads for the consolidated gateway-level auth policy.
 // All identity information is also available to TRLP and telemetry via filters.identity.
 //
 // After the gateway-level refactor, response shaping lives in the singleton gateway policy
@@ -1589,10 +1589,23 @@ func TestMaaSAuthPolicyReconciler_IdentityHeadersUpstream(t *testing.T) {
 			"X-MaaS-KeyName",
 			"X-MaaS-Organization-Id",
 			"X-MaaS-Cost-Center",
+			"X-MaaS-Identity",
 		} {
 			if _, exists := headers[header]; !exists {
 				t.Errorf("Identity header %q should be present in gateway response headers", header)
 			}
+		}
+		identityHeader, ok := headers["X-MaaS-Identity"].(map[string]any)
+		if !ok {
+			t.Fatalf("X-MaaS-Identity response is not a map: %#v", headers["X-MaaS-Identity"])
+		}
+		identityWhen, ok := identityHeader["when"].([]any)
+		if !ok || len(identityWhen) != 1 {
+			t.Fatalf("X-MaaS-Identity when clauses are invalid: %#v", identityHeader["when"])
+		}
+		identityClause, ok := identityWhen[0].(map[string]any)
+		if !ok || identityClause["predicate"] != "false" {
+			t.Fatalf("X-MaaS-Identity must stay disabled without the strict OIDC contract, got %#v", identityWhen)
 		}
 		if _, exists := headers["Authorization"]; exists {
 			t.Errorf("Authorization header should NOT be stripped (needed by FilterModelsByAccess)")
