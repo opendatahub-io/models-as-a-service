@@ -34,8 +34,8 @@ paths:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/HealthResponse'
-            example:
-                status: healthy
+                            example:
+                                status: healthy
     /v1/me:
         get:
             tags:
