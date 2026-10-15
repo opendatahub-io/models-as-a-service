@@ -33,6 +33,30 @@ pytestmark = [
 ]
 
 
+def _search_grid_api_keys(
+    maas_api_base_url: str,
+    token: str,
+    *,
+    subscription: str | None = None,
+    username: str | None = None,
+):
+    filters = {}
+    if subscription is not None:
+        filters["subscription"] = subscription
+    if username is not None:
+        filters["username"] = username
+    return _request_with_gateway_retry(
+        requests.post,
+        f"{maas_api_base_url}/v1/api-keys/search",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "filters": filters,
+            "pagination": {"limit": 100, "offset": 0},
+        },
+        timeout=30,
+    )
+
+
 @pytest.fixture(scope="module")
 def governance_context(maas_api_base_url: str) -> Iterator[GridGovernanceContext]:
     resources = new_grid_inventory_resources()
@@ -132,3 +156,33 @@ class TestGridGovernanceAPIKeys:
             f"{response.status_code} {response.text}"
         )
         assert response.json()["error"] == "API keys cannot create API keys"
+
+    def test_grid_admin_searches_all_users_in_authorized_subscription(
+        self, maas_api_base_url: str, governance_context: GridGovernanceContext
+    ):
+        token = request_grid_token("grid_admin")
+        resources = governance_context.resources
+
+        response = _search_grid_api_keys(
+            maas_api_base_url,
+            token,
+            subscription=resources.governance_subscription,
+        )
+        assert response.status_code == 200, (
+            f"Grid admin API-key search failed: {response.status_code} {response.text}"
+        )
+        items = response.json()["data"]
+        returned_ids = {item["id"] for item in items}
+        expected_ids = {
+            governance_context.keys[0].key_id,
+            governance_context.keys[1].key_id,
+        }
+        assert returned_ids == expected_ids, (
+            f"Grid admin search must return exactly the authorized subscription's "
+            f"keys {expected_ids}, got {returned_ids}"
+        )
+        assert all("key" not in item for item in items)
+        assert all(
+            item["subscription"] == resources.governance_subscription
+            for item in items
+        )
