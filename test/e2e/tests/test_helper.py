@@ -776,7 +776,7 @@ def _is_not_found_error(stderr):
     return "notfound" in stderr_lower or "not found" in stderr_lower
 
 
-def _run_oc(cmd, *, input_text=None, timeout=None):
+def _run_oc(cmd, *, input_text=None, timeout=None, retry_budget=None):
     """Run an oc/kubectl command, retrying transient API server and network errors.
 
     Retries while stderr matches ``_is_transient_kubectl_error`` or the process
@@ -784,9 +784,12 @@ def _run_oc(cmd, *, input_text=None, timeout=None):
     Any other outcome, NotFound included, is returned on the first attempt so
     callers keep interpreting ``returncode``/``stderr`` themselves. Once the
     budget is spent, the last result is returned or TimeoutExpired re-raised.
+
+    ``retry_budget`` caps total retry time (seconds) for callers with an outer
+    deadline, such as gateway-enforcement probes inside polling loops.
     """
     timeout = OC_TIMEOUT if timeout is None else timeout
-    deadline = time.monotonic() + OC_RETRY_BUDGET
+    deadline = time.monotonic() + (retry_budget if retry_budget is not None else OC_RETRY_BUDGET)
     what = " ".join([os.path.basename(cmd[0]), *cmd[1:3]])
     attempt = 0
     while True:
@@ -815,7 +818,7 @@ def _run_oc(cmd, *, input_text=None, timeout=None):
         time.sleep(delay)
 
 
-def _get_cr(kind, name, namespace=None):
+def _get_cr(kind, name, namespace=None, *, oc_timeout=None, oc_retry_budget=None):
     """Get a CR as dict, or None if not found. Retries on transient errors.
 
     Returns None only when the resource genuinely does not exist (server NotFound).
@@ -824,7 +827,11 @@ def _get_cr(kind, name, namespace=None):
     from true absence.
     """
     namespace = namespace or _ns()
-    result = _run_oc(["oc", "get", kind, name, "-n", namespace, "-o", "json"])
+    result = _run_oc(
+        ["oc", "get", kind, name, "-n", namespace, "-o", "json"],
+        timeout=oc_timeout,
+        retry_budget=oc_retry_budget,
+    )
 
     if result.returncode == 0:
         return json.loads(result.stdout)
@@ -1397,7 +1404,16 @@ def _wait_for_gateway_auth_enforced(
     )
 
     while time.time() < deadline:
-        cr = _get_cr("authpolicy", name, namespace)
+        remaining = max(0, int(deadline - time.time()))
+        if remaining <= 0:
+            break
+        cr = _get_cr(
+            "authpolicy",
+            name,
+            namespace,
+            oc_timeout=min(OC_TIMEOUT, remaining),
+            oc_retry_budget=remaining,
+        )
         if cr is None:
             last_snapshot = "AuthPolicy not found"
             now = time.time()
@@ -1432,7 +1448,9 @@ def _wait_for_gateway_auth_enforced(
                 log.info("Gateway AuthPolicy %s/%s is Accepted and Enforced", namespace, name)
                 return cr
             log.debug("Gateway AuthPolicy %s/%s not ready: %s", namespace, name, last_snapshot)
-        time.sleep(2)
+        sleep_for = min(2, max(0, int(deadline - time.time())))
+        if sleep_for > 0:
+            time.sleep(sleep_for)
 
     raise TimeoutError(
         f"Gateway AuthPolicy {namespace}/{name} was not Accepted+Enforced within {timeout}s "
