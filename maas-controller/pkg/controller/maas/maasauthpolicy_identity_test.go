@@ -112,15 +112,29 @@ func TestVerifiedIdentityHeaderStrictContract(t *testing.T) {
 	if !ok {
 		t.Fatalf("claims are missing: %#v", properties)
 	}
-	if _, exists := claims["groups"]; exists {
-		t.Errorf("verified identity envelope unexpectedly includes caller groups")
+	expectedClaims := map[string]string{
+		"iss":                          "auth.identity.iss",
+		"sub":                          "auth.identity.sub",
+		"aud":                          "auth.identity.aud",
+		"azp":                          "auth.identity.azp",
+		"name":                         `has(auth.identity.name) ? auth.identity.name : ""`,
+		"given_name":                   `has(auth.identity.given_name) ? auth.identity.given_name : ""`,
+		"family_name":                  `has(auth.identity.family_name) ? auth.identity.family_name : ""`,
+		"preferred_username":           `has(auth.identity.preferred_username) ? auth.identity.preferred_username : ""`,
+		"email":                        `has(auth.identity.email) ? auth.identity.email : ""`,
+		"groups":                       `has(auth.identity.groups) ? auth.identity.groups : []`,
+		"https://redhat.com/maas/orgs": `"https://redhat.com/maas/orgs" in auth.identity ? auth.identity["https://redhat.com/maas/orgs"] : []`,
 	}
-	for _, claim := range []string{
-		"iss", "sub", "aud", "azp", "name", "given_name", "family_name",
-		"preferred_username", "email", "https://redhat.com/maas/orgs",
-	} {
-		if _, exists := claims[claim]; !exists {
-			t.Errorf("claims is missing %q", claim)
+	if len(claims) != len(expectedClaims) {
+		t.Fatalf("claims count = %d, want %d: %#v", len(claims), len(expectedClaims), claims)
+	}
+	for claim, expectedExpression := range expectedClaims {
+		claimConfig, ok := claims[claim].(map[string]any)
+		if !ok {
+			t.Fatalf("claim %q is not an object: %#v", claim, claims[claim])
+		}
+		if claimConfig["expression"] != expectedExpression {
+			t.Errorf("claim %q expression = %#v, want %q", claim, claimConfig["expression"], expectedExpression)
 		}
 	}
 }

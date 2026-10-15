@@ -358,27 +358,55 @@ func (h *Handler) ListSubscriptions(c *gin.Context) {
 	h = h.withContext(c)
 
 	c.Header("Cache-Control", "no-store")
-	userContextVal, exists := c.Get("user")
-	if !exists {
+	identityVal, identityExists := c.Get("verified_identity")
+	var identity *token.VerifiedIdentity
+	if identityExists {
+		verifiedIdentity, ok := identityVal.(*token.VerifiedIdentity)
+		if !ok {
+			h.logger.Error("Invalid verified identity context type")
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error": gin.H{
+					"message": "Internal server error",
+					"type":    "server_error",
+				}})
+			return
+		}
+		identity = verifiedIdentity
+	}
+
+	userContextVal, userExists := c.Get("user")
+	if !identityExists && !userExists {
 		// No identity headers from Authorino — return an empty list instead
-		// of failing.  This mirrors the /v1/models behaviour when no
+		// of failing. This mirrors the /v1/models behaviour when no
 		// LLMInferenceService is deployed.
 		h.logger.Debug("No auth context present, returning empty subscription list")
 		c.JSON(http.StatusOK, []SubscriptionInfo{})
 		return
 	}
-	userContext, ok := userContextVal.(*token.UserContext)
-	if !ok {
-		h.logger.Error("Invalid user context type")
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": gin.H{
-				"message": "Internal server error",
-				"type":    "server_error",
-			}})
-		return
+
+	var userContext *token.UserContext
+	if userExists {
+		contextValue, ok := userContextVal.(*token.UserContext)
+		if !ok {
+			h.logger.Error("Invalid user context type")
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error": gin.H{
+					"message": "Internal server error",
+					"type":    "server_error",
+				}})
+			return
+		}
+		userContext = contextValue
 	}
 
-	accessible, err := h.selector.GetAllAccessible(userContext.Groups, userContext.Username)
+	var groups []string
+	var username string
+	if userContext != nil {
+		groups = userContext.Groups
+		username = userContext.Username
+	}
+
+	accessible, err := h.selector.ListInventory(groups, username, identity)
 	if err != nil {
 		h.logger.Error("Failed to list subscriptions", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{
@@ -389,12 +417,7 @@ func (h *Handler) ListSubscriptions(c *gin.Context) {
 		return
 	}
 
-	subs := make([]SubscriptionInfo, len(accessible))
-	for i, sub := range accessible {
-		subs[i] = ResponseToSubscriptionInfo(sub)
-	}
-
-	c.JSON(http.StatusOK, subs)
+	c.JSON(http.StatusOK, accessible)
 }
 
 // ListSubscriptionsForModel handles GET /v1/model/:model-id/subscriptions.

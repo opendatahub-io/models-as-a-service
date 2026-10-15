@@ -301,6 +301,10 @@ func registerHandlers(
 	)
 	v1Routes.GET("/models", append(modelAuthMiddleware, modelsHandler.ListLLMs)...)
 
+	// /v1/me is intentionally SSO-only. Legacy username/group headers and API
+	// keys cannot reconstruct the verified OIDC identity response.
+	v1Routes.GET("/me", tokenHandler.ExtractVerifiedIdentity(), tokenHandler.GetMe)
+
 	// Management routes may receive the new verified-identity envelope. Keeping
 	// it optional here preserves older gateways and deployments with no
 	// LLMInferenceService; malformed or duplicate envelopes still fail closed.
