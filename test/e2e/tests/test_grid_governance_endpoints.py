@@ -463,3 +463,29 @@ class TestGridGovernanceIdentity:
                 "roles": ["users"],
             },
         ]
+
+    def test_me_returns_empty_organizations_without_membership(
+        self, maas_api_base_url: str
+    ):
+        token = request_grid_token("grid_no_org")
+
+        response = _request_with_gateway_retry(
+            requests.get,
+            f"{maas_api_base_url}/v1/me",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=30,
+        )
+        assert response.status_code == 200, (
+            f"GET /v1/me failed for grid_no_org: "
+            f"{response.status_code} {response.text}"
+        )
+
+        identity = response.json()
+        assert set(identity) <= {
+            "sub",
+            "email",
+            "name",
+            "https://redhat.com/maas/orgs",
+        }
+        assert identity["sub"]
+        assert identity["https://redhat.com/maas/orgs"] == []
