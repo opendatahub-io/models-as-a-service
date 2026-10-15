@@ -108,3 +108,22 @@ class TestGridAdminInventory:
                 {"name": grid_inventory_resources.admin_only_owner_group}
             ]
         }
+
+    def test_grid_admin_does_not_receive_other_organization_inventory(
+        self, maas_api_base_url: str, grid_inventory_resources: GridInventoryResources
+    ):
+        token = request_grid_token("grid_admin")
+        subscriptions = get_grid_subscriptions(maas_api_base_url, token)
+
+        assert find_grid_subscription(
+            subscriptions,
+            grid_inventory_resources.other_organization_subscription,
+        ) is None
+        assert find_grid_subscription(
+            subscriptions,
+            grid_inventory_resources.owner_admin_subscription,
+        ) is not None
+        assert find_grid_subscription(
+            subscriptions,
+            grid_inventory_resources.admin_only_subscription,
+        ) is not None
