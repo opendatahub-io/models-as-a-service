@@ -427,3 +427,39 @@ class TestGridGovernanceAPIKeys:
         )
         assert inspection.status_code == 200
         assert inspection.json()["status"] == "active"
+
+
+class TestGridGovernanceIdentity:
+    def test_me_returns_verified_grid_identity(self, maas_api_base_url: str):
+        token = request_grid_token("grid_admin")
+
+        response = _request_with_gateway_retry(
+            requests.get,
+            f"{maas_api_base_url}/v1/me",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=30,
+        )
+        assert response.status_code == 200, (
+            f"GET /v1/me failed for Grid admin: "
+            f"{response.status_code} {response.text}"
+        )
+        assert response.headers.get("Cache-Control") == "no-store"
+
+        identity = response.json()
+        assert set(identity) <= {
+            "sub",
+            "email",
+            "name",
+            "https://redhat.com/maas/orgs",
+        }
+        assert identity["sub"]
+        assert identity["https://redhat.com/maas/orgs"] == [
+            {
+                "organization_id": "42c3e46f-2477-44d7-a85b-d3b43f6b31fa",
+                "roles": ["admins"],
+            },
+            {
+                "organization_id": "53d4f57e-3588-55e8-b96c-4ec54a7c42fa",
+                "roles": ["users"],
+            },
+        ]
