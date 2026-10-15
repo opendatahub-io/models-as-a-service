@@ -123,6 +123,16 @@ kubectl get persesdashboard -A -o json | jq -r '
 
 #### Operator-managed dashboards
 
+During upgrade, the MaaS controller removes the 3.4 metrics dashboard
+`dashboard-3-maas-usage-admin` and datasource `kuadrant-prometheus-datasource`
+from its applications namespace (for example, `redhat-ods-applications`). This
+migration runs even if the monitoring namespace is not configured. It identifies
+the old dashboard by its reference to `kuadrant-prometheus-datasource`, and the
+old datasource by its cluster Thanos URL targeting `kuadrant-system`.
+Resources with different names or backend configuration, and resources in other
+namespaces, are preserved. The current opt-in metrics dashboard uses
+`data-science-prometheus-datasource` and is not removed by this migration.
+
 Requires a running **maas-controller** (`LifecycleReconciler`), a `Config` instance, a monitoring namespace, and Perses CRDs (`PersesAvailable`). See [Setup](setup.md).
 
 ```bash

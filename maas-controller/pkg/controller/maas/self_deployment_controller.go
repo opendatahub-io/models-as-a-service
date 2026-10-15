@@ -412,6 +412,10 @@ func aitenantReferencesConfig(aitenant *maasv1alpha1.AITenant, ct *maasv1alpha1.
 }
 
 func (r *LifecycleReconciler) ensureObservability(ctx context.Context, log logr.Logger) error {
+	// Upgrade cleanup must also run when the new monitoring stack is not configured.
+	if err := r.cleanupLegacyUsageResources(ctx, log); err != nil {
+		return err
+	}
 	if r.MonitoringNamespace == "" {
 		log.V(1).Info("monitoring namespace not configured; skipping observability setup")
 		return nil
