@@ -84,6 +84,11 @@ type ConfigSpec struct {
 	// UsageLogging is retained for compatibility and does not gate deployment.
 	// When true, the gateway EnvoyFilter exports usage logs to usage-logs-collector.
 	// When false or unset, it exports to data-science-usage-logs-collector.
+	// When MaasTenantConfig telemetry is enabled and usageLogging is false or unset,
+	// MaasTenantConfig is Degraded unless DSCInitialization reports LokiStackAvailable,
+	// UsageLogsCollectorAvailable, and PersesAvailable as True.
+	// When usageLogging is true and telemetry is enabled, MaasTenantConfig is Degraded
+	// unless PersesAvailable is True.
 	// User identity (user_id) is included in those logs only when
 	// MaasTenantConfig.spec.telemetry.logs.captureUser is true.
 	// +kubebuilder:default=false
@@ -116,7 +121,10 @@ type ConfigSpec struct {
 
 	// UsageMetricsDashboard deploys the legacy Prometheus-based Perses usage dashboard
 	// (dashboard-3-maas-usage-admin). When disabled (the default), the controller
-	// removes any controller-owned copy of that dashboard.
+	// removes any controller-owned copy of that dashboard and does not mark
+	// MaasTenantConfig Degraded when the ODH monitoring stack is unavailable.
+	// When enabled and MaasTenantConfig telemetry is enabled, an unavailable monitoring
+	// stack sets MaasTenantConfig phase to Degraded.
 	// Prefer the logs-based usage dashboards, which are deployed with the usage-log resources.
 	// +kubebuilder:default=false
 	// +kubebuilder:validation:Optional

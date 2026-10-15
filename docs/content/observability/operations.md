@@ -184,7 +184,8 @@ kubectl exec -n <namespace> <pod> -- curl localhost:<port>/metrics
 kubectl get servicemonitor -n <namespace> \
   -l 'monitoring.opendatahub.io/scrape=true'
 
-# 3. Verify ODH monitoring stack enabled
+# 3. Verify ODH monitoring stack enabled.
+#    MaasTenantConfig is Degraded for a missing stack only when Config.spec.usageMetricsDashboard is true and tenant telemetry is enabled.
 kubectl get maastenantconfig default-tenant -n models-as-a-service  -o json | jq '.status.conditions[] | select(.type=="Degraded" or .type=="MaaSPrerequisitesAvailable") | {type, status, message}'
 
 kubectl get dscinitialization default-dsci -o json | jq '.status.conditions[] | select(.type=="MonitoringReady" or .type=="MonitoringStackAvailable") | {type, status}'
@@ -204,9 +205,12 @@ curl -s -H "Authorization: Bearer $(oc whoami -t)" --get \
 ### Troubleshooting Dashboard Issues
 
 ```bash
-# 1. Confirm Perses is available (ODH/RHOAI observability console)
+# 1. Confirm Perses is available (ODH/RHOAI observability console).
+#    When tenant telemetry is enabled, MaasTenantConfig is Degraded unless PersesAvailable is True.
+#    When usageLogging is false, it is also Degraded unless LokiStackAvailable and
+#    UsageLogsCollectorAvailable are True. See Setup.
 kubectl get dscinitialization default-dsci -o json | \
-  jq '.status.conditions[] | select(.type=="PersesAvailable") | {type, status}'
+  jq '.status.conditions[] | select(.type=="PersesAvailable" or .type=="LokiStackAvailable" or .type=="UsageLogsCollectorAvailable") | {type, status}'
 
 # 2. Confirm PersesDashboard CRs exist
 kubectl get persesdashboard -A | grep maas

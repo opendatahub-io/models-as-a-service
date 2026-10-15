@@ -18,6 +18,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/client-go/util/retry"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
@@ -299,7 +300,13 @@ func Run(
 		return nil, fmt.Errorf("invalid application namespace %q: %v", appNs, errs)
 	}
 
-	if err := ValidatePrerequisites(ctx, c, appNs); err != nil {
+	usageMetricsDashboard := false
+	usageLogging := false
+	if mcfg != nil {
+		usageMetricsDashboard = ptr.Deref(mcfg.Spec.UsageMetricsDashboard, false)
+		usageLogging = ptr.Deref(mcfg.Spec.UsageLogging, false)
+	}
+	if err := ValidatePrerequisites(ctx, c, appNs, usageMetricsDashboard, usageLogging, IsTelemetryEnabled(telemetryConfigFor(tenant))); err != nil {
 		return nil, fmt.Errorf("prerequisites: %w", err)
 	}
 
