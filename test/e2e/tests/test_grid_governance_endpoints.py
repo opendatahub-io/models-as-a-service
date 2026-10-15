@@ -57,6 +57,28 @@ def _search_grid_api_keys(
     )
 
 
+def _bulk_revoke_grid_api_keys(
+    maas_api_base_url: str,
+    token: str,
+    *,
+    subscription: str | None = None,
+    username: str | None = None,
+    dry_run: bool = False,
+):
+    payload = {"dryRun": dry_run}
+    if subscription is not None:
+        payload["subscription"] = subscription
+    if username is not None:
+        payload["username"] = username
+    return _request_with_gateway_retry(
+        requests.post,
+        f"{maas_api_base_url}/v1/api-keys/bulk-revoke",
+        headers={"Authorization": f"Bearer {token}"},
+        json=payload,
+        timeout=30,
+    )
+
+
 @pytest.fixture(scope="module")
 def governance_context(maas_api_base_url: str) -> Iterator[GridGovernanceContext]:
     resources = new_grid_inventory_resources()
@@ -297,3 +319,32 @@ class TestGridGovernanceAPIKeys:
             f"Grid admin must receive enumeration-safe 404 when revoking another "
             f"organization's key, got {response.status_code} {response.text}"
         )
+
+    def test_grid_admin_bulk_revoke_dry_run_counts_authorized_scope(
+        self, maas_api_base_url: str, governance_context: GridGovernanceContext
+    ):
+        token = request_grid_token("grid_admin")
+
+        response = _bulk_revoke_grid_api_keys(
+            maas_api_base_url,
+            token,
+            subscription=governance_context.resources.governance_subscription,
+            dry_run=True,
+        )
+        assert response.status_code == 200, (
+            f"Grid admin bulk-revoke dry run failed: "
+            f"{response.status_code} {response.text}"
+        )
+        payload = response.json()
+        assert payload["revokedCount"] == 1
+        assert payload["dryRun"] is True
+
+        owner_token = request_grid_token("alice_lead")
+        inspection = _request_with_gateway_retry(
+            requests.get,
+            f"{maas_api_base_url}/v1/api-keys/{governance_context.keys[0].key_id}",
+            headers={"Authorization": f"Bearer {owner_token}"},
+            timeout=30,
+        )
+        assert inspection.status_code == 200
+        assert inspection.json()["status"] == "active"
