@@ -33,7 +33,7 @@ User → External IdP (Keycloak / Entra ID) → JWT token
   → User uses API key for inference
 ```
 
-**Token validation layer:** Gateway / Authorino validates the JWT locally using cached JWKS keys from the IdP. The `azp` (authorized party) claim is checked against the configured `clientId`.
+**Token validation layer:** Gateway / Authorino validates the JWT locally using cached JWKS keys from the IdP. External JWTs must match the configured `iss` and `azp` claims; optional audience and access-token-purpose fields add a stricter contract for delegated administration.
 
 **What the admin configures:**
 
@@ -49,6 +49,9 @@ spec:
   oidc:
     issuerUrl: "https://keycloak.example.com/realms/maas"
     clientId: maas-api
+    audience: maas-api
+    accessTokenPurposeClaim: token_use
+    accessTokenPurpose: access
     ttl: 300
 ```
 
@@ -56,6 +59,9 @@ spec:
 |-------|-------------|
 | `issuerUrl` | OIDC issuer URL (must be HTTPS). Must serve `.well-known/openid-configuration`. |
 | `clientId` | OAuth2 client ID. Tokens must have `azp` claim matching this value. |
+| `audience` | Exact required token audience; MaaS must be an intended token recipient. Required for delegated Grid administration. |
+| `accessTokenPurposeClaim` | Mapper-controlled payload claim carrying the access-token purpose; set with `accessTokenPurpose`. |
+| `accessTokenPurpose` | Exact value required in `accessTokenPurposeClaim`; set with `accessTokenPurposeClaim`. |
 | `ttl` | JWKS cache duration in seconds (default: 300, minimum: 30). |
 
 For unmanaged tenants (legacy `Tenant` CR, not backed by an AITenant -- deprecated, will be removed in a future release):
@@ -70,6 +76,9 @@ spec:
   externalOIDC:
     issuerUrl: "https://keycloak.example.com/realms/maas"
     clientId: maas-api
+    audience: maas-api
+    accessTokenPurposeClaim: token_use
+    accessTokenPurpose: access
     ttl: 300
 ```
 
@@ -102,7 +111,8 @@ For the explicit priority order (API keys → OIDC → OpenShift TokenReview) an
 For Mode 2 (standalone OIDC), the IdP must:
 
 - Serve `/.well-known/openid-configuration` over HTTPS at the `issuerUrl`
-- Include `azp` (authorized party) claim in issued tokens matching the configured `clientId`
+- Include `iss` and `azp` (authorized party) claims matching the configured issuer and client
+- Include the configured `aud` and access-token-purpose values when delegated Grid administration is enabled
 - Expose a JWKS endpoint for public key retrieval
 - Issue tokens with group claims if group-based authorization is needed (claim name depends on IdP configuration)
 
@@ -116,7 +126,14 @@ Configuration fields align between the legacy Tenant CR and the current AITenant
 |-------|---------------|-------------------|-----------|
 | Issuer URL | `spec.externalOIDC.issuerUrl` | `spec.oidc.issuerUrl` | OIDC discovery endpoint (HTTPS required) |
 | Client ID | `spec.externalOIDC.clientId` | `spec.oidc.clientId` | OAuth2 client ID for `azp` claim matching |
+| Audience | `spec.externalOIDC.audience` | `spec.oidc.audience` | Exact token audience |
+| Purpose claim | `spec.externalOIDC.accessTokenPurposeClaim` | `spec.oidc.accessTokenPurposeClaim` | Claim carrying access-token purpose |
+| Purpose value | `spec.externalOIDC.accessTokenPurpose` | `spec.oidc.accessTokenPurpose` | Required access-token purpose |
 | JWKS TTL | `spec.externalOIDC.ttl` | `spec.oidc.ttl` | Cache duration for JWKS keys (seconds) |
+
+See [Audience and token purpose](../advanced-administration/external-oidc.md#audience-and-token-purpose)
+for the distinction between recipient binding and token-type binding, including
+provider requirements and the checks' limits.
 
 !!! note
     For AITenant-managed tenants, set OIDC on the AITenant CR. The controller propagates the configuration to the tenant's gateway AuthPolicy. The Tenant CR's `externalOIDC` field is ignored for AITenant-managed tenants.

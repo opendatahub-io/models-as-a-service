@@ -53,6 +53,7 @@ import (
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
+	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/authpolicy"
 	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/platform/tenantreconcile"
 )
 
@@ -101,9 +102,12 @@ type MaaSAuthPolicyReconciler struct {
 
 // oidcConfig holds resolved OIDC configuration from AITenant or a legacy Tenant CR.
 type oidcConfig struct {
-	IssuerURL string
-	ClientID  string
-	TTL       int
+	IssuerURL               string
+	ClientID                string
+	Audience                string
+	AccessTokenPurposeClaim string
+	AccessTokenPurpose      string
+	TTL                     int
 }
 
 // authzCacheTTL returns the safe TTL for authorization caches that depend on metadata.
@@ -243,6 +247,11 @@ func (r *MaaSAuthPolicyReconciler) fetchOIDCConfig(ctx context.Context, log logr
 		return nil
 	}
 
+	if (oidc.AccessTokenPurposeClaim == "") != (oidc.AccessTokenPurpose == "") {
+		log.Error(nil, "Tenant external OIDC access-token purpose claim and value must be configured together")
+		return nil
+	}
+
 	const (
 		defaultOIDCJWKSTTL = 300
 		minOIDCJWKSTTL     = 30
@@ -263,13 +272,18 @@ func (r *MaaSAuthPolicyReconciler) fetchOIDCConfig(ctx context.Context, log logr
 	log.Info("OIDC configuration loaded from tenant platform context",
 		"issuerUrl", oidc.IssuerURL,
 		"clientId", oidc.ClientID,
+		"audience", oidc.Audience,
+		"accessTokenPurposeClaim", oidc.AccessTokenPurposeClaim,
 		"ttl", ttl,
 		"source", platformContext.Source)
 
 	return &oidcConfig{
-		IssuerURL: oidc.IssuerURL,
-		ClientID:  oidc.ClientID,
-		TTL:       ttl,
+		IssuerURL:               oidc.IssuerURL,
+		ClientID:                oidc.ClientID,
+		Audience:                oidc.Audience,
+		AccessTokenPurposeClaim: oidc.AccessTokenPurposeClaim,
+		AccessTokenPurpose:      oidc.AccessTokenPurpose,
+		TTL:                     ttl,
 	}
 }
 
@@ -715,6 +729,24 @@ type authPolicyRef struct {
 	ModelNamespace string
 }
 
+// subscriptionInfoStringHeader injects a non-empty field from the resolved
+// MaaSSubscription (Authorino subscription-info metadata) as an X-MaaS-* header.
+func subscriptionInfoStringHeader(jsonField string) map[string]any {
+	path := fmt.Sprintf(`auth.metadata["subscription-info"].%s`, jsonField)
+	return map[string]any{
+		"when": []any{
+			map[string]any{
+				"predicate": fmt.Sprintf(`has(%s) && %s != ""`, path, path),
+			},
+		},
+		"plain": map[string]any{
+			"expression": path,
+		},
+		"metrics":  false,
+		"priority": int64(0),
+	}
+}
+
 // buildGatewayAuthPolicySpec returns the Authorino AuthPolicy spec for the singleton
 // Gateway-level policy. Model identity is resolved dynamically via CEL on every request
 // rather than being baked in per-model, so this spec is the same for all MaaSAuthPolicy CRs.
@@ -855,6 +887,18 @@ func (r *MaaSAuthPolicyReconciler) buildGatewayAuthPolicySpec(oidc *oidcConfig, 
 					map[string]any{
 						"predicate": `!("x-maas-subscription-rate-limit-id" in request.headers)`,
 					},
+					map[string]any{
+						"predicate": `!("x-maas-organization-id" in request.headers)`,
+					},
+					map[string]any{
+						"predicate": `!("x-maas-cost-center" in request.headers)`,
+					},
+					map[string]any{
+						"predicate": `!("x-maas-identity" in request.headers)`,
+					},
+					map[string]any{
+						"predicate": `!("x-maas-admin-scope" in request.headers)`,
+					},
 				},
 			},
 		},
@@ -940,28 +984,21 @@ allow {
 }`,
 			},
 		}
-		// oidc-client-bound enforces that OIDC JWTs were issued to the configured
-		// OAuth client (azp claim). The has(auth.identity.azp) guard is required so
-		// that OpenShift TokenReview identities (which carry no azp claim) are not
-		// matched by this rule and denied with 403.
+		// oidc-client-bound enforces the external-JWT issuer and OAuth client.
+		// TokenReview identities have a user object rather than a top-level iss
+		// claim and therefore remain on their existing authorization path.
 		authorizationRules["oidc-client-bound"] = map[string]any{
-			"when": []any{
-				map[string]any{
-					"predicate": celIsNotAPIKey +
-						` && request.headers.authorization.matches("^Bearer [^.]+\\.[^.]+\\.[^.]+$")` +
-						` && has(auth.identity.azp)`,
-				},
-			},
+			"when":     authpolicy.OIDCTokenBoundWhen(celIsNotAPIKey),
 			"metrics":  false,
 			"priority": int64(1),
 			"patternMatching": map[string]any{
-				"patterns": []any{
-					map[string]any{
-						"selector": "auth.identity.azp",
-						"operator": "eq",
-						"value":    oidc.ClientID,
-					},
-				},
+				"patterns": authpolicy.OIDCTokenBoundPatterns(
+					oidc.IssuerURL,
+					oidc.ClientID,
+					oidc.Audience,
+					oidc.AccessTokenPurposeClaim,
+					oidc.AccessTokenPurpose,
+				),
 			},
 		}
 	}
@@ -1122,13 +1159,19 @@ allow {
 						"metrics":  false,
 						"priority": int64(0),
 					},
-					// Clear client-supplied llm-d flow-control headers, canonical and legacy, so
-					// clients cannot pick an InferenceObjective or fairness ID. Keys are lowercase
-					// so they replace every client copy.
-					"x-llm-d-inference-objective":     clearedRequestHeader(),
-					"x-gateway-inference-objective":   clearedRequestHeader(),
-					"x-llm-d-inference-fairness-id":   clearedRequestHeader(),
-					"x-gateway-inference-fairness-id": clearedRequestHeader(),
+					// llm-d flow-control headers, canonical and legacy, from the subscription selected
+					// by maas-api. They are always set, empty when unknown, so client-supplied values
+					// never reach the scheduler. Keys are lowercase so they replace every client copy.
+					"x-llm-d-inference-objective":     subscriptionInfoHeader("objective"),
+					"x-gateway-inference-objective":   subscriptionInfoHeader("objective"),
+					"x-llm-d-inference-fairness-id":   subscriptionInfoHeader("fairnessId"),
+					"x-gateway-inference-fairness-id": subscriptionInfoHeader("fairnessId"),
+					// Organization and cost center come from the resolved MaaSSubscription
+					// (subscription-info), not the client. Injected only when set so empty
+					// values do not appear as identity headers.
+					"X-MaaS-Organization-Id": subscriptionInfoStringHeader("organizationId"),
+					"X-MaaS-Cost-Center":     subscriptionInfoStringHeader("costCenter"),
+					"X-MaaS-Identity":        verifiedIdentityHeader(oidc, celIsNotAPIKey),
 				},
 				"filters": map[string]any{
 					"identity": map[string]any{
@@ -1247,14 +1290,21 @@ allow {
 	}
 }
 
-// clearedRequestHeader is a success response header that sets the request header to an
-// empty value, replacing any client-supplied value.
-func clearedRequestHeader() map[string]any {
+// subscriptionInfoHeader is a success response header set from a subscription-info field, or
+// to an empty value when the field is absent. The expression never fails: subscription-info is
+// not fetched for every request, and a failing header drops the others in its priority group.
+func subscriptionInfoHeader(field string) map[string]any {
 	return map[string]any{
-		"plain":    map[string]any{"value": ""},
+		"plain":    map[string]any{"expression": subscriptionInfoFieldExpr(field)},
 		"metrics":  false,
 		"priority": int64(0),
 	}
+}
+
+// subscriptionInfoFieldExpr is a CEL expression for a subscription-info field, or "" when absent.
+func subscriptionInfoFieldExpr(field string) string {
+	return fmt.Sprintf(`has(auth.metadata) && "subscription-info" in auth.metadata && `+
+		`has(auth.metadata["subscription-info"].%[1]s) ? auth.metadata["subscription-info"].%[1]s : ""`, field)
 }
 
 func (r *MaaSAuthPolicyReconciler) gatewayAuthPolicyName(gatewayNamespace, gatewayName string) string {

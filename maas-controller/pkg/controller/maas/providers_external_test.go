@@ -365,9 +365,12 @@ func TestExternalModel_GetModelEndpoint_FromHostnames(t *testing.T) {
 
 func TestExternalModel_GetModelEndpoint_FromGateway(t *testing.T) {
 	model := newExternalModel("gpt-4o", "default", "openai", "api.openai.com")
-	gateway := newGatewayWithHostname("maas-default-gateway", "openshift-ingress", "maas.cluster.example.com")
+	model.Status.HTTPRouteGatewayName = "tenant-gateway"
+	model.Status.HTTPRouteGatewayNamespace = "tenant-ingress"
+	gateway := newGatewayWithHostname("tenant-gateway", "tenant-ingress", "maas.cluster.example.com")
+	defaultGateway := newGatewayWithHostname("maas-default-gateway", "openshift-ingress", "default.example.com")
 
-	r, _ := newTestReconciler(model, gateway)
+	r, _ := newTestReconciler(model, gateway, defaultGateway)
 	r.GatewayName = "maas-default-gateway"
 	r.GatewayNamespace = "openshift-ingress"
 	handler := &externalModelHandler{r: r}
@@ -626,5 +629,176 @@ func TestExternalModelRouteResolver_InferenceStatusEmpty_ReturnsNotReady(t *test
 	}
 	if !errors.Is(err, ErrHTTPRouteNotFound) {
 		t.Errorf("HTTPRouteForModel: want ErrHTTPRouteNotFound, got %v", err)
+	}
+}
+
+var (
+	testGatewayA = types.NamespacedName{Name: "gw-a", Namespace: "tenant-a-ingress"}
+	testGatewayB = types.NamespacedName{Name: "gw-b", Namespace: "tenant-b-ingress"}
+)
+
+// newGatewayResult returns a status.gateways result whose route is named after the gateway.
+func newGatewayResult(gateway types.NamespacedName, ready metav1.ConditionStatus) any {
+	return map[string]any{
+		"name":         gateway.Name,
+		"namespace":    gateway.Namespace,
+		"httpRouteRef": map[string]any{"name": "route-" + gateway.Name, "namespace": "user-ns"},
+		"conditions": []any{map[string]any{
+			"type": "Ready", "status": string(ready), "reason": "Reconciled", "message": "",
+			"lastTransitionTime": "2026-10-12T00:00:00Z",
+		}},
+	}
+}
+
+// newSharedExternalModelObjects returns the inference ExternalModel "shared" in user-ns with
+// the given status.gateways, plus tenant-a and tenant-b owning testGatewayA and testGatewayB
+// and each gateway's accepted route.
+func newSharedExternalModelObjects(results ...any) []client.Object {
+	em := newInferenceExternalModelCR("shared", "user-ns", "openai-provider")
+	em.Object["status"] = map[string]any{"gateways": results}
+	objs := []client.Object{em}
+	for tenant, gateway := range map[string]types.NamespacedName{"tenant-a": testGatewayA, "tenant-b": testGatewayB} {
+		objs = append(objs,
+			&maasv1alpha1.AITenant{
+				ObjectMeta: metav1.ObjectMeta{Name: tenant, Namespace: testAITenantNamespace},
+				Status:     maasv1alpha1.AITenantStatus{GatewayRef: maasv1alpha1.TenantGatewayRef{Name: gateway.Name, Namespace: gateway.Namespace}},
+			},
+			newHTTPRouteWithGateway("route-"+gateway.Name, "user-ns", gateway.Name, gateway.Namespace))
+	}
+	return objs
+}
+
+func TestExternalModel_ReconcileRoute_GatewayStatus(t *testing.T) {
+	tests := []struct {
+		name        string
+		tenantRef   string
+		results     []any
+		wantRoute   string
+		wantGateway types.NamespacedName
+		wantTenant  string
+		wantErr     string
+	}{{
+		name:        "tenantRef selects its own gateway",
+		tenantRef:   "tenant-b",
+		results:     []any{newGatewayResult(testGatewayA, metav1.ConditionTrue), newGatewayResult(testGatewayB, metav1.ConditionTrue)},
+		wantRoute:   "route-gw-b",
+		wantGateway: testGatewayB,
+		wantTenant:  "tenant-b",
+	}, {
+		name:       "not-ready selected result does not fall back to another gateway",
+		tenantRef:  "tenant-b",
+		results:    []any{newGatewayResult(testGatewayA, metav1.ConditionTrue), newGatewayResult(testGatewayB, metav1.ConditionFalse)},
+		wantTenant: "tenant-b",
+	}, {
+		name:       "tenant gateway not attached",
+		tenantRef:  "tenant-b",
+		results:    []any{newGatewayResult(testGatewayA, metav1.ConditionTrue)},
+		wantTenant: "tenant-b",
+	}, {
+		name:        "single attachment resolves its tenant from the gateway, not the model namespace",
+		results:     []any{newGatewayResult(testGatewayA, metav1.ConditionTrue)},
+		wantRoute:   "route-gw-a",
+		wantGateway: testGatewayA,
+		wantTenant:  "tenant-a",
+	}, {
+		name:    "several attachments without tenantRef are ambiguous even when only one is ready",
+		results: []any{newGatewayResult(testGatewayA, metav1.ConditionTrue), newGatewayResult(testGatewayB, metav1.ConditionFalse)},
+		wantErr: "set spec.tenantRef",
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			model := newExternalModel("shared", "user-ns", "", "")
+			model.Spec.TenantRef = tt.tenantRef
+			// Left by an earlier selection; only a route this reconcile validates may remain.
+			model.Status.HTTPRouteName = "route-gw-a"
+			model.Status.HTTPRouteGatewayName = testGatewayA.Name
+			model.Status.HTTPRouteGatewayNamespace = testGatewayA.Namespace
+			r, _ := newTestReconcilerWithMapper(append(newSharedExternalModelObjects(tt.results...), model)...)
+
+			err := (&externalModelHandler{r: r}).ReconcileRoute(t.Context(), zap.New(zap.UseDevMode(true)), model)
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("ReconcileRoute error = %v, want it to contain %q", err, tt.wantErr)
+				}
+			} else if err != nil {
+				t.Fatalf("ReconcileRoute: unexpected error: %v", err)
+			}
+			gateway := types.NamespacedName{Name: model.Status.HTTPRouteGatewayName, Namespace: model.Status.HTTPRouteGatewayNamespace}
+			if model.Status.HTTPRouteName != tt.wantRoute || gateway != tt.wantGateway {
+				t.Errorf("route = %q on gateway %v, want %q on gateway %v", model.Status.HTTPRouteName, gateway, tt.wantRoute, tt.wantGateway)
+			}
+			if model.Status.ResolvedTenantRef != tt.wantTenant {
+				t.Errorf("ResolvedTenantRef = %q, want %q", model.Status.ResolvedTenantRef, tt.wantTenant)
+			}
+		})
+	}
+}
+
+// AGC can report a gateway ready without changing anything else, so the ExternalModel
+// watch has to pass that write for the MaaSModelRef to select its route.
+func TestExternalModel_GatewayStatusUpdateSelectsRoute(t *testing.T) {
+	ctx := t.Context()
+	log := zap.New(zap.UseDevMode(true))
+	model := newExternalModel("shared", "user-ns", "", "")
+	model.Spec.TenantRef = "tenant-b"
+	r, c := newTestReconcilerWithMapper(append(newSharedExternalModelObjects(
+		newGatewayResult(testGatewayA, metav1.ConditionTrue), newGatewayResult(testGatewayB, metav1.ConditionFalse)), model)...)
+	handler := &externalModelHandler{r: r}
+
+	if err := handler.ReconcileRoute(ctx, log, model); err != nil {
+		t.Fatalf("ReconcileRoute (gateway B not ready): %v", err)
+	}
+	if model.Status.HTTPRouteName != "" {
+		t.Fatalf("HTTPRouteName = %q before gateway B is ready, want none", model.Status.HTTPRouteName)
+	}
+
+	current := &unstructured.Unstructured{}
+	current.SetGroupVersionKind(inferenceExternalModelGVK)
+	if err := c.Get(ctx, types.NamespacedName{Name: "shared", Namespace: "user-ns"}, current); err != nil {
+		t.Fatalf("Get inference ExternalModel: %v", err)
+	}
+	ready := current.DeepCopy()
+	ready.Object["status"] = map[string]any{"gateways": []any{
+		newGatewayResult(testGatewayA, metav1.ConditionTrue), newGatewayResult(testGatewayB, metav1.ConditionTrue),
+	}}
+	if !ippExternalModelChangedForModelRef().Update(event.UpdateEvent{ObjectOld: current, ObjectNew: ready}) {
+		t.Fatal("ExternalModel watch predicate dropped the per-gateway readiness write")
+	}
+	if err := c.Status().Update(ctx, ready); err != nil {
+		t.Fatalf("Update inference ExternalModel status: %v", err)
+	}
+
+	if err := handler.ReconcileRoute(ctx, log, model); err != nil {
+		t.Fatalf("ReconcileRoute (gateway B ready): %v", err)
+	}
+	if model.Status.HTTPRouteName != "route-gw-b" {
+		t.Errorf("HTTPRouteName = %q, want %q", model.Status.HTTPRouteName, "route-gw-b")
+	}
+}
+
+// AuthPolicy reconcile resolves the route of a shared model through the gateway each
+// MaaSModelRef selected, so a policy on tenant B's route conflicts only with tenant B's model.
+func TestDetectConflictingAuthPolicies_SharedExternalModelUsesSelectedRoute(t *testing.T) {
+	objs := newSharedExternalModelObjects(newGatewayResult(testGatewayA, metav1.ConditionTrue), newGatewayResult(testGatewayB, metav1.ConditionTrue))
+	selected := map[string]types.NamespacedName{"model-a": testGatewayA, "model-b": testGatewayB, "unselected": {}}
+	for name, gateway := range selected {
+		model := newMaaSModelRef(name, "user-ns", "ExternalModel", "shared")
+		model.Status.HTTPRouteGatewayName = gateway.Name
+		model.Status.HTTPRouteGatewayNamespace = gateway.Namespace
+		objs = append(objs, model)
+	}
+	objs = append(objs, newRogueAuthPolicy("rogue", "user-ns", "route-gw-b"))
+	c := fake.NewClientBuilder().WithScheme(scheme).WithRESTMapper(testRESTMapper()).WithObjects(objs...).Build()
+	r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme}
+
+	for name, wantConflict := range map[string]bool{"model-a": false, "model-b": true, "unselected": false} {
+		policy := newMaaSAuthPolicy("policy", "tenant-ns", "team", maasv1alpha1.ModelRef{Name: name, Namespace: "user-ns"})
+		conflicts, err := r.detectConflictingAuthPolicies(t.Context(), zap.New(zap.UseDevMode(true)), policy)
+		if err != nil {
+			t.Fatalf("%s: detectConflictingAuthPolicies: %v", name, err)
+		}
+		if got := len(conflicts) > 0; got != wantConflict {
+			t.Errorf("%s: conflicts = %v, want conflict %v", name, conflicts, wantConflict)
+		}
 	}
 }

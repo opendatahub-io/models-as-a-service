@@ -192,7 +192,7 @@ func (r *TenantReconciler) enqueueTenantForAITenant(_ context.Context, obj clien
 }
 
 // mapConfigToMaasTenantConfigs maps a Config change to reconcile requests for MaasTenantConfig
-// resources so usageLogging toggle changes propagate to every tenant's usage-logs EnvoyFilter.
+// resources so platform operands stay aligned with the cluster Config.
 func (r *TenantReconciler) mapConfigToMaasTenantConfigs(ctx context.Context, _ client.Object) []reconcile.Request {
 	if !r.TenantNamespaceDiscoveryEnabled {
 		return []reconcile.Request{{NamespacedName: types.NamespacedName{
@@ -310,7 +310,14 @@ func (r *TenantReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	ctx := context.Background()
 
 	b := ctrl.NewControllerManagedBy(mgr).
-		For(&maasv1alpha1.MaasTenantConfig{}).
+		For(&maasv1alpha1.MaasTenantConfig{}, builder.WithPredicates(
+			predicate.Or(
+				predicate.GenerationChangedPredicate{},
+				// E2E / ai-gateway-controller praxis handoff sets payload-processing
+				// annotations without spec changes; reconcile must refresh Ready status.
+				predicate.AnnotationChangedPredicate{},
+			),
+		)).
 		Watches(
 			&maasv1alpha1.Config{},
 			handler.EnqueueRequestsFromMapFunc(r.mapConfigToMaasTenantConfigs),

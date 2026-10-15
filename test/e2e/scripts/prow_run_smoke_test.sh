@@ -345,6 +345,10 @@ run_e2e_tests() {
     export ARTIFACTS_DIR
     export E2E_PARALLEL_WORKERS="${E2E_PARALLEL_WORKERS:-7}"
     export E2E_RECONCILE_WAIT="${E2E_RECONCILE_WAIT:-4}"
+    # Nightly tier (pass 3) only when EXTERNAL_OIDC is deployed; passes 1–2 always skip nightly.
+    if [[ "${EXTERNAL_OIDC}" == "true" ]]; then
+        export MAAS_PYTEST_INCLUDE_NIGHTLY="${MAAS_PYTEST_INCLUDE_NIGHTLY:-true}"
+    fi
     "${SCRIPT_DIR}/run_e2e_tests.sh"
 }
 

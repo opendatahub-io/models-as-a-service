@@ -43,6 +43,7 @@ pytest tests/<file>.py -v
 
 | File | Focus |
 |------|--------|
+| `test_smoke.py` | Read-only smoke checks, including non-streaming chat response body content |
 | `test_subscription.py` | Subscription / inference flows |
 | `test_trlp_rate_grouping.py` | TRLP limits grouped by rate: shared limits, per-subscription and per-user budgets, rate edits, gateway wasm config size guard |
 | `test_api_keys.py` | `/v1/api-keys` |
@@ -55,6 +56,7 @@ pytest tests/<file>.py -v
 | `test_tenant_namespace_discovery.py` | Multi-tenant namespace discovery (S1), webhooks (S6); smoke enables `ENABLE_TENANT_NAMESPACE_DISCOVERY=true` by default |
 | `test_gateway_scoped_authpolicy.py` | Gateway-scoped `maas-gateway-auth` (S10 / #912); runs in default CI |
 | `test_multi_tenant_integration.py` | Multi-tenant lifecycle and coexistence scenarios; smoke enables tenant namespace discovery by default |
+| `test_tenant_model_inference.py` | Per-tenant inference, symmetric cross-gateway API-key isolation, and AuthPolicy EnvoyFilter workload selectors |
 | `test_multi_tenant_maas_api.py` | Per-tenant `maas-api` infrastructure (S24); gated by `ENABLE_S24_E2E=true` |
 | `test_tenant_auth_isolation.py` | Tenant-scoped API-key/OIDC isolation (S4); gated by `ENABLE_S4_E2E=true` and tenant API URLs |
 | `test_tenant_subscription_isolation.py` | Tenant-scoped subscription listing/selection (S4); gated by `ENABLE_S4_E2E=true` and tenant API URLs |
@@ -91,6 +93,24 @@ The dormant-mode regression inside `test_tenant_namespace_discovery.py` mutates 
 The S24/S4 suites are in the smoke list but intentionally skip until their backing implementation is present in the deployed build. Enable them with `ENABLE_S24_E2E=true` or `ENABLE_S4_E2E=true` plus `MAAS_API_BASE_URL_TENANT_A`, `MAAS_API_BASE_URL_TENANT_B`, `TENANT_A_NAMESPACE`, and `TENANT_B_NAMESPACE`.
 
 External OIDC runs require `EXTERNAL_OIDC=true` and `OIDC_ISSUER_URL`, `OIDC_TOKEN_URL`, `OIDC_CLIENT_ID`, `OIDC_USERNAME`, `OIDC_PASSWORD` per your deploy/test setup.
+
+## Nightly tier (`@pytest.mark.nightly`)
+
+Tests marked `nightly` (for example `test_external_oidc.py` and per-tenant OIDC discovery) are **always excluded from passes 1–2**. They run only in **pass 3** (`-m nightly`) when `MAAS_PYTEST_INCLUDE_NIGHTLY=true` (set automatically when `EXTERNAL_OIDC=true` in prow, or explicitly on the ODH MaaS nightly in shepard). PR `/group-test` does not set that flag, so nightly tests are skipped there.
+
+Local opt-in via the runner:
+
+```bash
+MAAS_PYTEST_INCLUDE_NIGHTLY=true EXTERNAL_OIDC=true \
+  ./test/e2e/scripts/run_e2e_tests.sh
+```
+
+Or target nightly tests directly:
+
+```bash
+EXTERNAL_OIDC=true OIDC_ISSUER_URL=... OIDC_TOKEN_URL=... \
+  pytest tests/ -m nightly -v
+```
 
 ## Parallel execution (pytest-xdist)
 

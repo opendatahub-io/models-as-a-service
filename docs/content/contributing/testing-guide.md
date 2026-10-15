@@ -65,7 +65,7 @@ Tests are organized into **xdist groups** for parallel execution. All tests in a
 | `tenant_isolation` | `test_tenant_rate_limit_isolation.py` | Per-tenant rate limit independence |
 | `tenant_isolation` | `test_tenant_subscription_isolation.py` | Per-tenant subscription scoping |
 | `tenant_isolation` | `test_tenant_discovery_isolation.py` | Per-tenant /v1/tenants isolation |
-| `tenant_inference` | `test_tenant_model_inference.py` | Cross-gateway inference isolation |
+| `tenant_inference` | `test_tenant_model_inference.py` | Cross-gateway auth isolation and per-Gateway AuthPolicy EnvoyFilter selectors |
 | `tenant_ipp` | `test_per_tenant_ipp_isolation.py` | Per-tenant IPP stacks, routing isolation |
 | `tenant_auto_resolve` | `test_tenant_auto_resolve.py` | MaaSModelRef tenant auto-resolution from the gateway parentRef |
 | `external` | `test_external_oidc.py` | External OIDC token flows (skipped unless `EXTERNAL_OIDC=true`) |
@@ -173,11 +173,23 @@ The E2E framework auto-discovers most values from the cluster. These are the mos
 | `ADMIN_OC_TOKEN` | Admin token; admin tests skip if unset |
 | `E2E_SKIP_TLS_VERIFY` | Set `true` to skip TLS verification |
 | `MODEL_NAME` | Override model ID (defaults to first from catalog) |
+| `E2E_MODEL_PATH` | Override the model route path used by inference tests (for example, `/llm/facebook-opt-125m-simulated`; omit `/v1`) |
 | `EXTERNAL_OIDC` | Set `true` to enable external OIDC tests |
 | `E2E_PARALLEL_WORKERS` | pytest-xdist worker count for pass 1 (default `7`). Set to `1` for single-worker pass 1 without xdist; pass 2 stays serial. |
 | `LLMISVC_CONTROLLER_CPU_REQUEST` / `LLMISVC_CONTROLLER_CPU_LIMIT` | CPU that `deploy-platform.sh` gives `llmisvc-controller-manager` on the test cluster (defaults `1` / `2`; shipped is 100m). Set the limit empty to keep the shipped resources. |
 
 See `test/e2e/tests/conftest.py` and individual test module docstrings for the full set of supported variables.
+
+The non-streaming chat response regression is covered by
+`tests/test_smoke.py::test_chat_completions_gateway_alive`. It uses the governed
+`facebook-opt-125m-simulated` LLMInferenceService and MaaSModelRef deployed by
+`scripts/deploy-models.sh`, plus the `simulator-subscription` API key created by
+the `api_key_headers` fixture. `MODEL_NAME` selects the route/catalog model,
+while `E2E_MODEL_NAME` sets the ID sent in the inference request body (default
+`facebook/opt-125m`). The full CI runner sets `GATEWAY_HOST` and `MODEL_NAME`;
+for a local run, set `GATEWAY_HOST` to the gateway hostname and `MODEL_NAME` to
+the catalog model ID. Set `E2E_MODEL_PATH` when the catalog URL does not identify
+the model route.
 
 ### Parallel E2E (pytest-xdist)
 
@@ -379,8 +391,8 @@ AI Gateway now spans three repos: [ai-gateway-operator](https://github.com/opend
 | Repo | Owns | What it tests | Test suite |
 |------|------|----------------|------------|
 | **AIGO** | Component setup & dependency management | `AIGateway` CR reconciles to `Ready`; sibling controller Deployments (`maas-controller`, `ai-gateway-controller`, `batch-gateway-operator`) become `Available`; aggregate status (`ModelsAsAServiceReady`, etc.) rolls up correctly. Never the request path. | `test/e2e/*_test.go` (Go — deploy prereqs, create CR, assert status) |
-| **AIGC** | Deploying the Praxis-backed stack + AIGC's own control-plane logic | Its own reconciliation logic (`pkg/tenant`, `pkg/render`, `pkg/controller` for ExternalModel/ExternalProvider) via real fixtures. For MaaS-level/request-path behavior, AIGC does **not** write new test content — it fetches and re-runs **this repo's own pytest suite** against its Praxis-backed deployment, pinned via `test/maas-e2e.lock`, proving the same behavior holds under Praxis as under IPP. | `test/kind-env`, `test/openshift-env` (real fixtures) + a vendored copy of `test/e2e/tests/` from this repo, fetched at a pinned commit |
-| **MaaS** (this repo) | The single source of truth for MaaS-level resource/request behavior | Subscription enforcement, auth policy, rate limiting, API-key lifecycle, and anything visible at the MaaS API/Gateway boundary — including OpenAI resource-API routing and identity-header propagation. Written once here, run twice: in-repo against IPP, and via AIGC's vendored fetch against Praxis. | `test/e2e/tests/*.py` (pytest) |
+| **AIGC** | Deploying the Praxis-backed stack + AIGC's own control-plane logic | Its own reconciliation logic (`pkg/tenant`, `pkg/render`, `pkg/controller` for ExternalModel/ExternalProvider) via real fixtures. For MaaS-level/request-path behavior, AIGC does **not** write new test content — it fetches and re-runs **this repo's own pytest suite** against its Praxis-backed deployment, pinned via `test/maas-e2e.lock`, proving the same behavior holds under Praxis as under IPP. | `test/kind-env`, `test/openshift-env` (real fixtures) + a runtime checkout of `test/e2e/tests/` from this repo in `test/maas-e2e/`, fetched at the commit pinned in `test/maas-e2e.lock` |
+| **MaaS** (this repo) | The single source of truth for MaaS-level resource/request behavior | Subscription enforcement, auth policy, rate limiting, API-key lifecycle, and anything visible at the MaaS API/Gateway boundary — including OpenAI resource-API routing and identity-header propagation. Written once here, run twice: in-repo against IPP, and via AIGC's runtime checkout in `test/maas-e2e/` against Praxis. | `test/e2e/tests/*.py` (pytest) |
 
 **The upstream-first rule:** if MaaS-level behavior has a coverage gap that's exposed while working in AIGC or AIGO, add the test to **this repo's** `test/e2e/tests/` first (skip-gated with `pytest.mark.skipif` if the behavior is genuinely Praxis-only, mirroring the existing `EXTERNAL_OIDC` skip pattern — see [Group Assignment Rules](#group-assignment-rules)), then have the downstream repo bump its pin to pick it up. Don't accept a parallel Go/mock test in AIGO, and don't let a bespoke copy accumulate in AIGC. [`ai-gateway-controller#37`](https://github.com/opendatahub-io/ai-gateway-controller/pull/37) is a worked example of this lifecycle: a gap was fixed upstream in MaaS ([#1508](https://github.com/opendatahub-io/models-as-a-service/pull/1508)); once it landed, AIGC removed its own side-workarounds and re-pinned `test/maas-e2e.lock`.
 

@@ -136,6 +136,46 @@ func TestMaaSSubscriptionValidator_ValidateUpdate(t *testing.T) {
 	}
 }
 
+func TestMaaSSubscriptionValidator_ValidateUpdateOrganizationAssociation(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = maasv1alpha1.AddToScheme(scheme)
+
+	client := fake.NewClientBuilder().WithScheme(scheme).Build()
+	validator := &MaaSSubscriptionValidator{
+		Client: client,
+		Validator: &TenantNamespaceValidator{
+			Client: client,
+		},
+	}
+
+	tests := []struct {
+		name    string
+		oldID   *string
+		newID   *string
+		wantErr bool
+	}{
+		{name: "legacy adoption", oldID: nil, newID: stringPointer("grid-org-a")},
+		{name: "unchanged association", oldID: stringPointer("grid-org-a"), newID: stringPointer("grid-org-a")},
+		{name: "association cannot change", oldID: stringPointer("grid-org-a"), newID: stringPointer("grid-org-b"), wantErr: true},
+		{name: "association cannot be removed", oldID: stringPointer("grid-org-a"), newID: nil, wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			oldSub := subscriptionWithOrganization(tt.oldID)
+			newSub := subscriptionWithOrganization(tt.newID)
+
+			_, err := validator.ValidateUpdate(context.Background(), oldSub, newSub)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("ValidateUpdate() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if tt.wantErr && (err == nil || err.Error() != "organization.id is immutable") {
+				t.Fatalf("ValidateUpdate() error = %v, want organization.id is immutable", err)
+			}
+		})
+	}
+}
+
 func TestMaaSSubscriptionValidator_ValidateDelete(t *testing.T) {
 	scheme := runtime.NewScheme()
 	_ = maasv1alpha1.AddToScheme(scheme)
@@ -161,4 +201,21 @@ func TestMaaSSubscriptionValidator_ValidateDelete(t *testing.T) {
 	if err != nil {
 		t.Errorf("ValidateDelete() unexpected error: %v", err)
 	}
+}
+
+func subscriptionWithOrganization(id *string) *maasv1alpha1.MaaSSubscription {
+	sub := &maasv1alpha1.MaaSSubscription{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-sub",
+			Namespace: "ai-tenant-test",
+		},
+	}
+	if id != nil {
+		sub.Spec.Organization = &maasv1alpha1.SubscriptionOrganization{ID: *id}
+	}
+	return sub
+}
+
+func stringPointer(value string) *string {
+	return &value
 }

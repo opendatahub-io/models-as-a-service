@@ -18,7 +18,7 @@ Defines who (groups/users) can access which models. Creates Kuadrant AuthPolicie
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| groups | []GroupReference | No | List of Kubernetes group names |
+| groups | []GroupReference | No | Identity group names that may access the referenced models; matched exactly |
 | users | []string | No | List of Kubernetes user names |
 
 At least one of `groups` or `users` must be specified.

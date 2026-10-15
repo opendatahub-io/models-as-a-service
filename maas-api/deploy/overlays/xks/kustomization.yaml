@@ -134,13 +134,13 @@ patches:
       name: maas-api
     patch: |
       - op: test
-        path: /rules/8/apiGroups
+        path: /rules/6/apiGroups
         value: ["config.openshift.io"]
       - op: test
-        path: /rules/8/resources
+        path: /rules/6/resources
         value: ["apiservers"]
       - op: remove
-        path: /rules/8
+        path: /rules/6
   - target:
       kind: ClusterRole
       name: maas-api-supplemental

@@ -76,6 +76,32 @@ spec:
                   ExternalOIDC configures an external OIDC identity provider for legacy/unmanaged
                   Tenant resources. For AITenant-managed tenants, use AITenant.spec.oidc.
                 properties:
+                  accessTokenPurpose:
+                    description: |-
+                      AccessTokenPurpose is the exact value required in AccessTokenPurposeClaim.
+                      It and AccessTokenPurposeClaim must be set together and are required for
+                      delegated Grid administration.
+                    maxLength: 128
+                    minLength: 1
+                    pattern: ^\S+$
+                    type: string
+                  accessTokenPurposeClaim:
+                    description: |-
+                      AccessTokenPurposeClaim is the simple token claim name that carries the
+                      access-token purpose, such as token_use. It and AccessTokenPurpose must be
+                      set together and are required for delegated Grid administration.
+                    maxLength: 128
+                    minLength: 1
+                    pattern: ^[A-Za-z0-9_-]+$
+                    type: string
+                  audience:
+                    description: |-
+                      Audience is the exact OIDC audience required in the token `aud` claim.
+                      It must be set for delegated Grid administration.
+                    maxLength: 256
+                    minLength: 1
+                    pattern: ^\S+$
+                    type: string
                   clientId:
                     description: ClientID is the OAuth2 client ID.
                     maxLength: 256
@@ -97,6 +123,10 @@ spec:
                 - clientId
                 - issuerUrl
                 type: object
+                x-kubernetes-validations:
+                - message: accessTokenPurposeClaim and accessTokenPurpose must be
+                    set together
+                  rule: has(self.accessTokenPurposeClaim) == has(self.accessTokenPurpose)
               gatewayRef:
                 description: |-
                   GatewayRef specifies which Gateway (Gateway API) to use for exposing model endpoints
@@ -307,6 +337,13 @@ spec:
                     description: TenantLogsConfig defines optional usage-log identity
                       dimensions.
                     properties:
+                      captureOrganization:
+                        default: true
+                        description: |-
+                          CaptureOrganization includes the subscription organization ID as
+                          organization_id on usage logs. Defaults to true. Independent of
+                          metrics.captureOrganization.
+                        type: boolean
                       captureUser:
                         default: false
                         description: |-

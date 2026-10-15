@@ -136,6 +136,32 @@ spec:
                   AITenant is the source of truth for this derived platform context; the
                   bridge Tenant config object owns MaaS-specific user config only.
                 properties:
+                  accessTokenPurpose:
+                    description: |-
+                      AccessTokenPurpose is the exact value required in AccessTokenPurposeClaim.
+                      It and AccessTokenPurposeClaim must be set together and are required for
+                      delegated Grid administration.
+                    maxLength: 128
+                    minLength: 1
+                    pattern: ^\S+$
+                    type: string
+                  accessTokenPurposeClaim:
+                    description: |-
+                      AccessTokenPurposeClaim is the simple token claim name that carries the
+                      access-token purpose, such as token_use. It and AccessTokenPurpose must be
+                      set together and are required for delegated Grid administration.
+                    maxLength: 128
+                    minLength: 1
+                    pattern: ^[A-Za-z0-9_-]+$
+                    type: string
+                  audience:
+                    description: |-
+                      Audience is the exact OIDC audience required in the token `aud` claim.
+                      It must be set for delegated Grid administration.
+                    maxLength: 256
+                    minLength: 1
+                    pattern: ^\S+$
+                    type: string
                   clientId:
                     description: ClientID is the OAuth2 client ID.
                     maxLength: 256
@@ -157,6 +183,10 @@ spec:
                 - clientId
                 - issuerUrl
                 type: object
+                x-kubernetes-validations:
+                - message: accessTokenPurposeClaim and accessTokenPurpose must be
+                    set together
+                  rule: has(self.accessTokenPurposeClaim) == has(self.accessTokenPurpose)
               rbac:
                 description: |-
                   RBAC is retained only for compatibility with existing AITenant manifests.
@@ -199,6 +229,55 @@ spec:
                       type: object
                     maxItems: 128
                     type: array
+                type: object
+              responses:
+                description: |-
+                  Responses requests tenant-owned Responses and Conversations support.
+                  Omission disables both APIs. AI Gateway owns runtime and storage readiness.
+                properties:
+                  enabled:
+                    default: false
+                    description: Enabled enables Responses and Conversations together.
+                      Requires Praxis.
+                    type: boolean
+                  retention:
+                    description: |-
+                      Retention limits persisted Responses, conversation items and continuation state.
+                      Omission does not request a tenant-specific retention limit.
+                    properties:
+                      maxAge:
+                        description: MaxAge is a positive duration, for example "168h".
+                        maxLength: 32
+                        pattern: ^([0-9]+(\.[0-9]+)?(ms|s|m|h))+$
+                        type: string
+                        x-kubernetes-validations:
+                        - message: maxAge must be a positive duration
+                          rule: duration(self) > duration('0s')
+                    required:
+                    - maxAge
+                    type: object
+                  storage:
+                    default: {}
+                    description: |-
+                      Storage selects the separate platform Responses database binding.
+                      It never reuses the MaaS API-key database or provisions a database.
+                    properties:
+                      deletionPolicy:
+                        default: Retain
+                        description: |-
+                          DeletionPolicy retains content when Responses is disabled or the tenant is deleted.
+                          Externally managed databases are never deleted by tenant reconciliation.
+                        enum:
+                        - Retain
+                        type: string
+                      mode:
+                        default: PlatformDefault
+                        description: Mode selects the platform-provisioned Responses
+                          connection and CA binding.
+                        enum:
+                        - PlatformDefault
+                        type: string
+                    type: object
                 type: object
             type: object
           status:

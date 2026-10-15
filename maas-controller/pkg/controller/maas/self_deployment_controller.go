@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -59,8 +60,14 @@ import (
 // can strip it from older installs.
 const CleanupFinalizer = "maas.opendatahub.io/cleanup"
 
-// usageLogsCollectorName is the OpenTelemetryCollector resource for gateway usage logs.
-const usageLogsCollectorName = "usage-logs"
+// usageLogsCollectorClusterRoleBindingName grants the usage-logs collector write
+// access to application logs. It is removed when the collector CRD is unavailable
+// (CWE-863). Disabling usageLogging removes it with the rest of the usage-logs-only
+// resources.
+const usageLogsCollectorClusterRoleBindingName = "usage-collector-application-logs-write"
+
+// usageLogsDsciManagedKustomizeDir is the kustomization rendered when usageLogging is false or omitted.
+const usageLogsDsciManagedKustomizeDir = "dsci-managed"
 
 // usageLogsTenancyProxyDeploymentName is the Deployment for the Loki query tenancy proxy.
 const usageLogsTenancyProxyDeploymentName = "usage-logs-tenancy-proxy"
@@ -85,6 +92,7 @@ type LifecycleReconciler struct {
 	DeploymentNS                string
 	TenantSubscriptionNamespace string
 	AITenantNamespace           string
+	GatewayName                 string
 	GatewayNamespace            string
 	ObservabilityManifestsPath  string
 	MonitoringNamespace         string
@@ -92,6 +100,7 @@ type LifecycleReconciler struct {
 	DiscoveryEnabled            bool
 	DiscoveryManifestPath       string
 	DiscoveryImage              string
+	DiscoveryLogLevel           string
 	DiscoveryNamespace          string
 	DiscoveryReplicas           *int32
 }
@@ -102,6 +111,7 @@ type LifecycleReconciler struct {
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=configs/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=maastenantconfigs,verbs=get;list;watch;update;patch
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=aitenants,verbs=get;list;watch;update;patch
+//+kubebuilder:rbac:groups=route.openshift.io,resources=routes,verbs=get;list;watch
 //+kubebuilder:rbac:groups=perses.dev,resources=persesdashboards;persesdatasources,verbs=get;list;watch;create;patch;delete
 //+kubebuilder:rbac:groups=opentelemetry.io,resources=opentelemetrycollectors,verbs=get;list;watch;create;patch;delete
 //+kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterrolebindings;rolebindings,verbs=get;list;watch;create;patch;delete
@@ -559,8 +569,10 @@ func (r *LifecycleReconciler) ensureUsageDashboard(ctx context.Context, log logr
 	return nil
 }
 
-// ensureUsageLogs deploys or removes OTel collector and RBAC for usage logging based on
-// the Config's usageLogging feature gate.
+// ensureUsageLogs deploys usage-log dashboards, the tenancy proxy, and related RBAC.
+// usageLogging true renders usage-logs. false and omitted render dsci-managed.
+// Objects rendered by both bundles are applied in place. Controller-owned objects
+// rendered only by the other bundle are deleted.
 func (r *LifecycleReconciler) ensureUsageLogs(ctx context.Context, log logr.Logger) error {
 	if r.UsageLogsManifestPath == "" {
 		log.Info("WARNING: Usage logs manifest path not configured; skipping usage logs")
@@ -575,13 +587,16 @@ func (r *LifecycleReconciler) ensureUsageLogs(ctx context.Context, log logr.Logg
 		return err
 	}
 
-	resources, err := tenantreconcile.RenderKustomize(r.UsageLogsManifestPath, r.MonitoringNamespace)
+	usageLogging := ptr.Deref(cfg.Spec.UsageLogging, false)
+	manifestPath := usageLogsKustomizeDir(r.UsageLogsManifestPath, usageLogging)
+	inactivePath := usageLogsKustomizeDir(r.UsageLogsManifestPath, !usageLogging)
+	resources, err := tenantreconcile.RenderKustomize(manifestPath, r.MonitoringNamespace)
 	if err != nil {
 		return fmt.Errorf("render usage logs: %w", err)
 	}
-
-	if !ptr.Deref(cfg.Spec.UsageLogging, false) {
-		return r.deleteOwnedRenderedResources(ctx, log, cfg, resources, "usageLogging")
+	inactive, err := tenantreconcile.RenderKustomize(inactivePath, r.MonitoringNamespace)
+	if err != nil {
+		return fmt.Errorf("render inactive usage logs: %w", err)
 	}
 
 	// Track if the collector is skipped due to missing CRD (CWE-863).
@@ -627,7 +642,7 @@ func (r *LifecycleReconciler) ensureUsageLogs(ctx context.Context, log logr.Logg
 		}
 		crb := &unstructured.Unstructured{}
 		crb.SetGroupVersionKind(gvkClusterRoleBinding)
-		crb.SetName("usage-collector-application-logs-write")
+		crb.SetName(usageLogsCollectorClusterRoleBindingName)
 
 		if err := r.Get(ctx, client.ObjectKeyFromObject(crb), crb); err != nil {
 			if !apierrors.IsNotFound(err) {
@@ -641,7 +656,45 @@ func (r *LifecycleReconciler) ensureUsageLogs(ctx context.Context, log logr.Logg
 		}
 	}
 
+	// Delete controller-owned objects that only the inactive bundle renders.
+	// Shared objects stay and were updated by the apply above. Unowned objects
+	// with the same names are left in place.
+	if err := r.deleteOwnedRenderedResources(ctx, log, cfg, resourcesAbsentFrom(inactive, resources), "usageLogging"); err != nil {
+		return err
+	}
+
 	return nil
+}
+
+// resourcesAbsentFrom returns objects in have whose group, version, kind,
+// namespace, and name are not present in keep.
+func resourcesAbsentFrom(have, keep []unstructured.Unstructured) []unstructured.Unstructured {
+	present := make(map[string]struct{}, len(keep))
+	for _, obj := range keep {
+		present[renderedResourceID(obj)] = struct{}{}
+	}
+	stale := make([]unstructured.Unstructured, 0)
+	for _, obj := range have {
+		if _, ok := present[renderedResourceID(obj)]; ok {
+			continue
+		}
+		stale = append(stale, obj)
+	}
+	return stale
+}
+
+func renderedResourceID(obj unstructured.Unstructured) string {
+	gvk := obj.GroupVersionKind()
+	return strings.Join([]string{gvk.Group, gvk.Version, gvk.Kind, obj.GetNamespace(), obj.GetName()}, "/")
+}
+
+// usageLogsKustomizeDir selects the usage-logs kustomization.
+// usageLogging true uses the usage-logs directory; false and omitted use dsci-managed.
+func usageLogsKustomizeDir(base string, usageLogging bool) string {
+	if usageLogging {
+		return base
+	}
+	return filepath.Join(base, usageLogsDsciManagedKustomizeDir)
 }
 
 // deleteOwnedRenderedResources deletes resources from a rendered kustomize bundle
@@ -680,7 +733,7 @@ func (r *LifecycleReconciler) deleteOwnedRenderedResources(
 			}
 			return fmt.Errorf("delete %s %s/%s: %w", res.GetKind(), res.GetNamespace(), res.GetName(), err)
 		}
-		log.V(1).Info("deleted resource because feature is disabled",
+		log.V(1).Info("deleted controller-owned rendered resource",
 			"feature", disabledFeature,
 			"kind", res.GetKind(), "name", res.GetName(), "namespace", res.GetNamespace())
 	}

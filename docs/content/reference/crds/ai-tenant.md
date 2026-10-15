@@ -21,6 +21,7 @@ The controller automatically creates `AITenant/models-as-a-service` for the defa
 | rbac | AITenantRBACConfig | No | Deprecated compatibility field. Accepted but ignored; create standard Kubernetes RoleBindings instead. |
 
 `spec.rbac` remains in the served schema only for upgrade compatibility with existing manifests. New manifests should omit it. The controller does not create, update, or delete user-managed RoleBindings from this field.
+For `spec.oidc` field semantics, including audience and access-token-purpose checks, see [External OIDC Configuration](../../advanced-administration/external-oidc.md#configure-oidc).
 
 ---
 
@@ -95,6 +96,9 @@ spec:
   oidc:
     issuerUrl: "https://keycloak.example.com/realms/red-team"
     clientId: red-team-maas
+    audience: red-team-maas
+    accessTokenPurposeClaim: token_use
+    accessTokenPurpose: access
 ```
 
 ---
