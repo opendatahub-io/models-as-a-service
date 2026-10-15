@@ -11,6 +11,7 @@ import pytest
 import requests
 
 from conftest import TLS_VERIFY
+import test_helper
 
 
 pytestmark = [
@@ -101,11 +102,11 @@ class TestGridTenantAdminClaims:
     def test_subscription_listing_accepts_grid_admin_token(self, maas_api_base_url: str):
         token = _request_grid_token("grid_admin")
 
-        response = requests.get(
+        response = test_helper._request_with_gateway_retry(
+            requests.get,
             f"{maas_api_base_url}/v1/subscriptions",
             headers={"Authorization": f"Bearer {token}"},
             timeout=30,
-            verify=TLS_VERIFY,
         )
         assert response.status_code == 200, (
             f"GET /v1/subscriptions failed with Grid admin token: "
@@ -126,11 +127,11 @@ class TestGridTenantAdminClaims:
         token = _request_grid_token("grid_admin")
         expected_subject = _decode_jwt_payload(token)["sub"]
 
-        response = requests.get(
+        response = test_helper._request_with_gateway_retry(
+            requests.get,
             f"{maas_api_base_url}/v1/me",
             headers={"Authorization": f"Bearer {token}"},
             timeout=30,
-            verify=TLS_VERIFY,
         )
         assert response.status_code == 200, (
             f"GET /v1/me failed with Grid admin token: "
@@ -163,11 +164,11 @@ class TestGridTenantAdminClaims:
         token = _request_grid_token("grid_no_org")
         expected_subject = _decode_jwt_payload(token)["sub"]
 
-        response = requests.get(
+        response = test_helper._request_with_gateway_retry(
+            requests.get,
             f"{maas_api_base_url}/v1/me",
             headers={"Authorization": f"Bearer {token}"},
             timeout=30,
-            verify=TLS_VERIFY,
         )
         assert response.status_code == 200, (
             f"GET /v1/me failed for grid_no_org: "
@@ -198,11 +199,11 @@ class TestGridTenantAdminClaims:
         key_id = key_data["id"]
 
         try:
-            response = requests.get(
+            response = test_helper._request_with_gateway_retry(
+                requests.get,
                 f"{maas_api_base_url}/v1/me",
                 headers={"Authorization": f"Bearer {api_key}"},
                 timeout=30,
-                verify=TLS_VERIFY,
             )
             assert response.status_code == 401, (
                 f"Expected /v1/me to reject an inference API key, got "
@@ -217,10 +218,10 @@ class TestGridTenantAdminClaims:
             )
 
     def test_me_requires_verified_sso_identity(self, maas_api_base_url: str):
-        response = requests.get(
+        response = test_helper._request_with_gateway_retry(
+            requests.get,
             f"{maas_api_base_url}/v1/me",
             timeout=30,
-            verify=TLS_VERIFY,
         )
         assert response.status_code == 401, (
             f"Expected unauthenticated /v1/me to return 401, got "
