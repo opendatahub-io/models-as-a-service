@@ -12,7 +12,11 @@ from grid_governance_fixtures import (
     governance_context,  # noqa: F401 - pytest fixture
 )
 from grid_oidc_helpers import request_grid_token
-from test_helper import MODEL_NAMESPACE, _request_with_gateway_retry
+from test_helper import (
+    MODEL_NAMESPACE,
+    _request_with_gateway_retry,
+    kubectl_curl,
+)
 
 
 pytestmark = [
@@ -107,3 +111,19 @@ class TestGridGovernanceInference:
             resources.owner_model_ref
         ]
         assert all("subjects" not in model_ref for model_ref in model_refs)
+
+
+class TestGridTenantDiscoveryBoundary:
+    def test_grid_oidc_token_cannot_discover_tenants(
+        self, maas_api_internal_url: str
+    ):
+        token = request_grid_token("grid_admin")
+
+        status_code, body = kubectl_curl(
+            f"{maas_api_internal_url}/v1/tenants",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert status_code == 401, (
+            f"Grid OIDC token must not authorize Kubernetes tenant discovery, "
+            f"got {status_code} {body}"
+        )
