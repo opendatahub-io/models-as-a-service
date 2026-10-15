@@ -12,10 +12,13 @@ from grid_governance_fixtures import (
     GridGovernanceContext,
     governance_context,  # noqa: F401 - pytest fixture
 )
+from grid_inventory_fixtures import ORGANIZATION_A
 from grid_oidc_helpers import request_grid_token
 from test_helper import (
     MODEL_NAMESPACE,
+    _decode_jwt_payload,
     _request_with_gateway_retry,
+    _ns,
     kubectl_curl,
 )
 
@@ -30,15 +33,40 @@ pytestmark = [
 ]
 
 
-def _post_internal_json(url: str, payload: dict, token: str) -> tuple[int, dict]:
+def _post_internal_json(
+    url: str, payload: dict, token: str | None = None
+) -> tuple[int, dict]:
+    headers = {}
+    if token is not None:
+        headers["Authorization"] = f"Bearer {token}"
     status_code, body = kubectl_curl(
         url,
         method="POST",
-        headers={"Authorization": f"Bearer {token}"},
+        headers=headers,
         json_body=payload,
     )
     assert status_code == 200, f"POST {url} failed: {status_code} {body}"
     return status_code, json.loads(body)
+
+
+def _grid_admin_identity_envelope() -> dict:
+    token = request_grid_token("grid_admin")
+    claims = _decode_jwt_payload(token)
+    assert claims is not None
+
+    return {
+        "source": "oidc",
+        "claims": {
+            "iss": claims["iss"],
+            "sub": claims["sub"],
+            "aud": claims["aud"],
+            "azp": claims["azp"],
+            "groups": claims["groups"],
+            "https://redhat.com/maas/orgs": claims[
+                "https://redhat.com/maas/orgs"
+            ],
+        },
+    }
 
 
 class TestGridGovernanceInference:
@@ -181,3 +209,30 @@ class TestGridInternalSubscriptionCallback:
         assert response["accessAllowed"] is True
         assert "admin" not in response
         assert "purpose" not in response
+
+    def test_grid_subscription_admin_callback_returns_distinct_decision(
+        self,
+        maas_api_internal_url: str,
+        governance_context: GridGovernanceContext,
+    ):
+        resources = governance_context.resources
+
+        _, response = _post_internal_json(
+            f"{maas_api_internal_url}/internal/v1/subscriptions/select",
+            {
+                "purpose": "subscription-admin",
+                "requestedSubscription": resources.governance_subscription,
+                "identity": _grid_admin_identity_envelope(),
+            },
+        )
+
+        assert response["purpose"] == "subscription-admin"
+        assert response["accessAllowed"] is False
+        assert "name" not in response
+        admin = response["admin"]
+        assert admin["allowed"] is True
+        scope = admin["scope"]
+        assert scope["tenant"]
+        assert scope["namespace"] == _ns()
+        assert scope["subscription"] == resources.governance_subscription
+        assert scope["organizationId"] == ORGANIZATION_A
