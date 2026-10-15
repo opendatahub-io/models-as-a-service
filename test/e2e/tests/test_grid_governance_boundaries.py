@@ -236,3 +236,30 @@ class TestGridInternalSubscriptionCallback:
         assert scope["namespace"] == _ns()
         assert scope["subscription"] == resources.governance_subscription
         assert scope["organizationId"] == ORGANIZATION_A
+
+
+class TestGridInternalAPIKeyValidation:
+    def test_grid_api_key_validation_preserves_stored_identity(
+        self,
+        maas_api_internal_url: str,
+        governance_context: GridGovernanceContext,
+    ):
+        key = governance_context.keys[2]
+
+        _, response = _post_internal_json(
+            f"{maas_api_internal_url}/internal/v1/api-keys/validate",
+            {"key": key.secret},
+        )
+
+        assert response["valid"] is True
+        assert response["keyId"] == key.key_id
+        assert response["username"] == key.username
+        assert response["subscription"] == key.subscription
+        assert "Engineering" in response["groups"]
+        assert {
+            "https://redhat.com/maas/orgs",
+            "organizations",
+            "roles",
+            "admin",
+            "owner",
+        }.isdisjoint(response)
