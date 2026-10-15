@@ -281,3 +281,19 @@ class TestGridInternalLifecycleBoundary:
             f"{response.status_code} {response.text}"
         )
 
+    def test_grid_tenant_key_revocation_remains_unroutable(
+        self, maas_api_base_url: str
+    ):
+        token = request_grid_token("grid_admin")
+
+        response = _request_with_gateway_retry(
+            requests.delete,
+            f"{maas_api_base_url}/internal/v1/tenants/unmatched-grid-tenant/api-keys",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=30,
+        )
+        assert response.status_code == 404, (
+            f"Internal tenant API-key revocation must remain unroutable, got "
+            f"{response.status_code} {response.text}"
+        )
+
