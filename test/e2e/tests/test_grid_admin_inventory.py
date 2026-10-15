@@ -70,3 +70,30 @@ class TestGridAdminInventory:
             "users": [grid_inventory_resources.owner_user],
         }
         assert "subjects" not in model_refs[1]
+
+    def test_grid_admin_receives_admin_only_inventory(
+        self, maas_api_base_url: str, grid_inventory_resources: GridInventoryResources
+    ):
+        token = request_grid_token("grid_admin")
+        subscriptions = get_grid_subscriptions(maas_api_base_url, token)
+        subscription = find_grid_subscription(
+            subscriptions, grid_inventory_resources.admin_only_subscription
+        )
+        assert subscription is not None
+
+        assert subscription["roles"] == ["admin"]
+        assert subscription["organization_id"] == ORGANIZATION_A
+        assert subscription["owner"] == {
+            "groups": [
+                {"name": grid_inventory_resources.admin_only_owner_group}
+            ]
+        }
+
+        model_refs = subscription["model_refs"]
+        assert len(model_refs) == 1
+        assert model_refs[0]["name"] == grid_inventory_resources.owner_model_ref
+        assert model_refs[0]["subjects"] == {
+            "groups": [
+                {"name": grid_inventory_resources.admin_only_owner_group}
+            ]
+        }
