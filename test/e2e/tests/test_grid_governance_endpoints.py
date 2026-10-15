@@ -114,3 +114,21 @@ class TestGridGovernanceAPIKeys:
         assert isinstance(payload["max_expiration_days"], int)
         assert payload["max_expiration_days"] > 0
         assert isinstance(payload["ephemeral_max_expiration"], str)
+
+    def test_grid_api_key_cannot_mint_api_keys(
+        self, maas_api_base_url: str, governance_context: GridGovernanceContext
+    ):
+        inference_key = governance_context.keys[0].secret
+
+        response = _request_with_gateway_retry(
+            requests.post,
+            f"{maas_api_base_url}/v1/api-keys",
+            headers={"Authorization": f"Bearer {inference_key}"},
+            json={"name": f"grid-gov-child-{uuid.uuid4().hex[:8]}"},
+            timeout=30,
+        )
+        assert response.status_code == 403, (
+            f"Expected inference API key to be rejected from API-key minting, got "
+            f"{response.status_code} {response.text}"
+        )
+        assert response.json()["error"] == "API keys cannot create API keys"
