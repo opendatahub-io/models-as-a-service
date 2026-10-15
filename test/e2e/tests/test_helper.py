@@ -563,14 +563,20 @@ def _is_connect_failure(exc: requests.exceptions.ConnectionError) -> bool:
     return isinstance(reason, NewConnectionError)
 
 
-def _request_with_gateway_retry(method, url, retries=None, delay=None, **kwargs):
+def _request_with_gateway_retry(method, url, retries=None, delay=None, deadline=None, **kwargs):
     """Make an HTTP request, retrying transient gateway/auth propagation errors.
 
     See ``_is_transient_gateway_response`` for retryable status/body patterns.
     Connection errors are retried only when the request was never sent
     (``_is_connect_failure``), which is safe for POST.
 
+    When ``deadline`` is set (Unix timestamp), each request timeout, retry delay,
+    and gateway-enforcement wait is clamped to the remaining time so polling loops
+    cannot exceed their outer deadline.
+
     Returns the last response — callers' assertions surface a permanent failure.
+    Raises:
+        TimeoutError: When ``deadline`` has passed before any response was received.
     """
     retries = GATEWAY_PROPAGATION_RETRIES if retries is None else retries
     delay = GATEWAY_PROPAGATION_DELAY if delay is None else delay
@@ -578,19 +584,34 @@ def _request_with_gateway_retry(method, url, retries=None, delay=None, **kwargs)
     verify = kwargs.pop("verify", TLS_VERIFY)
     r = None
     for attempt in range(1, retries + 1):
+        if deadline is not None:
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                if r is not None:
+                    return r
+                raise TimeoutError(
+                    f"Request deadline exceeded before completing request to {url}"
+                )
+            request_timeout = min(timeout, max(1, int(remaining)))
+        else:
+            request_timeout = timeout
         try:
-            r = method(url, timeout=timeout, verify=verify, **kwargs)
+            r = method(url, timeout=request_timeout, verify=verify, **kwargs)
         except requests.exceptions.ConnectionError as exc:
             if attempt >= retries or not _is_connect_failure(exc):
                 raise
+            retry_delay = delay
+            if deadline is not None:
+                retry_delay = min(delay, max(0, int(deadline - time.time())))
             log.info(
                 "Gateway connection failed before sending (attempt %d/%d: %s), retrying in %ds...",
                 attempt,
                 retries,
                 exc,
-                delay,
+                retry_delay,
             )
-            time.sleep(delay)
+            if retry_delay > 0:
+                time.sleep(retry_delay)
             continue
         if _is_transient_gateway_response(r) and attempt < retries:
             log.info(
@@ -604,11 +625,22 @@ def _request_with_gateway_retry(method, url, retries=None, delay=None, **kwargs)
             # After the first proxy-style 500/503, re-check AuthPolicy Enforced
             # so remaining attempts are less likely to hit a mid-reload window.
             if r.status_code in (500, 503) and attempt == 1:
-                try:
-                    _wait_for_gateway_auth_enforced(timeout=min(60, GATEWAY_ENFORCED_TIMEOUT))
-                except TimeoutError:
-                    pass
-            time.sleep(delay)
+                enforcement_timeout = min(60, GATEWAY_ENFORCED_TIMEOUT)
+                if deadline is not None:
+                    enforcement_timeout = min(
+                        enforcement_timeout,
+                        max(0, int(deadline - time.time())),
+                    )
+                if enforcement_timeout > 0:
+                    try:
+                        _wait_for_gateway_auth_enforced(timeout=enforcement_timeout)
+                    except TimeoutError:
+                        pass
+            retry_delay = delay
+            if deadline is not None:
+                retry_delay = min(delay, max(0, int(deadline - time.time())))
+            if retry_delay > 0:
+                time.sleep(retry_delay)
             continue
         return r
     return r
