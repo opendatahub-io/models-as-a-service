@@ -10,8 +10,8 @@ import requests
 
 from grid_governance_fixtures import (
     GridGovernanceContext,
-    governance_context,  # noqa: F401 - pytest fixture
 )
+from grid_governance_fixtures import governance_context as grid_governance_context  # noqa: F401 - pytest fixture
 from grid_inventory_fixtures import ORGANIZATION_A
 from grid_oidc_helpers import request_grid_token
 from test_helper import (
@@ -312,4 +312,3 @@ class TestGridHealthBoundary:
             f"{response.status_code} {response.text}"
         )
         assert response.json() == {"status": "healthy"}
-
