@@ -552,9 +552,9 @@ func TestPatchPayloadProcessingEnvoyFilterOmitsRouterFallback(t *testing.T) {
 	configPatches, found, err := unstructured.NestedSlice(ef.Object, "spec", "configPatches")
 	require.NoError(t, err)
 	require.True(t, found)
-	require.Len(t, configPatches, 11)
+	require.Len(t, configPatches, 12)
 
-	for i := 4; i < 9; i++ {
+	for i := 4; i < 10; i++ {
 		cp, ok := configPatches[i].(map[string]any)
 		require.True(t, ok)
 		op, _, _ := unstructured.NestedString(cp, "patch", "operation")
@@ -579,7 +579,7 @@ func TestPatchPayloadProcessingEnvoyFilterKeepsRouterFallback(t *testing.T) {
 	configPatches, found, err := unstructured.NestedSlice(ef.Object, "spec", "configPatches")
 	require.NoError(t, err)
 	require.True(t, found)
-	require.Len(t, configPatches, 9)
+	require.Len(t, configPatches, 10)
 
 	wantClusters := []string{
 		grpcClusterName(PayloadPreProcessingDeploymentName(""), params.GatewayNamespace, 9004),
@@ -593,7 +593,7 @@ func TestPatchPayloadProcessingEnvoyFilterKeepsRouterFallback(t *testing.T) {
 		cluster, _, _ := unstructured.NestedString(cp, "patch", "value", "typed_config", "grpc_service", "envoy_grpc", "cluster_name")
 		assert.Equal(t, wantCluster, cluster, "configPatches[%d] grpc cluster_name", i)
 	}
-	for i := 2; i < 7; i++ {
+	for i := 2; i < 8; i++ {
 		cp, ok := configPatches[i].(map[string]any)
 		require.True(t, ok)
 		routeName, _, _ := unstructured.NestedString(cp, "match", "routeConfiguration", "vhost", "route", "name")
