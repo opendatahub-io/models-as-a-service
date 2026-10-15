@@ -30,12 +30,12 @@ def _required_env(name: str) -> str:
     return value
 
 
-def _request_grid_token(username: str) -> str:
+def _request_grid_token(username: str, client_id: str | None = None) -> str:
     response = requests.post(
         _required_env("OIDC_TOKEN_URL"),
         data={
             "grant_type": "password",
-            "client_id": _required_env("OIDC_CLIENT_ID"),
+            "client_id": client_id or _required_env("OIDC_CLIENT_ID"),
             "username": username,
             "password": "letmein",
         },
@@ -59,17 +59,14 @@ def _decode_jwt_payload(token: str) -> dict:
 
 
 class TestGridTenantAdminClaims:
-    def test_keycloak_emits_organization_claims(self):
+    def test_keycloak_organization_claim_is_namespaced(self):
         token = _request_grid_token("grid_admin")
         claims = _decode_jwt_payload(token)
 
-        organizations = claims.get("https://redhat.com/maas/orgs")
-        assert isinstance(organizations, list), (
-            f"Expected organization claim to be a list, got {type(organizations)}"
-        )
-        assert len(organizations) == 2, (
-            f"Expected two organization memberships, got {organizations}"
-        )
+        assert "maasOrganizations" not in claims
+        organizations = claims["https://redhat.com/maas/orgs"]
+        assert isinstance(organizations, list)
+        assert len(organizations) == 2
 
         assert organizations[0]["organization_id"] == (
             "42c3e46f-2477-44d7-a85b-d3b43f6b31fa"
@@ -84,23 +81,40 @@ class TestGridTenantAdminClaims:
         token = _request_grid_token("grid_admin")
         claims = _decode_jwt_payload(token)
 
-        groups = claims.get("groups")
-        assert isinstance(groups, list), f"Expected groups to be a list, got {type(groups)}"
+        groups = claims["groups"]
         assert set(groups) == {
             "42c3e46f-2477-44d7-a85b-d3b43f6b31fa/ai-grid-admins",
             "53d4f57e-3588-55e8-b96c-4ec54a7c42fa/ai-grid-users",
         }
 
-        organizations = claims.get("https://redhat.com/maas/orgs")
-        assert organizations, "Expected organization memberships to remain present"
+        organizations = claims["https://redhat.com/maas/orgs"]
         organization_ids = {
             organization["organization_id"] for organization in organizations
         }
         assert all("/" in group for group in groups)
         assert all(group.split("/", 1)[0] in organization_ids for group in groups)
 
-    def test_subscription_listing_accepts_grid_admin_token(self, maas_api_base_url: str):
+    def test_grid_admin_without_model_access_gets_empty_model_list(
+        self, maas_api_base_url: str
+    ):
         token = _request_grid_token("grid_admin")
+
+        response = test_helper._request_with_gateway_retry(
+            requests.get,
+            f"{maas_api_base_url}/v1/models",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=45,
+        )
+        assert response.status_code == 200, (
+            f"GET /v1/models failed for Grid admin token: "
+            f"{response.status_code} {response.text}"
+        )
+        assert response.json()["data"] == []
+
+    def test_grid_no_org_user_gets_empty_subscription_list(
+        self, maas_api_base_url: str
+    ):
+        token = _request_grid_token("grid_no_org")
 
         response = test_helper._request_with_gateway_retry(
             requests.get,
@@ -109,121 +123,40 @@ class TestGridTenantAdminClaims:
             timeout=30,
         )
         assert response.status_code == 200, (
-            f"GET /v1/subscriptions failed with Grid admin token: "
+            f"GET /v1/subscriptions failed for grid_no_org: "
             f"{response.status_code} {response.text}"
         )
         assert response.headers.get("Cache-Control") == "no-store"
+        assert response.json() == []
 
-        subscriptions = response.json()
-        assert isinstance(subscriptions, list), (
-            f"Expected subscription listing to be a list, got {type(subscriptions)}"
-        )
-        for subscription in subscriptions:
-            assert isinstance(subscription["subscription_id_header"], str)
-            assert isinstance(subscription["priority"], int)
-            assert isinstance(subscription["model_refs"], list)
-
-    def test_me_returns_verified_identity(self, maas_api_base_url: str):
-        token = _request_grid_token("grid_admin")
-        expected_subject = _decode_jwt_payload(token)["sub"]
+    def test_tampered_grid_token_is_rejected(self, maas_api_base_url: str):
+        token = _request_grid_token("grid_admin") + "tampered"
 
         response = test_helper._request_with_gateway_retry(
-            requests.get,
-            f"{maas_api_base_url}/v1/me",
-            headers={"Authorization": f"Bearer {token}"},
-            timeout=30,
-        )
-        assert response.status_code == 200, (
-            f"GET /v1/me failed with Grid admin token: "
-            f"{response.status_code} {response.text}"
-        )
-        assert response.headers.get("Cache-Control") == "no-store"
-
-        identity = response.json()
-        assert set(identity) <= {
-            "sub",
-            "email",
-            "name",
-            "https://redhat.com/maas/orgs",
-        }
-        assert identity["sub"] == expected_subject
-
-        organizations = identity["https://redhat.com/maas/orgs"]
-        assert organizations == [
-            {
-                "organization_id": "42c3e46f-2477-44d7-a85b-d3b43f6b31fa",
-                "roles": ["admins"],
-            },
-            {
-                "organization_id": "53d4f57e-3588-55e8-b96c-4ec54a7c42fa",
-                "roles": ["users"],
-            },
-        ]
-
-    def test_me_returns_empty_organizations_for_no_membership(self, maas_api_base_url: str):
-        token = _request_grid_token("grid_no_org")
-        expected_subject = _decode_jwt_payload(token)["sub"]
-
-        response = test_helper._request_with_gateway_retry(
-            requests.get,
-            f"{maas_api_base_url}/v1/me",
-            headers={"Authorization": f"Bearer {token}"},
-            timeout=30,
-        )
-        assert response.status_code == 200, (
-            f"GET /v1/me failed for grid_no_org: "
-            f"{response.status_code} {response.text}"
-        )
-
-        identity = response.json()
-        assert identity["sub"] == expected_subject
-        assert identity["https://redhat.com/maas/orgs"] == []
-
-    def test_me_rejects_inference_api_key(self, maas_api_base_url: str):
-        oidc_token = _request_grid_token("alice_lead")
-        key_name = f"e2e-me-api-key-{uuid.uuid4().hex[:8]}"
-
-        create_response = requests.post(
+            requests.post,
             f"{maas_api_base_url}/v1/api-keys",
-            headers={"Authorization": f"Bearer {oidc_token}"},
-            json={"name": key_name},
-            timeout=30,
-            verify=TLS_VERIFY,
-        )
-        assert create_response.status_code in (200, 201), (
-            f"API key creation failed for /v1/me negative test: "
-            f"{create_response.status_code} {create_response.text}"
-        )
-        key_data = create_response.json()
-        api_key = key_data["key"]
-        key_id = key_data["id"]
-
-        try:
-            response = test_helper._request_with_gateway_retry(
-                requests.get,
-                f"{maas_api_base_url}/v1/me",
-                headers={"Authorization": f"Bearer {api_key}"},
-                timeout=30,
-            )
-            assert response.status_code == 401, (
-                f"Expected /v1/me to reject an inference API key, got "
-                f"{response.status_code} {response.text}"
-            )
-        finally:
-            requests.delete(
-                f"{maas_api_base_url}/v1/api-keys/{key_id}",
-                headers={"Authorization": f"Bearer {oidc_token}"},
-                timeout=30,
-                verify=TLS_VERIFY,
-            )
-
-    def test_me_requires_verified_sso_identity(self, maas_api_base_url: str):
-        response = test_helper._request_with_gateway_retry(
-            requests.get,
-            f"{maas_api_base_url}/v1/me",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"name": f"e2e-grid-tampered-{uuid.uuid4().hex[:8]}"},
             timeout=30,
         )
         assert response.status_code == 401, (
-            f"Expected unauthenticated /v1/me to return 401, got "
+            f"Expected tampered Grid token to be rejected with 401, got "
+            f"{response.status_code} {response.text}"
+        )
+
+    def test_wrong_client_grid_token_is_rejected(self, maas_api_base_url: str):
+        token = _request_grid_token("grid_admin", client_id="wrong-client")
+        claims = _decode_jwt_payload(token)
+        assert claims["azp"] == "wrong-client"
+
+        response = test_helper._request_with_gateway_retry(
+            requests.post,
+            f"{maas_api_base_url}/v1/api-keys",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"name": f"e2e-grid-wrong-client-{uuid.uuid4().hex[:8]}"},
+            timeout=30,
+        )
+        assert response.status_code == 403, (
+            f"Expected wrong-client Grid token to be rejected with 403, got "
             f"{response.status_code} {response.text}"
         )

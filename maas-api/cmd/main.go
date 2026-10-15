@@ -289,7 +289,6 @@ func registerHandlers(
 	tokenHandler := token.NewHandler(log, cfg.TenantName)
 	modelsHandler := handlers.NewModelsHandler(log, modelManager, subscriptionSelector, cluster.MaaSModelRefLister, metricsRecorder)
 	subscriptionHandler := subscription.NewHandler(log, subscriptionSelector, metricsRecorder)
-	identityHandler := handlers.NewIdentityHandler(log)
 
 	apiKeyService := api_keys.NewServiceWithLogger(store, cfg, subscriptionSelector, log)
 	apiKeyService.StartDebounceCleanup(ctx)
@@ -332,7 +331,6 @@ func registerHandlers(
 	// list when no LLMInferenceService is deployed (same rationale as /v1/models).
 	v1Routes.GET("/subscriptions", append(optionalAuthMiddleware, subscriptionHandler.ListSubscriptions)...)
 	v1Routes.GET("/model/:model-id/subscriptions", append(optionalAuthMiddleware, subscriptionHandler.ListSubscriptionsForModel)...)
-	v1Routes.GET("/me", append(optionalAuthMiddleware, identityHandler.GetMe)...)
 
 	// API Key routes use strict auth for mutating operations.
 	// Only the search/listing endpoint uses optional auth so it can return
