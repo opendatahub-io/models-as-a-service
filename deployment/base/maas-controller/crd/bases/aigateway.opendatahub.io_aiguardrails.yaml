@@ -1,0 +1,259 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.19.0
+  name: aiguardrails.aigateway.opendatahub.io
+spec:
+  group: aigateway.opendatahub.io
+  names:
+    kind: AIGuardrail
+    listKind: AIGuardrailList
+    plural: aiguardrails
+    singular: aiguardrail
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.provider.nemo.ref.name
+      name: Provider
+      type: string
+    - jsonPath: .status.conditions[?(@.type=="Accepted")].status
+      name: Accepted
+      type: string
+    - jsonPath: .status.conditions[?(@.type=="Accepted")].reason
+      name: Reason
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          AIGuardrail is a reusable, ordered collection of checks backed by a
+          TrustyAI NemoGuardrails service.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: AIGuardrailSpec defines a guardrail provider and its ordered
+              checks.
+            properties:
+              checks:
+                description: |-
+                  Checks is the ordered list of independent checks. All selected checks
+                  must pass. Check names are unique within this list.
+                items:
+                  description: |-
+                    AIGuardrailCheck defines one named NeMo configuration and the phases in
+                    which it is evaluated.
+                  properties:
+                    configId:
+                      description: ConfigID identifies the configuration loaded by
+                        NemoGuardrails.
+                      maxLength: 253
+                      minLength: 1
+                      type: string
+                    name:
+                      description: |-
+                        Name is the stable name used by attachment resources to select this
+                        check.
+                      maxLength: 63
+                      minLength: 1
+                      pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                      type: string
+                    phases:
+                      description: Phases is the non-empty set of request phases for
+                        this check.
+                      items:
+                        description: GuardrailPhase identifies when a guardrail check
+                          is applied.
+                        enum:
+                        - Input
+                        - Output
+                        type: string
+                      maxItems: 2
+                      minItems: 1
+                      type: array
+                      x-kubernetes-list-type: set
+                  required:
+                  - configId
+                  - name
+                  - phases
+                  type: object
+                maxItems: 64
+                minItems: 1
+                type: array
+                x-kubernetes-list-type: atomic
+                x-kubernetes-validations:
+                - message: check names must be unique
+                  rule: self.all(x, self.exists_one(y, y.name == x.name))
+              provider:
+                description: Provider identifies the service used to execute the checks.
+                properties:
+                  nemo:
+                    description: |-
+                      Nemo references a NemoGuardrails resource. If Namespace is omitted,
+                      the reference resolves in the AIGuardrail namespace.
+                    properties:
+                      ref:
+                        description: Ref references a NemoGuardrails resource.
+                        properties:
+                          name:
+                            maxLength: 253
+                            minLength: 1
+                            pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                            type: string
+                          namespace:
+                            maxLength: 63
+                            minLength: 1
+                            pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                            type: string
+                        required:
+                        - name
+                        type: object
+                    required:
+                    - ref
+                    type: object
+                  timeout:
+                    description: Timeout is the maximum duration for an individual
+                      provider call.
+                    maxLength: 64
+                    type: string
+                    x-kubernetes-validations:
+                    - message: timeout must be a valid positive duration
+                      rule: duration(self) > duration('0s')
+                required:
+                - nemo
+                - timeout
+                type: object
+            required:
+            - checks
+            - provider
+            type: object
+          status:
+            description: AIGuardrailStatus defines the observed provider binding and
+              readiness.
+            properties:
+              bindingRevision:
+                description: |-
+                  BindingRevision is a content digest of the provider identity, endpoint,
+                  configuration and permission dependencies behind an accepted binding:
+                  the inputs that can change without changing this policy's
+                  metadata.generation. Equal revisions mean equal dependencies, so a
+                  consumer compares it for equality rather than ordering it. It is set
+                  only while Accepted is True and cleared whenever the policy is refused,
+                  so a consumer gating on it never matches a binding that is no longer
+                  accepted.
+
+                  It does not detect every change. The content of a ConfigMap behind a
+                  provider configuration name is not observable from these resources, so
+                  editing one can change effective safety while this digest stays
+                  constant. Version configuration resources immutably where that
+                  distinction matters.
+                type: string
+              conditions:
+                description: |-
+                  Conditions report sanitized acceptance, reference, provider and
+                  compatibility state. Credentials and provider configuration are never
+                  exposed here.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+              observedGeneration:
+                description: |-
+                  ObservedGeneration is the latest spec generation processed by the
+                  controller.
+                format: int64
+                type: integer
+              providerEndpoint:
+                description: |-
+                  ProviderEndpoint is the in-cluster base URL of the NeMo Guardrails
+                  server, read verbatim from NemoGuardrails.status.endpoint.
+
+                  It is published so a consumer compiles against the same endpoint this
+                  controller accepted, rather than re-deriving one from the provider's
+                  name. It is set only while Accepted is True and cleared whenever the
+                  policy is refused.
+
+                  A published endpoint means the server is addressable and
+                  authenticated, not that it is serving: TrustyAI writes this field
+                  whenever the server is auth-protected, including while its pods are
+                  still coming up.
+                type: string
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
