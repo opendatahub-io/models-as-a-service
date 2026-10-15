@@ -19,6 +19,7 @@ from grid_oidc_helpers import (
     find_grid_subscription,
     get_grid_subscriptions,
     request_grid_token,
+    wait_for_grid_subscription,
 )
 
 
@@ -33,10 +34,20 @@ pytestmark = [
 
 
 @pytest.fixture(scope="module")
-def grid_inventory_resources() -> Iterator[GridInventoryResources]:
+def grid_inventory_resources(maas_api_base_url: str) -> Iterator[GridInventoryResources]:
     resources = new_grid_inventory_resources()
     try:
         apply_grid_inventory_resources(resources)
+        wait_for_grid_subscription(
+            maas_api_base_url,
+            "grid_admin",
+            resources.owner_admin_subscription,
+        )
+        wait_for_grid_subscription(
+            maas_api_base_url,
+            "grid_admin",
+            resources.admin_only_subscription,
+        )
         yield resources
     finally:
         cleanup_grid_inventory_resources(resources)
