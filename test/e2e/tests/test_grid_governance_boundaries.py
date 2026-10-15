@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 
 import pytest
@@ -27,6 +28,17 @@ pytestmark = [
     ),
     pytest.mark.xdist_group("external"),
 ]
+
+
+def _post_internal_json(url: str, payload: dict, token: str) -> tuple[int, dict]:
+    status_code, body = kubectl_curl(
+        url,
+        method="POST",
+        headers={"Authorization": f"Bearer {token}"},
+        json_body=payload,
+    )
+    assert status_code == 200, f"POST {url} failed: {status_code} {body}"
+    return status_code, json.loads(body)
 
 
 class TestGridGovernanceInference:
@@ -144,3 +156,28 @@ class TestGridTenantDiscoveryBoundary:
             f"Root /v1/tenants route must remain unroutable, got "
             f"{response.status_code} {response.text}"
         )
+
+
+class TestGridInternalSubscriptionCallback:
+    def test_legacy_grid_subscription_selection_is_unchanged(
+        self,
+        maas_api_internal_url: str,
+        governance_context: GridGovernanceContext,
+    ):
+        resources = governance_context.resources
+        api_key = governance_context.keys[2].secret
+
+        _, response = _post_internal_json(
+            f"{maas_api_internal_url}/internal/v1/subscriptions/select",
+            {
+                "username": "alice_lead",
+                "groups": ["Engineering"],
+                "requestedSubscription": resources.governance_subscription,
+            },
+            api_key,
+        )
+
+        assert response["name"] == resources.governance_subscription
+        assert response["accessAllowed"] is True
+        assert "admin" not in response
+        assert "purpose" not in response
