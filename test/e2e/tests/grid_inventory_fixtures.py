@@ -28,6 +28,8 @@ class GridInventoryResources:
     owner_admin_subscription: str
     admin_only_subscription: str
     other_organization_subscription: str
+    governance_subscription: str
+    other_organization_governance_subscription: str
     owner_model_ref: str
     unmatched_model_ref: str
     owner_auth_policy: str
@@ -36,6 +38,7 @@ class GridInventoryResources:
     owner_user: str
     admin_only_owner_group: str
     other_organization_owner_group: str
+    governance_owner_group: str
     non_owner_group: str
     unqualified_user: str
 
@@ -46,6 +49,8 @@ def new_grid_inventory_resources() -> GridInventoryResources:
         owner_admin_subscription=f"grid-inv-{suffix}-owner",
         admin_only_subscription=f"grid-inv-{suffix}-admin",
         other_organization_subscription=f"grid-inv-{suffix}-org-b",
+        governance_subscription=f"grid-inv-{suffix}-gov",
+        other_organization_governance_subscription=f"grid-inv-{suffix}-gov-b",
         owner_model_ref=f"grid-inv-{suffix}-model",
         unmatched_model_ref=f"grid-inv-{suffix}-unmatched",
         owner_auth_policy=f"grid-inv-{suffix}-owner-access",
@@ -54,6 +59,7 @@ def new_grid_inventory_resources() -> GridInventoryResources:
         owner_user=f"{ORGANIZATION_A}/inventory-owner",
         admin_only_owner_group=f"{ORGANIZATION_A}/admin-only-owners",
         other_organization_owner_group=f"{ORGANIZATION_B}/unrelated-owners",
+        governance_owner_group="Engineering",
         non_owner_group=f"{ORGANIZATION_A}/model-only-users",
         unqualified_user="unqualified-inventory-user",
     )
@@ -145,6 +151,7 @@ def apply_grid_inventory_resources(resources: GridInventoryResources) -> None:
             resources.owner_group,
             resources.admin_only_owner_group,
             resources.other_organization_owner_group,
+            resources.governance_owner_group,
             resources.non_owner_group,
         ],
         [resources.owner_user, resources.unqualified_user],
@@ -176,6 +183,20 @@ def apply_grid_inventory_resources(resources: GridInventoryResources) -> None:
         [],
         ORGANIZATION_B,
     )
+    _apply_subscription(
+        resources.governance_subscription,
+        [resources.owner_model_ref],
+        [resources.governance_owner_group],
+        [],
+        ORGANIZATION_A,
+    )
+    _apply_subscription(
+        resources.other_organization_governance_subscription,
+        [resources.owner_model_ref],
+        [resources.governance_owner_group],
+        [],
+        ORGANIZATION_B,
+    )
 
     namespace = _subscription_namespace()
     for policy_name in (
@@ -192,6 +213,8 @@ def apply_grid_inventory_resources(resources: GridInventoryResources) -> None:
         resources.owner_admin_subscription,
         resources.admin_only_subscription,
         resources.other_organization_subscription,
+        resources.governance_subscription,
+        resources.other_organization_governance_subscription,
     ):
         _wait_for_maas_subscription_phase(
             subscription_name,
@@ -207,6 +230,8 @@ def cleanup_grid_inventory_resources(resources: GridInventoryResources) -> None:
             (resources.owner_admin_subscription, namespace),
             (resources.admin_only_subscription, namespace),
             (resources.other_organization_subscription, namespace),
+            (resources.governance_subscription, namespace),
+            (resources.other_organization_governance_subscription, namespace),
         ],
         auth_policies=[
             (resources.owner_auth_policy, namespace),
