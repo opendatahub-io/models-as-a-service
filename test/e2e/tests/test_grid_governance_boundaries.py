@@ -297,3 +297,19 @@ class TestGridInternalLifecycleBoundary:
             f"{response.status_code} {response.text}"
         )
 
+
+class TestGridHealthBoundary:
+    def test_grid_health_remains_public_and_unaugmented(
+        self, maas_api_base_url: str
+    ):
+        response = _request_with_gateway_retry(
+            requests.get,
+            f"{maas_api_base_url}/health",
+            timeout=30,
+        )
+        assert response.status_code == 200, (
+            f"Unauthenticated health probe failed: "
+            f"{response.status_code} {response.text}"
+        )
+        assert response.json() == {"status": "healthy"}
+
