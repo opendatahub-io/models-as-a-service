@@ -374,3 +374,28 @@ class TestGridGovernanceAPIKeys:
         )
         assert inspection.status_code == 200
         assert inspection.json()["status"] == "revoked"
+
+    def test_grid_admin_username_only_bulk_revoke_is_denied(
+        self, maas_api_base_url: str, governance_context: GridGovernanceContext
+    ):
+        token = request_grid_token("grid_admin")
+
+        response = _bulk_revoke_grid_api_keys(
+            maas_api_base_url,
+            token,
+            username="alice_lead",
+        )
+        assert response.status_code == 403, (
+            f"Grid admin username-only bulk revoke must be denied, got "
+            f"{response.status_code} {response.text}"
+        )
+
+        owner_token = request_grid_token("alice_lead")
+        inspection = _request_with_gateway_retry(
+            requests.get,
+            f"{maas_api_base_url}/v1/api-keys/{governance_context.keys[2].key_id}",
+            headers={"Authorization": f"Bearer {owner_token}"},
+            timeout=30,
+        )
+        assert inspection.status_code == 200
+        assert inspection.json()["status"] == "active"
