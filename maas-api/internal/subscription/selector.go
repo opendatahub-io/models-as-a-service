@@ -443,6 +443,9 @@ func (s *Selector) buildAdminInventories(
 			continue
 		}
 		for _, ref := range subscriptions[index].ModelRefs {
+			if ref.Namespace == "" || ref.Name == "" {
+				continue
+			}
 			modelRefsByOrganization[organizationID] = append(
 				modelRefsByOrganization[organizationID],
 				authpolicy.ModelKey{Namespace: ref.Namespace, Name: ref.Name},

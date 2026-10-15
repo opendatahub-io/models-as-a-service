@@ -1403,6 +1403,44 @@ func TestListSubscriptions_AdminSubjectInventoryUsesExactModelRefJoins(t *testin
 	assert.NotContains(t, rawModelCRef, "subjects")
 }
 
+func TestListSubscriptions_AdminInventorySkipsIncompleteModelRefs(t *testing.T) {
+	subscriptionObject := createInventorySubscription(t, "admin-sub", []string{
+		organizationA + "/owners",
+	}, organizationA, organizationB, "Pending", []map[string]any{
+		{"name": "model-a", "namespace": "model-ns"},
+		{"name": "missing-namespace"},
+		{"namespace": "model-ns"},
+	})
+	policies := []*unstructured.Unstructured{
+		createInventoryPolicy("model-a-access", nil, []string{
+			organizationA + "/owners",
+		}, []map[string]any{{"name": "model-a", "namespace": "model-ns"}}),
+	}
+	identity := inventoryIdentityFor(t, []token.OrganizationMembership{
+		{OrganizationID: organizationA, Roles: []string{"admins"}},
+	})
+	router := setupInventoryTestRouter(
+		&mockLister{subscriptions: []*unstructured.Unstructured{subscriptionObject}},
+		policies,
+		"",
+		nil,
+		identity,
+	)
+
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/v1/subscriptions", nil))
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	var result []subscription.SubscriptionInfo
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &result))
+	require.Len(t, result, 1)
+	require.Len(t, result[0].ModelRefs, 3)
+	require.NotNil(t, result[0].ModelRefs[0].Subjects)
+	assert.Nil(t, result[0].ModelRefs[1].Subjects)
+	assert.Nil(t, result[0].ModelRefs[2].Subjects)
+	require.NotNil(t, result[0].Owner)
+}
+
 func TestListSubscriptionsForModel_DoesNotUseAdminInventory(t *testing.T) {
 	subscriptionObject := createInventorySubscription(t, "admin-sub", nil, organizationA, organizationB, "Pending", []map[string]any{
 		{"name": "model-a", "namespace": "model-ns"},
