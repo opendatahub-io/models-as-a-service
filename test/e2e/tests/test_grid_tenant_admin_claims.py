@@ -10,7 +10,7 @@ import uuid
 import pytest
 import requests
 
-from conftest import TLS_VERIFY
+from grid_oidc_helpers import request_grid_token
 import test_helper
 
 
@@ -24,33 +24,6 @@ pytestmark = [
 ]
 
 
-def _required_env(name: str) -> str:
-    value = os.environ.get(name, "")
-    assert value, f"{name} must be set when EXTERNAL_OIDC=true"
-    return value
-
-
-def _request_grid_token(username: str, client_id: str | None = None) -> str:
-    response = requests.post(
-        _required_env("OIDC_TOKEN_URL"),
-        data={
-            "grant_type": "password",
-            "client_id": client_id or _required_env("OIDC_CLIENT_ID"),
-            "username": username,
-            "password": "letmein",
-        },
-        timeout=30,
-        verify=TLS_VERIFY,
-    )
-    assert response.status_code == 200, (
-        f"Keycloak token request failed for {username}: "
-        f"{response.status_code} {response.text}"
-    )
-    token = response.json().get("access_token")
-    assert token, "Keycloak token response missing access_token"
-    return token
-
-
 def _decode_jwt_payload(token: str) -> dict:
     parts = token.split(".")
     assert len(parts) == 3, f"Invalid JWT format: expected 3 parts, got {len(parts)}"
@@ -60,7 +33,7 @@ def _decode_jwt_payload(token: str) -> dict:
 
 class TestGridTenantAdminClaims:
     def test_keycloak_organization_claim_is_namespaced(self):
-        token = _request_grid_token("grid_admin")
+        token = request_grid_token("grid_admin")
         claims = _decode_jwt_payload(token)
 
         assert "maasOrganizations" not in claims
@@ -78,7 +51,7 @@ class TestGridTenantAdminClaims:
         assert organizations[1]["roles"] == ["users"]
 
     def test_keycloak_groups_remain_organization_qualified(self):
-        token = _request_grid_token("grid_admin")
+        token = request_grid_token("grid_admin")
         claims = _decode_jwt_payload(token)
 
         groups = claims["groups"]
@@ -97,7 +70,7 @@ class TestGridTenantAdminClaims:
     def test_grid_admin_without_model_access_gets_empty_model_list(
         self, maas_api_base_url: str
     ):
-        token = _request_grid_token("grid_admin")
+        token = request_grid_token("grid_admin")
 
         response = test_helper._request_with_gateway_retry(
             requests.get,
@@ -114,7 +87,7 @@ class TestGridTenantAdminClaims:
     def test_grid_no_org_user_gets_empty_subscription_list(
         self, maas_api_base_url: str
     ):
-        token = _request_grid_token("grid_no_org")
+        token = request_grid_token("grid_no_org")
 
         response = test_helper._request_with_gateway_retry(
             requests.get,
@@ -130,7 +103,7 @@ class TestGridTenantAdminClaims:
         assert response.json() == []
 
     def test_tampered_grid_token_is_rejected(self, maas_api_base_url: str):
-        token = _request_grid_token("grid_admin") + "tampered"
+        token = request_grid_token("grid_admin") + "tampered"
 
         response = test_helper._request_with_gateway_retry(
             requests.post,
@@ -145,7 +118,7 @@ class TestGridTenantAdminClaims:
         )
 
     def test_wrong_client_grid_token_is_rejected(self, maas_api_base_url: str):
-        token = _request_grid_token("grid_admin", client_id="wrong-client")
+        token = request_grid_token("grid_admin", client_id="wrong-client")
         claims = _decode_jwt_payload(token)
         assert claims["azp"] == "wrong-client"
 
