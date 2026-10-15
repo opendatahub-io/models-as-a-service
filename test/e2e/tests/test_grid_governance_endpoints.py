@@ -90,3 +90,27 @@ class TestGridGovernanceAPIKeys:
                     f"Grid SSO API-key cleanup failed: "
                     f"{cleanup_response.status_code} {cleanup_response.text}"
                 )
+
+    def test_grid_api_key_config_has_no_admin_fields(
+        self, maas_api_base_url: str, governance_context: GridGovernanceContext
+    ):
+        token = request_grid_token("grid_admin")
+
+        response = _request_with_gateway_retry(
+            requests.get,
+            f"{maas_api_base_url}/v1/api-keys/config",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=30,
+        )
+        assert response.status_code == 200, (
+            f"GET /v1/api-keys/config failed for Grid admin: "
+            f"{response.status_code} {response.text}"
+        )
+        payload = response.json()
+        assert set(payload) == {
+            "max_expiration_days",
+            "ephemeral_max_expiration",
+        }
+        assert isinstance(payload["max_expiration_days"], int)
+        assert payload["max_expiration_days"] > 0
+        assert isinstance(payload["ephemeral_max_expiration"], str)
