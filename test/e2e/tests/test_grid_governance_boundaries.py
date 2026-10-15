@@ -263,3 +263,21 @@ class TestGridInternalAPIKeyValidation:
             "admin",
             "owner",
         }.isdisjoint(response)
+
+
+class TestGridInternalLifecycleBoundary:
+    def test_grid_cleanup_remains_unroutable(self, maas_api_base_url: str):
+        token = request_grid_token("grid_admin")
+
+        response = _request_with_gateway_retry(
+            requests.post,
+            f"{maas_api_base_url}/internal/v1/api-keys/cleanup",
+            headers={"Authorization": f"Bearer {token}"},
+            json={},
+            timeout=30,
+        )
+        assert response.status_code == 404, (
+            f"Internal API-key cleanup must remain unroutable, got "
+            f"{response.status_code} {response.text}"
+        )
+
