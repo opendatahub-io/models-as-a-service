@@ -1,0 +1,92 @@
+"""System-level tests for Grid authorization across governance endpoints."""
+
+from __future__ import annotations
+
+from collections.abc import Iterator
+import os
+import uuid
+
+import pytest
+import requests
+
+from grid_governance_fixtures import (
+    GridGovernanceContext,
+    cleanup_grid_governance_context,
+    create_grid_governance_context,
+)
+from grid_inventory_fixtures import (
+    apply_grid_inventory_resources,
+    cleanup_grid_inventory_resources,
+    new_grid_inventory_resources,
+)
+from grid_oidc_helpers import request_grid_token
+from test_helper import _request_with_gateway_retry
+
+
+pytestmark = [
+    pytest.mark.nightly,
+    pytest.mark.skipif(
+        os.environ.get("EXTERNAL_OIDC", "").lower() != "true",
+        reason="EXTERNAL_OIDC is not true",
+    ),
+    pytest.mark.xdist_group("external"),
+]
+
+
+@pytest.fixture(scope="module")
+def governance_context(maas_api_base_url: str) -> Iterator[GridGovernanceContext]:
+    resources = new_grid_inventory_resources()
+    context: GridGovernanceContext | None = None
+    try:
+        apply_grid_inventory_resources(resources)
+        context = create_grid_governance_context(maas_api_base_url, resources)
+        yield context
+    finally:
+        if context is not None:
+            cleanup_grid_governance_context(maas_api_base_url, context)
+        cleanup_grid_inventory_resources(resources)
+
+
+class TestGridGovernanceAPIKeys:
+    def test_grid_sso_key_creation_remains_self_service(
+        self, maas_api_base_url: str, governance_context: GridGovernanceContext
+    ):
+        token = request_grid_token("grid_admin")
+        key_name = f"grid-gov-self-{uuid.uuid4().hex[:8]}"
+        created_key_id = None
+        try:
+            response = _request_with_gateway_retry(
+                requests.post,
+                f"{maas_api_base_url}/v1/api-keys",
+                headers={"Authorization": f"Bearer {token}"},
+                json={
+                    "name": key_name,
+                    "subscription": (
+                        governance_context.resources.owner_admin_subscription
+                    ),
+                },
+                timeout=30,
+            )
+            assert response.status_code == 201, (
+                f"Grid SSO API-key creation failed: "
+                f"{response.status_code} {response.text}"
+            )
+            payload = response.json()
+            assert payload["name"] == key_name
+            assert payload["subscription"] == (
+                governance_context.resources.owner_admin_subscription
+            )
+            assert payload["key"].startswith("sk-oai-")
+            created_key_id = payload["id"]
+        finally:
+            if created_key_id is not None:
+                cleanup_response = _request_with_gateway_retry(
+                    requests.delete,
+                    f"{maas_api_base_url}/v1/api-keys/{created_key_id}",
+                    headers={"Authorization": f"Bearer {token}"},
+                    timeout=30,
+                )
+                assert cleanup_response.status_code in (200, 404), (
+                    f"Grid SSO API-key cleanup failed: "
+                    f"{cleanup_response.status_code} {cleanup_response.text}"
+                )
