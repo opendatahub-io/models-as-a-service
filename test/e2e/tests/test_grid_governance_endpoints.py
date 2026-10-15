@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
 import os
 import uuid
 
@@ -11,13 +10,7 @@ import requests
 
 from grid_governance_fixtures import (
     GridGovernanceContext,
-    cleanup_grid_governance_context,
-    create_grid_governance_context,
-)
-from grid_inventory_fixtures import (
-    apply_grid_inventory_resources,
-    cleanup_grid_inventory_resources,
-    new_grid_inventory_resources,
+    governance_context,  # noqa: F401 - pytest fixture
 )
 from grid_oidc_helpers import request_grid_token
 from test_helper import _request_with_gateway_retry
@@ -77,20 +70,6 @@ def _bulk_revoke_grid_api_keys(
         json=payload,
         timeout=30,
     )
-
-
-@pytest.fixture(scope="module")
-def governance_context(maas_api_base_url: str) -> Iterator[GridGovernanceContext]:
-    resources = new_grid_inventory_resources()
-    context: GridGovernanceContext | None = None
-    try:
-        apply_grid_inventory_resources(resources)
-        context = create_grid_governance_context(maas_api_base_url, resources)
-        yield context
-    finally:
-        if context is not None:
-            cleanup_grid_governance_context(maas_api_base_url, context)
-        cleanup_grid_inventory_resources(resources)
 
 
 class TestGridGovernanceAPIKeys:

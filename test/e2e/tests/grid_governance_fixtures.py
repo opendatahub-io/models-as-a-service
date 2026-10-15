@@ -3,11 +3,18 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Iterator
 from dataclasses import dataclass
 
+import pytest
 import requests
 
-from grid_inventory_fixtures import GridInventoryResources
+from grid_inventory_fixtures import (
+    GridInventoryResources,
+    apply_grid_inventory_resources,
+    cleanup_grid_inventory_resources,
+    new_grid_inventory_resources,
+)
 from grid_oidc_helpers import request_grid_token
 from test_helper import _request_with_gateway_retry
 
@@ -118,3 +125,19 @@ def cleanup_grid_governance_context(
 ) -> None:
     for key in context.keys:
         revoke_governance_api_key(maas_api_base_url, key)
+
+
+@pytest.fixture(scope="module")
+def governance_context(
+    maas_api_base_url: str,
+) -> Iterator[GridGovernanceContext]:
+    resources = new_grid_inventory_resources()
+    context: GridGovernanceContext | None = None
+    try:
+        apply_grid_inventory_resources(resources)
+        context = create_grid_governance_context(maas_api_base_url, resources)
+        yield context
+    finally:
+        if context is not None:
+            cleanup_grid_governance_context(maas_api_base_url, context)
+        cleanup_grid_inventory_resources(resources)
