@@ -19,18 +19,12 @@ resources:
   - external-token-limit # LLMIS-only backend for ExternalModel token-rate enforcement
 
 # E2E-only: enable the simulator's optional full HTTP request/response logging so tests
-# can assert on headers the backend actually received (e.g. RHOAIENG-94276's check that the
-# client's MaaS API key is stripped before reaching the backend). Scoped to this e2e
-# kustomization only — NOT applied to docs/samples/models/simulator/model.yaml, since that
-# file also serves as the public deployment sample and --log-http's own upstream docs warn
-# it may log sensitive Authorization headers, which isn't appropriate default guidance.
-# v0.8.2 (the version pinned in the public sample) predates --log-http
-# (llm-d/llm-d-inference-sim#470, merged 2026-05-03); v0.9.0+ includes it.
+# can assert on headers the backend actually received. Scoped to this e2e
+# kustomization only. v0.8.2 (the version pinned in the public sample) predates --log-http;
+# v0.9.0+ includes it.
 #
 # v0.9.0 also replaced the "UDS Tokenizer" with "vLLM Render" for any --model value that
-# looks like a real HuggingFace repo id (confirmed against a live cluster: facebook/opt-125m
-# triggers it, and the pod CrashLoopBackOffs with "dial tcp [::1]:8082: connect: connection
-# refused" since no render sidecar is deployed here). Point --model at a dummy id to force the
+# looks like a real HuggingFace repo id. Point --model at a dummy id to force the
 # simulator's fast/simulated tokenizer (no render dependency) while --served-model-name keeps
 # exposing the real id the rest of the e2e suite routes to.
 patches:

@@ -92,23 +92,16 @@ def test_chat_completions_gateway_alive(model_v1: str, api_key_headers: dict, ap
     Given a governed model and valid API key, a non-streaming request returns
     HTTP 200 with non-whitespace assistant content.
 
-    Also verifies the client's MaaS API key never reaches the backend's own received-request
-    logs. The `maas-headers-guard` IPP plugin strips `Authorization`/`x-api-key` from every
-    request before forwarding upstream, regardless of model kind (RHOAIENG-94276) - the
-    provider-credential re-injection half of that same chain is ExternalModel-specific and is
-    already covered live by ai-gateway-controller's own E2E suite (test/overlay-e2e/run.sh,
-    test/openshift-env/e2e.sh), so it's out of scope here. Requires `--log-http` on the
-    simulator (test/e2e/fixtures kustomize patch) and llm-d-inference-sim >= v0.9.0 (see
-    llm-d/llm-d-inference-sim#470); empty logs, or logs missing header content, fail the test
-    rather than skip it, so a broken/disabled log pipeline can't silently mask a leak (an
-    empty-of-headers log would otherwise trivially "pass" the leak check for the wrong reason -
-    the key is absent because nothing was captured at all, not because it was actually stripped).
+    Also verifies the client's MaaS API key, and the `X-MaaS-Identity` header never reach the
+    backend's own received-request logs. The `maas-headers-guard`
+    IPP plugin strips these headers before forwarding upstream. Requires
+    `--log-http` on the simulator (test/e2e/fixtures kustomize patch) and llm-d-inference-sim
+    >= v0.9.0.
 
-    Known currently-failing on Praxis-based deployments: confirmed against a live cluster that
-    `maas-headers-guard` only exists in the legacy IPP plugin chain today - Praxis's default
-    post-auth config for a tenant with no ExternalModel is just a bare `request_id` filter, so
-    the client's key is not yet stripped there. This is intentionally left failing (not skipped)
-    until Praxis gets an equivalent guard, so the gap stays visible rather than masked.
+    Note on `X-MaaS-Identity` specifically: Authorino only generates this header
+    once the strict external-OIDC contract is configured, which this API-key-authenticated
+    model doesn't use, making the assertion a defense-in-depth regression guard rather than
+    proof the strip itself fires here.
     """
     r = requests.post(
         f"{model_v1}/chat/completions",
@@ -142,6 +135,9 @@ def test_chat_completions_gateway_alive(model_v1: str, api_key_headers: dict, ap
         "in effect on this build (expected the request's content-type header in the logs)"
     )
     assert api_key not in logs, "Client MaaS API key leaked into the backend's received-request logs"
+    assert "x-maas-identity" not in logs.lower(), (
+        "X-MaaS-Identity header leaked into the backend's received-request logs"
+    )
 
 
 def test_chat_completions_streaming_sse(model_v1: str, api_key_headers: dict):
