@@ -311,6 +311,35 @@ func (r *MaaSSubscriptionReconciler) checkTokenRateLimitHealth(ctx context.Conte
 		}
 		status.Namespace = httpRouteNS
 
+		gatewayRef, gatewayErr := tenantGatewayRefForNamespace(
+			ctx,
+			r.Client,
+			subscription.Namespace,
+			r.DefaultTenantNamespace,
+			r.GatewayName,
+			r.GatewayNamespace,
+			r.TenantNamespaceDiscoveryEnabled,
+		)
+		if gatewayErr != nil {
+			status.Ready = false
+			status.Reason = maasv1alpha1.ReasonGetFailed
+			status.Message = fmt.Sprintf("failed to resolve tenant gateway for subscription namespace %s: %v", subscription.Namespace, gatewayErr)
+			statuses = append(statuses, status)
+			continue
+		}
+		if err := validateHTTPRouteReferencesGateway(ctx, r.Client, httpRouteName, httpRouteNS, gatewayRef); err != nil {
+			status.Ready = false
+			if errors.Is(err, ErrHTTPRouteNotOnTenantGateway) {
+				status.Reason = maasv1alpha1.ReasonBackendNotReady
+				status.Message = fmt.Sprintf("HTTPRoute is not attached to the subscription tenant gateway: %v", err)
+			} else {
+				status.Reason = maasv1alpha1.ReasonGetFailed
+				status.Message = fmt.Sprintf("failed to validate HTTPRoute against tenant gateway: %v", err)
+			}
+			statuses = append(statuses, status)
+			continue
+		}
+
 		gatewaySuffix := ""
 		if gateway, ok, err := selectedGatewayForModel(ctx, r.Client, ref.Namespace, ref.Name); err == nil && ok {
 			gatewaySuffix = fmt.Sprintf(" on gateway %s/%s", gateway.Namespace, gateway.Name)
@@ -635,8 +664,14 @@ func (r *MaaSSubscriptionReconciler) reconcileTRLPForModel(ctx context.Context, 
 		}
 		return fmt.Errorf("failed to resolve HTTPRoute for model %s/%s: %w", modelNamespace, modelName, err)
 	}
-	if err := r.validateSubscriptionTenantGatewaysForRoute(ctx, allSubs, httpRouteName, httpRouteNS, modelNamespace, modelName); err != nil {
+	allSubs, skipped, err := r.validateSubscriptionTenantGatewaysForRoute(ctx, allSubs, httpRouteName, httpRouteNS, modelNamespace, modelName)
+	if err != nil {
 		return err
+	}
+	if len(skipped) > 0 {
+		log.Info("Skipping subscriptions not attached to the model route tenant gateway",
+			"model", modelNamespace+"/"+modelName,
+			"skippedSubscriptions", skipped)
 	}
 
 	// Check if existing TRLP is opted-out before doing any expensive work
@@ -830,13 +865,14 @@ func (r *MaaSSubscriptionReconciler) validateSubscriptionTenantGatewaysForRoute(
 	httpRouteNS string,
 	modelNamespace string,
 	modelName string,
-) error {
+) ([]maasv1alpha1.MaaSSubscription, map[string]string, error) {
 	// Every effective subscription for this model must come from a tenant whose
 	// Gateway matches the model HTTPRoute. This preserves the existing one
 	// TRLP-per-route behavior while preventing a tenant namespace from attaching
-	// policy to another tenant's Gateway.
+	// policy to another tenant's Gateway. Subscriptions from mismatched tenant
+	// gateways are skipped rather than failing all contributors for the model.
 	validatedTenantNamespaces := make(map[string]struct{})
-	validatedGateways := make(map[string]struct{})
+	skippedNamespaces := make(map[string]string)
 	for _, sub := range subscriptions {
 		if _, ok := validatedTenantNamespaces[sub.Namespace]; ok {
 			continue
@@ -853,20 +889,29 @@ func (r *MaaSSubscriptionReconciler) validateSubscriptionTenantGatewaysForRoute(
 			r.TenantNamespaceDiscoveryEnabled,
 		)
 		if err != nil {
-			return err
+			return nil, nil, err
 		}
-		gatewayKey := qualifiedName(gatewayRef.Namespace, gatewayRef.Name)
-		if _, ok := validatedGateways[gatewayKey]; ok {
-			continue
-		}
-		validatedGateways[gatewayKey] = struct{}{}
 
 		if err := validateHTTPRouteReferencesGateway(ctx, r.Client, httpRouteName, httpRouteNS, gatewayRef); err != nil {
-			return fmt.Errorf("model %s/%s is not attached to tenant gateway for subscription %s: %w",
+			if errors.Is(err, ErrHTTPRouteNotOnTenantGateway) {
+				skippedNamespaces[sub.Namespace] = fmt.Sprintf("model %s/%s is not attached to tenant gateway for subscription %s: %v",
+					modelNamespace, modelName, qualifiedName(sub.Namespace, sub.Name), err)
+				continue
+			}
+			return nil, nil, fmt.Errorf("model %s/%s is not attached to tenant gateway for subscription %s: %w",
 				modelNamespace, modelName, qualifiedName(sub.Namespace, sub.Name), err)
 		}
 	}
-	return nil
+
+	valid := make([]maasv1alpha1.MaaSSubscription, 0, len(subscriptions))
+	for _, sub := range subscriptions {
+		if _, skipped := skippedNamespaces[sub.Namespace]; skipped {
+			continue
+		}
+		valid = append(valid, sub)
+	}
+
+	return valid, skippedNamespaces, nil
 }
 
 // cleanupStaleTRLPs deletes aggregated TokenRateLimitPolicies for models that this

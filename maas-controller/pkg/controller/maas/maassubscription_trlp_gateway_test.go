@@ -613,4 +613,91 @@ func TestReconcileTRLPForModel_RemovedTenantReferenceCleansOnlyItsPolicy(t *test
 	}
 }
 
+func TestReconcileTRLPForModel_MismatchedTenantSubscriptionIsSkipped(t *testing.T) {
+	const (
+		modelNS = "user-ns"
+		subANS  = "tenant-a-admin"
+		subBNS  = "tenant-b-admin"
+	)
+
+	modelA := newMaaSModelRef("model-a", modelNS, "ExternalModel", "shared")
+	modelA.Status.HTTPRouteGatewayName = testGatewayA.Name
+	modelA.Status.HTTPRouteGatewayNamespace = testGatewayA.Namespace
+
+	validSub := newTenantSubscription("sub-a", subANS, modelNS, "model-a", 100)
+	mismatchedSub := newTenantSubscription("sub-b-mismatch", subBNS, modelNS, "model-a", 200)
+
+	objs := append(newSharedExternalModelObjects(
+		newGatewayResult(testGatewayA, metav1.ConditionTrue),
+		newGatewayResult(testGatewayB, metav1.ConditionTrue),
+	),
+		modelA,
+		validSub,
+		mismatchedSub,
+		newDiscoveredTenantNamespace(subANS, "tenant-a"),
+		newDiscoveredTenantNamespace(subBNS, "tenant-b"),
+		newAITenantManagedTenantConfig(subANS, "tenant-a"),
+		newAITenantManagedTenantConfig(subBNS, "tenant-b"),
+	)
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(testRESTMapper()).
+		WithObjects(objs...).
+		WithStatusSubresource(&maasv1alpha1.MaaSSubscription{}).
+		WithIndex(&maasv1alpha1.MaaSSubscription{}, modelRefIndexKey, subscriptionModelRefIndexer).
+		Build()
+
+	r := &MaaSSubscriptionReconciler{
+		Client:                          c,
+		APIReader:                       c,
+		Scheme:                          scheme,
+		DefaultTenantNamespace:          "models-as-a-service",
+		TenantNamespaceDiscoveryEnabled: true,
+	}
+
+	reqA := ctrl.Request{NamespacedName: types.NamespacedName{Name: validSub.Name, Namespace: validSub.Namespace}}
+	if _, err := r.Reconcile(context.Background(), reqA); err != nil {
+		t.Fatalf("Reconcile valid subscription: %v", err)
+	}
+
+	trlp := &unstructured.Unstructured{}
+	trlp.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1alpha1", Kind: "TokenRateLimitPolicy"})
+	if err := c.Get(context.Background(), types.NamespacedName{Name: "maas-trlp-model-a", Namespace: modelNS}, trlp); err != nil {
+		t.Fatalf("Get TRLP model-a: %v", err)
+	}
+	ids := getPolicyPredicateIDs(t, trlp)
+	validID := SubscriptionRateLimitID(ModelScopedSubscriptionKey(subANS, validSub.Name, modelNS, "model-a"))
+	mismatchID := SubscriptionRateLimitID(ModelScopedSubscriptionKey(subBNS, mismatchedSub.Name, modelNS, "model-a"))
+	if !strings.Contains(strings.Join(ids, ","), validID) {
+		t.Fatalf("TRLP predicate IDs %v missing valid subscription ID %s", ids, validID)
+	}
+	if strings.Contains(strings.Join(ids, ","), mismatchID) {
+		t.Fatalf("TRLP predicate IDs %v unexpectedly include mismatched subscription ID %s", ids, mismatchID)
+	}
+
+	reqB := ctrl.Request{NamespacedName: types.NamespacedName{Name: mismatchedSub.Name, Namespace: mismatchedSub.Namespace}}
+	if _, err := r.Reconcile(context.Background(), reqB); err != nil {
+		t.Fatalf("Reconcile mismatched subscription should not fail: %v", err)
+	}
+
+	updatedMismatch := &maasv1alpha1.MaaSSubscription{}
+	if err := c.Get(context.Background(), types.NamespacedName{Name: mismatchedSub.Name, Namespace: mismatchedSub.Namespace}, updatedMismatch); err != nil {
+		t.Fatalf("Get mismatched subscription: %v", err)
+	}
+	if updatedMismatch.Status.Phase != maasv1alpha1.PhaseFailed {
+		t.Fatalf("mismatched subscription phase = %q, want %q", updatedMismatch.Status.Phase, maasv1alpha1.PhaseFailed)
+	}
+	if len(updatedMismatch.Status.TokenRateLimitStatuses) != 1 {
+		t.Fatalf("mismatched subscription expected 1 tokenRateLimitStatus, got %d", len(updatedMismatch.Status.TokenRateLimitStatuses))
+	}
+	status := updatedMismatch.Status.TokenRateLimitStatuses[0]
+	if status.Reason != maasv1alpha1.ReasonBackendNotReady {
+		t.Fatalf("mismatched subscription token status reason = %q, want %q", status.Reason, maasv1alpha1.ReasonBackendNotReady)
+	}
+	if !strings.Contains(status.Message, ErrHTTPRouteNotOnTenantGateway.Error()) {
+		t.Fatalf("mismatched subscription token status message %q does not include %q", status.Message, ErrHTTPRouteNotOnTenantGateway.Error())
+	}
+}
+
 func ptrTo[T any](v T) *T { return &v }
