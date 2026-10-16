@@ -39,9 +39,10 @@ func TestMiddleware_SpanWithTenantAttributes(t *testing.T) {
 	router.Use(tracing.NewMiddleware("redteam", "ai-tenant-redteam", "redteam-gw", "openshift-ingress"))
 	router.GET("/v1/models", func(c *gin.Context) {
 		c.Set("user", &token.UserContext{
-			Username: "alice",
-			Groups:   []string{"users"},
-			Tenant:   "redteam",
+			Username:       "alice",
+			Groups:         []string{"users"},
+			Tenant:         "redteam",
+			OrganizationID: "stable-org",
 		})
 		c.Status(http.StatusOK)
 	})
@@ -65,8 +66,36 @@ func TestMiddleware_SpanWithTenantAttributes(t *testing.T) {
 	assert.Equal(t, "ai-tenant-redteam", attrs["tenant.namespace"])
 	assert.Equal(t, "redteam-gw", attrs["gateway.name"])
 	assert.Equal(t, "openshift-ingress", attrs["gateway.namespace"])
+	assert.Equal(t, "stable-org", attrs["organization.id"])
 	assert.Equal(t, "GET", attrs["http.method"])
 	assert.Equal(t, "/v1/models", attrs["http.route"])
+}
+
+// TestMiddleware_SpanWithResolvedOrganization verifies that the internal
+// subscription callback can add the selected organization after the span starts.
+func TestMiddleware_SpanWithResolvedOrganization(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	exporter := setupTracingTest(t)
+
+	router := gin.New()
+	router.Use(tracing.NewMiddleware("models-as-a-service", "", "", ""))
+	router.POST("/internal/v1/subscriptions/select", func(c *gin.Context) {
+		token.SetOrganizationID(c, "resolved-org")
+		c.Status(http.StatusOK)
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/internal/v1/subscriptions/select", nil)
+	router.ServeHTTP(httptest.NewRecorder(), req)
+
+	spans := exporter.GetSpans()
+	require.Len(t, spans, 1)
+	for _, attribute := range spans[0].Attributes {
+		if string(attribute.Key) == "organization.id" {
+			assert.Equal(t, "resolved-org", attribute.Value.AsString())
+			return
+		}
+	}
+	t.Fatal("span is missing organization.id attribute")
 }
 
 // TestMiddleware_SpanDefaultTenantWithoutUserContext verifies that spans use

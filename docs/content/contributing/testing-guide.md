@@ -180,16 +180,19 @@ The E2E framework auto-discovers most values from the cluster. These are the mos
 
 See `test/e2e/tests/conftest.py` and individual test module docstrings for the full set of supported variables.
 
-The non-streaming chat response regression is covered by
-`tests/test_smoke.py::test_chat_completions_gateway_alive`. It uses the governed
-`facebook-opt-125m-simulated` LLMInferenceService and MaaSModelRef deployed by
-`scripts/deploy-models.sh`, plus the `simulator-subscription` API key created by
-the `api_key_headers` fixture. `MODEL_NAME` selects the route/catalog model,
-while `E2E_MODEL_NAME` sets the ID sent in the inference request body (default
-`facebook/opt-125m`). The full CI runner sets `GATEWAY_HOST` and `MODEL_NAME`;
-for a local run, set `GATEWAY_HOST` to the gateway hostname and `MODEL_NAME` to
-the catalog model ID. Set `E2E_MODEL_PATH` when the catalog URL does not identify
-the model route.
+The governed chat/completions smoke regressions are covered by
+`tests/test_smoke.py::test_chat_completions_gateway_alive` (non-streaming body
+content) and `tests/test_smoke.py::test_chat_completions_streaming_sse`
+(`text/event-stream`, JSON `data:` chunks, `data: [DONE]`). Both use the
+governed `facebook-opt-125m-simulated` LLMInferenceService and MaaSModelRef
+deployed by `scripts/deploy-models.sh`, plus the `simulator-subscription` API key
+created by the `api_key_headers` fixture. `MODEL_NAME` selects the route/catalog
+model, while `E2E_MODEL_NAME` sets the ID sent in the inference request body
+(default `facebook/opt-125m`). The full CI runner sets `GATEWAY_HOST` and
+`MODEL_NAME`; for a local run, set `GATEWAY_HOST` to the gateway hostname and
+`MODEL_NAME` to the catalog model ID. Set `E2E_MODEL_PATH` when the catalog URL
+does not identify the model route. SSE parsing is centralized in
+`test_helper.assert_openai_sse_chat_stream`.
 
 ### Parallel E2E (pytest-xdist)
 

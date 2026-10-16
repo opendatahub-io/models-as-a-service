@@ -54,6 +54,7 @@ import (
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/authpolicy"
+	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/groupname"
 	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/platform/tenantreconcile"
 )
 
@@ -397,26 +398,46 @@ const (
 		`: (has(auth.identity.preferred_username) ? auth.identity.preferred_username ` +
 		`: (has(auth.identity.sub) ? auth.identity.sub : auth.identity.user.username))`
 
-	// celGroups extracts groups from API key, OIDC, or K8s token
-	// API key: uses apiKeyValidation.groups (snapshot at key creation)
-	// OIDC: uses groups claim (no .user. prefix)
-	// K8s: uses user.groups (from TokenReview)
+	// celGroups extracts the group list used for subscription selection,
+	// cache keys, and metrics labels.
+	// API key: uses apiKeyValidation.groups (snapshot at key creation).
+	// The source for token identities is selected by identity type, never by
+	// claim presence: JWT identities (auth.identity.iss set) use only the
+	// groups claim, TokenReview identities use only user.groups. Authorino
+	// overlays the decoded JWT payload into auth.identity, so a JWT could
+	// otherwise craft a "user" claim and impersonate TokenReview groups.
+	// Both sources are gated on the canonical pattern and yield an empty
+	// list on failure, keeping subscription selection, the cache key, and
+	// the X-MaaS-Group header consistent with the oidc-groups-safe denial:
+	// a TokenReview group that fails the pattern must never authorize a
+	// subscription the forwarded identity header omits.
 	celGroups = `(has(auth.metadata) && has(auth.metadata.apiKeyValidation)) ` +
 		`? auth.metadata.apiKeyValidation.groups ` +
-		`: (has(auth.identity.groups) ? auth.identity.groups : auth.identity.user.groups)`
+		`: (has(auth.identity.iss) ? ` +
+		`(has(auth.identity.groups) && ` + celOIDCGroupsSafe + ` ? auth.identity.groups : []) : ` +
+		`(has(auth.identity.user.groups) && ` +
+		`auth.identity.user.groups.all(g, g.matches('` + safeGroupNamePattern + `')) ? ` +
+		`auth.identity.user.groups : []))`
 
-	safeGroupNamePattern = `^[A-Za-z0-9:._/ -]+$`
+	safeGroupNamePattern = groupname.Pattern
 	celOIDCGroupsSafe    = `auth.identity.groups.all(g, g.matches('` + safeGroupNamePattern + `'))`
 
 	// celTokenGroupsHeaderJSON renders the X-MaaS-Group header for non-API-key
-	// identities. OIDC tokens may omit or provide an empty groups claim, but API
-	// key minting still requires at least system:authenticated to match the
-	// default subscription.
-	celTokenGroupsHeaderJSON = `has(auth.identity.groups) ? ` +
-		`(size(auth.identity.groups) > 0 && ` + celOIDCGroupsSafe + ` ? ` +
+	// identities. The group source is selected by identity type, never by
+	// claim presence: JWT identities (auth.identity.iss set) use only the
+	// groups claim, TokenReview identities use only user.groups — Authorino
+	// overlays the decoded JWT payload into auth.identity, so a JWT could
+	// otherwise craft a "user" claim and reach the TokenReview branch. Both
+	// sources are gated on the canonical group-name pattern because CEL builds
+	// the JSON by concatenation without escaping. Identities with no usable
+	// groups still get system:authenticated, which API-key minting requires
+	// to match the default subscription.
+	celTokenGroupsHeaderJSON = `has(auth.identity.iss) ? ` +
+		`(has(auth.identity.groups) && size(auth.identity.groups) > 0 && ` + celOIDCGroupsSafe + ` ? ` +
 		`'["system:authenticated","' + auth.identity.groups.join('","') + '"]' : ` +
 		`'["system:authenticated"]') : ` +
-		`(has(auth.identity.user.groups) && size(auth.identity.user.groups) > 0 ? ` +
+		`(has(auth.identity.user.groups) && size(auth.identity.user.groups) > 0 && ` +
+		`auth.identity.user.groups.all(g, g.matches('` + safeGroupNamePattern + `')) ? ` +
 		`'["system:authenticated","' + auth.identity.user.groups.join('","') + '"]' : ` +
 		`'["system:authenticated"]')`
 
@@ -1167,9 +1188,10 @@ allow {
 					"x-llm-d-inference-fairness-id":   subscriptionInfoHeader("fairnessId"),
 					"x-gateway-inference-fairness-id": subscriptionInfoHeader("fairnessId"),
 					// Organization and cost center come from the resolved MaaSSubscription
-					// (subscription-info), not the client. Injected only when set so empty
-					// values do not appear as identity headers.
-					"X-MaaS-Organization-Id": subscriptionInfoStringHeader("organizationId"),
+					// (subscription-info), not the client. Organization is always set, empty
+					// when unresolved, so a client-supplied value can never survive as
+					// telemetry attribution. The lowercase key replaces every client copy.
+					"x-maas-organization-id": subscriptionInfoHeader("organizationId"),
 					"X-MaaS-Cost-Center":     subscriptionInfoStringHeader("costCenter"),
 					"X-MaaS-Identity":        verifiedIdentityHeader(oidc, celIsNotAPIKey),
 				},

@@ -14,9 +14,53 @@ import (
 	"sigs.k8s.io/yaml"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
+	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/groupname"
 )
 
 func boolPtr(b bool) *bool { return &b }
+
+// TestPatchAuthPolicyWithOIDC_GroupsExprUsesCanonicalPattern ensures the
+// per-tenant maas-api AuthPolicy post-render gates X-MaaS-Group-OC JSON
+// construction on the canonical group-name pattern (maas-controller/pkg/
+// groupname). This is the AuthPolicy-side twin of the maas-api API-key
+// mint-time validation (maas-api/internal/api_keys/groupname.go).
+func TestPatchAuthPolicyWithOIDC_GroupsExprUsesCanonicalPattern(t *testing.T) {
+	resource := &unstructured.Unstructured{Object: map[string]any{}}
+	// SetNestedField requires intermediate maps to exist; the rendered
+	// maas-api AuthPolicy provides them in production.
+	for _, path := range [][]string{
+		{"spec", "rules", "authentication"},
+		{"spec", "rules", "authentication", "openshift-identities"},
+		{"spec", "rules", "authorization"},
+		{"spec", "rules", "response", "success", "headers"},
+	} {
+		require.NoError(t, unstructured.SetNestedField(resource.Object, map[string]any{}, path...))
+	}
+
+	oidc := &maasv1alpha1.TenantExternalOIDCConfig{IssuerURL: "https://idp.example.com/realms/test", ClientID: "maas"}
+	require.NoError(t, patchAuthPolicyWithOIDC(logr.Discard(), resource, oidc))
+
+	expr, found, err := unstructured.NestedString(resource.Object, "spec", "rules", "response", "success", "headers", "X-MaaS-Group-OC", "plain", "expression")
+	require.NoError(t, err)
+	require.True(t, found, "X-MaaS-Group-OC expression should be set")
+	assert.Contains(t, expr, "g.matches('"+groupname.Pattern+"')",
+		"OIDC groups must be gated on the canonical group-name pattern")
+	assert.Contains(t, expr, `'["system:authenticated","' + auth.identity.groups.join('","') + '"]'`,
+		"safe groups must be joined with the implicit system:authenticated prefix")
+	// The pattern must accept slash groups (IdP full-path claims) while the
+	// expression still falls back for unsafe ones.
+	assert.Regexp(t, `/`, groupname.Pattern, "canonical pattern must allow slashes")
+	assert.True(t, groupname.Valid("/Engineering"))
+	assert.False(t, groupname.Valid(`bad"group`))
+
+	// Security: the group source is selected by identity type, never by claim
+	// presence — a JWT carrying a crafted "user" claim must never reach the
+	// TokenReview branch — and both sources are gated on the pattern.
+	assert.Contains(t, expr, "has(auth.identity.iss)",
+		"JWT identities must be selected by iss, not by groups-claim presence")
+	assert.Contains(t, expr, "auth.identity.user.groups.all(g, g.matches('"+groupname.Pattern+"')",
+		"TokenReview groups must be gated on the canonical group-name pattern")
+}
 
 func TestPatchAuthPolicyWithOIDCRequiresPurposePair(t *testing.T) {
 	resource := &unstructured.Unstructured{Object: map[string]any{"spec": map[string]any{}}}

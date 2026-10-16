@@ -1587,7 +1587,7 @@ func TestMaaSAuthPolicyReconciler_IdentityHeadersUpstream(t *testing.T) {
 			"X-MaaS-Group", "X-MaaS-Group-Token",
 			"X-MaaS-Subscription",
 			"X-MaaS-KeyName",
-			"X-MaaS-Organization-Id",
+			"x-maas-organization-id",
 			"X-MaaS-Cost-Center",
 			"X-MaaS-Identity",
 		} {
@@ -1610,11 +1610,16 @@ func TestMaaSAuthPolicyReconciler_IdentityHeadersUpstream(t *testing.T) {
 		if _, exists := headers["Authorization"]; exists {
 			t.Errorf("Authorization header should NOT be stripped (needed by FilterModelsByAccess)")
 		}
-		for _, tc := range []struct{ header, field string }{
-			{"X-MaaS-Organization-Id", "organizationId"},
-			{"X-MaaS-Cost-Center", "costCenter"},
-		} {
-			assertNonEmptySubscriptionHeader(t, headers, tc.header, tc.field)
+		assertNonEmptySubscriptionHeader(t, headers, "X-MaaS-Cost-Center", "costCenter")
+		orgHeader, ok := headers["x-maas-organization-id"].(map[string]any)
+		if !ok {
+			t.Fatalf("x-maas-organization-id response is not a map: %#v", headers["x-maas-organization-id"])
+		}
+		if _, hasWhen := orgHeader["when"]; hasWhen {
+			t.Errorf("x-maas-organization-id must apply to every authorized request, got when %#v", orgHeader["when"])
+		}
+		if expr, _, _ := unstructured.NestedString(orgHeader, "plain", "expression"); expr != subscriptionInfoFieldExpr("organizationId") {
+			t.Errorf("x-maas-organization-id expression = %q, want empty fallback for organizationId", expr)
 		}
 	})
 

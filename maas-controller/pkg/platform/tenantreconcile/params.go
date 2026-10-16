@@ -1397,7 +1397,7 @@ func patchPayloadProcessingEnvoyFilter(log logr.Logger, r *unstructured.Unstruct
 	const (
 		wasmFilterPatchCount     = 4 // WasmPlugin pair + RHCL 1.4 wasm pair
 		routerFallbackPatchCount = 2 // router anchor when Kuadrant WASM is absent
-		routeDisablePatchCount   = 5
+		routeDisablePatchCount   = 6
 		// Trailing REMOVE + INSERT_BEFORE that move Istio's InferencePool filter in front of
 		// the router. Their anchors (Istio's fixed filter name and the router) are the same on
 		// every gateway, so no mode rewrites them.
@@ -1482,7 +1482,8 @@ func patchPayloadProcessingEnvoyFilter(log logr.Logger, r *unstructured.Unstruct
 	// Route patches disable ext_proc on all non-inference maas-api routes; the EPP reorder
 	// patches after them need no rewrite.
 	// Route name uses Istio's Gateway API convention: <namespace>.<httproute-name>.<rule-index>.
-	// Rule indices: 0=/v1/models, 1=/v1/subscriptions, 2=/v1/api-keys, 3=/maas-api/v1/*, 4=/maas-api/health
+	// Rule indices: 0=/v1/models, 1=/v1/subscriptions, 2=/v1/api-keys, 3=/maas-api/v1/*,
+	// 4=/maas-api/health, 5=/v1/me
 	for i := routeDisablePatchBase; i < routeDisablePatchEnd; i++ {
 		patch, ok := configPatches[i].(map[string]any)
 		if !ok {

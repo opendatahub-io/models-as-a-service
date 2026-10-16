@@ -103,7 +103,22 @@ type OrganizationMembership struct {
 	// bypassing duplicate detection.
 	OrganizationID   string   `json:"organization_id"`
 	OrganizationName string   `json:"organization_name,omitempty"`
-	Roles            []string `json:"roles"`
+	Roles            []string `json:"roles,omitempty"`
+}
+
+// IdentityResponse contains only the identity fields exposed by GET /v1/me.
+// It is deliberately separate from VerifiedIdentity so transport provenance
+// and internal claim representations cannot leak into the public response.
+type IdentityResponse struct {
+	Issuer            string                   `json:"iss"`
+	Subject           string                   `json:"sub"`
+	Name              string                   `json:"name,omitempty"`
+	GivenName         string                   `json:"given_name,omitempty"`
+	FamilyName        string                   `json:"family_name,omitempty"`
+	PreferredUsername string                   `json:"preferred_username,omitempty"`
+	Email             string                   `json:"email,omitempty"`
+	Groups            []string                 `json:"groups,omitempty"`
+	Organizations     []OrganizationMembership `json:"https://redhat.com/maas/orgs,omitempty"`
 }
 
 // ParseIdentityEnvelope validates the fixed Authorino-to-maas-api identity
@@ -329,6 +344,60 @@ func (h *Handler) ExtractVerifiedIdentityOptional() gin.HandlerFunc {
 		c.Set("verified_identity", identity)
 		c.Next()
 	}
+}
+
+// ExtractVerifiedIdentity requires the trusted SSO identity envelope. Unlike
+// the optional variant, legacy username/group headers cannot authenticate an
+// endpoint that is defined specifically for verified OIDC identity.
+func (h *Handler) ExtractVerifiedIdentity() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if err := validateOptionalIdentityHeaders(c.Request.Header); err != nil {
+			h.rejectIdentity(c, err)
+			return
+		}
+
+		value := c.Request.Header.Get(constant.HeaderIdentity)
+		if value == "" {
+			h.rejectIdentity(c, errors.New("trusted identity is required"))
+			return
+		}
+
+		identity, err := ParseIdentityEnvelope(value)
+		if err != nil {
+			h.rejectIdentity(c, err)
+			return
+		}
+		c.Set("verified_identity", identity)
+		c.Next()
+	}
+}
+
+// GetMe returns the caller's verified identity. It performs no authorization
+// or inventory computation and accepts no target filter.
+func (h *Handler) GetMe(c *gin.Context) {
+	value, exists := c.Get("verified_identity")
+	if !exists {
+		h.rejectIdentity(c, errors.New("trusted identity is required"))
+		return
+	}
+	identity, ok := value.(*VerifiedIdentity)
+	if !ok || identity == nil {
+		h.rejectIdentity(c, errors.New("trusted identity is invalid"))
+		return
+	}
+
+	c.Header("Cache-Control", "no-store")
+	c.JSON(http.StatusOK, IdentityResponse{
+		Issuer:            identity.Claims.Issuer,
+		Subject:           identity.Claims.Subject,
+		Name:              identity.Claims.Name,
+		GivenName:         identity.Claims.GivenName,
+		FamilyName:        identity.Claims.FamilyName,
+		PreferredUsername: identity.Claims.PreferredUsername,
+		Email:             identity.Claims.Email,
+		Groups:            identity.Claims.Groups,
+		Organizations:     identity.Claims.Organizations,
+	})
 }
 
 // RejectTrustedIdentityHeaders prevents direct callers from injecting the new

@@ -4,7 +4,12 @@ import pytest
 import requests
 
 from conftest import TLS_VERIFY
-from test_helper import MODEL_NAME as SERVED_MODEL_NAME, completions
+from test_helper import (
+    MODEL_NAME as SERVED_MODEL_NAME,
+    assert_openai_sse_chat_stream,
+    chat,
+    completions,
+)
 
 log = logging.getLogger(__name__)
 
@@ -111,6 +116,27 @@ def test_chat_completions_gateway_alive(model_v1: str, api_key_headers: dict):
     assert isinstance(content, str) and content.strip(), (
         f"HTTP 200 chat completion returned empty assistant content: {r.text[:500]}"
     )
+
+
+def test_chat_completions_streaming_sse(model_v1: str, api_key_headers: dict):
+    """
+    Given a governed model and valid API key with stream=true,
+    the client receives multiple SSE data chunks, each JSON-parseable,
+    and the stream ends with data: [DONE].
+    """
+    with chat(
+        "Say 'hello' in one word.",
+        model_v1,
+        api_key_headers,
+        SERVED_MODEL_NAME,
+        stream=True,
+        max_tokens=16,
+    ) as streamed:
+        events = assert_openai_sse_chat_stream(streamed)
+    msg = f"[chat-stream] POST /chat/completions stream=true -> 200, {len(events)} SSE lines"
+    log.info(msg)
+    print(msg)
+
 
 def test_legacy_completions_optionally(model_v1: str, api_key_headers: dict, model_name: str):
     """

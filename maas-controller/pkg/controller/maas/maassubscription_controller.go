@@ -120,6 +120,11 @@ const (
 	// unreasonably large windows from reaching Kuadrant. 8784h fits the CRD pattern
 	// ^[1-9]\d{0,3}(s|m|h)$.
 	maxWindowSeconds int64 = 366 * 24 * 3600 // 366 days (leap year) in seconds
+
+	trlpLabelModel            = "maas.opendatahub.io/model"
+	trlpLabelModelNamespace   = "maas.opendatahub.io/model-namespace"
+	trlpLabelGatewayName      = "maas.opendatahub.io/gateway-name"
+	trlpLabelGatewayNamespace = "maas.opendatahub.io/gateway-namespace"
 )
 
 var windowPattern = regexp.MustCompile(`^[1-9]\d{0,3}(s|m|h)$`)
@@ -290,7 +295,7 @@ func (r *MaaSSubscriptionReconciler) checkTokenRateLimitHealth(ctx context.Conte
 		}
 
 		// Find the TRLP for this model (TRLP lives in HTTPRoute namespace)
-		_, httpRouteNS, err := findHTTPRouteForModel(ctx, r.Client, ref.Namespace, ref.Name)
+		httpRouteName, httpRouteNS, err := findHTTPRouteForModel(ctx, r.Client, ref.Namespace, ref.Name)
 		if err != nil {
 			// Record status even when HTTPRoute not found - makes diagnosing issues easier
 			status.Ready = false
@@ -306,6 +311,18 @@ func (r *MaaSSubscriptionReconciler) checkTokenRateLimitHealth(ctx context.Conte
 		}
 		status.Namespace = httpRouteNS
 
+		gatewaySuffix := ""
+		if gateway, ok, err := selectedGatewayForModel(ctx, r.Client, ref.Namespace, ref.Name); err == nil && ok {
+			gatewaySuffix = fmt.Sprintf(" on gateway %s/%s", gateway.Namespace, gateway.Name)
+		} else {
+			route := &gatewayapiv1.HTTPRoute{}
+			if err := r.Get(ctx, types.NamespacedName{Name: httpRouteName, Namespace: httpRouteNS}, route); err == nil {
+				if gateway, ok := routeGatewayForTRLP(route); ok {
+					gatewaySuffix = fmt.Sprintf(" on gateway %s/%s", gateway.Namespace, gateway.Name)
+				}
+			}
+		}
+
 		trlp := &unstructured.Unstructured{}
 		trlp.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1alpha1", Kind: "TokenRateLimitPolicy"})
 
@@ -313,7 +330,7 @@ func (r *MaaSSubscriptionReconciler) checkTokenRateLimitHealth(ctx context.Conte
 			if apierrors.IsNotFound(err) {
 				status.Ready = false
 				status.Reason = maasv1alpha1.ReasonNotFound
-				status.Message = "TokenRateLimitPolicy not created yet"
+				status.Message = "TokenRateLimitPolicy not created yet" + gatewaySuffix
 			} else {
 				status.Ready = false
 				status.Reason = maasv1alpha1.ReasonGetFailed
@@ -327,7 +344,7 @@ func (r *MaaSSubscriptionReconciler) checkTokenRateLimitHealth(ctx context.Conte
 				status.Reason = maasv1alpha1.ReasonAccepted
 			} else {
 				status.Reason = maasv1alpha1.ReasonNotAccepted
-				status.Message = message
+				status.Message = message + gatewaySuffix
 			}
 		}
 		statuses = append(statuses, status)
@@ -652,6 +669,15 @@ func (r *MaaSSubscriptionReconciler) reconcileTRLPForModel(ctx context.Context, 
 		return fmt.Errorf("failed to fetch HTTPRoute %s/%s: %w", httpRouteNS, httpRouteName, err)
 	}
 
+	trlpGatewayName := ""
+	trlpGatewayNamespace := ""
+	if gateway, ok, err := gatewayIdentityForTRLP(ctx, r.Client, modelNamespace, modelName, route); err != nil {
+		return fmt.Errorf("failed to resolve selected gateway for model %s/%s: %w", modelNamespace, modelName, err)
+	} else if ok {
+		trlpGatewayName = gateway.Name
+		trlpGatewayNamespace = gateway.Namespace
+	}
+
 	var subs []subInfo
 	for _, sub := range allSubs {
 		for _, mRef := range sub.Spec.ModelRefs {
@@ -705,19 +731,24 @@ func (r *MaaSSubscriptionReconciler) reconcileTRLPForModel(ctx context.Context, 
 	policy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1alpha1", Kind: "TokenRateLimitPolicy"})
 	policy.SetName(policyName)
 	policy.SetNamespace(httpRouteNS)
-	policy.SetLabels(map[string]string{
-		"maas.opendatahub.io/model":           modelName,
-		"maas.opendatahub.io/model-namespace": modelNamespace,
-		"app.kubernetes.io/managed-by":        "maas-controller",
-		"app.kubernetes.io/part-of":           "maas-subscription",
-		"app.kubernetes.io/component":         "token-rate-limit-policy",
-	})
+	labels := map[string]string{
+		trlpLabelModel:                 modelName,
+		trlpLabelModelNamespace:        modelNamespace,
+		"app.kubernetes.io/managed-by": "maas-controller",
+		"app.kubernetes.io/part-of":    "maas-subscription",
+		"app.kubernetes.io/component":  "token-rate-limit-policy",
+	}
+	if trlpGatewayName != "" && trlpGatewayNamespace != "" {
+		labels[trlpLabelGatewayName] = trlpGatewayName
+		labels[trlpLabelGatewayNamespace] = trlpGatewayNamespace
+	}
+	policy.SetLabels(labels)
 	policy.SetAnnotations(map[string]string{
 		"maas.opendatahub.io/subscriptions": strings.Join(subNames, ","),
 	})
 
 	// Set HTTPRoute as owner for garbage collection (TRLP deleted when route is deleted)
-	if err := controllerutil.SetControllerReference(route, policy, r.Scheme); err != nil {
+	if err := setHTTPRouteControllerOwner(route, policy, r.Scheme); err != nil {
 		return fmt.Errorf("failed to set owner reference on TokenRateLimitPolicy %s/%s: %w", policy.GetNamespace(), policy.GetName(), err)
 	}
 
@@ -750,13 +781,13 @@ func (r *MaaSSubscriptionReconciler) reconcileTRLPForModel(ctx context.Context, 
 		if !isManaged(existing) {
 			log.Info("TokenRateLimitPolicy opted out during reconciliation, skipping update", "name", policyName)
 		} else {
+			// Snapshot before any mutation (including owner updates), so owner-only
+			// transitions are persisted.
+			snapshot := existing.DeepCopy()
 			// Ensure owner reference is set on managed existing policy.
-			if err := controllerutil.SetControllerReference(route, existing, r.Scheme); err != nil {
+			if err := setHTTPRouteControllerOwner(route, existing, r.Scheme); err != nil {
 				return fmt.Errorf("failed to set owner reference on existing TokenRateLimitPolicy %s/%s: %w", existing.GetNamespace(), existing.GetName(), err)
 			}
-			// Snapshot the existing object before modifications so we can detect
-			// no-op updates.
-			snapshot := existing.DeepCopy()
 
 			mergedAnnotations := existing.GetAnnotations()
 			if mergedAnnotations == nil {
@@ -898,10 +929,10 @@ func (r *MaaSSubscriptionReconciler) deleteModelTRLP(ctx context.Context, log lo
 	policyList := &unstructured.UnstructuredList{}
 	policyList.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1alpha1", Kind: "TokenRateLimitPolicyList"})
 	labelSelector := client.MatchingLabels{
-		"maas.opendatahub.io/model":           modelName,
-		"maas.opendatahub.io/model-namespace": modelNamespace,
-		"app.kubernetes.io/managed-by":        "maas-controller",
-		"app.kubernetes.io/part-of":           "maas-subscription",
+		trlpLabelModel:                 modelName,
+		trlpLabelModelNamespace:        modelNamespace,
+		"app.kubernetes.io/managed-by": "maas-controller",
+		"app.kubernetes.io/part-of":    "maas-subscription",
 	}
 	if err := r.List(ctx, policyList, labelSelector); err != nil {
 		if apierrors.IsNotFound(err) || apimeta.IsNoMatchError(err) {
@@ -921,6 +952,67 @@ func (r *MaaSSubscriptionReconciler) deleteModelTRLP(ctx context.Context, log lo
 		}
 	}
 	return nil
+}
+
+// routeGatewayForTRLP returns the first HTTPRoute parentRef that targets a Gateway,
+// with an omitted namespace defaulting to the route namespace.
+func routeGatewayForTRLP(route *gatewayapiv1.HTTPRoute) (types.NamespacedName, bool) {
+	for _, parentRef := range route.Spec.ParentRefs {
+		if !parentRefTargetsGateway(parentRef) {
+			continue
+		}
+		return routeParentGateway(route, parentRef), true
+	}
+	return types.NamespacedName{}, false
+}
+
+// selectedGatewayForModel returns the model's currently selected gateway from status,
+// if available.
+func selectedGatewayForModel(ctx context.Context, c client.Reader, modelNamespace, modelName string) (types.NamespacedName, bool, error) {
+	model := &maasv1alpha1.MaaSModelRef{}
+	if err := c.Get(ctx, types.NamespacedName{Name: modelName, Namespace: modelNamespace}, model); err != nil {
+		if apierrors.IsNotFound(err) {
+			return types.NamespacedName{}, false, nil
+		}
+		return types.NamespacedName{}, false, fmt.Errorf("get MaaSModelRef %s/%s: %w", modelNamespace, modelName, err)
+	}
+	if model.Status.HTTPRouteGatewayName == "" || model.Status.HTTPRouteGatewayNamespace == "" {
+		return types.NamespacedName{}, false, nil
+	}
+	return types.NamespacedName{
+		Name:      model.Status.HTTPRouteGatewayName,
+		Namespace: model.Status.HTTPRouteGatewayNamespace,
+	}, true, nil
+}
+
+// gatewayIdentityForTRLP returns the gateway identity to label/report on for the
+// model's TRLP, preferring the model's selected gateway and falling back to the
+// route's first gateway parentRef.
+func gatewayIdentityForTRLP(ctx context.Context, c client.Reader, modelNamespace, modelName string, route *gatewayapiv1.HTTPRoute) (types.NamespacedName, bool, error) {
+	if gateway, ok, err := selectedGatewayForModel(ctx, c, modelNamespace, modelName); err != nil {
+		return types.NamespacedName{}, false, err
+	} else if ok {
+		return gateway, true, nil
+	}
+	gateway, ok := routeGatewayForTRLP(route)
+	return gateway, ok, nil
+}
+
+// setHTTPRouteControllerOwner records the HTTPRoute as controller owner. Managed TRLPs can
+// move between routes when attachments transition, so an existing HTTPRoute controller owner
+// is replaced with the new one.
+func setHTTPRouteControllerOwner(route *gatewayapiv1.HTTPRoute, obj client.Object, scheme *runtime.Scheme) error {
+	ownerRefs := obj.GetOwnerReferences()
+	updated := make([]metav1.OwnerReference, 0, len(ownerRefs))
+	for _, ownerRef := range ownerRefs {
+		if ownerRef.Controller != nil && *ownerRef.Controller &&
+			ownerRef.APIVersion == gatewayapiv1.GroupVersion.String() && ownerRef.Kind == "HTTPRoute" {
+			continue
+		}
+		updated = append(updated, ownerRef)
+	}
+	obj.SetOwnerReferences(updated)
+	return controllerutil.SetControllerReference(route, obj, scheme)
 }
 
 func (r *MaaSSubscriptionReconciler) handleDeletion(ctx context.Context, log logr.Logger, subscription *maasv1alpha1.MaaSSubscription) (ctrl.Result, error) {

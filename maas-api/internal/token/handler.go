@@ -71,6 +71,7 @@ func (h *Handler) ExtractUserInfo() gin.HandlerFunc {
 
 		username := strings.TrimSpace(c.GetHeader(constant.HeaderUsername))
 		groupHeader := c.GetHeader(constant.HeaderGroup)
+		organizationID := strings.TrimSpace(c.GetHeader(constant.HeaderOrganizationID))
 
 		// Validate required headers exist and are not empty
 		// Missing headers indicate a configuration issue with the auth policy (internal error)
@@ -122,15 +123,20 @@ func (h *Handler) ExtractUserInfo() gin.HandlerFunc {
 		// Create UserContext from headers and handler config.
 		// Tenant comes from TENANT_NAME env var set during maas-api deployment.
 		userContext := &UserContext{
-			Username: username,
-			Groups:   groups,
-			Tenant:   h.tenantName,
+			Username:       username,
+			Groups:         groups,
+			Tenant:         h.tenantName,
+			OrganizationID: organizationID,
 		}
 
-		requestLogger.Debug("Extracted user info from headers",
+		logFields := []any{
 			"username", logger.RedactValue(username),
 			"groups", groups,
-		)
+		}
+		if organizationID != "" {
+			logFields = append(logFields, "organization_id", organizationID)
+		}
+		requestLogger.Debug("Extracted user info from headers", logFields...)
 
 		c.Set("user", userContext)
 		c.Next()
@@ -149,6 +155,7 @@ func (h *Handler) ExtractUserInfoOptional() gin.HandlerFunc {
 
 		username := strings.TrimSpace(c.GetHeader(constant.HeaderUsername))
 		groupHeader := c.GetHeader(constant.HeaderGroup)
+		organizationID := strings.TrimSpace(c.GetHeader(constant.HeaderOrganizationID))
 
 		// When both identity headers are absent, continue without user context.
 		// This allows the handler to return a graceful response (e.g. empty list).
@@ -204,15 +211,20 @@ func (h *Handler) ExtractUserInfoOptional() gin.HandlerFunc {
 		}
 
 		userContext := &UserContext{
-			Username: username,
-			Groups:   groups,
-			Tenant:   h.tenantName,
+			Username:       username,
+			Groups:         groups,
+			Tenant:         h.tenantName,
+			OrganizationID: organizationID,
 		}
 
-		requestLogger.Debug("Extracted user info from headers",
+		logFields := []any{
 			"username", logger.RedactValue(username),
 			"groups", groups,
-		)
+		}
+		if organizationID != "" {
+			logFields = append(logFields, "organization_id", organizationID)
+		}
+		requestLogger.Debug("Extracted user info from headers", logFields...)
 
 		c.Set("user", userContext)
 		c.Next()
