@@ -4,8 +4,11 @@ import pytest
 import requests
 
 from conftest import TLS_VERIFY
+from multitenancy_helpers import deployment_log_snapshot
 from test_helper import (
     MODEL_NAME as SERVED_MODEL_NAME,
+    MODEL_NAMESPACE,
+    MODEL_REF,
     assert_openai_sse_chat_stream,
     chat,
     completions,
@@ -83,10 +86,21 @@ def test_models_catalog(model_catalog: dict):
     if "ready" in first:
         print(f"[models] first model ready={first['ready']}")
 
-def test_chat_completions_gateway_alive(model_v1: str, api_key_headers: dict):
+def test_chat_completions_gateway_alive(model_v1: str, api_key_headers: dict, api_key: str):
     """
     Given a governed model and valid API key, a non-streaming request returns
     HTTP 200 with non-whitespace assistant content.
+
+    Also verifies the client's MaaS API key, and the `X-MaaS-Identity` header never reach the
+    backend's own received-request logs. The `maas-headers-guard`
+    IPP plugin strips these headers before forwarding upstream. Requires
+    `--log-http` on the simulator (test/e2e/fixtures kustomize patch) and llm-d-inference-sim
+    >= v0.9.0.
+
+    Note on `X-MaaS-Identity` specifically: Authorino only generates this header
+    once the strict external-OIDC contract is configured, which this API-key-authenticated
+    model doesn't use, making the assertion a defense-in-depth regression guard rather than
+    proof the strip itself fires here.
     """
     r = requests.post(
         f"{model_v1}/chat/completions",
@@ -115,6 +129,23 @@ def test_chat_completions_gateway_alive(model_v1: str, api_key_headers: dict):
     content = message.get("content")
     assert isinstance(content, str) and content.strip(), (
         f"HTTP 200 chat completion returned empty assistant content: {r.text[:500]}"
+    )
+
+    logs = deployment_log_snapshot(f"{MODEL_REF}-kserve", namespace=MODEL_NAMESPACE)
+    assert logs.strip(), (
+        "No logs captured from the backend deployment; cannot verify header stripping "
+        "(--log-http may be disabled or unsupported on this build)"
+    )
+    # The request always sends Content-Type, a header maas-headers-guard never strips - its
+    # presence confirms --log-http actually captured request headers (as opposed to only
+    # unrelated startup/probe log lines), so the absence check below is meaningful.
+    assert "content-type" in logs.lower(), (
+        "Backend logs don't show request headers were captured; --log-http may not be "
+        "in effect on this build (expected the request's content-type header in the logs)"
+    )
+    assert api_key not in logs, "Client MaaS API key leaked into the backend's received-request logs"
+    assert "x-maas-identity" not in logs.lower(), (
+        "X-MaaS-Identity header leaked into the backend's received-request logs"
     )
 
 

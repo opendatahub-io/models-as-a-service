@@ -50,6 +50,8 @@ import pytest
 import requests
 
 from conftest import TLS_VERIFY
+from multitenancy_helpers import deployment_log_snapshot
+from test_helper import MODEL_NAME as SERVED_MODEL_NAME, MODEL_NAMESPACE, MODEL_REF
 
 log = logging.getLogger(__name__)
 
@@ -453,7 +455,11 @@ class TestOIDCModelAccess:
     """Full flow: OIDC token → API key mint → list models → inference."""
 
     def test_minted_api_key_can_list_models_and_infer(self, maas_api_base_url: str):
-        """Complete happy path: OIDC token → API key → model list → inference."""
+        """Complete happy path: OIDC token → API key → model list → inference.
+
+        Also verifies the `X-MaaS-Identity` header never reaches the backend's received-request
+        logs. This check targets the simulator model instrumented with --log-http directly.
+        """
         token = _request_oidc_token()
         api_key = _create_oidc_api_key(maas_api_base_url, token)["key"]
 
@@ -498,6 +504,44 @@ class TestOIDCModelAccess:
             f"{inference_response.status_code} {inference_response.text}"
         )
         log.info(f"Inference succeeded for {model_id}")
+
+        # Deterministic X-MaaS-Identity leak check: always hit the known instrumented model
+        # directly, independent of the catalog-driven inference above.
+        identity_check_url = f"{scheme}://{gateway_host}/{MODEL_NAMESPACE}/{SERVED_MODEL_NAME}/v1/chat/completions"
+        identity_check_response = _oidc_request_with_retry(
+            requests.post,
+            identity_check_url,
+            api_key,
+            label="OIDC identity-header leak check",
+            json={
+                "model": SERVED_MODEL_NAME,
+                "messages": [{"role": "user", "content": "Hello from external OIDC e2e"}],
+                "max_tokens": 16,
+            },
+            timeout=45,
+        )
+        assert identity_check_response.status_code == 200, (
+            f"OIDC inference against {SERVED_MODEL_NAME} failed (needed to verify the "
+            f"X-MaaS-Identity header isn't leaked): {identity_check_response.status_code} "
+            f"{identity_check_response.text}"
+        )
+
+        logs = deployment_log_snapshot(f"{MODEL_REF}-kserve", namespace=MODEL_NAMESPACE)
+        assert logs.strip(), (
+            "No logs captured from the backend deployment; cannot verify header "
+            "stripping (--log-http may be disabled or unsupported on this build)"
+        )
+        # Content-Type is never stripped - its presence confirms --log-http actually
+        # captured request headers, so the absence check below is meaningful rather
+        # than a vacuous pass from an empty-of-headers log.
+        assert "content-type" in logs.lower(), (
+            "Backend logs don't show request headers were captured; --log-http may "
+            "not be in effect on this build"
+        )
+        assert "x-maas-identity" not in logs.lower(), (
+            "X-MaaS-Identity header leaked into the backend's "
+            "received-request logs"
+        )
 
     def test_revoked_api_key_cannot_access_models(self, maas_api_base_url: str):
         """API key minted via OIDC can be revoked and then rejected."""
