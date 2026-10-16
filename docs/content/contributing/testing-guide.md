@@ -58,7 +58,7 @@ Tests are organized into **xdist groups** for parallel execution. All tests in a
 | `security` | `test_negative_security.py` | Header spoofing, expired keys, cross-model access |
 | `security` | `test_namespace_scoping.py` | Namespace isolation behavior |
 | `mt_lifecycle` | `test_aitenant_lifecycle.py` | AITenant create/migrate/delete |
-| `mt_lifecycle` | `test_multi_tenant_maas_api.py` | Per-tenant Deployment, Service, HTTPRoute |
+| `mt_lifecycle` | `test_multi_tenant_maas_api.py` | Per-tenant Deployment, Service, HTTPRoute; dual-listener AuthConfig uniqueness and Kuadrant wasm config stability |
 | `mt_lifecycle` | `test_tenant_namespace_discovery.py` | Namespace-label discovery, webhook validation |
 | `mt_lifecycle` | `test_crd_watch_resilience.py` | Dynamic CRD watch registration (restarts controller) |
 | `tenant_isolation` | `test_tenant_auth_isolation.py` | Cross-tenant key rejection, OIDC scoping |

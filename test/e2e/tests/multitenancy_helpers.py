@@ -629,10 +629,50 @@ def apply_tenant_cr(
     )
 
 
-def apply_gateway_fixture(gateway_name: str, *, fixture_label: str) -> None:
+def apply_gateway_fixture(
+    gateway_name: str,
+    *,
+    fixture_label: str,
+    dual_http_listener: bool = False,
+) -> None:
     gw_options_name = f"{gateway_name}-gw-options"
     service_ca_secret = f"{gateway_name}-gw-service-tls"
     gateway_access_label = gateway_access_label_key(gateway_name)
+    namespace_selector = {
+        "namespaces": {
+            "from": "Selector",
+            "selector": {"matchLabels": {gateway_access_label: "true"}},
+        }
+    }
+    listeners = [
+        {
+            "name": "https",
+            "port": 443,
+            "protocol": "HTTPS",
+            "allowedRoutes": namespace_selector,
+            "tls": {
+                "mode": "Terminate",
+                "certificateRefs": [
+                    {"group": "", "kind": "Secret", "name": service_ca_secret}
+                ],
+            },
+        }
+    ]
+    if dual_http_listener:
+        # Both hostnames are unset so the same HTTPRoutes match both listeners.
+        listeners.append(
+            {
+                "name": "http",
+                "port": 80,
+                "protocol": "HTTP",
+                "allowedRoutes": {
+                    "namespaces": {
+                        "from": "Selector",
+                        "selector": {"matchLabels": {gateway_access_label: "true"}},
+                    }
+                },
+            }
+        )
     # Apply gateway access label to infra namespace where HTTPRoutes are created
     apply_gateway_access_label(INFRA_NAMESPACE, gateway_name)
     _apply(
@@ -683,29 +723,7 @@ def apply_gateway_fixture(gateway_name: str, *, fixture_label: str) -> None:
                         "name": gw_options_name,
                     }
                 },
-                "listeners": [
-                    {
-                        "name": "https",
-                        "port": 443,
-                        "protocol": "HTTPS",
-                        "allowedRoutes": {
-                            "namespaces": {
-                                "from": "Selector",
-                                "selector": {
-                                    "matchLabels": {
-                                        gateway_access_label: "true",
-                                    }
-                                },
-                            }
-                        },
-                        "tls": {
-                            "mode": "Terminate",
-                            "certificateRefs": [
-                                {"group": "", "kind": "Secret", "name": service_ca_secret}
-                            ],
-                        },
-                    }
-                ],
+                "listeners": listeners,
             },
         }
     )
@@ -1038,9 +1056,14 @@ def bootstrap_aitenant_tenant(
     *,
     use_default_gateway: bool = False,
     payload_processing_type: Optional[str] = None,
+    dual_http_listener: bool = False,
 ) -> None:
     if not use_default_gateway:
-        apply_gateway_fixture(case["gateway_name"], fixture_label=case["tenant_label_name"])
+        apply_gateway_fixture(
+            case["gateway_name"],
+            fixture_label=case["tenant_label_name"],
+            dual_http_listener=dual_http_listener,
+        )
         wait_for_gateway_programmed(case["gateway_name"])
         apply_gateway_route_fixture(case["gateway_name"], fixture_label=case["tenant_label_name"])
     apply_aitenant(case)
