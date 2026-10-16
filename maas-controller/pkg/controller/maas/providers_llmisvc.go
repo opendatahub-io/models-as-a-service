@@ -224,30 +224,39 @@ func (h *llmisvcHandler) getEndpointFromLLMISvc(llmisvc *kservev1alpha2.LLMInfer
 	}
 	// For unfiltered (legacy single-gateway) deployments, prefer base URLs (model-routing style)
 	// over path-based URLs so status.endpoint is consistent with the BBR gateway entry-point.
+	// Skip cluster-local routes so callers get the customer-facing endpoint from
+	// HTTPRoute/Gateway metadata via GetModelEndpoint.
 	var fallbackURL string
 	for _, addr := range llmisvc.Status.Addresses {
 		if addr.URL == nil {
 			continue
 		}
+		raw := addr.URL.String()
+		if isClusterLocalURL(raw) {
+			continue
+		}
 		// Prefer base URLs (path "" or "/") — these are model-routing endpoints.
 		if addr.URL.Path == "" || addr.URL.Path == "/" {
-			return addr.URL.String()
+			return upgradeToHTTPS(raw)
 		}
 		if fallbackURL == "" {
-			fallbackURL = addr.URL.String()
+			fallbackURL = upgradeToHTTPS(raw)
 		}
 	}
 	// Check Status.URL as a base-URL candidate.
 	if llmisvc.Status.URL != nil {
-		if llmisvc.Status.URL.Path == "" || llmisvc.Status.URL.Path == "/" {
-			return llmisvc.Status.URL.String()
+		raw := llmisvc.Status.URL.String()
+		if !isClusterLocalURL(raw) {
+			if llmisvc.Status.URL.Path == "" || llmisvc.Status.URL.Path == "/" {
+				return upgradeToHTTPS(raw)
+			}
+			if fallbackURL == "" {
+				fallbackURL = upgradeToHTTPS(raw)
+			}
 		}
 	}
 	if fallbackURL != "" {
 		return fallbackURL
-	}
-	if llmisvc.Status.URL != nil {
-		return llmisvc.Status.URL.String()
 	}
 	return ""
 }
@@ -256,6 +265,10 @@ func (h *llmisvcHandler) selectAddress(llmisvc *kservev1alpha2.LLMInferenceServi
 	var urls []string
 	for _, addr := range llmisvc.Status.Addresses {
 		if addr.Name == nil || *addr.Name != targetName || addr.URL == nil {
+			continue
+		}
+		raw := addr.URL.String()
+		if isClusterLocalURL(raw) {
 			continue
 		}
 		if filtering {
@@ -268,17 +281,37 @@ func (h *llmisvcHandler) selectAddress(llmisvc *kservev1alpha2.LLMInferenceServi
 				continue
 			}
 		}
-		urls = append(urls, addr.URL.String())
+		urls = append(urls, raw)
 	}
 	for _, u := range urls {
-		if strings.HasPrefix(u, "https://") {
+		parsed, err := url.Parse(u)
+		if err == nil && strings.EqualFold(parsed.Scheme, "https") {
 			return u
 		}
 	}
 	if len(urls) > 0 {
-		return urls[0]
+		return upgradeToHTTPS(urls[0])
 	}
 	return ""
+}
+
+func upgradeToHTTPS(rawURL string) string {
+	if len(rawURL) >= 7 && strings.EqualFold(rawURL[:7], "http://") {
+		return "https://" + rawURL[7:]
+	}
+	return rawURL
+}
+
+func isClusterLocalURL(rawURL string) bool {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	host := strings.TrimSuffix(strings.ToLower(parsed.Hostname()), ".")
+	if host == "" {
+		return false
+	}
+	return strings.HasSuffix(host, ".svc") || strings.HasSuffix(host, ".svc.cluster.local")
 }
 
 // ResolveModelAlias returns the canonical BBR model ID for the referenced LLMInferenceService.

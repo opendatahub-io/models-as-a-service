@@ -107,16 +107,28 @@ func TestGetEndpointFromLLMISvc_SingleGateway_WithHostnames(t *testing.T) {
 	}
 }
 
-func TestGetEndpointFromLLMISvc_NoExpectedHostnames_FallbackToFirstAddress(t *testing.T) {
+func TestGetEndpointFromLLMISvc_NoExpectedHostnames_ClusterLocalFallbackReturnsEmpty(t *testing.T) {
 	llmisvc := newReadyLLMISvc("test-model", "default", []duckv1.Addressable{
 		{Name: strPtr("cluster-local"), URL: mustParseURL("http://test-model.default.svc.cluster.local")},
 	})
 	h := &llmisvcHandler{}
 
 	got := h.getEndpointFromLLMISvc(llmisvc, nil)
-	want := "http://test-model.default.svc.cluster.local"
+	if got != "" {
+		t.Errorf("getEndpointFromLLMISvc() = %q, want empty (cluster-local fallback should defer to GetModelEndpoint)", got)
+	}
+}
+
+func TestGetEndpointFromLLMISvc_NoExpectedHostnames_UnnamedExternalAddressUpgradesHTTP(t *testing.T) {
+	llmisvc := newReadyLLMISvc("test-model", "default", []duckv1.Addressable{
+		{Name: strPtr("other"), URL: mustParseURL("http://maas.example.com")},
+	})
+	h := &llmisvcHandler{}
+
+	got := h.getEndpointFromLLMISvc(llmisvc, nil)
+	want := "https://maas.example.com"
 	if got != want {
-		t.Errorf("getEndpointFromLLMISvc() = %q, want %q (legacy fallback to first address)", got, want)
+		t.Errorf("getEndpointFromLLMISvc() = %q, want %q (unnamed external fallback should upgrade HTTP)", got, want)
 	}
 }
 
@@ -270,6 +282,52 @@ func TestGetEndpointFromLLMISvc_ModelRouting_NoMatch_ReturnsEmpty(t *testing.T) 
 	got := h.getEndpointFromLLMISvc(llmisvc, []string{"maas.example.com"})
 	if got != "" {
 		t.Errorf("getEndpointFromLLMISvc() = %q, want empty (no matching hostname for any address type)", got)
+	}
+}
+
+func TestUpgradeToHTTPS(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{name: "http", input: "http://example.com/path", want: "https://example.com/path"},
+		{name: "uppercase", input: "HTTP://example.com/path", want: "https://example.com/path"},
+		{name: "mixedcase", input: "Http://example.com/path", want: "https://example.com/path"},
+		{name: "https unchanged", input: "https://example.com/path", want: "https://example.com/path"},
+		{name: "other scheme unchanged", input: "ftp://example.com", want: "ftp://example.com"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := upgradeToHTTPS(tt.input)
+			if got != tt.want {
+				t.Errorf("upgradeToHTTPS() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIsClusterLocalURL(t *testing.T) {
+	tests := []struct {
+		name string
+		url  string
+		want bool
+	}{
+		{name: "svc host", url: "http://model.default.svc", want: true},
+		{name: "cluster local host", url: "https://model.default.svc.cluster.local", want: true},
+		{name: "cluster local host with trailing dot", url: "https://model.default.svc.cluster.local.", want: true},
+		{name: "external host containing svc label", url: "https://gateway.svc.example.com", want: false},
+		{name: "malformed url", url: "://bad", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isClusterLocalURL(tt.url)
+			if got != tt.want {
+				t.Errorf("isClusterLocalURL(%q) = %v, want %v", tt.url, got, tt.want)
+			}
+		})
 	}
 }
 
