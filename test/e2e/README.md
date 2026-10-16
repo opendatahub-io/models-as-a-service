@@ -48,7 +48,7 @@ pytest tests/<file>.py -v
 | `test_trlp_rate_grouping.py` | TRLP limits grouped by rate: shared limits, per-subscription and per-user budgets, rate edits, gateway wasm config size guard |
 | `test_api_keys.py` | `/v1/api-keys` |
 | `test_models_endpoint.py` | `/v1/models` |
-| `test_negative_security.py` | Security / negative paths |
+| `test_negative_security.py` | Security / negative paths on the **default** gateway (`GATEWAY_HOST`) |
 | `test_namespace_scoping.py` | Namespace wiring |
 | `test_external_models.py` | External model refs |
 | `test_tenant.py` | `default-tenant` (subscription namespace): Ready/phase, optional payload-processing (gateway namespace), user CRs not owned by Tenant |
@@ -56,7 +56,7 @@ pytest tests/<file>.py -v
 | `test_tenant_namespace_discovery.py` | Multi-tenant namespace discovery (S1), webhooks (S6); smoke enables `ENABLE_TENANT_NAMESPACE_DISCOVERY=true` by default |
 | `test_gateway_scoped_authpolicy.py` | Gateway-scoped `maas-gateway-auth` (S10 / #912); runs in default CI |
 | `test_multi_tenant_integration.py` | Multi-tenant lifecycle and coexistence scenarios; smoke enables tenant namespace discovery by default |
-| `test_tenant_model_inference.py` | Per-tenant inference, symmetric cross-gateway API-key isolation, and AuthPolicy EnvoyFilter workload selectors |
+| `test_tenant_model_inference.py` | Per-tenant inference, symmetric cross-gateway API-key isolation, AuthPolicy EnvoyFilter workload selectors (RHOAIENG-99372), and per-tenant gateway negative auth (RHOAIENG-100758; `TestTenantGatewayNegativeSecurity`) |
 | `test_multi_tenant_maas_api.py` | Per-tenant `maas-api` infrastructure (S24); gated by `ENABLE_S24_E2E=true` |
 | `test_tenant_auth_isolation.py` | Tenant-scoped API-key/OIDC isolation (S4); gated by `ENABLE_S4_E2E=true` and tenant API URLs |
 | `test_tenant_subscription_isolation.py` | Tenant-scoped subscription listing/selection (S4); gated by `ENABLE_S4_E2E=true` and tenant API URLs |

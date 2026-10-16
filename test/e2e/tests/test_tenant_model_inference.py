@@ -316,6 +316,100 @@ class TestTenantModelInference:
             )
 
 
+_TENANT_INFERENCE_CHAT_BODY = {
+    "model": "facebook/opt-125m",
+    "messages": [{"role": "user", "content": "Say hello"}],
+}
+
+_FORGED_IDENTITY_HEADERS_ON_INFERENCE = {
+    "X-MaaS-Username": "cluster-admin",
+    "X-MaaS-Group": "system:cluster-admins,system:masters",
+    "X-MaaS-KeyName": "forged-prod-key",
+    "X-MaaS-Identity": '{"source":"oidc","claims":{}}',
+    "X-MaaS-Key-Id": "fake-key-id-00000",
+}
+
+
+def _tenant_chat_completions_url(gateway_url: str, model_path: str) -> str:
+    return f"{gateway_url}{model_path}/chat/completions"
+
+
+class TestTenantGatewayNegativeSecurity:
+    """Per-tenant gateway negative auth (RHOAIENG-100758).
+
+    Complements test_negative_security.py (default gateway) and
+    test_auth_envoyfilters_select_their_gateway_workloads (RHOAIENG-99372).
+    """
+
+    @pytest.mark.parametrize("tenant_index", [0, 1], ids=["tenant_a", "tenant_b"])
+    def test_missing_api_key_denied_on_tenant_gateway(self, tenant_inference_cases, tenant_index):
+        """Governed inference on each tenant gateway requires Authorization."""
+        case = tenant_inference_cases[tenant_index]
+        gateway_url = _get_tenant_gateway_url(case["gateway_name"])
+        url = _tenant_chat_completions_url(gateway_url, case["model_path"])
+        response = requests.post(
+            url,
+            headers={"Content-Type": "application/json"},
+            json=_TENANT_INFERENCE_CHAT_BODY,
+            timeout=30,
+            verify=TLS_VERIFY,
+        )
+        assert is_gateway_auth_denial(response), (
+            f"Expected 401/403 without API key on {case['gateway_name']!r}, "
+            f"got {response.status_code}. Response: {response_summary(response, max_body=500)}"
+        )
+
+    @pytest.mark.parametrize("tenant_index", [0, 1], ids=["tenant_a", "tenant_b"])
+    def test_invalid_api_key_denied_on_tenant_gateway(self, tenant_inference_cases, tenant_index):
+        """Invalid sk-oai-* keys are rejected on each tenant gateway URL."""
+        case = tenant_inference_cases[tenant_index]
+        gateway_url = _get_tenant_gateway_url(case["gateway_name"])
+        url = _tenant_chat_completions_url(gateway_url, case["model_path"])
+        response = requests.post(
+            url,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": "Bearer sk-oai-e2e-invalid-not-a-real-key",
+            },
+            json=_TENANT_INFERENCE_CHAT_BODY,
+            timeout=30,
+            verify=TLS_VERIFY,
+        )
+        assert is_gateway_auth_denial(response), (
+            f"Expected 401/403 for invalid API key on {case['gateway_name']!r}, "
+            f"got {response.status_code}. Response: {response_summary(response, max_body=500)}"
+        )
+
+    @pytest.mark.parametrize("tenant_index", [0, 1], ids=["tenant_a", "tenant_b"])
+    def test_forged_identity_headers_denied_on_tenant_gateway(self, tenant_inference_cases, tenant_index):
+        """Client-supplied X-MaaS identity headers are denied on each tenant gateway (RHOAIENG-99369)."""
+        case = tenant_inference_cases[tenant_index]
+        gateway_url = _get_tenant_gateway_url(case["gateway_name"])
+        api_key = _create_tenant_api_key(gateway_url, case, name_prefix="e2e-tenant-neg-sec")
+        _wait_for_chat_ok(case, gateway_url, api_key)
+
+        url = _tenant_chat_completions_url(gateway_url, case["model_path"])
+        with _tenant_gateway_auth_policy(case["gateway_name"]):
+            response = requests.post(
+                url,
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {api_key}",
+                    **_FORGED_IDENTITY_HEADERS_ON_INFERENCE,
+                },
+                json=_TENANT_INFERENCE_CHAT_BODY,
+                timeout=30,
+                verify=TLS_VERIFY,
+            )
+        assert is_gateway_auth_denial(response), (
+            f"Expected 401/403 for forged identity headers on {case['gateway_name']!r}, "
+            f"got {response.status_code}. Response: {response_summary(response, max_body=500)}"
+        )
+        assert "sk-oai-" not in response.text, (
+            "Denied inference response must not contain API key material"
+        )
+
+
 # ─── Body-based routing ────────────────────────────────────────────────────
 
 
