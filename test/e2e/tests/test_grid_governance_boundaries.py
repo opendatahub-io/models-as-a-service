@@ -25,6 +25,7 @@ from test_helper import (
 
 pytestmark = [
     pytest.mark.nightly,
+    pytest.mark.grid_oidc,
     pytest.mark.skipif(
         os.environ.get("EXTERNAL_OIDC", "").lower() != "true",
         reason="EXTERNAL_OIDC is not true",

@@ -18,6 +18,7 @@ markers = [
     "legacy_ipp: legacy maas-controller IPP dataplane; excluded from default e2e passes (run with -m legacy_ipp)",
     "external: external OIDC and ExternalModel integrations",
     "nightly: extended E2E (external OIDC, slow paths); excluded from PR /group-test; run on scheduled nightly only",
+    "grid_oidc: Grid organization OIDC governance tests; collected before legacy external OIDC tests",
 ]
 addopts = "--strict-markers"
 
