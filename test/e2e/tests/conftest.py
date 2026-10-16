@@ -79,6 +79,7 @@ def _activate_marked_worker_tenant(request):
         request.getfixturevalue("worker_tenant_context")
 
 
+@pytest.hookimpl(trylast=True)
 def pytest_collection_modifyitems(config, items):
     """Tag serial tests and activate explicitly marked worker isolation.
 
@@ -114,6 +115,15 @@ def pytest_collection_modifyitems(config, items):
                 f"{item.nodeid}: mutable xdist group {groups} requires "
                 "@pytest.mark.worker_tenant or @pytest.mark.serial"
             )
+
+    _order_grid_oidc_tests_first(items)
+
+
+def _order_grid_oidc_tests_first(items):
+    """Surface Grid OIDC failures before the longer legacy external suite."""
+    items.sort(
+        key=lambda item: 0 if item.get_closest_marker("grid_oidc") else 1
+    )
 
 
 # TLS verification flag - set E2E_SKIP_TLS_VERIFY=true to disable cert verification
