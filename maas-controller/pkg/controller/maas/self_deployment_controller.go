@@ -24,6 +24,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -103,6 +104,9 @@ type LifecycleReconciler struct {
 	DiscoveryLogLevel           string
 	DiscoveryNamespace          string
 	DiscoveryReplicas           *int32
+
+	staleUsageCleanupMu        sync.Mutex
+	staleUsageCleanupCompleted bool
 }
 
 //+kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;update;patch
@@ -422,6 +426,10 @@ func aitenantReferencesConfig(aitenant *maasv1alpha1.AITenant, ct *maasv1alpha1.
 }
 
 func (r *LifecycleReconciler) ensureObservability(ctx context.Context, log logr.Logger) error {
+	// Upgrade cleanup must also run when the new monitoring stack is not configured.
+	if err := r.cleanupStaleUsageResources(ctx, log); err != nil {
+		return err
+	}
 	if r.MonitoringNamespace == "" {
 		log.V(1).Info("monitoring namespace not configured; skipping observability setup")
 		return nil

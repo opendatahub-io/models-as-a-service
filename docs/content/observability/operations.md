@@ -123,6 +123,19 @@ kubectl get persesdashboard -A -o json | jq -r '
 
 #### Operator-managed dashboards
 
+During upgrade, the MaaS controller removes the stale 3.4 metrics dashboard
+`dashboard-3-maas-usage-admin`, datasource `kuadrant-prometheus-datasource`, and
+ConfigMap `prometheus-web-tls-ca` from its applications namespace (for example,
+`redhat-ods-applications`). The dashboard is preserved when `spec.display.name`
+is `Usage (legacy)`, identifying the current opt-in metrics dashboard even when
+the applications and monitoring namespaces are the same. The obsolete datasource
+and ConfigMap are removed by name; resources with other names or in other
+namespaces are unaffected.
+
+Cleanup runs once successfully per controller lifetime, independently of monitoring
+setup. Concurrent reconciliations are serialized, failures are retried on subsequent
+reconciliation, and missing Perses APIs leave cleanup pending until they are available.
+
 Requires a running **maas-controller** (`LifecycleReconciler`), a `Config` instance, a monitoring namespace, and Perses CRDs (`PersesAvailable`). See [Setup](setup.md).
 
 Usage-log dashboards (`dashboard-4`, `dashboard-5`) are reconciled whenever `Config/default` exists. Setting `usageLogging` does not remove them. Deleting `Config/default` garbage-collects controller-owned copies.
