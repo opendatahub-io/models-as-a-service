@@ -35,11 +35,14 @@ See [Upgrade to 3.6](../migration/upgrade-to-3.6.md) for full guidance. Summary:
 - **Recommended short downtime** when upgrading from 3.5 → 3.6 while AuthPolicy / TRLP / maas-api adopt short subscription rate-limit IDs (avoids a brief rate-limit fail-open window).
 - **Token rate-limit counters reset** on upgrade (limit keys become rate-grouped `tokens-*`, counters use `selected_subscription_id`). Limitador enforcement budgets start fresh for the current window.
 - **Prometheus and Loki usage history are unaffected** — telemetry still labels by subscription name (`selected_subscription` / `X-MaaS-Subscription`), not the rate-limit ID.
+- **IPP → Praxis plugins ConfigMap migration is gated:** product-default ConfigMaps (and default + response `api-translation`) auto-migrate; customized ConfigMaps block until `maas.opendatahub.io/force-payload-processing-migration=true` is set on `MaasTenantConfig` (see [Upgrade to 3.6](../migration/upgrade-to-3.6.md)).
 - **Legacy metrics usage dashboard is opt-in** (`Config.spec.usageMetricsDashboard`, default `false`). The operator no longer deploys `dashboard-3-maas-usage-admin` unless this is set to `true`; existing operator-owned copies are removed on reconcile. See [Upgrade to 3.6](../migration/upgrade-to-3.6.md).
 
 ### Key Fixes
 
 - **Short subscription rate-limit IDs in TokenRateLimitPolicy:** TRLP `when` predicates and counters use a stable 16-hex SHA-256 of `namespace/name@modelNs/model` (`selected_subscription_id`) so Kuadrant WASM / EnvoyFilter size no longer embeds long subscription strings. Limit map keys stay rate-grouped (`tokens-<limit>-per-<window>`). Human-readable `selected_subscription_key` remains for telemetry.
+
+- **Consistent group-name validation, slashes now allowed on all paths:** API-key minting and AuthPolicy enforcement previously disagreed about `/` in group names — API keys rejected `/` while the gateway allowed it, so behavior depended on which path was used. Both now enforce the same allowlist (`[A-Za-z0-9:#._/ -]`), the rule is defined once per component, and a mirrored test in each module fails if the copies drift. Users in IdP groups that contain `/` (Keycloak full-path groups, Entra ID, Okta, GitHub `org/team`) or `#` (for example IBM Cloud IAM names like `IAM#AccessGroupId-...`) can now mint and use API keys; requests with such groups previously failed with a validation error. Requests with unsafe OIDC group names are still rejected at the gateway with 403; when an invalid group name does reach the API-key handler, it now returns HTTP 400 with the allowed character set instead of an opaque 500. Identity headers now also select the group source by identity type (JWT `groups` claim vs OpenShift TokenReview `user.groups`) and gate both on the pattern, closing a claim-confusion path where a crafted JWT `user` claim could forge group names into `X-MaaS-Group`.
 
 ---
 

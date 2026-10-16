@@ -563,14 +563,20 @@ def _is_connect_failure(exc: requests.exceptions.ConnectionError) -> bool:
     return isinstance(reason, NewConnectionError)
 
 
-def _request_with_gateway_retry(method, url, retries=None, delay=None, **kwargs):
+def _request_with_gateway_retry(method, url, retries=None, delay=None, deadline=None, **kwargs):
     """Make an HTTP request, retrying transient gateway/auth propagation errors.
 
     See ``_is_transient_gateway_response`` for retryable status/body patterns.
     Connection errors are retried only when the request was never sent
     (``_is_connect_failure``), which is safe for POST.
 
+    When ``deadline`` is set (Unix timestamp), each request timeout, retry delay,
+    and gateway-enforcement wait is clamped to the remaining time so polling loops
+    cannot exceed their outer deadline.
+
     Returns the last response — callers' assertions surface a permanent failure.
+    Raises:
+        TimeoutError: When ``deadline`` has passed before any response was received.
     """
     retries = GATEWAY_PROPAGATION_RETRIES if retries is None else retries
     delay = GATEWAY_PROPAGATION_DELAY if delay is None else delay
@@ -578,19 +584,34 @@ def _request_with_gateway_retry(method, url, retries=None, delay=None, **kwargs)
     verify = kwargs.pop("verify", TLS_VERIFY)
     r = None
     for attempt in range(1, retries + 1):
+        if deadline is not None:
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                if r is not None:
+                    return r
+                raise TimeoutError(
+                    f"Request deadline exceeded before completing request to {url}"
+                )
+            request_timeout = min(timeout, max(1, int(remaining)))
+        else:
+            request_timeout = timeout
         try:
-            r = method(url, timeout=timeout, verify=verify, **kwargs)
+            r = method(url, timeout=request_timeout, verify=verify, **kwargs)
         except requests.exceptions.ConnectionError as exc:
             if attempt >= retries or not _is_connect_failure(exc):
                 raise
+            retry_delay = delay
+            if deadline is not None:
+                retry_delay = min(delay, max(0, int(deadline - time.time())))
             log.info(
                 "Gateway connection failed before sending (attempt %d/%d: %s), retrying in %ds...",
                 attempt,
                 retries,
                 exc,
-                delay,
+                retry_delay,
             )
-            time.sleep(delay)
+            if retry_delay > 0:
+                time.sleep(retry_delay)
             continue
         if _is_transient_gateway_response(r) and attempt < retries:
             log.info(
@@ -604,11 +625,22 @@ def _request_with_gateway_retry(method, url, retries=None, delay=None, **kwargs)
             # After the first proxy-style 500/503, re-check AuthPolicy Enforced
             # so remaining attempts are less likely to hit a mid-reload window.
             if r.status_code in (500, 503) and attempt == 1:
-                try:
-                    _wait_for_gateway_auth_enforced(timeout=min(60, GATEWAY_ENFORCED_TIMEOUT))
-                except TimeoutError:
-                    pass
-            time.sleep(delay)
+                enforcement_timeout = min(60, GATEWAY_ENFORCED_TIMEOUT)
+                if deadline is not None:
+                    enforcement_timeout = min(
+                        enforcement_timeout,
+                        max(0, int(deadline - time.time())),
+                    )
+                if enforcement_timeout > 0:
+                    try:
+                        _wait_for_gateway_auth_enforced(timeout=enforcement_timeout)
+                    except TimeoutError:
+                        pass
+            retry_delay = delay
+            if deadline is not None:
+                retry_delay = min(delay, max(0, int(deadline - time.time())))
+            if retry_delay > 0:
+                time.sleep(retry_delay)
             continue
         return r
     return r
@@ -744,7 +776,7 @@ def _is_not_found_error(stderr):
     return "notfound" in stderr_lower or "not found" in stderr_lower
 
 
-def _run_oc(cmd, *, input_text=None, timeout=None):
+def _run_oc(cmd, *, input_text=None, timeout=None, retry_budget=None):
     """Run an oc/kubectl command, retrying transient API server and network errors.
 
     Retries while stderr matches ``_is_transient_kubectl_error`` or the process
@@ -752,9 +784,12 @@ def _run_oc(cmd, *, input_text=None, timeout=None):
     Any other outcome, NotFound included, is returned on the first attempt so
     callers keep interpreting ``returncode``/``stderr`` themselves. Once the
     budget is spent, the last result is returned or TimeoutExpired re-raised.
+
+    ``retry_budget`` caps total retry time (seconds) for callers with an outer
+    deadline, such as gateway-enforcement probes inside polling loops.
     """
     timeout = OC_TIMEOUT if timeout is None else timeout
-    deadline = time.monotonic() + OC_RETRY_BUDGET
+    deadline = time.monotonic() + (retry_budget if retry_budget is not None else OC_RETRY_BUDGET)
     what = " ".join([os.path.basename(cmd[0]), *cmd[1:3]])
     attempt = 0
     while True:
@@ -783,7 +818,7 @@ def _run_oc(cmd, *, input_text=None, timeout=None):
         time.sleep(delay)
 
 
-def _get_cr(kind, name, namespace=None):
+def _get_cr(kind, name, namespace=None, *, oc_timeout=None, oc_retry_budget=None):
     """Get a CR as dict, or None if not found. Retries on transient errors.
 
     Returns None only when the resource genuinely does not exist (server NotFound).
@@ -792,7 +827,11 @@ def _get_cr(kind, name, namespace=None):
     from true absence.
     """
     namespace = namespace or _ns()
-    result = _run_oc(["oc", "get", kind, name, "-n", namespace, "-o", "json"])
+    result = _run_oc(
+        ["oc", "get", kind, name, "-n", namespace, "-o", "json"],
+        timeout=oc_timeout,
+        retry_budget=oc_retry_budget,
+    )
 
     if result.returncode == 0:
         return json.loads(result.stdout)
@@ -1209,6 +1248,33 @@ def chat(prompt: str, model_v1: str, headers: dict, model_name: str, *,
     return requests.post(url, headers=headers, json=body, timeout=30, verify=TLS_VERIFY, stream=stream)
 
 
+OPENAI_SSE_DONE_LINE = "data: [DONE]"
+
+
+def assert_openai_sse_chat_stream(response: requests.Response) -> list[str]:
+    """
+    Given a streaming chat/completions Response (stream=True), assert OpenAI-style SSE:
+    HTTP 200, text/event-stream, multiple parseable data: JSON chunks, and data: [DONE].
+    Returns non-empty event lines (including the terminal [DONE] line).
+    """
+    assert response.status_code == 200, (
+        f"expected streaming HTTP 200, got {response.status_code}: {(response.text or '')[:500]}"
+    )
+    content_type = response.headers.get("content-type", "")
+    assert "text/event-stream" in content_type, (
+        f"expected text/event-stream, got content-type={content_type!r}"
+    )
+    events = [line for line in response.iter_lines(decode_unicode=True) if line]
+    assert events, "streaming response contained no SSE lines"
+    assert events[-1] == OPENAI_SSE_DONE_LINE, f"stream did not end with [DONE]: {events[-3:]}"
+    data_chunks = [e for e in events[:-1] if e.startswith("data: {")]
+    assert data_chunks, f"stream carried no JSON data chunks: {events[:5]}"
+    for chunk in data_chunks:
+        payload = chunk[len("data: ") :]
+        json.loads(payload)
+    return events
+
+
 def completions(prompt: str, model_v1: str, headers: dict, model_name: str):
     url = f"{model_v1}/completions"
     body = {"model": model_name, "prompt": prompt, "max_tokens": 16}
@@ -1338,7 +1404,16 @@ def _wait_for_gateway_auth_enforced(
     )
 
     while time.time() < deadline:
-        cr = _get_cr("authpolicy", name, namespace)
+        remaining = max(0, int(deadline - time.time()))
+        if remaining <= 0:
+            break
+        cr = _get_cr(
+            "authpolicy",
+            name,
+            namespace,
+            oc_timeout=min(OC_TIMEOUT, remaining),
+            oc_retry_budget=remaining,
+        )
         if cr is None:
             last_snapshot = "AuthPolicy not found"
             now = time.time()
@@ -1373,7 +1448,9 @@ def _wait_for_gateway_auth_enforced(
                 log.info("Gateway AuthPolicy %s/%s is Accepted and Enforced", namespace, name)
                 return cr
             log.debug("Gateway AuthPolicy %s/%s not ready: %s", namespace, name, last_snapshot)
-        time.sleep(2)
+        sleep_for = min(2, max(0, int(deadline - time.time())))
+        if sleep_for > 0:
+            time.sleep(sleep_for)
 
     raise TimeoutError(
         f"Gateway AuthPolicy {namespace}/{name} was not Accepted+Enforced within {timeout}s "

@@ -1,6 +1,7 @@
 package token_test
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -190,4 +191,140 @@ func TestExtractVerifiedIdentityOptional(t *testing.T) {
 		router.ServeHTTP(recorder, request)
 		assert.Equal(t, http.StatusUnauthorized, recorder.Code)
 	})
+}
+
+func TestGetMe(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	handler := token.NewHandler(logger.New(false), "tenant")
+	router := gin.New()
+	router.GET("/v1/me", handler.ExtractVerifiedIdentity(), handler.GetMe)
+
+	request := httptest.NewRequest(http.MethodGet, "/v1/me?organization_id=another-org", nil)
+	request.Header.Set(constant.HeaderIdentity, validIdentityEnvelope)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	assert.Equal(t, "no-store", recorder.Header().Get("Cache-Control"))
+
+	var response map[string]any
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &response))
+	assert.Equal(t, "https://issuer.example.com", response["iss"])
+	assert.Equal(t, "user-1", response["sub"])
+	assert.Equal(t, "Alex User", response["name"])
+	assert.Equal(t, "Alex", response["given_name"])
+	assert.Equal(t, "User", response["family_name"])
+	assert.Equal(t, "alex", response["preferred_username"])
+	assert.Equal(t, "alex@example.com", response["email"])
+	assert.Equal(t, []any{"42c3e46f-2477-44d7-a85b-d3b43f6b31fa/users"}, response["groups"])
+	assert.Equal(t, []any{
+		map[string]any{
+			"organization_id":   "42c3e46f-2477-44d7-a85b-d3b43f6b31fa",
+			"organization_name": "coke",
+			"roles":             []any{"admins"},
+		},
+	}, response["https://redhat.com/maas/orgs"])
+	assert.ElementsMatch(t, []string{
+		"iss", "sub", "name", "given_name", "family_name", "preferred_username", "email", "groups",
+		"https://redhat.com/maas/orgs",
+	}, mapKeys(response))
+	assert.NotContains(t, response, "is_admin")
+	assert.NotContains(t, response, "subscriptions")
+}
+
+func TestGetMeRequiresVerifiedSSOIdentity(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	handler := token.NewHandler(logger.New(false), "tenant")
+	router := gin.New()
+	router.GET("/v1/me", handler.ExtractVerifiedIdentity(), handler.GetMe)
+
+	request := httptest.NewRequest(http.MethodGet, "/v1/me", nil)
+	request.Header.Set(constant.HeaderUsername, "alice")
+	request.Header.Set(constant.HeaderGroup, `["team-a"]`)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+
+	assert.Equal(t, http.StatusUnauthorized, recorder.Code)
+	assert.NotContains(t, recorder.Body.String(), "alice")
+	assert.NotContains(t, recorder.Body.String(), "team-a")
+}
+
+func TestGetMeAbsentOptionalMembershipSucceeds(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	handler := token.NewHandler(logger.New(false), "tenant")
+	router := gin.New()
+	router.GET("/v1/me", handler.ExtractVerifiedIdentity(), handler.GetMe)
+
+	envelope := `{
+		"source": "oidc",
+		"claims": {
+			"iss": "https://issuer.example.com",
+			"sub": "user-2",
+			"aud": "maas-api",
+			"azp": "maas-client"
+		}
+	}`
+	request := httptest.NewRequest(http.MethodGet, "/v1/me", nil)
+	request.Header.Set(constant.HeaderIdentity, envelope)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	assert.Equal(t, "no-store", recorder.Header().Get("Cache-Control"))
+
+	var response token.IdentityResponse
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &response))
+	assert.Equal(t, "https://issuer.example.com", response.Issuer)
+	assert.Equal(t, "user-2", response.Subject)
+	assert.Empty(t, response.Name)
+	assert.Empty(t, response.GivenName)
+	assert.Empty(t, response.FamilyName)
+	assert.Empty(t, response.PreferredUsername)
+	assert.Empty(t, response.Email)
+	assert.Empty(t, response.Groups)
+	assert.Empty(t, response.Organizations)
+}
+
+func TestGetMeOmitsAbsentOrganizationRoles(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	handler := token.NewHandler(logger.New(false), "tenant")
+	router := gin.New()
+	router.GET("/v1/me", handler.ExtractVerifiedIdentity(), handler.GetMe)
+
+	envelope := `{
+		"source": "oidc",
+		"claims": {
+			"iss": "https://issuer.example.com",
+			"sub": "user-2",
+			"aud": "maas-api",
+			"azp": "maas-client",
+			"https://redhat.com/maas/orgs": [
+				{"organization_id": "42c3e46f-2477-44d7-a85b-d3b43f6b31fa"}
+			]
+		}
+	}`
+	request := httptest.NewRequest(http.MethodGet, "/v1/me", nil)
+	request.Header.Set(constant.HeaderIdentity, envelope)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+
+	var response map[string]any
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &response))
+	organizations, ok := response["https://redhat.com/maas/orgs"].([]any)
+	require.True(t, ok)
+	require.Len(t, organizations, 1)
+	organization, ok := organizations[0].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "42c3e46f-2477-44d7-a85b-d3b43f6b31fa", organization["organization_id"])
+	assert.NotContains(t, organization, "roles")
+}
+
+func mapKeys(value map[string]any) []string {
+	keys := make([]string, 0, len(value))
+	for key := range value {
+		keys = append(keys, key)
+	}
+	return keys
 }

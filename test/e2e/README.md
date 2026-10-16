@@ -43,7 +43,7 @@ pytest tests/<file>.py -v
 
 | File | Focus |
 |------|--------|
-| `test_smoke.py` | Read-only smoke checks, including non-streaming chat response body content |
+| `test_smoke.py` | Read-only smoke checks: non-streaming and streaming (`text/event-stream`) chat/completions |
 | `test_subscription.py` | Subscription / inference flows |
 | `test_trlp_rate_grouping.py` | TRLP limits grouped by rate: shared limits, per-subscription and per-user budgets, rate edits, gateway wasm config size guard |
 | `test_api_keys.py` | `/v1/api-keys` |

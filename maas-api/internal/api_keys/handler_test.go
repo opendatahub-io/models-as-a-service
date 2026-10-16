@@ -210,6 +210,38 @@ func TestCreateAPIKey_RejectsAPIKeyAuthentication(t *testing.T) {
 	assert.Equal(t, metricsCall{tenant: "redteam", result: "rejected"}, spy.tokenMints[0])
 }
 
+// TestCreateAPIKey_InvalidGroupNameIs400 verifies that group-name validation
+// failures surface as 400 with a helpful message, not as a generic 500.
+// Group names come from identity headers minted by the gateway, so this is
+// a validation outcome, not a server error.
+func TestCreateAPIKey_InvalidGroupNameIs400(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store := NewMockStore()
+	svc := NewServiceWithLogger(store, &config.Config{}, fixedSubSelector{}, logger.Development())
+	spy := &spyMetricsRecorder{}
+	h := NewHandler(logger.Development(), svc, newMockAdminChecker(), spy)
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/api-keys", strings.NewReader(`{"name":"slash-key"}`))
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Set("user", &token.UserContext{
+		Username: "alice",
+		Groups:   []string{"/Engineering", "unsafe;group"},
+		Tenant:   "redteam",
+	})
+
+	h.CreateAPIKey(c)
+
+	require.Equal(t, http.StatusBadRequest, w.Code)
+	// Assert the functional contract only: the offending group is echoed in
+	// the response. The exact wording of the message is free to change.
+	assert.Contains(t, w.Body.String(), "unsafe;group", "response should identify the offending group")
+	assert.Empty(t, store.keys, "rejected requests must not persist a key")
+	require.Len(t, spy.tokenMints, 1)
+	assert.Equal(t, metricsCall{tenant: "redteam", result: "rejected"}, spy.tokenMints[0])
+}
+
 func TestValidateAPIKey_RecordsValidationMetric(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	store := NewMockStore()

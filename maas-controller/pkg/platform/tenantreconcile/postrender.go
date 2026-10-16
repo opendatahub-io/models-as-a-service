@@ -12,6 +12,7 @@ import (
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/authpolicy"
+	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/groupname"
 )
 
 // PostRender mutates rendered resources after kustomize build. It patches all
@@ -246,11 +247,20 @@ func patchAuthPolicyWithOIDC(log logr.Logger, resource *unstructured.Unstructure
 	}, "spec", "rules", "response", "success", "headers", "X-MaaS-Username-OC", "plain"); err != nil {
 		return fmt.Errorf("failed to set X-MaaS-Username-OC: %w", err)
 	}
-	groupsExpr := `has(auth.identity.groups) ? ` +
-		`(size(auth.identity.groups) > 0 && auth.identity.groups.all(g, g.matches('^[A-Za-z0-9:._/ -]+$')) ? ` +
+	// The group source is selected by identity type, never by claim presence:
+	// JWT identities (auth.identity.iss set) use only the groups claim,
+	// TokenReview identities use only user.groups — Authorino overlays the
+	// decoded JWT payload into auth.identity, so a JWT could otherwise craft
+	// a "user" claim and reach the TokenReview branch. Both sources are
+	// gated on the canonical pattern because CEL builds the JSON by
+	// concatenation without escaping.
+	groupsExpr := `has(auth.identity.iss) ? ` +
+		`(has(auth.identity.groups) && size(auth.identity.groups) > 0 && ` +
+		`auth.identity.groups.all(g, g.matches('` + groupname.Pattern + `')) ? ` +
 		`'["system:authenticated","' + auth.identity.groups.join('","') + '"]' : ` +
 		`'["system:authenticated"]') : ` +
-		`(has(auth.identity.user.groups) && size(auth.identity.user.groups) > 0 ? ` +
+		`(has(auth.identity.user.groups) && size(auth.identity.user.groups) > 0 && ` +
+		`auth.identity.user.groups.all(g, g.matches('` + groupname.Pattern + `')) ? ` +
 		`'["system:authenticated","' + auth.identity.user.groups.join('","') + '"]' : ` +
 		`'["system:authenticated"]')`
 	if err := unstructured.SetNestedField(resource.Object, map[string]any{

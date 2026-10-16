@@ -298,7 +298,7 @@ func (h *Handler) CreateAPIKey(c *gin.Context) {
 	)
 	if err != nil {
 		h.logger.Error("Failed to create API key", "error", err)
-		if errors.Is(err, ErrExpirationNotPositive) || errors.Is(err, ErrExpirationExceedsMax) {
+		if errors.Is(err, ErrExpirationNotPositive) || errors.Is(err, ErrExpirationExceedsMax) || errors.Is(err, ErrInvalidGroupName) {
 			h.recordTokenMint(user.Tenant, "rejected")
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return

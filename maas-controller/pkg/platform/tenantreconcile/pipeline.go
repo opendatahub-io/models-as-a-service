@@ -126,45 +126,19 @@ func RunPlatform(
 	// absent resources. When SkipIPP is true (praxis), run a one-shot, ownership-
 	// gated cleanup of existing MaaS-owned IPP operands, then stop touching
 	// payload-processing names — ai-gateway-controller owns them for praxis tenants.
-	if params.SkipIPP {
-		switch payloadProcessingStatus(tenant) {
-		case PayloadProcessingStatusCleanupComplete:
-			// Already signaled; do not re-cleanup.
-		case "":
-			// Absent: legacy still owned the names — clean up, then signal.
-			if err := cleanupIPPResources(ctx, c, params, mcfg.UID, log); err != nil {
-				return nil, fmt.Errorf("cleanup IPP resources: %w", err)
-			}
-			if err := markPayloadProcessingCleanupComplete(ctx, c, tenant); err != nil {
-				return nil, fmt.Errorf("mark payload-processing cleanup complete: %w", err)
-			}
-		default:
-			// Any other value is a peer claim; do not overwrite it.
-		}
-	} else {
-		// Legacy IPP is selected. Status drives the handshake (no bundleExists gate):
-		//   absent            → apply
-		//   cleanup-complete  → CAS-claim to absent, then apply
-		//   any other value   → wait for peer switch-off
-		ready, err := ensureLegacyMayDeploy(ctx, c, tenant)
-		if err != nil {
-			return nil, fmt.Errorf("ensure legacy may deploy: %w", err)
-		}
-		if !ready {
-			return &RunResult{
-				DeploymentPending: true,
-				Detail:            "waiting for the praxis payload-processing cleanup to finish before redeploying legacy IPP",
-				Warnings:          params.Warnings,
-
-				KuadrantDetectionWarning: params.KuadrantDetectionWarning,
-			}, nil
-		}
-		if err := cleanupPayloadProcessingHPA(ctx, c, params, log); err != nil {
-			return nil, fmt.Errorf("cleanup payload-processing HPA: %w", err)
-		}
-		if err := cleanupPayloadPreProcessingHPA(ctx, c, params, log); err != nil {
-			return nil, fmt.Errorf("cleanup payload-pre-processing HPA: %w", err)
-		}
+	// A blocked plugins ConfigMap gate skips only that cleanup; apply/sync/readiness
+	// for non-IPP resources still run so the rest of the tenant stays current.
+	switchOutcome, err := reconcilePayloadProcessingSwitch(ctx, c, tenant, &params, mcfg, log)
+	if err != nil {
+		return nil, err
+	}
+	if switchOutcome.pendingDetail != "" {
+		return &RunResult{
+			DeploymentPending:        true,
+			Detail:                   switchOutcome.pendingDetail,
+			Warnings:                 params.Warnings,
+			KuadrantDetectionWarning: params.KuadrantDetectionWarning,
+		}, nil
 	}
 
 	if err := ApplyRendered(ctx, c, scheme, tenant, appNs, mcfg, resources); err != nil {
@@ -184,7 +158,7 @@ func RunPlatform(
 		return nil, fmt.Errorf("deployment status: %w", err)
 	}
 	if !ready {
-		return &RunResult{DeploymentPending: true, Detail: detail, Warnings: params.Warnings,
+		return &RunResult{DeploymentPending: true, Detail: withMigrationBlockedDetail(detail, switchOutcome.blockedReason), Warnings: params.Warnings,
 			KuadrantDetectionWarning: params.KuadrantDetectionWarning}, nil
 	}
 	if !params.SkipIPP {
@@ -193,11 +167,107 @@ func RunPlatform(
 			return nil, fmt.Errorf("payload-processing EnvoyFilter status: %w", err)
 		}
 		if !ready {
-			return &RunResult{DeploymentPending: true, Detail: detail, Warnings: params.Warnings,
+			return &RunResult{DeploymentPending: true, Detail: withMigrationBlockedDetail(detail, switchOutcome.blockedReason), Warnings: params.Warnings,
 				KuadrantDetectionWarning: params.KuadrantDetectionWarning}, nil
 		}
 	}
+	if switchOutcome.blockedReason != "" {
+		return &RunResult{DeploymentPending: true, Detail: switchOutcome.blockedReason, Warnings: params.Warnings,
+			KuadrantDetectionWarning: params.KuadrantDetectionWarning}, nil
+	}
 	return &RunResult{Warnings: params.Warnings, KuadrantDetectionWarning: params.KuadrantDetectionWarning}, nil
+}
+
+type payloadProcessingSwitchOutcome struct {
+	blockedReason string // plugins ConfigMap gate blocked; caller continues non-IPP apply
+	pendingDetail string // peer handshake wait; caller returns DeploymentPending immediately
+}
+
+func withMigrationBlockedDetail(detail, blockedReason string) string {
+	if blockedReason == "" {
+		return detail
+	}
+	if detail == "" {
+		return blockedReason
+	}
+	return fmt.Sprintf("%s; migration blocked: %s", detail, blockedReason)
+}
+
+// reconcilePayloadProcessingSwitch runs the one-shot IPP↔Praxis cleanup handshake.
+// When the plugins ConfigMap gate blocks migration it records the annotation and
+// returns blockedReason without cleaning up, so the caller can still apply non-IPP
+// resources. A non-empty pendingDetail means the caller should return pending now.
+func reconcilePayloadProcessingSwitch(
+	ctx context.Context,
+	c client.Client,
+	tenant client.Object,
+	params *PlatformParams,
+	mcfg *maasv1alpha1.Config,
+	log logr.Logger,
+) (payloadProcessingSwitchOutcome, error) {
+	if params.SkipIPP {
+		switch payloadProcessingStatus(tenant) {
+		case PayloadProcessingStatusCleanupComplete:
+			// Steady-state praxis tenants already have cleanup-complete and no
+			// migration annotation. Skip the clear patch unless a sticky
+			// blocked marker remains (self-heal); otherwise every reconcile
+			// would Get+Patch MaasTenantConfig for a no-op.
+			if ann := tenant.GetAnnotations(); ann != nil && ann[AnnotationPayloadProcessingMigration] != "" {
+				if err := setPayloadProcessingMigrationAnnotation(ctx, c, tenant, ""); err != nil {
+					return payloadProcessingSwitchOutcome{}, fmt.Errorf("clear payload-processing migration annotation: %w", err)
+				}
+			}
+		case "":
+			gate, gateErr := evaluatePluginsConfigMapMigration(ctx, c, *params, tenant)
+			if gateErr != nil {
+				return payloadProcessingSwitchOutcome{}, fmt.Errorf("evaluate plugins ConfigMap migration: %w", gateErr)
+			}
+			if gate.Decision == pluginsMigrationBlock {
+				log.Info("blocking IPP→Praxis migration for non-standard plugins ConfigMap",
+					"reason", gate.Reason,
+					"forceAnnotation", AnnotationForcePayloadProcessingMigration+"=true")
+				if err := setPayloadProcessingMigrationAnnotation(ctx, c, tenant, PayloadProcessingMigrationBlocked); err != nil {
+					return payloadProcessingSwitchOutcome{}, fmt.Errorf("mark payload-processing migration blocked: %w", err)
+				}
+				params.Warnings = append(params.Warnings, gate.Reason)
+				return payloadProcessingSwitchOutcome{blockedReason: gate.Reason}, nil
+			}
+			log.Info("plugins ConfigMap migration gate allow", "baseline", gate.Baseline, "reason", gate.Reason)
+			if err := cleanupIPPResources(ctx, c, *params, mcfg.UID, log); err != nil {
+				return payloadProcessingSwitchOutcome{}, fmt.Errorf("cleanup IPP resources: %w", err)
+			}
+			if err := setPayloadProcessingMigrationAnnotation(ctx, c, tenant, ""); err != nil {
+				return payloadProcessingSwitchOutcome{}, fmt.Errorf("clear payload-processing migration annotation: %w", err)
+			}
+			if err := markPayloadProcessingCleanupComplete(ctx, c, tenant); err != nil {
+				return payloadProcessingSwitchOutcome{}, fmt.Errorf("mark payload-processing cleanup complete: %w", err)
+			}
+		default:
+			// Any other value is a peer claim; do not overwrite it.
+		}
+		return payloadProcessingSwitchOutcome{}, nil
+	}
+
+	// Legacy IPP is selected. Status drives the handshake (no bundleExists gate):
+	//   absent            → apply
+	//   cleanup-complete  → CAS-claim to absent, then apply
+	//   any other value   → wait for peer switch-off
+	ready, err := ensureLegacyMayDeploy(ctx, c, tenant)
+	if err != nil {
+		return payloadProcessingSwitchOutcome{}, fmt.Errorf("ensure legacy may deploy: %w", err)
+	}
+	if !ready {
+		return payloadProcessingSwitchOutcome{
+			pendingDetail: "waiting for the praxis payload-processing cleanup to finish before redeploying legacy IPP",
+		}, nil
+	}
+	if err := cleanupPayloadProcessingHPA(ctx, c, *params, log); err != nil {
+		return payloadProcessingSwitchOutcome{}, fmt.Errorf("cleanup payload-processing HPA: %w", err)
+	}
+	if err := cleanupPayloadPreProcessingHPA(ctx, c, *params, log); err != nil {
+		return payloadProcessingSwitchOutcome{}, fmt.Errorf("cleanup payload-pre-processing HPA: %w", err)
+	}
+	return payloadProcessingSwitchOutcome{}, nil
 }
 
 // Run executes the Tenant platform pipeline (dependencies → prerequisites → render → apply → status).

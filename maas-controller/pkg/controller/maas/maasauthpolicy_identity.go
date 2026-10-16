@@ -55,6 +55,9 @@ func verifiedIdentityHeader(oidc *oidcConfig, notAPIKeyPredicate string) map[str
 					"email": map[string]any{
 						"expression": `has(auth.identity.email) ? auth.identity.email : ""`,
 					},
+					"groups": map[string]any{
+						"expression": `has(auth.identity.groups) ? auth.identity.groups : []`,
+					},
 					"https://redhat.com/maas/orgs": map[string]any{
 						"expression": `"https://redhat.com/maas/orgs" in auth.identity ? auth.identity["https://redhat.com/maas/orgs"] : []`,
 					},

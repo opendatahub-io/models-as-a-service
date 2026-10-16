@@ -36,6 +36,53 @@ paths:
                                 $ref: '#/components/schemas/HealthResponse'
                             example:
                                 status: healthy
+    /v1/me:
+        get:
+            tags:
+                - identity
+            summary: Return the verified SSO caller identity
+            description: |
+                Returns the verified `iss` and `sub` claims, optional profile claims, and all literal
+                organization membership entries from the trusted OIDC identity envelope. Optional
+                claims are returned verbatim when present and nonempty; they are omitted when absent
+                or empty, and are never replaced with `null` or an empty array. The response contains
+                no computed permissions, subscriptions, or inventory. Group claims and organization
+                membership entries are independent literal claims; neither is used to infer or
+                validate the other. API-key and Kubernetes authentication cannot provide this
+                SSO-only response.
+            operationId: identity#get-me
+            responses:
+                "200":
+                    description: OK response. The response must not be cached.
+                    headers:
+                        Cache-Control:
+                            description: Disables response caching.
+                            schema:
+                                type: string
+                                example: no-store
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/CallerIdentity'
+                            example:
+                                iss: https://issuer.example.com
+                                sub: user-1
+                                preferred_username: alex
+                                email: alex@example.com
+                                groups:
+                                    - idp-developers
+                                https://redhat.com/maas/orgs:
+                                    - organization_id: 42c3e46f-2477-44d7-a85b-d3b43f6b31fa
+                                      organization_name: grid-tenant
+                                      roles:
+                                          - admins
+                                    - organization_id: 53d4f57e-3588-55e8-b96c-4ec54a7c42fa
+                "401":
+                    description: Unauthorized. Verified SSO identity is missing or invalid.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ErrorResponse'
     /v1/models:
         get:
             tags:
@@ -589,8 +636,24 @@ paths:
         get:
             tags:
                 - subscriptions
-            summary: List all subscriptions the authenticated user has access to
-            description: Returns all MaaSSubscription resources the user has access to based on group membership or username. Useful for UIs that need to show all user subscriptions.
+            summary: List owner and administered subscriptions
+            description: |
+                Returns the union of owner-visible and organization-administered MaaSSubscription
+                resources, deduplicated by namespace and name.
+
+                Owner visibility retains the existing Active/Degraded, non-deleting, and
+                model-authorization filters. A verified SSO caller additionally sees Pending and
+                Failed resources when the subscription's organization association resolves to an
+                organization for which that caller has the admin role.
+
+                Owner-only and API-key items omit `roles`; admin-only items return `["admin"]`;
+                owner/admin overlap returns `["owner","admin"]`. Administered items return every
+                configured model reference, irrespective of inference readiness or authorization.
+                Owner-only and API-key items retain the existing inference-eligible model-reference
+                behavior. Administered model references include `subjects`, an admin-only
+                intersection of `MaaSSubscription.spec.owner` and organization-qualified
+                MaaSAuthPolicy subjects for that exact model reference. The subscription-level
+                `owner` field is the deduplicated union of those per-model `subjects` results.
             operationId: subscriptions#list
             responses:
                 "200":
@@ -602,11 +665,25 @@ paths:
                                 items:
                                     $ref: '#/components/schemas/SubscriptionListItem'
                             example:
-                                - subscription_id_header: free-tier
+                                - subscription_id_header: grid-subscription
+                                  roles:
+                                      - admin
+                                  organization_id: 42c3e46f-2477-44d7-a85b-d3b43f6b31fa
                                   subscription_description: Free Tier
                                   priority: 0
-                                  model_refs: []
-                                - subscription_id_header: premium
+                                  owner:
+                                      groups:
+                                          - name: 42c3e46f-2477-44d7-a85b-d3b43f6b31fa/ai-grid-users
+                                      users:
+                                          - 42c3e46f-2477-44d7-a85b-d3b43f6b31fa/alice
+                                  model_refs:
+                                      - name: free-model
+                                        subjects:
+                                            groups:
+                                                - name: 42c3e46f-2477-44d7-a85b-d3b43f6b31fa/ai-grid-users
+                                            users:
+                                                - 42c3e46f-2477-44d7-a85b-d3b43f6b31fa/alice
+                                - subscription_id_header: owner-subscription
                                   subscription_description: Premium Plan
                                   priority: 10
                                   model_refs: []
@@ -911,39 +988,61 @@ components:
             properties:
                 subscription_id_header:
                     type: string
-                    description: Subscription name to use in the X-MaaS-Subscription header
+                    description: Always present. Subscription name to use in the X-MaaS-Subscription header.
                     example: premium
                 subscription_description:
                     type: string
-                    description: Human-readable description from the openshift.io/description annotation. May be empty if not set.
+                    description: Always present. Human-readable description from the openshift.io/description annotation; empty when unset.
                     example: Premium Plan
                 display_name:
                     type: string
-                    description: Display name from the openshift.io/display-name annotation
+                    description: Display name from the openshift.io/display-name annotation. Omitted when unset or empty.
                     example: Premium
                 priority:
                     type: integer
                     format: int32
-                    description: Subscription priority (higher = higher priority)
+                    description: Always present. Subscription priority (higher = higher priority).
                     example: 10
                 model_refs:
                     type: array
-                    description: Model references with rate limits
+                    description: |
+                        Always present, but may be empty. Administered items contain every configured
+                        reference. Owner-only and API-key items retain the existing inference-eligible
+                        reference set. The MaaSModelRef namespace is used internally for exact joins
+                        and authorization but is not returned.
                     items:
                         $ref: '#/components/schemas/ModelRefInfo'
+                roles:
+                    type: array
+                    description: |
+                        Effective caller relationship. Omitted for owner-only and API-key responses.
+                        Admin-only is ["admin"]; owner/admin overlap is ["owner","admin"].
+                    items:
+                        type: string
+                        enum:
+                            - owner
+                            - admin
+                    example:
+                        - admin
+                owner:
+                    $ref: '#/components/schemas/SubjectInventory'
                 organization_id:
                     type: string
-                    description: Organization identifier for metering and billing
-                    example: premium-org
+                    description: |
+                        Verbatim MaaSSubscription.spec.organization.id when that administrative
+                        association is present; otherwise the legacy tokenMetadata.organizationId
+                        attribution value. Omitted when both are absent. This field describes
+                        association and does not itself grant access.
+                    example: 42c3e46f-2477-44d7-a85b-d3b43f6b31fa
                 cost_center:
                     type: string
-                    description: Cost center for usage attribution
+                    description: Cost center for usage attribution. Omitted when unset or empty.
                     example: ai-team
                 labels:
                     type: object
                     additionalProperties:
                         type: string
-                    description: Additional labels for tracking and metrics
+                    description: Additional labels for tracking and metrics. Omitted when no labels are set.
                     example:
                         env: production
             required:
@@ -951,30 +1050,68 @@ components:
                 - priority
                 - model_refs
 
+        SubjectInventory:
+            type: object
+            description: |
+                Admin-only inventory of subscription owners that also have model access. On a model
+                reference, it contains only owners with access to that exact model reference. On a
+                subscription, it is the deduplicated union across all returned model references.
+                The object and its arrays are omitted when no owner satisfies both conditions.
+            properties:
+                groups:
+                    type: array
+                    description: |
+                        Owner group names that also appear as organization-qualified model-access
+                        subjects for the applicable model-reference scope. Omitted when none
+                        satisfy both conditions.
+                    items:
+                        type: object
+                        properties:
+                            name:
+                                type: string
+                                description: Opaque owner and model-access group name.
+                        required:
+                            - name
+                    example:
+                        - name: 42c3e46f-2477-44d7-a85b-d3b43f6b31fa/ai-grid-users
+                users:
+                    type: array
+                    description: |
+                        Owner user names that also appear as organization-qualified model-access
+                        subjects for the applicable model-reference scope. Omitted when none
+                        satisfy both conditions.
+                    items:
+                        type: string
+                    example:
+                        - 42c3e46f-2477-44d7-a85b-d3b43f6b31fa/alice
+
         ModelRefInfo:
             type: object
             properties:
                 name:
                     type: string
-                    description: Name of the MaaSModelRef
+                    description: Always present. Name of the MaaSModelRef; unique within its internal namespace.
                     example: free-model-ref
+                subjects:
+                    $ref: '#/components/schemas/SubjectInventory'
                 display_name:
                     type: string
-                    description: Human-readable display name from the openshift.io/display-name annotation on the MaaSModelRef
+                    description: Display name from the openshift.io/display-name annotation on the MaaSModelRef. Omitted when unset or empty.
                     example: Free Model
                 description:
                     type: string
-                    description: Description from the openshift.io/description annotation on the MaaSModelRef
+                    description: Description from the openshift.io/description annotation on the MaaSModelRef. Omitted when unset or empty.
                     example: A free-tier model for general use
                 source:
                     type: string
-                    description: "Classification of the model: internal (on-cluster) or external (third-party API)"
+                    description: "Classification of the model: internal (on-cluster) or external (third-party API). Omitted until the referenced model source is resolved."
                     enum:
                         - internal
                         - external
                     example: internal
                 token_rate_limits:
                     type: array
+                    description: Configured token budgets. Omitted when no budget is configured.
                     items:
                         type: object
                         properties:
@@ -993,10 +1130,11 @@ components:
                             - window
                 unlimited:
                     type: boolean
-                    description: No token budget is enforced for this model; usage is still metered. Mutually exclusive with token_rate_limits.
+                    description: Present only with the value true when no token budget is enforced; usage is still metered. Mutually exclusive with token_rate_limits.
                     example: false
                 billing_rate:
                     type: object
+                    description: Configured billing rate. Omitted when no billing rate is configured.
                     properties:
                         per_token:
                             type: string
@@ -1006,6 +1144,89 @@ components:
                         - per_token
             required:
                 - name
+
+        CallerIdentity:
+            type: object
+            description: |
+                Verified SSO identity fields only; no computed permissions or inventory. `iss` and
+                `sub` are always present. Optional scalar and array fields are returned verbatim
+                when present and nonempty, and are omitted otherwise.
+            properties:
+                iss:
+                    type: string
+                    format: uri
+                    description: Verified issuer claim
+                    example: https://issuer.example.com
+                sub:
+                    type: string
+                    description: Verified subject claim
+                    example: user-1
+                name:
+                    type: string
+                    description: Verified full-name claim. Omitted when absent or empty.
+                    example: Alex User
+                given_name:
+                    type: string
+                    description: Verified given-name claim. Omitted when absent or empty.
+                    example: Alex
+                family_name:
+                    type: string
+                    description: Verified family-name claim. Omitted when absent or empty.
+                    example: User
+                preferred_username:
+                    type: string
+                    description: Verified preferred-username claim. Omitted when absent or empty.
+                    example: alex
+                email:
+                    type: string
+                    format: email
+                    description: Verified email claim. Omitted when absent or empty.
+                    example: alex@example.com
+                groups:
+                    type: array
+                    description: |
+                        All literal verified group claims. Omitted when the claim is absent or empty.
+                        Group names are independent of organization membership entries and do not
+                        imply an organization role.
+                    items:
+                        type: string
+                    example:
+                        - 42c3e46f-2477-44d7-a85b-d3b43f6b31fa/users
+                https://redhat.com/maas/orgs:
+                    type: array
+                    description: |
+                        All literal verified organization membership entries, without filtering by
+                        target or role. Omitted when the claim is absent or empty.
+                    items:
+                        $ref: '#/components/schemas/OrganizationMembership'
+            required:
+                - iss
+                - sub
+
+        OrganizationMembership:
+            type: object
+            description: One literal verified organization membership entry.
+            properties:
+                organization_id:
+                    type: string
+                    format: uuid
+                    description: Always present. Canonical organization UUID.
+                    example: 42c3e46f-2477-44d7-a85b-d3b43f6b31fa
+                organization_name:
+                    type: string
+                    description: Organization display name. Omitted when absent or empty.
+                    example: grid-tenant
+                roles:
+                    type: array
+                    description: |
+                        Literal roles from the same organization entry. Omitted when the roles claim
+                        is absent or empty; absence means the caller has no organization role.
+                    items:
+                        type: string
+                    example:
+                        - admins
+            required:
+                - organization_id
 
         # API Key configuration limits
         ApiKeyConfig:
@@ -1160,6 +1381,8 @@ tags:
       description: "\U0001F511 API Key Management v2. OpenAI-compatible API keys with hash-based storage."
     - name: health
       description: ❤️ Health check service
+    - name: identity
+      description: "\U0001F464 Verified caller identity service"
     - name: models
       description: "\U0001F916 Model management service"
     - name: subscriptions
