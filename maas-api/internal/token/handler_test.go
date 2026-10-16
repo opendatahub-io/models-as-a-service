@@ -43,6 +43,7 @@ func TestExtractUserInfo_TenantFromConfig(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/test", nil)
 		req.Header.Set(constant.HeaderUsername, "testuser")
 		req.Header.Set(constant.HeaderGroup, `["group1"]`)
+		req.Header.Set(constant.HeaderOrganizationID, "stable-org")
 
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
@@ -54,6 +55,7 @@ func TestExtractUserInfo_TenantFromConfig(t *testing.T) {
 		assert.Equal(t, "testuser", body.Username)
 		assert.Equal(t, []string{"group1"}, body.Groups)
 		assert.Equal(t, "test", body.Tenant, "tenant should come from handler config")
+		assert.Equal(t, "stable-org", body.OrganizationID)
 	})
 }
 

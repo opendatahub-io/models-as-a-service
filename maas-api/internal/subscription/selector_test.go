@@ -103,6 +103,59 @@ func createSubscription(name string, groups []string, users []string, priority i
 	}
 }
 
+func TestSelector_OrganizationIDPrecedence(t *testing.T) {
+	tests := []struct {
+		name               string
+		organizationID     any
+		tokenMetadataOrgID any
+		expectedOrgID      string
+	}{
+		{
+			name:               "stable organization overrides token metadata",
+			organizationID:     "stable-org",
+			tokenMetadataOrgID: "legacy-org",
+			expectedOrgID:      "stable-org",
+		},
+		{
+			name:               "stable organization defaults missing token metadata",
+			organizationID:     "stable-org",
+			tokenMetadataOrgID: nil,
+			expectedOrgID:      "stable-org",
+		},
+		{
+			name:               "legacy subscription retains token metadata",
+			organizationID:     nil,
+			tokenMetadataOrgID: "legacy-org",
+			expectedOrgID:      "legacy-org",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			subscriptionObject := createSubscription("test-sub", []string{"g1"}, nil, 10, defaultTestTokenRateLimit, "", "")
+			spec, ok := subscriptionObject.Object["spec"].(map[string]any)
+			if !ok {
+				t.Fatalf("test subscription spec is not a map: %T", subscriptionObject.Object["spec"])
+			}
+			if test.organizationID != nil {
+				spec["organization"] = map[string]any{"id": test.organizationID}
+			}
+			if test.tokenMetadataOrgID != nil {
+				spec["tokenMetadata"] = map[string]any{"organizationId": test.tokenMetadataOrgID}
+			}
+
+			selector := subscription.NewSelector(logger.New(false), &fakeLister{subscriptions: []*unstructured.Unstructured{subscriptionObject}}, nil, nil)
+			response, err := selector.Select([]string{"g1"}, "", "", "")
+			if err != nil {
+				t.Fatalf("Select() error = %v", err)
+			}
+			if response.OrganizationID != test.expectedOrgID {
+				t.Fatalf("OrganizationID = %q, want %q", response.OrganizationID, test.expectedOrgID)
+			}
+		})
+	}
+}
+
 func TestGetAllAccessible(t *testing.T) {
 	log := logger.New(false)
 

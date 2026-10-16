@@ -1188,9 +1188,10 @@ allow {
 					"x-llm-d-inference-fairness-id":   subscriptionInfoHeader("fairnessId"),
 					"x-gateway-inference-fairness-id": subscriptionInfoHeader("fairnessId"),
 					// Organization and cost center come from the resolved MaaSSubscription
-					// (subscription-info), not the client. Injected only when set so empty
-					// values do not appear as identity headers.
-					"X-MaaS-Organization-Id": subscriptionInfoStringHeader("organizationId"),
+					// (subscription-info), not the client. Organization is always set, empty
+					// when unresolved, so a client-supplied value can never survive as
+					// telemetry attribution. The lowercase key replaces every client copy.
+					"x-maas-organization-id": subscriptionInfoHeader("organizationId"),
 					"X-MaaS-Cost-Center":     subscriptionInfoStringHeader("costCenter"),
 					"X-MaaS-Identity":        verifiedIdentityHeader(oidc, celIsNotAPIKey),
 				},

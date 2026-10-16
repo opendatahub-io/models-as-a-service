@@ -49,7 +49,7 @@ func NewMiddleware(defaultTenant, tenantNamespace, gatewayName, gatewayNamespace
 			}
 
 			status := c.Writer.Status()
-			span.SetAttributes(
+			attributes := []attribute.KeyValue{
 				attribute.String("http.method", c.Request.Method),
 				attribute.String("http.route", route),
 				attribute.Int("http.status_code", status),
@@ -57,7 +57,11 @@ func NewMiddleware(defaultTenant, tenantNamespace, gatewayName, gatewayNamespace
 				attribute.String("tenant.namespace", tenantNamespace),
 				attribute.String("gateway.name", gatewayName),
 				attribute.String("gateway.namespace", gatewayNamespace),
-			)
+			}
+			if organizationID := token.OrganizationIDFromContext(c); organizationID != "" {
+				attributes = append(attributes, attribute.String("organization.id", organizationID))
+			}
+			span.SetAttributes(attributes...)
 
 			if status >= 500 {
 				span.SetStatus(codes.Error, "HTTP "+strconv.Itoa(status))

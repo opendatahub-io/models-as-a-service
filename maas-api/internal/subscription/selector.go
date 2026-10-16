@@ -1006,6 +1006,16 @@ func parseTokenMetadata(spec map[string]any, sub *subscription) {
 	}
 }
 
+// effectiveOrganizationID returns the organization ID used for subscription
+// attribution. A stable organization association is authoritative; legacy
+// subscriptions without one retain tokenMetadata.organizationId.
+func (sub subscription) effectiveOrganizationID() string {
+	if sub.AssociatedOrganizationID != "" {
+		return sub.AssociatedOrganizationID
+	}
+	return sub.OrganizationID
+}
+
 // userHasAccess checks if user/groups match subscription owner.
 func userHasAccess(sub *subscription, username string, groups []string) bool {
 	// Check username match
@@ -1248,7 +1258,7 @@ func toSubscriptionInfo(sub *subscription) SubscriptionInfo {
 		DisplayName:             sub.DisplayName,
 		Priority:                sub.Priority,
 		ModelRefs:               modelRefs,
-		OrganizationID:          sub.OrganizationID,
+		OrganizationID:          sub.effectiveOrganizationID(),
 		CostCenter:              sub.CostCenter,
 		Labels:                  sub.Labels,
 	}
@@ -1294,7 +1304,7 @@ func toResponse(sub *subscription) *SelectResponse {
 		Description:              sub.Description,
 		Priority:                 sub.Priority,
 		ModelRefs:                modelRefs,
-		OrganizationID:           sub.OrganizationID,
+		OrganizationID:           sub.effectiveOrganizationID(),
 		AssociatedOrganizationID: sub.AssociatedOrganizationID,
 		CostCenter:               sub.CostCenter,
 		Labels:                   sub.Labels,

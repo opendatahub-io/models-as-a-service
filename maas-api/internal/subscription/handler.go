@@ -239,6 +239,7 @@ func (h *Handler) SelectSubscription(c *gin.Context) {
 		"subscription", response.Name,
 		"organizationId", response.OrganizationID,
 	)
+	token.SetOrganizationID(c, response.OrganizationID)
 	c.JSON(http.StatusOK, response)
 }
 
