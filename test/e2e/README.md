@@ -96,20 +96,14 @@ External OIDC runs require `EXTERNAL_OIDC=true` and `OIDC_ISSUER_URL`, `OIDC_TOK
 
 ## Nightly tier (`@pytest.mark.nightly`)
 
-Tests marked `nightly` (for example `test_external_oidc.py` and per-tenant OIDC discovery) are **always excluded from passes 1–2**. They run only in **pass 3** (`-m nightly`) when `MAAS_PYTEST_INCLUDE_NIGHTLY=true` (set automatically when `EXTERNAL_OIDC=true` in prow, or explicitly on the ODH MaaS nightly in shepard). PR `/group-test` does not set that flag, so nightly tests are skipped there.
+Tests marked `nightly` are **always excluded from passes 1–2**. They run only in **pass 3** (`-m nightly`) when `MAAS_PYTEST_INCLUDE_NIGHTLY=true` (set automatically when `EXTERNAL_OIDC=true` in prow, or explicitly on the ODH MaaS nightly in shepard).
 
-Local opt-in via the runner:
+External OIDC coverage (`test_external_oidc.py`, per-tenant OIDC discovery) is **not** nightly-gated: with `EXTERNAL_OIDC=true` those tests run in the normal parallel/serial passes.
 
-```bash
-MAAS_PYTEST_INCLUDE_NIGHTLY=true EXTERNAL_OIDC=true \
-  ./test/e2e/scripts/run_e2e_tests.sh
-```
-
-Or target nightly tests directly:
+Local opt-in for the empty/optional pass 3:
 
 ```bash
-EXTERNAL_OIDC=true OIDC_ISSUER_URL=... OIDC_TOKEN_URL=... \
-  pytest tests/ -m nightly -v
+MAAS_PYTEST_INCLUDE_NIGHTLY=true ./test/e2e/scripts/run_e2e_tests.sh
 ```
 
 ## Parallel execution (pytest-xdist)
