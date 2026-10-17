@@ -17,9 +17,13 @@ def required_grid_env(name: str) -> str:
     return value
 
 
-def request_grid_token(username: str, client_id: str | None = None) -> str:
+def request_grid_token(
+    username: str,
+    client_id: str | None = None,
+    token_url: str | None = None,
+) -> str:
     response = requests.post(
-        required_grid_env("OIDC_TOKEN_URL"),
+        token_url or required_grid_env("OIDC_TOKEN_URL"),
         data={
             "grant_type": "password",
             "client_id": client_id or required_grid_env("OIDC_CLIENT_ID"),
@@ -36,6 +40,13 @@ def request_grid_token(username: str, client_id: str | None = None) -> str:
     token = response.json().get("access_token")
     assert token, "Keycloak token response missing access_token"
     return token
+
+
+def request_tenant_b_token(username: str) -> str:
+    return request_grid_token(
+        username,
+        token_url=required_grid_env("OIDC_TOKEN_URL_TENANT_B"),
+    )
 
 
 def get_grid_subscriptions(maas_api_base_url: str, token: str) -> list[dict]:

@@ -12,8 +12,10 @@ from grid_governance_fixtures import (
     GridGovernanceContext,
 )
 from grid_governance_fixtures import governance_context as grid_governance_context  # noqa: F401 - pytest fixture
+from grid_cross_tenant_fixtures import GridCrossTenantContext
+from grid_cross_tenant_fixtures import grid_cross_tenant_context as grid_cross_tenant_context_fixture  # noqa: F401 - pytest fixture
 from grid_inventory_fixtures import ORGANIZATION_A
-from grid_oidc_helpers import request_grid_token
+from grid_oidc_helpers import request_grid_token, request_tenant_b_token
 from test_helper import (
     MODEL_NAMESPACE,
     _decode_jwt_payload,
@@ -237,6 +239,127 @@ class TestGridInternalSubscriptionCallback:
         assert scope["namespace"] == _ns()
         assert scope["subscription"] == resources.governance_subscription
         assert scope["organizationId"] == ORGANIZATION_A
+
+
+class TestGridCrossTenantQualifiedSubscription:
+    def test_grid_admin_cannot_use_cross_tenant_qualified_target(
+        self,
+        maas_api_base_url: str,
+        maas_api_internal_url: str,
+        grid_cross_tenant_context: GridCrossTenantContext,
+    ):
+        context = grid_cross_tenant_context
+        qualified_subscription = (
+            f"{context.tenant_b['namespace']}/{context.subscription_name}"
+        )
+        token = request_grid_token("grid_admin")
+
+        creation_attempt = _request_with_gateway_retry(
+            requests.post,
+            f"{maas_api_base_url}/v1/api-keys",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "name": f"{context.subscription_name}-cross-tenant",
+                "subscription": qualified_subscription,
+            },
+            timeout=30,
+        )
+        if creation_attempt.status_code == 201:
+            accidental_key_id = creation_attempt.json()["id"]
+            accidental_cleanup = _request_with_gateway_retry(
+                requests.delete,
+                f"{maas_api_base_url}/v1/api-keys/{accidental_key_id}",
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=30,
+            )
+            assert accidental_cleanup.status_code in (200, 404), (
+                f"Failed to clean up an unexpectedly minted cross-tenant key: "
+                f"{accidental_cleanup.status_code} {accidental_cleanup.text}"
+            )
+        assert creation_attempt.status_code == 400, (
+            f"Tenant A Grid admin must not mint a key for Tenant B's "
+            f"qualified subscription, got "
+            f"{creation_attempt.status_code} {creation_attempt.text}"
+        )
+        assert creation_attempt.json()["code"] == "invalid_subscription"
+
+        search = _request_with_gateway_retry(
+            requests.post,
+            f"{maas_api_base_url}/v1/api-keys/search",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "filters": {
+                    "subscription": qualified_subscription,
+                    "username": "charlie_sec_lead",
+                },
+                "pagination": {"limit": 100, "offset": 0},
+            },
+            timeout=30,
+        )
+        assert search.status_code == 403, (
+            f"Tenant A Grid admin must not search Tenant B's qualified "
+            f"subscription, got {search.status_code} {search.text}"
+        )
+
+        bulk_revoke = _request_with_gateway_retry(
+            requests.post,
+            f"{maas_api_base_url}/v1/api-keys/bulk-revoke",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"subscription": qualified_subscription},
+            timeout=30,
+        )
+        assert bulk_revoke.status_code == 403, (
+            f"Tenant A Grid admin must not bulk revoke Tenant B's qualified "
+            f"subscription, got {bulk_revoke.status_code} {bulk_revoke.text}"
+        )
+
+        key_inspection = _request_with_gateway_retry(
+            requests.get,
+            f"{maas_api_base_url}/v1/api-keys/{context.api_key_id}",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=30,
+        )
+        assert key_inspection.status_code == 404, (
+            f"Tenant A Grid admin must not inspect Tenant B's API key, got "
+            f"{key_inspection.status_code} {key_inspection.text}"
+        )
+
+        key_revocation = _request_with_gateway_retry(
+            requests.delete,
+            f"{maas_api_base_url}/v1/api-keys/{context.api_key_id}",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=30,
+        )
+        assert key_revocation.status_code == 404, (
+            f"Tenant A Grid admin must not revoke Tenant B's API key, got "
+            f"{key_revocation.status_code} {key_revocation.text}"
+        )
+
+        _, selection = _post_internal_json(
+            f"{maas_api_internal_url}/internal/v1/subscriptions/select",
+            {
+                "purpose": "subscription-admin",
+                "requestedSubscription": qualified_subscription,
+                "identity": _grid_admin_identity_envelope(),
+            },
+        )
+        admin = selection["admin"]
+        assert admin["allowed"] is False
+        assert admin["reason"] == "not_found"
+        assert "scope" not in admin
+
+        tenant_b_token = request_tenant_b_token("charlie_sec_lead")
+        tenant_b_inspection = _request_with_gateway_retry(
+            requests.get,
+            f"{context.tenant_b['base_url']}/v1/api-keys/{context.api_key_id}",
+            headers={"Authorization": f"Bearer {tenant_b_token}"},
+            timeout=30,
+        )
+        assert tenant_b_inspection.status_code == 200, (
+            f"Tenant B owner must still inspect its API key: "
+            f"{tenant_b_inspection.status_code} {tenant_b_inspection.text}"
+        )
+        assert tenant_b_inspection.json()["status"] == "active"
 
 
 class TestGridInternalAPIKeyValidation:
