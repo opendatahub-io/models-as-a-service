@@ -318,6 +318,7 @@ def kubectl_curl(
             "--restart=Never",
             f"--image={E2E_CURL_IMAGE}",
             "-n", namespace,
+            "--labels=maas-api-e2e-probe=true",
             "--command", "--", "sleep", "300",
         ]
         subprocess.run(create_cmd, capture_output=True, text=True, timeout=30, check=True)

@@ -500,10 +500,10 @@ func TestIsMaaSManagedMaaSAPIEgressNetworkPolicy(t *testing.T) {
 
 	unrelated := sampleMaaSAPIEgressRestrictNetworkPolicy()
 
-	assert.True(t, isMaaSManagedMaaSAPIEgressNetworkPolicy(owned, configUID))
-	assert.True(t, isMaaSManagedMaaSAPIEgressNetworkPolicy(ssaManaged, configUID))
-	assert.False(t, isMaaSManagedMaaSAPIEgressNetworkPolicy(external, configUID))
-	assert.False(t, isMaaSManagedMaaSAPIEgressNetworkPolicy(unrelated, configUID))
+	assert.True(t, isMaaSManagedNetworkPolicy(owned, configUID))
+	assert.True(t, isMaaSManagedNetworkPolicy(ssaManaged, configUID))
+	assert.False(t, isMaaSManagedNetworkPolicy(external, configUID))
+	assert.False(t, isMaaSManagedNetworkPolicy(unrelated, configUID))
 }
 
 func TestMaasAPIEgressNetworkPolicyDisabled(t *testing.T) {
@@ -526,10 +526,23 @@ func TestPostRender_SkipsMaaSAPIEgressWhenDisabled(t *testing.T) {
 				"metadata": map[string]any{
 					"name": "maas-api-allow-gateway",
 				},
+				"spec": map[string]any{
+					"ingress": []any{map[string]any{
+						"from": []any{map[string]any{
+							"namespaceSelector": map[string]any{},
+							"podSelector":       map[string]any{},
+						}},
+					}},
+					"podSelector": map[string]any{},
+				},
 			},
 		},
 	}
-	params := PlatformParams{MaaSAPIEgressNetworkPolicyDisabled: true}
+	params := PlatformParams{
+		MaaSAPIEgressNetworkPolicyDisabled: true,
+		GatewayNamespace:                   "gateway-ns",
+		GatewayName:                        "gateway-name",
+	}
 	tenant := &maasv1alpha1.MaasTenantConfig{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      maasv1alpha1.MaasTenantConfigInstanceName,
@@ -545,7 +558,7 @@ func TestPostRender_SkipsMaaSAPIEgressWhenDisabled(t *testing.T) {
 			t.Fatalf("unexpected maas-api egress restrict policy in output")
 		}
 	}
-	requireResourceName(t, resources, GVKNetworkPolicy, "maas-api-allow-gateway")
+	requireResourceName(t, resources, GVKNetworkPolicy, MaaSAPIGatewayNetworkPolicyName(""))
 }
 
 func TestCleanupMaaSAPIEgressNetworkPolicy(t *testing.T) {
@@ -594,6 +607,70 @@ func TestCleanupMaaSAPIEgressNetworkPolicy(t *testing.T) {
 		got := &unstructured.Unstructured{}
 		got.SetGroupVersionKind(GVKNetworkPolicy)
 		err = cl.Get(context.Background(), types.NamespacedName{Namespace: appNs, Name: baseMaaSAPIEgressRestrictNetworkPolicyName}, got)
+		require.Error(t, err)
+	})
+}
+
+func TestCleanupLegacyMaaSAPIGatewayNetworkPolicy(t *testing.T) {
+	const appNs = "maas-system"
+	configUID := types.UID("config-uid")
+
+	samplePolicy := func() *unstructured.Unstructured {
+		np := &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "networking.k8s.io/v1",
+			"kind":       "NetworkPolicy",
+			"metadata": map[string]any{
+				"name": baseMaaSAPIGatewayNetworkPolicyName,
+			},
+			"spec": map[string]any{
+				"podSelector": map[string]any{},
+			},
+		}}
+		np.SetNamespace(appNs)
+		np.SetUID("np-uid")
+		np.SetResourceVersion("1")
+		return np
+	}
+
+	t.Run("no-op when policy is absent", func(t *testing.T) {
+		cl := fake.NewClientBuilder().Build()
+		require.NoError(t, cleanupLegacyMaaSAPIGatewayNetworkPolicy(context.Background(), cl, appNs, configUID, logr.Discard()))
+	})
+
+	t.Run("skips policy not managed by maas-controller", func(t *testing.T) {
+		np := samplePolicy()
+		cl := fake.NewClientBuilder().WithObjects(np).Build()
+
+		require.NoError(t, cleanupLegacyMaaSAPIGatewayNetworkPolicy(context.Background(), cl, appNs, configUID, logr.Discard()))
+
+		got := &unstructured.Unstructured{}
+		got.SetGroupVersionKind(GVKNetworkPolicy)
+		require.NoError(t, cl.Get(context.Background(), types.NamespacedName{
+			Namespace: appNs,
+			Name:      baseMaaSAPIGatewayNetworkPolicyName,
+		}, got))
+	})
+
+	t.Run("deletes Config-owned policy", func(t *testing.T) {
+		controller := true
+		np := samplePolicy()
+		np.SetOwnerReferences([]metav1.OwnerReference{{
+			APIVersion: "maas.opendatahub.io/v1alpha1",
+			Kind:       "Config",
+			Name:       maasv1alpha1.ConfigInstanceName,
+			UID:        configUID,
+			Controller: &controller,
+		}})
+		cl := fake.NewClientBuilder().WithObjects(np).Build()
+
+		require.NoError(t, cleanupLegacyMaaSAPIGatewayNetworkPolicy(context.Background(), cl, appNs, configUID, logr.Discard()))
+
+		got := &unstructured.Unstructured{}
+		got.SetGroupVersionKind(GVKNetworkPolicy)
+		err := cl.Get(context.Background(), types.NamespacedName{
+			Namespace: appNs,
+			Name:      baseMaaSAPIGatewayNetworkPolicyName,
+		}, got)
 		require.Error(t, err)
 	})
 }

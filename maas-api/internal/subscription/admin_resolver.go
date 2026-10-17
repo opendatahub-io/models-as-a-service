@@ -33,6 +33,54 @@ func (s *Selector) ResolveSubscriptionAdmin(identity *token.VerifiedIdentity, re
 			Message: "trusted identity is required",
 		}
 	}
+	target, err := s.adminSubscriptionTarget(requestedSubscription)
+	if err != nil {
+		return nil, err
+	}
+
+	if target.AssociatedOrganizationID == "" {
+		return nil, &SubscriptionAdminError{
+			Code:    "unresolved_association",
+			Message: "subscription organization association is required",
+		}
+	}
+	organizationID, err := canonicalOrganizationID(target.AssociatedOrganizationID)
+	if err != nil {
+		return nil, &SubscriptionAdminError{
+			Code:    "unresolved_association",
+			Message: "subscription organization association is invalid",
+		}
+	}
+	if !identityHasOrganizationAdmin(identity, organizationID) {
+		return nil, &SubscriptionAdminError{
+			Code:    "access_denied",
+			Message: "organization administration is denied",
+		}
+	}
+	if s.tenantName == "" {
+		return nil, &SubscriptionAdminError{
+			Code:    "internal_error",
+			Message: "tenant is not configured",
+		}
+	}
+
+	return &AdminScope{
+		Tenant:         s.tenantName,
+		Namespace:      target.Namespace,
+		Subscription:   target.Name,
+		OrganizationID: organizationID,
+	}, nil
+}
+
+func (s *Selector) CanonicalizeSubscription(requestedSubscription string) (string, error) {
+	target, err := s.adminSubscriptionTarget(requestedSubscription)
+	if err != nil {
+		return "", err
+	}
+	return target.Name, nil
+}
+
+func (s *Selector) adminSubscriptionTarget(requestedSubscription string) (*subscription, error) {
 	if requestedSubscription == "" {
 		return nil, &SubscriptionAdminError{
 			Code:    "bad_request",
@@ -78,39 +126,7 @@ func (s *Selector) ResolveSubscriptionAdmin(identity *token.VerifiedIdentity, re
 		}
 	}
 
-	target := matches[0]
-	if target.AssociatedOrganizationID == "" {
-		return nil, &SubscriptionAdminError{
-			Code:    "unresolved_association",
-			Message: "subscription organization association is required",
-		}
-	}
-	organizationID, err := canonicalOrganizationID(target.AssociatedOrganizationID)
-	if err != nil {
-		return nil, &SubscriptionAdminError{
-			Code:    "unresolved_association",
-			Message: "subscription organization association is invalid",
-		}
-	}
-	if !identityHasOrganizationAdmin(identity, organizationID) {
-		return nil, &SubscriptionAdminError{
-			Code:    "access_denied",
-			Message: "organization administration is denied",
-		}
-	}
-	if s.tenantName == "" {
-		return nil, &SubscriptionAdminError{
-			Code:    "internal_error",
-			Message: "tenant is not configured",
-		}
-	}
-
-	return &AdminScope{
-		Tenant:         s.tenantName,
-		Namespace:      target.Namespace,
-		Subscription:   target.Name,
-		OrganizationID: organizationID,
-	}, nil
+	return &matches[0], nil
 }
 
 func (s *Selector) loadAdminSubscriptions() ([]subscription, error) {

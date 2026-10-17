@@ -150,6 +150,7 @@ const (
 	baseMaaSAPIServiceName                         = "maas-api"
 	baseMaaSAPIKeyCleanupScriptConfigMapName       = "maas-api-key-cleanup-script" //nolint:gosec // Kubernetes resource name, not a credential
 	baseMaaSAPIDeploymentNSNetworkPolicyName       = "maas-api-allow-deployment-ns"
+	baseMaaSAPIGatewayNetworkPolicyName            = "maas-api-allow-gateway"
 	baseMaaSAPIEgressRestrictNetworkPolicyName     = "maas-api-egress-restrict"
 	baseMaaSAPIServingCertName                     = "maas-api-serving-cert"
 	baseUsageLogsEnvoyFilterName                   = "maas-model-access-logs"
@@ -247,6 +248,13 @@ func MaaSAPIKeyCleanupCronJobName(tenantID string) string {
 
 func GatewayDestinationRuleName(tenantID string) string {
 	return resourceNameForTenant(baseGatewayDestinationRuleName, tenantID)
+}
+
+func MaaSAPIGatewayNetworkPolicyName(tenantID string) string {
+	if tenantID == "" {
+		return baseMaaSAPIGatewayNetworkPolicyName + "-default"
+	}
+	return resourceNameForTenant(baseMaaSAPIGatewayNetworkPolicyName, tenantID)
 }
 
 func TelemetryPolicyName(tenantID string) string {

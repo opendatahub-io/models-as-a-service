@@ -145,6 +145,10 @@ func RunPlatform(
 		return nil, fmt.Errorf("apply: %w", err)
 	}
 
+	if err := cleanupLegacyMaaSAPIGatewayNetworkPolicy(ctx, c, appNs, mcfg.UID, log); err != nil {
+		return nil, fmt.Errorf("cleanup legacy maas-api gateway networkpolicy: %w", err)
+	}
+
 	if err := syncMaaSParametersConfigMap(ctx, c, appNs, params, log); err != nil {
 		return nil, fmt.Errorf("sync maas-parameters ConfigMap: %w", err)
 	}
@@ -895,7 +899,7 @@ func applyMaaSAPIPreserveEgressConfig(ctx context.Context, c client.Client, para
 		}
 		return fmt.Errorf("get NetworkPolicy %s/%s: %w", appNs, baseMaaSAPIEgressRestrictNetworkPolicyName, err)
 	}
-	if !isMaaSManagedMaaSAPIEgressNetworkPolicy(np, mcfg.UID) || !networkPolicyDeclaresEgress(np) {
+	if !isMaaSManagedNetworkPolicy(np, mcfg.UID) || !networkPolicyDeclaresEgress(np) {
 		return nil
 	}
 
@@ -926,9 +930,9 @@ func applyMaaSAPIPreserveEgressConfig(ctx context.Context, c client.Client, para
 	return nil
 }
 
-// isMaaSManagedMaaSAPIEgressNetworkPolicy reports whether maas-controller may delete
-// maas-api-egress-restrict during Disabled cleanup. External controller ownership wins.
-func isMaaSManagedMaaSAPIEgressNetworkPolicy(np *unstructured.Unstructured, configUID types.UID) bool {
+// isMaaSManagedNetworkPolicy reports whether maas-controller may delete a
+// rendered NetworkPolicy during cleanup. External controller ownership wins.
+func isMaaSManagedNetworkPolicy(np *unstructured.Unstructured, configUID types.UID) bool {
 	for _, ref := range np.GetOwnerReferences() {
 		if ref.Controller != nil && *ref.Controller && ref.UID != configUID {
 			return false
@@ -955,7 +959,7 @@ func cleanupMaaSAPIEgressNetworkPolicy(ctx context.Context, c client.Client, app
 		return fmt.Errorf("get NetworkPolicy %s/%s: %w", appNs, baseMaaSAPIEgressRestrictNetworkPolicyName, err)
 	}
 
-	if !isMaaSManagedMaaSAPIEgressNetworkPolicy(np, configUID) {
+	if !isMaaSManagedNetworkPolicy(np, configUID) {
 		log.V(1).Info("Skipping maas-api egress NetworkPolicy cleanup; not managed by maas-controller",
 			"name", baseMaaSAPIEgressRestrictNetworkPolicyName, "namespace", appNs)
 		return nil
@@ -969,6 +973,41 @@ func cleanupMaaSAPIEgressNetworkPolicy(ctx context.Context, c client.Client, app
 	}
 	if err := c.Delete(ctx, np, deleteOptions...); err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("delete NetworkPolicy %s/%s: %w", appNs, baseMaaSAPIEgressRestrictNetworkPolicyName, err)
+	}
+	return nil
+}
+
+func cleanupLegacyMaaSAPIGatewayNetworkPolicy(
+	ctx context.Context,
+	c client.Client,
+	appNs string,
+	configUID types.UID,
+	log logr.Logger,
+) error {
+	np := &unstructured.Unstructured{}
+	np.SetGroupVersionKind(GVKNetworkPolicy)
+	key := types.NamespacedName{Namespace: appNs, Name: baseMaaSAPIGatewayNetworkPolicyName}
+
+	if err := c.Get(ctx, key, np); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("get NetworkPolicy %s/%s: %w", appNs, baseMaaSAPIGatewayNetworkPolicyName, err)
+	}
+	if !isMaaSManagedNetworkPolicy(np, configUID) {
+		log.V(1).Info("Skipping legacy maas-api gateway NetworkPolicy cleanup; not managed by maas-controller",
+			"name", baseMaaSAPIGatewayNetworkPolicyName, "namespace", appNs)
+		return nil
+	}
+
+	log.Info("Deleting legacy shared maas-api gateway NetworkPolicy",
+		"name", baseMaaSAPIGatewayNetworkPolicyName, "namespace", appNs)
+	deleteOptions, err := validatedDeleteOptions(np)
+	if err != nil {
+		return fmt.Errorf("prepare NetworkPolicy %s/%s deletion: %w", appNs, baseMaaSAPIGatewayNetworkPolicyName, err)
+	}
+	if err := c.Delete(ctx, np, deleteOptions...); err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("delete NetworkPolicy %s/%s: %w", appNs, baseMaaSAPIGatewayNetworkPolicyName, err)
 	}
 	return nil
 }

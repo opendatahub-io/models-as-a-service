@@ -471,22 +471,65 @@ func TestApplyPlatformParamsWithRenderedOverlay(t *testing.T) {
 	assert.Equal(t, DefaultOTLPCollectorComponentLabelValue, otlpPodMatchLabels[DefaultOTLPCollectorComponentLabelKey])
 
 	deploymentNSPolicy := requireResource(t, resources, GVKNetworkPolicy, baseMaaSAPIDeploymentNSNetworkPolicyName)
-	ingress, found, err := unstructured.NestedSlice(deploymentNSPolicy.Object, "spec", "ingress")
+	assert.Equal(t, params.AppNamespace, deploymentNSPolicy.GetNamespace())
+	deploymentIngress, ingressFound, err := unstructured.NestedSlice(deploymentNSPolicy.Object, "spec", "ingress")
+	require.NoError(t, err)
+	require.True(t, ingressFound)
+	require.Len(t, deploymentIngress, 1)
+	deploymentRule, ok := deploymentIngress[0].(map[string]any)
+	require.True(t, ok)
+	deploymentPeers, ok := deploymentRule["from"].([]any)
+	require.True(t, ok)
+	require.Len(t, deploymentPeers, 3)
+	expectedDeploymentPodLabels := []map[string]any{
+		{"control-plane": "maas-controller"},
+		{"deployment": "odh-dashboard"},
+		{"maas-api-e2e-probe": "true"},
+	}
+	for index, expectedPodLabels := range expectedDeploymentPodLabels {
+		peer, ok := deploymentPeers[index].(map[string]any)
+		require.True(t, ok)
+		nsSelector, ok := peer["namespaceSelector"].(map[string]any)
+		require.True(t, ok)
+		nsMatchLabels, ok := nsSelector["matchLabels"].(map[string]any)
+		require.True(t, ok)
+		assert.Equal(t, params.ControllerNamespace, nsMatchLabels["kubernetes.io/metadata.name"])
+		podSelector, ok := peer["podSelector"].(map[string]any)
+		require.True(t, ok)
+		podMatchLabels, ok := podSelector["matchLabels"].(map[string]any)
+		require.True(t, ok)
+		assert.Equal(t, expectedPodLabels, podMatchLabels)
+	}
+
+	gatewayPolicy := requireResource(t, resources, GVKNetworkPolicy, MaaSAPIGatewayNetworkPolicyName(tenantID))
+	assert.Equal(t, params.AppNamespace, gatewayPolicy.GetNamespace())
+	gatewayIngress, found, err := unstructured.NestedSlice(gatewayPolicy.Object, "spec", "ingress")
 	require.NoError(t, err)
 	require.True(t, found)
-	require.NotEmpty(t, ingress)
-	rule, ok := ingress[0].(map[string]any)
+	require.Len(t, gatewayIngress, 1)
+	gatewayRule, ok := gatewayIngress[0].(map[string]any)
 	require.True(t, ok)
-	from, ok := rule["from"].([]any)
+	from, ok := gatewayRule["from"].([]any)
 	require.True(t, ok)
-	require.NotEmpty(t, from)
+	require.Len(t, from, 1)
 	peer, ok := from[0].(map[string]any)
 	require.True(t, ok)
 	nsSelector, ok := peer["namespaceSelector"].(map[string]any)
 	require.True(t, ok)
-	matchLabels, ok := nsSelector["matchLabels"].(map[string]any)
+	nsMatchLabels, ok := nsSelector["matchLabels"].(map[string]any)
 	require.True(t, ok)
-	assert.Equal(t, params.ControllerNamespace, matchLabels["kubernetes.io/metadata.name"])
+	assert.Equal(t, params.GatewayNamespace, nsMatchLabels["kubernetes.io/metadata.name"])
+	gatewayPodSelector, ok := peer["podSelector"].(map[string]any)
+	require.True(t, ok)
+	gatewayPodMatchLabels, ok := gatewayPodSelector["matchLabels"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, params.GatewayName, gatewayPodMatchLabels["gateway.networking.k8s.io/gateway-name"])
+	gatewayTargetSelector, found, err := unstructured.NestedMap(gatewayPolicy.Object, "spec", "podSelector")
+	require.NoError(t, err)
+	require.True(t, found)
+	gatewayTargetLabels, ok := gatewayTargetSelector["matchLabels"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, MaaSAPIDeploymentName(tenantID), gatewayTargetLabels[LabelTenantInstance])
 
 	authorinoPolicy := requireResource(t, resources, GVKNetworkPolicy, "maas-authorino-allow")
 	assert.Equal(t, params.AppNamespace, authorinoPolicy.GetNamespace())
@@ -774,6 +817,32 @@ func TestApplyPlatformParamsWithRenderedOverlay_AITenant(t *testing.T) {
 
 	payloadBeforeDeployment := requireResource(t, resources, GVKDeployment, "payload-pre-processing-redteam")
 	assert.Equal(t, "payload-pre-processing-redteam", requireDeploymentSelectorLabel(t, payloadBeforeDeployment, LabelTenantInstance))
+
+	gatewayPolicy := requireResource(t, resources, GVKNetworkPolicy, MaaSAPIGatewayNetworkPolicyName("redteam"))
+	gatewayTargetSelector, found, err := unstructured.NestedMap(gatewayPolicy.Object, "spec", "podSelector")
+	require.NoError(t, err)
+	require.True(t, found)
+	gatewayTargetLabels, ok := gatewayTargetSelector["matchLabels"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "maas-api-redteam", gatewayTargetLabels[LabelTenantInstance])
+}
+
+func TestPatchMaaSAPIGatewayNetworkPolicyMissingIngressFailsClosed(t *testing.T) {
+	policy := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "networking.k8s.io/v1",
+		"kind":       "NetworkPolicy",
+		"metadata": map[string]any{
+			"name": baseMaaSAPIGatewayNetworkPolicyName,
+		},
+		"spec": map[string]any{},
+	}}
+
+	err := patchMaaSAPIGatewayNetworkPolicy(policy, PlatformParams{
+		GatewayNamespace: "gateway-ns",
+		GatewayName:      "gateway-name",
+	})
+
+	require.ErrorContains(t, err, "ingress is missing")
 }
 
 func TestBuildPlatformParams_SkipIPPForPraxis(t *testing.T) {
