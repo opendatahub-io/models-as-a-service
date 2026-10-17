@@ -342,6 +342,9 @@ def initialize():
         sys.exit(1)
 
     gateway_service = os.getenv("LOKI_GATEWAY_SERVICE")
+    if not gateway_service:
+        logger.fatal("LOKI_GATEWAY_SERVICE environment variable is required")
+        sys.exit(1)
     loki_upstream = f"https://{gateway_service}.{namespace}.svc:8080/api/logs/v1/application"
     logger.info(f"Loki upstream: {loki_upstream}")
 

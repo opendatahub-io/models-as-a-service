@@ -2193,7 +2193,7 @@ def _create_llmis(
                 "containers": [
                     {
                         "name": "main",
-                        "image": "ghcr.io/llm-d/llm-d-inference-sim@sha256:c3ba435081a4d032676b218ea34eb3a1c54507da0fade2f6297f9c37894fe0d1",
+                        "image": "ghcr.io/llm-d/llm-d-inference-sim@sha256:c6838d8616c9818f4cdb0e9ef7597e483a71c081b869d34c7eafac1481d76c60",
                         "command": ["/app/llm-d-inference-sim"],
                         "args": [
                             "--port", "8000",
@@ -2219,7 +2219,7 @@ def _create_llmis(
                         },
                         "readinessProbe": {
                             "httpGet": {
-                                "path": "/ready",
+                                "path": "/health/ready",
                                 "port": "https",
                                 "scheme": "HTTPS",
                             }
