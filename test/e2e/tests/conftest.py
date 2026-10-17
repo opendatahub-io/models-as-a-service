@@ -451,6 +451,7 @@ def shared_test_tenants(gateway_host: str, is_https: bool):
         cleanup_discovery_case,
         wait_for_route_admitted,
         wait_for_deployment_available,
+        tenant_b_external_oidc_from_env,
     )
 
     require_aitenant_crd()
@@ -461,8 +462,10 @@ def shared_test_tenants(gateway_host: str, is_https: bool):
 
     try:
         # Bootstrap both tenants (creates gateway + AITenant CR)
-        for case in (case_a, case_b):
-            bootstrap_aitenant_tenant(case)
+        bootstrap_aitenant_tenant(case_a)
+        bootstrap_aitenant_tenant(
+            case_b, external_oidc=tenant_b_external_oidc_from_env()
+        )
 
         scheme = "https"
         for case in (case_a, case_b):
