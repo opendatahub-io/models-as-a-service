@@ -11,11 +11,11 @@ These tests use kubectl exec with curl to access internal Service URLs.
 
 import json
 import logging
-import os
 
 import pytest
+import requests
 
-from conftest import TLS_VERIFY  # noqa: F401 - used by conftest integration
+from conftest import TLS_VERIFY
 from test_helper import MAAS_API_DEPLOYMENT_NAMESPACE, _get_cluster_token, kubectl_curl as _kubectl_curl
 
 log = logging.getLogger(__name__)
@@ -48,12 +48,14 @@ def tenant_service_urls(shared_test_tenants):
             "name": tenant_a["name"],
             "namespace": tenant_a["namespace"],
             "service_url": service_url(tenant_a),
+            "gateway_url": tenant_a["base_url"].removesuffix("/maas-api"),
             "aitenant_name": tenant_a["name"],  # AITenant CR name matches tenant name
         },
         "tenant_b": {
             "name": tenant_b["name"],
             "namespace": tenant_b["namespace"],
             "service_url": service_url(tenant_b),
+            "gateway_url": tenant_b["base_url"].removesuffix("/maas-api"),
             "aitenant_name": tenant_b["name"],
         },
     }
@@ -87,16 +89,6 @@ def test_tenant_discovery_same_tenant_access(tenant_service_urls, tenant_tokens)
 
     This is the positive case - tenant A's token should work for tenant A's endpoint.
     """
-    # Skip test when Gateway is deployed in unsupported ClusterIP + Route mode (ocproute)
-    ingress_mode = os.environ.get("INGRESS_MODE", "loadbalancer")
-    if ingress_mode == "ocproute":
-        pytest.skip(
-            "Skipping when Gateway uses ClusterIP + OpenShift Route (unsupported configuration). "
-            "This mixes incompatible routing paradigms. "
-            "Gateway has no external hostname in spec.listeners, so /v1/tenants returns an error. "
-            "Supported configuration: LoadBalancer service with hostname in spec.listeners."
-        )
-
     for tenant_key in ["tenant_a", "tenant_b"]:
         tenant = tenant_service_urls[tenant_key]
         token = tenant_tokens["cluster"]  # Using cluster token (has access)
@@ -135,16 +127,6 @@ def test_tenant_discovery_cross_tenant_isolation(tenant_service_urls, tenant_tok
     different data (proving each instance is correctly configured and not
     leaking data from other tenants).
     """
-    # Skip test when Gateway is deployed in unsupported ClusterIP + Route mode (ocproute)
-    ingress_mode = os.environ.get("INGRESS_MODE", "loadbalancer")
-    if ingress_mode == "ocproute":
-        pytest.skip(
-            "Skipping when Gateway uses ClusterIP + OpenShift Route (unsupported configuration). "
-            "This mixes incompatible routing paradigms. "
-            "Gateway has no external hostname in spec.listeners, so /v1/tenants returns an error. "
-            "Supported configuration: LoadBalancer service with hostname in spec.listeners."
-        )
-
     tenant_a = tenant_service_urls["tenant_a"]
     tenant_b = tenant_service_urls["tenant_b"]
     cluster_token = tenant_tokens["cluster"]
@@ -222,16 +204,6 @@ def test_tenant_discovery_each_tenant_returns_own_gateway(tenant_service_urls, t
     This validates that the implementation uses instance configuration (GATEWAY_NAME env var)
     rather than hardcoding a specific gateway name.
     """
-    # Skip test when Gateway is deployed in unsupported ClusterIP + Route mode (ocproute)
-    ingress_mode = os.environ.get("INGRESS_MODE", "loadbalancer")
-    if ingress_mode == "ocproute":
-        pytest.skip(
-            "Skipping when Gateway uses ClusterIP + OpenShift Route (unsupported configuration). "
-            "This mixes incompatible routing paradigms. "
-            "Gateway has no external hostname in spec.listeners, so /v1/tenants returns an error. "
-            "Supported configuration: LoadBalancer service with hostname in spec.listeners."
-        )
-
     cluster_token = tenant_tokens["cluster"]
 
     for tenant_key in ["tenant_a", "tenant_b"]:
@@ -251,6 +223,10 @@ def test_tenant_discovery_each_tenant_returns_own_gateway(tenant_service_urls, t
         # The gateway name should match this tenant's gateway
         # (not hardcoded to 'maas-default-gateway')
         gateway_name = tenant_data["gateway"]["name"]
+        assert tenant_data["gateway"]["externalUrl"] == tenant["gateway_url"], (
+            f"Expected Route URL {tenant['gateway_url']}, "
+            f"got {tenant_data['gateway']['externalUrl']}"
+        )
 
         # Each tenant's gateway name should contain their tenant name or suffix
         # to prove it's NOT using a hardcoded default
@@ -258,3 +234,16 @@ def test_tenant_discovery_each_tenant_returns_own_gateway(tenant_service_urls, t
             f"Gateway name '{gateway_name}' should be tenant-specific, not default"
 
         print(f"[isolation] ✓ {tenant['name']} returns own gateway: {gateway_name}")
+
+
+def test_tenant_discovery_gateway_route_reachable(tenant_service_urls):
+    """Verify the discovery URL remains reachable through the reencrypt Route."""
+    for tenant in tenant_service_urls.values():
+        response = requests.get(
+            f"{tenant['gateway_url']}/maas-api/health",
+            timeout=30,
+            verify=TLS_VERIFY,
+        )
+        assert response.status_code == 200, (
+            f"{tenant['name']} Route should reach maas-api, got {response.status_code}"
+        )
