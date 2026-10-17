@@ -35,19 +35,24 @@ data:
     - type: model-provider-resolver
     - type: api-translation
     - type: apikey-injection
+    - type: passthrough-profile-picker
+      name: passthrough-profile-picker
+    preProcessing:
+      plugins:
+      - pluginRef: maas-headers-guard
+      - pluginRef: stream-usage-enforcer
+      - pluginRef: model-provider-resolver
+    profilePicker:
+      pluginRef: passthrough-profile-picker
     profiles:
-    - name: default
+    - name: translation
       plugins:
         request:
-        - pluginRef: maas-headers-guard
-        - pluginRef: stream-usage-enforcer
-        - pluginRef: model-provider-resolver
         - pluginRef: api-translation
         - pluginRef: apikey-injection
-        # Response api-translation is off by default so SSE streaming for
-        # internal/OpenAI-compatible models is not held by a response processor.
-        # Re-enable for providers that need response rewrite (e.g. Anthropic):
-        #   response:
-        #   - pluginRef: api-translation
-        # See docs/content/install/external-model-setup.md (IPP response translation).
-        response: []
+        response:
+        - pluginRef: api-translation
+    - name: passthrough
+      plugins:
+        request:
+        - pluginRef: apikey-injection
