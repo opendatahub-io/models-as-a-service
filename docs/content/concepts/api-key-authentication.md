@@ -64,6 +64,11 @@ sequenceDiagram
 ## API Key Validation Flow
 
 When you use an API key for inference, the gateway validates it via the MaaS API before allowing the request.
+Send the same `sk-oai-*` key in either `Authorization: Bearer <key>` or
+`x-api-key: <key>`. Both headers use the same validation and subscription checks
+for local and external models. The `x-api-key` option is available even when no
+Anthropic Messages API ExternalModel exists. If both headers are sent, the
+Bearer API key takes precedence.
 
 ### Validation Flow Diagram
 
@@ -77,7 +82,7 @@ sequenceDiagram
     participant Model as Model Backend
 
     Note over User,MaaS: Inference Request
-    User->>Gateway: 1. Request with Authorization: Bearer sk-oai-*
+    User->>Gateway: 1. Request with Bearer or x-api-key: sk-oai-*
     Gateway->>AuthPolicy: Route to MaaSAuthPolicy
     AuthPolicy->>MaaS: 2. POST /internal/v1/api-keys/validate (key)
     MaaS->>MaaS: Hash key, lookup by hash
@@ -91,7 +96,7 @@ sequenceDiagram
     Gateway-->>User: Response
 ```
 
-The validation endpoint (`/internal/v1/api-keys/validate`) is called by Authorino on every request that bears an `sk-oai-*` token. It:
+The validation endpoint (`/internal/v1/api-keys/validate`) is called by Authorino on every request with an `sk-oai-*` key in either header. It:
 
 1. Hashes the incoming key and looks it up in the database
 2. Returns `valid: true` with `userId`, `groups`, and `subscription` if the key is active and not expired

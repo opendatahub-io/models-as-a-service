@@ -3,7 +3,7 @@
 This guide explains how to create and manage API keys for accessing models through the MaaS platform.
 
 !!! tip "API keys for model access"
-    The platform uses **API keys** (`sk-oai-*`) stored in PostgreSQL for programmatic access. Create keys via `POST /v1/api-keys` (authenticate with your OpenShift token) and use them with the `Authorization: Bearer` header. Each key is bound to one MaaSSubscription at creation time.
+    The platform uses **API keys** (`sk-oai-*`) stored in PostgreSQL for programmatic access. Create keys via `POST /v1/api-keys` (authenticate with your OpenShift token) and use them with `Authorization: Bearer` or `x-api-key`. Each key is bound to one MaaSSubscription at creation time. See [API Key Authentication](../concepts/api-key-authentication.md#api-key-validation-flow) for details.
 
 !!! note "Prerequisites"
     This document assumes your administrator has configured subscriptions (MaaSAuthPolicy, MaaSSubscription) that grant you access to models.

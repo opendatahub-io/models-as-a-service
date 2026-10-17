@@ -1,14 +1,11 @@
 """
 E2E tests for x-api-key inbound authentication.
 
-Validates that the gateway AuthPolicy dynamically adds an x-api-key identity
-source when an IPP ExternalModel CR with apiFormat=messages exists, allowing
-Anthropic SDK clients to authenticate via x-api-key header instead of
-Authorization: Bearer.
+Validates that the gateway AuthPolicy always accepts a MaaS API key through
+either x-api-key or Authorization: Bearer, without an ExternalModel trigger.
 
 Prerequisites:
 - MaaS deployed with x-api-key support in the controller
-- IPP ExternalModel CRD (externalmodels.inference.opendatahub.io) installed
 
 Environment variables:
   See test_helper.py module docstring for shared environment variables.
@@ -27,12 +24,9 @@ import requests
 
 from test_helper import (
     MODEL_NAME,
-    MODEL_NAMESPACE,
     MODEL_PATH,
     TIMEOUT,
     TLS_VERIFY,
-    _apply_cr,
-    _delete_cr,
     _gateway_url,
     _inference,
     _poll_status,
@@ -44,34 +38,6 @@ log = logging.getLogger(__name__)
 GATEWAY_NAMESPACE = os.environ.get("GATEWAY_NAMESPACE", "openshift-ingress")
 GATEWAY_AUTH_POLICY_NAME = "maas-gateway-auth"
 IDENTITY_SOURCE_NAME = "api-keys-x-api-key"
-
-IPP_EXTERNAL_MODEL_CRD = "externalmodels.inference.opendatahub.io"
-IPP_EXTERNAL_MODEL_NAME = "e2e-x-api-key-trigger"
-
-IPP_EXTERNAL_MODEL_CR = {
-    "apiVersion": "inference.opendatahub.io/v1alpha1",
-    "kind": "ExternalModel",
-    "metadata": {"name": IPP_EXTERNAL_MODEL_NAME, "namespace": MODEL_NAMESPACE},
-    "spec": {
-        "modelName": "claude-test",
-        "externalProviderRefs": [{
-            "ref": {"name": "dummy-anthropic"},
-            "targetModel": "claude-sonnet-4-20250514",
-            "apiFormat": "messages",
-            "path": "/v1/messages",
-        }],
-    },
-}
-
-
-def _crd_installed(crd_name):
-    """Check if a CRD is installed on the cluster."""
-    result = subprocess.run(
-        ["oc", "get", "crd", crd_name],
-        capture_output=True, text=True, timeout=30,
-    )
-    return result.returncode == 0
-
 
 def _get_authpolicy_identities():
     """Get the list of identity source names from the gateway AuthPolicy."""
@@ -90,43 +56,19 @@ def _get_authpolicy_identities():
     return list(authentication.keys())
 
 
-def _wait_for_identity_source(identity_name, present=True, timeout=120):
-    """Poll AuthPolicy until an identity source appears or disappears."""
+def _wait_for_identity_source(identity_name, timeout=120):
+    """Poll AuthPolicy until an identity source appears."""
     deadline = time.time() + timeout
     while time.time() < deadline:
         identities = _get_authpolicy_identities()
-        found = identity_name in identities
-        if found == present:
-            log.info(
-                "Identity source %r %s (identities: %s)",
-                identity_name, "appeared" if present else "removed", identities,
-            )
+        if identity_name in identities:
+            log.info("Identity source %r appeared (identities: %s)", identity_name, identities)
             return True
         time.sleep(5)
     raise TimeoutError(
-        f"Identity source {identity_name!r} did not {'appear' if present else 'disappear'} "
+        f"Identity source {identity_name!r} did not appear "
         f"within {timeout}s. Current identities: {_get_authpolicy_identities()}"
     )
-
-
-def _trigger_reconcile():
-    """Trigger controller reconciliation by touching the IPP ExternalModel CR.
-
-    Annotating the ExternalModel causes the controller's ExternalModel watch to
-    fire, which enqueues all MaaSAuthPolicies for reconciliation.  Annotating
-    MaaSAuthPolicies directly is ineffective because their watch uses
-    GenerationChangedPredicate, which ignores metadata-only updates.
-    """
-    result = subprocess.run(
-        ["oc", "annotate",
-         f"externalmodel.inference.opendatahub.io/{IPP_EXTERNAL_MODEL_NAME}",
-         "-n", MODEL_NAMESPACE,
-         f"e2e.maas/reconcile-trigger={int(time.time())}", "--overwrite"],
-        capture_output=True, text=True, timeout=30,
-    )
-    if result.returncode != 0:
-        log.warning("Failed to annotate ExternalModel to trigger reconcile: %s",
-                    result.stderr.strip())
 
 
 def _inference_x_api_key(api_key, path=None, extra_headers=None, model_name=None):
@@ -148,10 +90,6 @@ def _inference_x_api_key(api_key, path=None, extra_headers=None, model_name=None
 
 
 pytestmark = [
-    pytest.mark.skipif(
-        not _crd_installed(IPP_EXTERNAL_MODEL_CRD),
-        reason=f"IPP ExternalModel CRD ({IPP_EXTERNAL_MODEL_CRD}) not installed",
-    ),
     pytest.mark.xdist_group("api_keys"),
     pytest.mark.serial,
 ]
@@ -159,28 +97,8 @@ pytestmark = [
 
 @pytest.fixture(scope="module")
 def x_api_key_setup(api_key):
-    """Create IPP ExternalModel with apiFormat=messages to enable x-api-key identity source.
-
-    Setup:
-      1. Apply IPP ExternalModel CR
-      2. Trigger reconciliation
-      3. Wait for api-keys-x-api-key identity to appear in gateway AuthPolicy
-
-    Teardown:
-      1. Delete IPP ExternalModel CR
-      2. Trigger reconciliation
-      3. Wait for api-keys-x-api-key identity to be removed
-    """
-    log.info("Setting up x-api-key auth test fixture...")
-
-    _apply_cr(IPP_EXTERNAL_MODEL_CR)
-    _trigger_reconcile()
-
-    try:
-        _wait_for_identity_source(IDENTITY_SOURCE_NAME, present=True, timeout=120)
-    except TimeoutError:
-        _delete_cr("externalmodel.inference.opendatahub.io", IPP_EXTERNAL_MODEL_NAME, MODEL_NAMESPACE)
-        raise
+    """Wait for the always-on gateway identity source and auth enforcement."""
+    _wait_for_identity_source(IDENTITY_SOURCE_NAME, timeout=120)
 
     # AuthPolicy YAML can list api-keys-x-api-key before Kuadrant/Authorino has
     # enforced it. Bearer still works via the existing api-keys identity, so a
@@ -189,21 +107,11 @@ def x_api_key_setup(api_key):
     _poll_status(api_key, 200, timeout=60)
     _poll_status(api_key, 200, timeout=120, inference_fn=_inference_x_api_key)
 
-    log.info("x-api-key identity source is active, running tests...")
-    yield api_key
-
-    log.info("Cleaning up x-api-key auth test fixture...")
-    _delete_cr("externalmodel.inference.opendatahub.io", IPP_EXTERNAL_MODEL_NAME, MODEL_NAMESPACE)
-    _trigger_reconcile()
-
-    try:
-        _wait_for_identity_source(IDENTITY_SOURCE_NAME, present=False, timeout=120)
-    except TimeoutError:
-        log.warning("Identity source %s did not disappear during cleanup", IDENTITY_SOURCE_NAME)
+    return api_key
 
 
 class TestXAPIKeyAuthentication:
-    """Validate x-api-key header authentication when IPP ExternalModel with apiFormat=messages exists."""
+    """Validate x-api-key auth without creating any ExternalModel."""
 
     def test_x_api_key_authenticates(self, x_api_key_setup):
         """x-api-key header with valid API key returns 200."""
@@ -214,7 +122,7 @@ class TestXAPIKeyAuthentication:
         )
 
     def test_authorization_bearer_still_works(self, x_api_key_setup):
-        """Authorization: Bearer still works when x-api-key identity source is active."""
+        """Authorization: Bearer authenticates the same key."""
         api_key = x_api_key_setup
         r = _inference(api_key)
         assert r.status_code == 200, (
