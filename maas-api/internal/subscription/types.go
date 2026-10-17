@@ -59,9 +59,11 @@ type SelectResponse struct {
 	// gateway AuthPolicy to build selected_subscription_key (telemetry/debug) and,
 	// with namespace/name, to derive RateLimitID for TokenRateLimitPolicy matching.
 	ResolvedModel string `json:"resolvedModel,omitempty"`
-	// RateLimitID is a short stable hash of namespace/name@resolvedModel. AuthPolicy
-	// copies it to auth.identity.selected_subscription_id for TokenRateLimitPolicy
-	// when-predicates so the WASM shim does not embed long subscription keys.
+	// RateLimitID is a short stable hash of namespace/name@resolvedModel, set
+	// only for subscriptions created after the short-ID rollout
+	// (status.rateLimitIdentity=short). AuthPolicy copies it to
+	// auth.identity.selected_subscription_id. Pre-upgrade subscriptions omit
+	// this field and keep matching on selected_subscription_key.
 	RateLimitID string `json:"rateLimitId,omitempty"`
 	// Objective is the InferenceObjective name for ResolvedModel from the subscription's
 	// status.flowControlStatuses. AuthPolicy injects it as the llm-d objective header; empty

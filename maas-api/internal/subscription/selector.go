@@ -159,6 +159,7 @@ type subscription struct {
 	Ready                    bool                   // computed from status.conditions Ready condition
 	DeletionTimestamp        *string                // metadata.deletionTimestamp (set when being deleted)
 	TokenRateLimitStatuses   []TokenRateLimitStatus // per-model TRLP status from status.tokenRateLimitStatuses
+	UseShortRateLimitID      bool                   // status.rateLimitIdentity=short
 	Objectives               map[string]string      // "namespace/name" of a model -> InferenceObjective name, from status.flowControlStatuses
 }
 
@@ -782,11 +783,24 @@ func parseSubscription(obj *unstructured.Unstructured) (subscription, error) {
 		Namespace: obj.GetNamespace(),
 	}
 
-	// Parse annotations for display metadata
+	// Parse annotations for display metadata.
 	if annotations := obj.GetAnnotations(); annotations != nil {
 		sub.DisplayName = annotations[constant.AnnotationDisplayName]
 		sub.Description = annotations[constant.AnnotationDescription]
 	}
+
+	// Match controller precedence: spec escape hatch, sticky status, then
+	// legacy annotation from early short-ID builds.
+	identity, _, _ := unstructured.NestedString(obj.Object, "spec", "rateLimitIdentity")
+	if identity == "" {
+		identity, _, _ = unstructured.NestedString(obj.Object, "status", "rateLimitIdentity")
+	}
+	if identity == "" {
+		if annotations := obj.GetAnnotations(); annotations != nil {
+			identity = annotations[constant.AnnotationRateLimitIdentity]
+		}
+	}
+	sub.UseShortRateLimitID = UsesShortRateLimitID(identity)
 
 	// Parse owner
 	if owner, found, _ := unstructured.NestedMap(spec, "owner"); found {
@@ -1325,7 +1339,9 @@ func (s *Selector) toResponseWithResolvedModel(sub *subscription, resolvedModel 
 	resp.ResolvedModel = resolvedModel
 	resp.FairnessID = s.tenantName
 	if sub != nil {
-		resp.RateLimitID = RateLimitIDFor(sub.Namespace, sub.Name, resolvedModel)
+		if sub.UseShortRateLimitID {
+			resp.RateLimitID = RateLimitIDFor(sub.Namespace, sub.Name, resolvedModel)
+		}
 		if ref := findModelRef(sub, resolvedModel); ref != nil {
 			resp.Objective = sub.Objectives[ref.Namespace+"/"+ref.Name]
 		}

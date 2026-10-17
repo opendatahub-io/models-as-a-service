@@ -1223,8 +1223,9 @@ allow {
 								},
 								// Model-scoped subscription key: namespace/name@modelIdentity
 								// Prefer resolvedModel from subscription-info (MaaSModelRef
-								// namespace/name after BBR alias resolution). Kept for telemetry
-								// and debugging; TRLP when-predicates match selected_subscription_id.
+								// namespace/name after BBR alias resolution). Always set for
+								// telemetry/debugging. Legacy (pre-upgrade) TRLP limits also
+								// match this field when maas-api omits rateLimitId.
 								"selected_subscription_key": map[string]any{
 									"expression": fmt.Sprintf(
 										`(has(auth.metadata["subscription-info"].namespace) && `+
@@ -1234,9 +1235,10 @@ allow {
 										celResolvedModelIdentity,
 									),
 								},
-								// Short hash of selected_subscription_key from maas-api
-								// (subscription-info.rateLimitId). TokenRateLimitPolicy when
-								// predicates match this field to keep the WASM shim compact.
+								// Short hash from maas-api (subscription-info.rateLimitId) for
+								// new subscriptions. Empty when rateLimitId is omitted (legacy
+								// identity). New TRLP limits match this field; legacy limits
+								// match selected_subscription_key instead.
 								"selected_subscription_id": map[string]any{
 									"expression": `has(auth.metadata["subscription-info"].rateLimitId) ? auth.metadata["subscription-info"].rateLimitId : ""`,
 								},

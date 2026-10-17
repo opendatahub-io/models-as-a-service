@@ -6,7 +6,9 @@ This guide explains the cardinality dimensions in MaaS, when they become a probl
 
 ## How Cardinality Arises
 
-The controller generates one Kuadrant **TokenRateLimitPolicy** (TRLP) per model, shared by every MaaSSubscription that references it. The TRLP has one limit per distinct set of `tokenRateLimits` on that model, so subscriptions with identical rates share a limit. Each limit counts per subscription and per user (counters `selected_subscription_id` and `userid`), so sharing a limit never means sharing a budget. Limitador maintains a separate counter for each unique combination of those values. The TelemetryPolicy adds further labels (`user`, `subscription`, `model`, `organization_id`, and optionally `group`) to usage metrics.
+The controller generates one Kuadrant **TokenRateLimitPolicy** (TRLP) per model, shared by every MaaSSubscription that references it. The TRLP has one limit per distinct set of `tokenRateLimits` on that model, so subscriptions with identical rates share a limit. Each limit counts per subscription and per user (counters `selected_subscription_id` and `userid` for subscriptions created after the short-ID rollout, or `selected_subscription_key` and `userid` for pre-upgrade subscriptions), so sharing a limit never means sharing a budget. Limitador maintains a separate counter for each unique combination of those values. The TelemetryPolicy adds further labels (`user`, `subscription`, `model`, `organization_id`, and optionally `group`) to usage metrics.
+
+A rate set that still has both generations is split into two limits so the counter expressions can differ. That extra limit is copied into every gateway ActionSet, so clusters with many leftover pre-upgrade subscriptions keep more of the wasm-config size until those CRs are replaced. See [Upgrade to 3.6](../migration/upgrade-to-3.6.md#trade-off-size-savings-only-accrue-on-new-subscriptions).
 
 Limits and counters scale differently:
 

@@ -1870,12 +1870,24 @@ func TestMaaSSubscriptionReconciler_ReconcileErrorPreservedOnStatusFailure(t *te
 
 	// No valid models routes Reconcile through cleanupStaleTRLPs.
 	sub := newMaaSSubscription("sub-missing", "default", "team-a", "missing-model", 100)
-	funcs := failStatusUpdates(statusErr)
-	funcs.List = func(ctx context.Context, cl client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
-		if list.GetObjectKind().GroupVersionKind().Kind == "TokenRateLimitPolicyList" {
-			return listErr
-		}
-		return cl.List(ctx, list, opts...)
+	funcs := interceptor.Funcs{
+		// Allow the early sticky rateLimitIdentity status stamp (phase still
+		// empty); fail later status writes used for the reconcile-error path.
+		SubResourceUpdate: func(ctx context.Context, cl client.Client, subResource string, obj client.Object, opts ...client.SubResourceUpdateOption) error {
+			if subResource != "status" {
+				return cl.SubResource(subResource).Update(ctx, obj, opts...)
+			}
+			if sub, ok := obj.(*maasv1alpha1.MaaSSubscription); ok && sub.Status.Phase == "" {
+				return cl.Status().Update(ctx, obj, opts...)
+			}
+			return statusErr
+		},
+		List: func(ctx context.Context, cl client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+			if list.GetObjectKind().GroupVersionKind().Kind == "TokenRateLimitPolicyList" {
+				return listErr
+			}
+			return cl.List(ctx, list, opts...)
+		},
 	}
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).

@@ -38,6 +38,17 @@ const (
 	AnnotationContextWindow     = "opendatahub.io/context-window"
 	AnnotationModelCapabilities = "opendatahub.io/model-capabilities"
 
+	// RateLimitIdentity* values for status.rateLimitIdentity / spec.rateLimitIdentity.
+	// Must stay in sync with maas-controller RateLimitIdentity*.
+	// "short" → maas-api returns rateLimitId; omitted / "legacy" keeps
+	// selected_subscription_key matching for pre-upgrade subscriptions.
+	RateLimitIdentityShort  = "short"
+	RateLimitIdentityLegacy = "legacy"
+
+	// AnnotationRateLimitIdentity is a legacy stamp from early short-ID builds.
+	// Prefer status.rateLimitIdentity; still read as a migration fallback.
+	AnnotationRateLimitIdentity = "maas.opendatahub.io/rate-limit-identity"
+
 	// MaxLabelsEntries is the maximum number of label key-value pairs per API key (prevent abuse).
 	MaxLabelsEntries    = 50
 	MaxLabelKeyLength   = 128

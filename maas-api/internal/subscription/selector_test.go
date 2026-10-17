@@ -9,6 +9,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/authpolicy"
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/constant"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/subscription"
 )
@@ -2176,6 +2177,48 @@ func TestSelector_ResolvedModelFromAlias(t *testing.T) {
 			})
 		})
 	}
+}
+
+func TestSelect_RateLimitIDOnlyForShortIdentity(t *testing.T) {
+	log := logger.New(false)
+	requestedModel := "ns1/model-a"
+
+	legacy := createSubscriptionWithModelRefs("legacy-sub", []string{"g1"}, []map[string]any{
+		{"name": "model-a", "namespace": "ns1"},
+	})
+	fresh := createSubscriptionWithModelRefs("fresh-sub", []string{"g1"}, []map[string]any{
+		{"name": "model-a", "namespace": "ns1"},
+	})
+	if status, ok := fresh.Object["status"].(map[string]any); ok {
+		status["rateLimitIdentity"] = constant.RateLimitIdentityShort
+	} else {
+		fresh.Object["status"] = map[string]any{
+			"rateLimitIdentity": constant.RateLimitIdentityShort,
+		}
+	}
+
+	t.Run("legacy omits rateLimitId", func(t *testing.T) {
+		selector := subscription.NewSelector(log, &fakeLister{subscriptions: []*unstructured.Unstructured{legacy}}, nil, nil)
+		result, err := selector.Select([]string{"g1"}, "", "", requestedModel)
+		if err != nil {
+			t.Fatalf("Select: %v", err)
+		}
+		if result.RateLimitID != "" {
+			t.Errorf("RateLimitID = %q, want empty for legacy subscription", result.RateLimitID)
+		}
+	})
+
+	t.Run("short status returns rateLimitId", func(t *testing.T) {
+		selector := subscription.NewSelector(log, &fakeLister{subscriptions: []*unstructured.Unstructured{fresh}}, nil, nil)
+		result, err := selector.Select([]string{"g1"}, "", "", requestedModel)
+		if err != nil {
+			t.Fatalf("Select: %v", err)
+		}
+		want := subscription.RateLimitIDFor("test-ns", "fresh-sub", requestedModel)
+		if result.RateLimitID != want {
+			t.Errorf("RateLimitID = %q, want %q", result.RateLimitID, want)
+		}
+	})
 }
 
 // createSubscriptionWithFlowControl returns a subscription for models ns1/model-a and
