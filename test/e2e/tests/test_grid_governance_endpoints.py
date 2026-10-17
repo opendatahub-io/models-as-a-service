@@ -13,7 +13,7 @@ from grid_governance_fixtures import (
 )
 from grid_governance_fixtures import governance_context as grid_governance_context  # noqa: F401 - pytest fixture
 from grid_oidc_helpers import request_grid_token
-from test_helper import _request_with_gateway_retry
+from test_helper import _ns, _request_with_gateway_retry
 
 
 pytestmark = [
@@ -182,6 +182,36 @@ class TestGridGovernanceAPIKeys:
         assert returned_ids == expected_ids, (
             f"Grid admin search must return exactly the authorized subscription's "
             f"keys {expected_ids}, got {returned_ids}"
+        )
+        assert all("key" not in item for item in items)
+        assert all(
+            item["subscription"] == resources.governance_subscription
+            for item in items
+        )
+
+    def test_grid_admin_search_canonicalizes_authorized_username_scope(
+        self, maas_api_base_url: str, governance_context: GridGovernanceContext
+    ):
+        token = request_grid_token("grid_admin")
+        resources = governance_context.resources
+        subscription_alias = f"{_ns()}/{resources.governance_subscription}"
+
+        response = _search_grid_api_keys(
+            maas_api_base_url,
+            token,
+            subscription=subscription_alias,
+            username="bob_sre",
+        )
+        assert response.status_code == 200, (
+            f"Grid admin canonical API-key search failed: "
+            f"{response.status_code} {response.text}"
+        )
+        items = response.json()["data"]
+        returned_ids = {item["id"] for item in items}
+        expected_ids = {governance_context.keys[1].key_id}
+        assert returned_ids == expected_ids, (
+            f"Canonical Grid admin search must return exactly Bob's key "
+            f"{expected_ids}, got {returned_ids}"
         )
         assert all("key" not in item for item in items)
         assert all(
