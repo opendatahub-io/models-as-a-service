@@ -1,0 +1,20 @@
+# MaaSModelRef for the echo-mode simulator.
+# Used by e2e tests that need responses to mirror the request: large mirrored
+# payloads (I/O limits, buffering) and canary strings traced from request to
+# response, logs and metrics (leak tests).
+# LLMIS from docs/samples/models/echo-simulator (name: echo-simulator in namespace llm).
+# Serves model ID: test/e2e-echo-model (different from all other test models)
+# No MaaSSubscription ships with this fixture; tests create their own, matching
+# the distinct and distinct-2 fixtures.
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: MaaSModelRef
+metadata:
+  name: echo-simulator
+  namespace: llm
+  annotations:
+    openshift.io/display-name: "E2E Echo Simulated Model"
+    openshift.io/description: "Simulated model running --mode echo for large I/O and leak testing"
+spec:
+  modelRef:
+    kind: LLMInferenceService
+    name: echo-simulator
