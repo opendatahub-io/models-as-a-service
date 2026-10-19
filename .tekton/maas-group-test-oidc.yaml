@@ -44,6 +44,8 @@ spec:
       env:
       - name: EXTERNAL_OIDC
         value: "true"
+      - name: E2E_PARALLEL_WORKERS
+        value: "1"
     serviceAccountName: konflux-integration-runner
   timeouts:
     pipeline: 4h0m0s
