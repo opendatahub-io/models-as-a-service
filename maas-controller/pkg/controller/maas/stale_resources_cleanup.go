@@ -14,19 +14,20 @@ import (
 
 const staleUsageDatasourceName = "kuadrant-prometheus-datasource"
 
-// cleanupStaleUsageResources migrates the 3.4 metrics dashboard resources in the
-// controller (applications) namespace. They predate Config ownership, so the
-// normal owner-based cleanup cannot identify them. Match their reserved names
-// instead; never sweep other namespaces. Cleanup is completed once per reconciler
-// lifetime, with retries after errors or when the optional Perses APIs appear.
-func (r *LifecycleReconciler) cleanupStaleUsageResources(ctx context.Context, log logr.Logger) error {
+// cleanupStaleResources removes obsolete resources from previous releases in the
+// controller (applications) namespace, independently of module setup. Add future
+// stale resources here to share the same lock and completion tracking.
+// Cleanup completes once per reconciler lifetime, with retries after errors or
+// when optional APIs appear. Resources predating Config ownership are identified
+// by reserved names and resource-specific checks; never sweep other namespaces.
+func (r *LifecycleReconciler) cleanupStaleResources(ctx context.Context, log logr.Logger) error {
 	if r.DeploymentNS == "" {
 		return nil
 	}
 
-	r.staleUsageCleanupMu.Lock()
-	defer r.staleUsageCleanupMu.Unlock()
-	if r.staleUsageCleanupCompleted {
+	r.staleResourcesCleanupMu.Lock()
+	defer r.staleResourcesCleanupMu.Unlock()
+	if r.staleResourcesCleanupCompleted {
 		return nil
 	}
 	missingAPI := false
@@ -73,8 +74,8 @@ func (r *LifecycleReconciler) cleanupStaleUsageResources(ctx context.Context, lo
 			}
 			return fmt.Errorf("delete stale %s %s: %w", resource.kind, key, err)
 		}
-		log.Info("removed stale 3.4 metrics usage resource", "kind", resource.kind, "namespace", key.Namespace, "name", key.Name)
+		log.Info("removed stale resource", "kind", resource.kind, "namespace", key.Namespace, "name", key.Name)
 	}
-	r.staleUsageCleanupCompleted = !missingAPI
+	r.staleResourcesCleanupCompleted = !missingAPI
 	return nil
 }

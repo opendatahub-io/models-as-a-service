@@ -96,8 +96,8 @@ type LifecycleReconciler struct {
 	DiscoveryNamespace          string
 	DiscoveryReplicas           *int32
 
-	staleUsageCleanupMu        sync.Mutex
-	staleUsageCleanupCompleted bool
+	staleResourcesCleanupMu        sync.Mutex
+	staleResourcesCleanupCompleted bool
 }
 
 //+kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;update;patch
@@ -152,6 +152,10 @@ func (r *LifecycleReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 			return ctrl.Result{}, err
 		} else if res != nil {
 			return *res, nil
+		}
+		// Upgrade cleanup is independent of observability and other module setup.
+		if err := r.cleanupStaleResources(ctx, log); err != nil {
+			return ctrl.Result{}, err
 		}
 		if err := r.ensureObservability(ctx, log); err != nil {
 			return ctrl.Result{}, err
@@ -416,10 +420,6 @@ func aitenantReferencesConfig(aitenant *maasv1alpha1.AITenant, ct *maasv1alpha1.
 }
 
 func (r *LifecycleReconciler) ensureObservability(ctx context.Context, log logr.Logger) error {
-	// Upgrade cleanup must also run when the new monitoring stack is not configured.
-	if err := r.cleanupStaleUsageResources(ctx, log); err != nil {
-		return err
-	}
 	if r.MonitoringNamespace == "" {
 		log.V(1).Info("monitoring namespace not configured; skipping observability setup")
 		return nil

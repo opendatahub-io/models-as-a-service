@@ -132,9 +132,11 @@ the applications and monitoring namespaces are the same. The obsolete datasource
 and ConfigMap are removed by name; resources with other names or in other
 namespaces are unaffected.
 
-Cleanup runs once successfully per controller lifetime, independently of monitoring
-setup. Concurrent reconciliations are serialized, failures are retried on subsequent
-reconciliation, and missing Perses APIs leave cleanup pending until they are available.
+The lifecycle reconciler runs general stale-resource cleanup before module setup,
+independently of monitoring configuration. Cleanup runs once successfully per
+controller lifetime. Concurrent reconciliations are serialized, failures are retried
+on subsequent reconciliation, and missing Perses APIs leave cleanup pending until
+they are available.
 
 Requires a running **maas-controller** (`LifecycleReconciler`), a `Config` instance, a monitoring namespace, and Perses CRDs (`PersesAvailable`). See [Setup](setup.md).
 
