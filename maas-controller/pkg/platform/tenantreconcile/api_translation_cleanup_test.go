@@ -74,7 +74,7 @@ func TestRunPlatformBlocksMigrationWhenExternalModelAssessmentFails(t *testing.T
 			reader := failingExternalModelReader{Reader: base, err: test.err}
 			platformContext := PlatformContext{GatewayRef: maasv1alpha1.TenantGatewayRef{Namespace: gatewayNS, Name: gateway}, SkipIPP: true, Source: "aitenant"}
 			result, err := RunPlatformWithReader(context.Background(), logr.Discard(), base, reader, scheme, tenant,
-				platformContext, platformOverlayManifestPath(t), appNS, "controller-ns", "https://kubernetes.default.svc", "opendatahub", config)
+				platformContext, platformOverlayManifestPath(t), appNS, "controller-ns", "https://kubernetes.default.svc", "", "opendatahub", config)
 			require.NoError(t, err)
 			require.NotNil(t, result)
 			require.True(t, result.DeploymentPending, "uncertain provider state must block migration")
@@ -149,7 +149,7 @@ func TestRunPlatformPersistsResponseTranslationBeforeCleanupAndRetriesAfterFailu
 
 	run := func(current *maasv1alpha1.MaasTenantConfig) (*RunResult, error) {
 		return RunPlatform(context.Background(), logr.Discard(), cl, scheme, current, platformContext,
-			platformOverlayManifestPath(t), appNS, "controller-ns", "https://kubernetes.default.svc", "opendatahub", config)
+			platformOverlayManifestPath(t), appNS, "controller-ns", "https://kubernetes.default.svc", "", "opendatahub", config)
 	}
 	_, err := run(tenant)
 	require.ErrorContains(t, err, "injected cleanup failure")
@@ -221,7 +221,7 @@ func TestRunPlatformGatesOnlyUnsupportedExternalModelHandoffs(t *testing.T) {
 			).Build()
 			platformContext := PlatformContext{GatewayRef: maasv1alpha1.TenantGatewayRef{Namespace: gatewayNS, Name: gateway}, SkipIPP: true, Source: "aitenant"}
 			result, err := RunPlatform(context.Background(), logr.Discard(), base, scheme, tenant, platformContext,
-				platformOverlayManifestPath(t), appNS, "controller-ns", "https://kubernetes.default.svc", "opendatahub", config)
+				platformOverlayManifestPath(t), appNS, "controller-ns", "https://kubernetes.default.svc", "", "opendatahub", config)
 			require.NoError(t, err)
 			require.NotNil(t, result)
 			remaining := &corev1.ConfigMap{}
@@ -251,7 +251,7 @@ func TestRunPlatformGatesOnlyUnsupportedExternalModelHandoffs(t *testing.T) {
 				stored = &maasv1alpha1.MaasTenantConfig{}
 				require.NoError(t, base.Get(context.Background(), client.ObjectKeyFromObject(tenant), stored))
 				steadyResult, err := RunPlatform(context.Background(), logr.Discard(), base, scheme, stored, platformContext,
-					platformOverlayManifestPath(t), appNS, "controller-ns", "https://kubernetes.default.svc", "opendatahub", config)
+					platformOverlayManifestPath(t), appNS, "controller-ns", "https://kubernetes.default.svc", "", "opendatahub", config)
 				require.NoError(t, err)
 				require.Contains(t, steadyResult.Warnings[0], "accepts this compatibility loss")
 			}
@@ -288,7 +288,7 @@ func TestRunPlatformPersistsAcceptedRiskBeforeCleanupFailureAndKeepsWarningAfter
 	platformContext := PlatformContext{GatewayRef: maasv1alpha1.TenantGatewayRef{Namespace: gatewayNS, Name: gateway}, SkipIPP: true, Source: "aitenant"}
 	run := func(current *maasv1alpha1.MaasTenantConfig) (*RunResult, error) {
 		return RunPlatform(context.Background(), logr.Discard(), cl, scheme, current, platformContext,
-			platformOverlayManifestPath(t), appNS, "controller-ns", "https://kubernetes.default.svc", "opendatahub", config)
+			platformOverlayManifestPath(t), appNS, "controller-ns", "https://kubernetes.default.svc", "", "opendatahub", config)
 	}
 
 	_, err := run(tenant)
@@ -355,7 +355,7 @@ func TestRunPlatformUsesLiveReaderBeforeIPPTranslationCleanup(t *testing.T) {
 	platformContext := PlatformContext{GatewayRef: maasv1alpha1.TenantGatewayRef{Namespace: gatewayNS, Name: gateway}, SkipIPP: true, Source: "aitenant"}
 
 	result, err := RunPlatformWithReader(context.Background(), logr.Discard(), cachedClient, apiReader, scheme, tenant,
-		platformContext, platformOverlayManifestPath(t), appNS, "controller-ns", "https://kubernetes.default.svc", "opendatahub", config)
+		platformContext, platformOverlayManifestPath(t), appNS, "controller-ns", "https://kubernetes.default.svc", "", "opendatahub", config)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.True(t, result.DeploymentPending)

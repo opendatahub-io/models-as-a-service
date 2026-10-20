@@ -12,8 +12,10 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientsetfake "k8s.io/client-go/kubernetes/fake"
@@ -98,6 +100,121 @@ func TestFetchTLSProfileWithRetryTransientErrorFallsBackToIntermediate(t *testin
 	if len(profile.Ciphers) == 0 {
 		t.Fatalf("default Intermediate profile should include TLS ciphers")
 	}
+}
+
+func TestGetOpenShiftClusterID(t *testing.T) {
+	useShortClusterIDResolveTimings := func(t *testing.T) {
+		t.Helper()
+		originalTimeout := clusterIDResolveTimeout
+		originalRetryDelay := clusterIDResolveRetryDelay
+		clusterIDResolveTimeout = 20 * time.Millisecond
+		clusterIDResolveRetryDelay = time.Millisecond
+		t.Cleanup(func() {
+			clusterIDResolveTimeout = originalTimeout
+			clusterIDResolveRetryDelay = originalRetryDelay
+		})
+	}
+
+	t.Run("resolves the singleton ClusterVersion cluster ID", func(t *testing.T) {
+		clusterVersion := &confv1.ClusterVersion{
+			ObjectMeta: metav1.ObjectMeta{Name: "version"},
+			Spec: confv1.ClusterVersionSpec{
+				ClusterID: "11111111-1111-1111-1111-111111111111",
+			},
+		}
+		cl := controllerfake.NewClientBuilder().
+			WithScheme(managerTestScheme(t)).
+			WithObjects(clusterVersion).
+			Build()
+
+		clusterID, err := getOpenShiftClusterID(context.Background(), cl)
+		if err != nil {
+			t.Fatalf("getOpenShiftClusterID returned error: %v", err)
+		}
+		if clusterID != "11111111-1111-1111-1111-111111111111" {
+			t.Fatalf("cluster ID = %q", clusterID)
+		}
+	})
+
+	t.Run("retries transient lookup failures", func(t *testing.T) {
+		useShortClusterIDResolveTimings(t)
+		clusterVersion := &confv1.ClusterVersion{
+			ObjectMeta: metav1.ObjectMeta{Name: "version"},
+			Spec: confv1.ClusterVersionSpec{
+				ClusterID: "11111111-1111-1111-1111-111111111111",
+			},
+		}
+		attempts := 0
+		cl := controllerfake.NewClientBuilder().
+			WithScheme(managerTestScheme(t)).
+			WithObjects(clusterVersion).
+			WithInterceptorFuncs(interceptor.Funcs{
+				Get: func(_ context.Context, _ client.WithWatch, _ client.ObjectKey, obj client.Object, _ ...client.GetOption) error {
+					attempts++
+					switch attempts {
+					case 1:
+						return apierrors.NewNotFound(schema.GroupResource{Group: "config.openshift.io", Resource: "clusterversions"}, "version")
+					case 2:
+						return apierrors.NewForbidden(schema.GroupResource{Group: "config.openshift.io", Resource: "clusterversions"}, "version", errors.New("denied"))
+					case 3:
+						return context.DeadlineExceeded
+					default:
+						version, ok := obj.(*confv1.ClusterVersion)
+						if !ok {
+							return apierrors.NewInternalError(errors.New("unexpected object"))
+						}
+						*version = *clusterVersion
+						return nil
+					}
+				},
+			}).
+			Build()
+
+		clusterID := resolveOpenShiftClusterID(context.Background(), cl)
+		if attempts < 4 {
+			t.Fatalf("attempts = %d, want at least 4", attempts)
+		}
+		if clusterID != "11111111-1111-1111-1111-111111111111" {
+			t.Fatalf("cluster ID = %q", clusterID)
+		}
+	})
+
+	t.Run("returns empty on xKS API no-match", func(t *testing.T) {
+		cl := controllerfake.NewClientBuilder().
+			WithScheme(managerTestScheme(t)).
+			WithInterceptorFuncs(interceptor.Funcs{
+				Get: func(_ context.Context, _ client.WithWatch, _ client.ObjectKey, _ client.Object, _ ...client.GetOption) error {
+					return &apimeta.NoKindMatchError{}
+				},
+			}).
+			Build()
+
+		clusterID, err := getOpenShiftClusterID(context.Background(), cl)
+		if err != nil {
+			t.Fatalf("getOpenShiftClusterID returned error: %v", err)
+		}
+		if clusterID != "" {
+			t.Fatalf("cluster ID = %q, want empty", clusterID)
+		}
+	})
+
+	t.Run("omits the cluster ID after bounded unavailable retries", func(t *testing.T) {
+		useShortClusterIDResolveTimings(t)
+		cl := controllerfake.NewClientBuilder().
+			WithScheme(managerTestScheme(t)).
+			WithInterceptorFuncs(interceptor.Funcs{
+				Get: func(ctx context.Context, _ client.WithWatch, _ client.ObjectKey, _ client.Object, _ ...client.GetOption) error {
+					<-ctx.Done()
+					return ctx.Err()
+				},
+			}).
+			Build()
+
+		clusterID := resolveOpenShiftClusterID(context.Background(), cl)
+		if clusterID != "" {
+			t.Fatalf("cluster ID = %q, want empty", clusterID)
+		}
+	})
 }
 
 func TestFetchTLSProfileWithRetryAPIUnavailableSkipsWatcher(t *testing.T) {

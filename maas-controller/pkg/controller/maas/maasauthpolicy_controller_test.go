@@ -1586,6 +1586,7 @@ func TestMaaSAuthPolicyReconciler_IdentityHeadersUpstream(t *testing.T) {
 			"X-MaaS-Username", "X-MaaS-Username-Token",
 			"X-MaaS-Group", "X-MaaS-Group-Token",
 			"X-MaaS-Subscription",
+			"x-maas-subscription-namespace",
 			"X-MaaS-KeyName",
 			"x-maas-organization-id",
 			"X-MaaS-Cost-Center",
@@ -1620,6 +1621,16 @@ func TestMaaSAuthPolicyReconciler_IdentityHeadersUpstream(t *testing.T) {
 		}
 		if expr, _, _ := unstructured.NestedString(orgHeader, "plain", "expression"); expr != subscriptionInfoFieldExpr("organizationId") {
 			t.Errorf("x-maas-organization-id expression = %q, want empty fallback for organizationId", expr)
+		}
+		subscriptionNamespaceHeader, ok := headers["x-maas-subscription-namespace"].(map[string]any)
+		if !ok {
+			t.Fatalf("x-maas-subscription-namespace response is not a map: %#v", headers["x-maas-subscription-namespace"])
+		}
+		if _, hasWhen := subscriptionNamespaceHeader["when"]; hasWhen {
+			t.Errorf("x-maas-subscription-namespace must apply to every authorized request, got when %#v", subscriptionNamespaceHeader["when"])
+		}
+		if expr, _, _ := unstructured.NestedString(subscriptionNamespaceHeader, "plain", "expression"); expr != subscriptionInfoFieldExpr("namespace") {
+			t.Errorf("x-maas-subscription-namespace expression = %q, want empty fallback for namespace", expr)
 		}
 	})
 
@@ -1902,7 +1913,7 @@ func TestBuildGatewayAuthPolicySpec_DenyClientIdentityHeaders(t *testing.T) {
 		"spec", "defaults", "rules", "authorization", "deny-client-identity-headers", "patternMatching", "patterns",
 	)
 
-	if err != nil || !found || len(patterns) != 8 {
+	if err != nil || !found || len(patterns) != 9 {
 		t.Fatalf("deny-client-identity-headers patterns missing: found=%v len=%d err=%v", found, len(patterns), err)
 	}
 
@@ -1924,6 +1935,7 @@ func TestBuildGatewayAuthPolicySpec_DenyClientIdentityHeaders(t *testing.T) {
 		`!("x-maas-group" in request.headers)`,
 		`!("x-maas-keyname" in request.headers)`,
 		`!("x-maas-subscription-rate-limit-id" in request.headers)`,
+		`!("x-maas-subscription-namespace" in request.headers)`,
 		`!("x-maas-organization-id" in request.headers)`,
 		`!("x-maas-cost-center" in request.headers)`,
 		`!("x-maas-identity" in request.headers)`,

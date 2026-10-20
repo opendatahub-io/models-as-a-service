@@ -77,6 +77,9 @@ type TenantReconciler struct {
 	cleanupCompleted bool
 	// ClusterAudience is the OIDC audience resolved at startup (auto-detected issuer or default).
 	ClusterAudience string
+	// ClusterID is the producer cluster identity resolved from OpenShift ClusterVersion.
+	// It is empty on xKS and must not be substituted with another identifier.
+	ClusterID string
 	// TenantNamespaceDiscoveryEnabled allows reconciling MaasTenantConfig CRs across all namespaces
 	// instead of only TenantNamespace (enables AITenant multi-tenancy).
 	TenantNamespaceDiscoveryEnabled bool
