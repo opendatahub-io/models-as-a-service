@@ -133,6 +133,17 @@ func usageLogsCollectorAddressOf(ef *unstructured.Unstructured) (string, error) 
 	return addr, nil
 }
 
+func expectUsageLogsEnvoyFilterOwnedByConfig(g Gomega, ef *unstructured.Unstructured, cfg *maasv1alpha1.Config) {
+	refs := ef.GetOwnerReferences()
+	g.Expect(refs).To(HaveLen(1))
+	g.Expect(refs[0].APIVersion).To(Equal(maasv1alpha1.GroupVersion.String()))
+	g.Expect(refs[0].Kind).To(Equal("Config"))
+	g.Expect(refs[0].Name).To(Equal(cfg.Name))
+	g.Expect(refs[0].UID).To(Equal(cfg.UID))
+	g.Expect(refs[0].Controller).To(Equal(ptr.To(true)))
+	g.Expect(refs[0].BlockOwnerDeletion).To(Equal(ptr.To(true)))
+}
+
 func defaultUsageLogsPlatformContext() tenantreconcile.PlatformContext {
 	return tenantreconcile.PlatformContext{
 		GatewayRef: maasv1alpha1.TenantGatewayRef{Name: tenantreconcile.DefaultAITenantName, Namespace: usageLogsTestGatewayNS},
@@ -354,6 +365,7 @@ func TestTenantEnsureUsageLogsEnvoyFilter(t *testing.T) {
 		g.Expect(ef.GetLabels()).To(HaveKeyWithValue(tenantreconcile.LabelTenantName, tenantreconcile.DefaultAITenantName))
 		g.Expect(ef.GetAnnotations()).To(HaveKeyWithValue(tenantreconcile.AnnotationAITenantName, tenantreconcile.DefaultAITenantName))
 		g.Expect(ef.GetAnnotations()).To(HaveKeyWithValue(tenantreconcile.AnnotationAITenantNamespace, usageLogsTestAITenantNS))
+		expectUsageLogsEnvoyFilterOwnedByConfig(g, ef, cfg)
 
 		namespace, err := usageLogsServiceNamespace(ef)
 		g.Expect(err).NotTo(HaveOccurred())
@@ -413,6 +425,7 @@ func TestTenantEnsureUsageLogsEnvoyFilter(t *testing.T) {
 		ef.SetGroupVersionKind(tenantreconcile.GVKEnvoyFilter)
 		g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: tenantreconcile.UsageLogsEnvoyFilterName(""), Namespace: usageLogsTestGatewayNS}, ef)).
 			To(Succeed())
+		expectUsageLogsEnvoyFilterOwnedByConfig(g, ef, cfg)
 	})
 
 	t.Run("returns warning when manifest not found", func(t *testing.T) {

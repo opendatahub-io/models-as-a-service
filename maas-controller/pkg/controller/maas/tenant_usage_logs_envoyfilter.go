@@ -18,6 +18,7 @@ package maas
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -26,9 +27,11 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/serializer/yaml"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/platform/tenantreconcile"
@@ -192,6 +195,16 @@ func (r *TenantReconciler) applyUsageLogsEnvoyFilter(
 	ef.SetName(efName)
 	ef.SetNamespace(r.GatewayNamespace)
 	applyUsageLogsEnvoyFilterMetadata(ef, tenant)
+	// Config is the controller owner, same as gateway TelemetryPolicy via ApplyRendered,
+	// so deleting Config garbage-collects the per-tenant usage-logs filter.
+	if err := setUsageLogsEnvoyFilterConfigOwner(mcfg, ef, r.Scheme); err != nil {
+		var already *controllerutil.AlreadyOwnedError
+		if !errors.As(err, &already) {
+			return false, fmt.Errorf("set controller reference (Config) on EnvoyFilter %s/%s: %w", r.GatewayNamespace, efName, err)
+		}
+		log.Info("skipping Config controller reference: EnvoyFilter already owned by another controller",
+			"name", efName, "namespace", r.GatewayNamespace, "existingOwner", already)
+	}
 
 	if err := r.Apply(ctx, client.ApplyConfigurationFromUnstructured(ef), client.ForceOwnership, client.FieldOwner("maas-controller")); err != nil {
 		if apimeta.IsNoMatchError(err) {
@@ -206,6 +219,15 @@ func (r *TenantReconciler) applyUsageLogsEnvoyFilter(
 		"gateway", gatewayName, "collector", collectorAddress,
 		"serviceNamespace", tenant.GetNamespace())
 	return true, nil
+}
+
+// setUsageLogsEnvoyFilterConfigOwner sets Config as the controller owner of the EnvoyFilter.
+// Cluster-scoped Config may own namespaced objects in the gateway namespace.
+func setUsageLogsEnvoyFilterConfigOwner(mcfg *maasv1alpha1.Config, ef client.Object, scheme *runtime.Scheme) error {
+	if mcfg == nil || mcfg.UID == "" {
+		return errors.New("config with UID is required to own the usage-logs EnvoyFilter")
+	}
+	return controllerutil.SetControllerReference(mcfg, ef, scheme)
 }
 
 func applyUsageLogsEnvoyFilterMetadata(obj client.Object, tenant *maasv1alpha1.MaasTenantConfig) {
