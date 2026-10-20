@@ -43,7 +43,7 @@ sequenceDiagram
     participant Gateway
     participant AuthPolicy as AuthPolicy (Authorino)
     participant MaaS as maas-api
-    participant DB as PostgreSQL
+    participant DB as PostgreSQL (local read replica when configured)
 
     Note over User,MaaS: API Key Creation
     User->>Gateway: 1. POST /v1/api-keys (Bearer OpenShift token)
@@ -98,6 +98,12 @@ The validation endpoint (`/internal/v1/api-keys/validate`) is called by Authorin
 3. Returns `valid: false` with a reason if the key is invalid, revoked, or expired
 
 After a successful lookup, maas-api asynchronously updates `last_used_at` in the background. To prevent Postgres row-lock contention when many requests share a single key, these writes are **debounced**: at most one write is issued per key per `LAST_USED_DEBOUNCE_SECS` window (default 60 s). Set `LAST_USED_DEBOUNCE_SECS=0` on the maas-api Deployment to write on every validation.
+
+When `DB_READ_CONNECTION_URL` is configured, the hash lookup uses the cluster-local
+PostgreSQL read replica to avoid a cross-cluster round trip. Revocation is then visible
+after replication lag plus any brief Authorino cache delay. Deployments that require
+strict immediate revocation must omit the read-replica URL. See
+[Database Setup](../install/maas-setup.md#optional-postgresql-read-replica).
 
 ---
 
