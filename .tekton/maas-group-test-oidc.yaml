@@ -47,6 +47,9 @@ spec:
       - name: E2E_PARALLEL_WORKERS
         value: "1"
     serviceAccountName: konflux-integration-runner
+  taskRunSpecs:
+  - pipelineTaskName: e2e-maas-openshift
+    timeout: 2h30m
   timeouts:
     pipeline: 4h0m0s
     tasks: 3h
