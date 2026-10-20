@@ -29,6 +29,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/serializer/yaml"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/platform/tenantreconcile"
@@ -192,6 +193,14 @@ func (r *TenantReconciler) applyUsageLogsEnvoyFilter(
 	ef.SetName(efName)
 	ef.SetNamespace(r.GatewayNamespace)
 	applyUsageLogsEnvoyFilterMetadata(ef, tenant)
+	// Anchor the filter to the cluster-scoped Config so garbage collection removes
+	// it with the platform. The tenant cannot be the owner: MaasTenantConfig is
+	// namespaced and owner references do not cross namespaces (the filter lives in
+	// the gateway namespace). Per-tenant cleanup stays explicit (telemetry-disable
+	// path and the tenant-cleanup finalizer).
+	if err := controllerutil.SetOwnerReference(mcfg, ef, r.Scheme); err != nil {
+		return false, fmt.Errorf("set Config owner reference on usage-logs EnvoyFilter: %w", err)
+	}
 
 	if err := r.Apply(ctx, client.ApplyConfigurationFromUnstructured(ef), client.ForceOwnership, client.FieldOwner("maas-controller")); err != nil {
 		if apimeta.IsNoMatchError(err) {

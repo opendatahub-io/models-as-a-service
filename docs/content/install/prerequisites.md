@@ -81,7 +81,7 @@ See [Managing observability (RHOAI 3.4)](https://docs.redhat.com/en/documentatio
 
 ### Loki for Access logs
 
-To enable storing access logs from the MaaS gateway for logs-based showback or auditing, you need to configure a LokiStack. First, install the Loki Operator, and then configure a LokiStack named `usage` in the monitoring namespace configured in DSCI `spec.monitoring.namespace`, for example:
+Access logs for logs-based showback or auditing follow `Config.spec.usageLogging`. When it is `false` or omitted, the gateway sends logs to `data-science-usage-logs-collector` and the dashboards read LokiStack `data-science-lokistack` in the monitoring namespace configured in DSCI `spec.monitoring.namespace`. Create LokiStack `usage` in that namespace only when `usageLogging` is `true`. Install the Loki Operator, then apply a stack named `usage`, for example:
 
 ```yaml
 apiVersion: loki.grafana.com/v1

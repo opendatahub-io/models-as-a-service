@@ -210,6 +210,37 @@ func TestTenantEnsureUsageLogsEnvoyFilter(t *testing.T) {
 		g.Expect(addr).To(Equal("data-science-usage-logs-collector.opendatahub.svc"))
 	})
 
+	t.Run("applied filter is anchored to Config for garbage collection", func(t *testing.T) {
+		g := NewWithT(t)
+		s := tenantTestScheme(t)
+
+		cfg := usageLogsConfig(true)
+		tenant := usageLogsTenantConfig(usageLogsTestDefaultTenant, tenantreconcile.DefaultAITenantName, usageLogsTestAITenantNS)
+
+		cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cfg, tenant).Build()
+		r := newUsageLogsReconciler(t, s, cl, func(r *TenantReconciler) {
+			r.UsageLogsManifestPath = testUsageLogsManifestPath(t)
+		})
+
+		warning, err := r.ensureUsageLogsEnvoyFilter(context.Background(), ctrl.Log, tenant, defaultUsageLogsPlatformContext(), cfg)
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(warning).To(BeEmpty())
+
+		ef := &unstructured.Unstructured{}
+		ef.SetGroupVersionKind(tenantreconcile.GVKEnvoyFilter)
+		g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: tenantreconcile.UsageLogsEnvoyFilterName(""), Namespace: usageLogsTestGatewayNS}, ef)).
+			To(Succeed())
+
+		// The default tenant is torn down by Config garbage collection (no cleanup
+		// finalizer), so the filter must be cascaded via a Config owner reference.
+		ownerRefs := ef.GetOwnerReferences()
+		g.Expect(ownerRefs).To(HaveLen(1))
+		g.Expect(ownerRefs[0].APIVersion).To(Equal("maas.opendatahub.io/v1alpha1"))
+		g.Expect(ownerRefs[0].Kind).To(Equal(maasv1alpha1.ConfigKind))
+		g.Expect(ownerRefs[0].Name).To(Equal(maasv1alpha1.ConfigInstanceName))
+		g.Expect(ownerRefs[0].UID).To(Equal(types.UID("cfg-uid")))
+	})
+
 	t.Run("usageLogging unset uses data-science collector", func(t *testing.T) {
 		g := NewWithT(t)
 		s := tenantTestScheme(t)

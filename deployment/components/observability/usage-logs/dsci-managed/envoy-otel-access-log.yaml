@@ -19,7 +19,8 @@
 #            Extracts "model" from request body (covers 429),
 #            then overwrites from response body on 200 (authoritative).
 # Tokens:    json_to_metadata extracts usage.{total,prompt,completion}_tokens
-#            from response body (application/json only).
+#            and usage.prompt_tokens_details.cached_tokens (OpenAI-compatible
+#            prefix-caching stat) from response body (application/json only).
 # Scope:     Composite filter path match + CEL access log filter both restrict
 #            to inference endpoints only.
 # Targeting: Gateway API targetRefs.
@@ -315,6 +316,20 @@ spec:
                                 key: tokens_completion
                                 value: "0"
                                 preserve_existing_metadata_value: true
+                            - selectors:
+                              - key: usage
+                              - key: prompt_tokens_details
+                              - key: cached_tokens
+                              on_present:
+                                key: tokens_cached
+                              on_missing:
+                                key: tokens_cached
+                                value: "0"
+                                preserve_existing_metadata_value: true
+                              on_error:
+                                key: tokens_cached
+                                value: "0"
+                                preserve_existing_metadata_value: true
                             # ── Authoritative model from response ──
                             # On 200 JSON: overwrites the request-extracted model with the
                             # response value (authoritative, not user-spoofable).
@@ -397,8 +412,8 @@ spec:
                 if not string.find(ct, "text/event-stream", 1, true) then return end
 
                 -- Iterate SSE chunks; pcall catches malformed data
-                local ok, total, prompt, completion, model = pcall(function()
-                  local t, p, c, m = "0", "0", "0", nil
+                local ok, total, prompt, completion, cached, model = pcall(function()
+                  local t, p, c, ca, m = "0", "0", "0", "0", nil
 
                   for chunk in response_handle:bodyChunks() do
                     local data = chunk:getBytes(0, chunk:length())
@@ -408,13 +423,14 @@ spec:
                       t = tt
                       p = string.match(data, '"prompt_tokens"%s*:%s*(%d+)') or "0"
                       c = string.match(data, '"completion_tokens"%s*:%s*(%d+)') or "0"
+                      ca = string.match(data, '"cached_tokens"%s*:%s*(%d+)') or "0"
                     end
 
                     local mm = string.match(data, '"model"%s*:%s*"([^"]+)"')
                     if mm then m = mm end
                   end
 
-                  return t, p, c, m
+                  return t, p, c, ca, m
                 end)
 
                 -- Write to same metadata namespace as json_to_metadata
@@ -422,6 +438,7 @@ spec:
                 md:set(MD_NS, "tokens_total",      ok and total      or "0")
                 md:set(MD_NS, "tokens_prompt",      ok and prompt     or "0")
                 md:set(MD_NS, "tokens_completion",  ok and completion or "0")
+                md:set(MD_NS, "tokens_cached",      ok and cached     or "0")
                 if ok and model then md:set(MD_NS, "model", model) end
               end
 
@@ -498,6 +515,9 @@ spec:
                 - key: tokens_completion
                   value:
                     string_value: "%DYNAMIC_METADATA(envoy.filters.http.json_to_metadata:tokens_completion)%"
+                - key: tokens_cached
+                  value:
+                    string_value: "%DYNAMIC_METADATA(envoy.filters.http.json_to_metadata:tokens_cached)%"
                 # ── Model (json_to_metadata → dynamic metadata) ──
                 - key: model
                   value:
