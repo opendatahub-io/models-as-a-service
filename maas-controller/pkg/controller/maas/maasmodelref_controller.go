@@ -600,7 +600,7 @@ func (b *crdBootstrap) handleMetadata(_ context.Context, name string, reader cli
 	if name != b.crdName || !b.started.CompareAndSwap(false, true) {
 		return
 	}
-	go b.waitForEstablishedAndRun(context.Background(), reader, q)
+	go b.waitForEstablishedAndRun(context.Background(), reader, q) //nolint:gosec,contextcheck // the event handler ctx is cancelled when the handler returns; the retry goroutine must outlive it.
 }
 
 func (b *crdBootstrap) waitForEstablishedAndRun(ctx context.Context, reader client.Reader, q workqueue.TypedInterface[reconcile.Request]) {
