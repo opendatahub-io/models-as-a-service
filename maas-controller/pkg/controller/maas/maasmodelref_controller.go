@@ -594,15 +594,13 @@ func newCRDBootstrap(crdName string, register func() error, onEstablished func(c
 
 // handleMetadata starts the bootstrap when a metadata-only CRD event matches.
 // It claims ownership via CompareAndSwap on the first matching event and polls
-// for the Established condition with bounded retry, so transient API failures
-// don't stall bootstrap indefinitely.
-func (b *crdBootstrap) handleMetadata(ctx context.Context, name string, reader client.Reader, q workqueue.TypedInterface[reconcile.Request]) {
+// for the Established condition with exponential backoff on a background context
+// that outlives the event handler. The goroutine terminates when the process exits.
+func (b *crdBootstrap) handleMetadata(_ context.Context, name string, reader client.Reader, q workqueue.TypedInterface[reconcile.Request]) {
 	if name != b.crdName || !b.started.CompareAndSwap(false, true) {
 		return
 	}
-	// The event handler's context is cancelled when the handler returns, so the retries
-	// run on a context that keeps its values but not its cancellation.
-	go b.waitForEstablishedAndRun(context.WithoutCancel(ctx), reader, q)
+	go b.waitForEstablishedAndRun(context.Background(), reader, q)
 }
 
 func (b *crdBootstrap) waitForEstablishedAndRun(ctx context.Context, reader client.Reader, q workqueue.TypedInterface[reconcile.Request]) {
