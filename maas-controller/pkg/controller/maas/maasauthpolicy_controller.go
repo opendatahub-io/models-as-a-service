@@ -916,6 +916,9 @@ func (r *MaaSAuthPolicyReconciler) buildGatewayAuthPolicySpec(oidc *oidcConfig, 
 						"predicate": `!("x-maas-subscription-rate-limit-id" in request.headers)`,
 					},
 					map[string]any{
+						"predicate": `!("x-maas-subscription-namespace" in request.headers)`,
+					},
+					map[string]any{
 						"predicate": `!("x-maas-organization-id" in request.headers)`,
 					},
 					map[string]any{
@@ -1213,6 +1216,11 @@ allow {
 					"x-gateway-inference-objective":   subscriptionInfoHeader("objective"),
 					"x-llm-d-inference-fairness-id":   subscriptionInfoHeader("fairnessId"),
 					"x-gateway-inference-fairness-id": subscriptionInfoHeader("fairnessId"),
+					// Subscription scope is emitted as name and namespace so telemetry
+					// remains unambiguous when tenants use the same subscription name.
+					// Both headers are always set, empty when unresolved, and replace
+					// every client-supplied copy.
+					"x-maas-subscription-namespace": subscriptionInfoHeader("namespace"),
 					// Organization and cost center come from the resolved MaaSSubscription
 					// (subscription-info), not the client. Organization is always set, empty
 					// when unresolved, so a client-supplied value can never survive as

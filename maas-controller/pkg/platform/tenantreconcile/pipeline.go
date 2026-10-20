@@ -60,11 +60,12 @@ func RunPlatform(
 	appNs string,
 	controllerNs string,
 	clusterAudience string,
+	clusterID string,
 	monitoringNamespace string,
 	mcfg *maasv1alpha1.Config,
 ) (*RunResult, error) {
 	return RunPlatformWithReader(ctx, log, c, c, scheme, tenant, platformContext, manifestPath,
-		appNs, controllerNs, clusterAudience, monitoringNamespace, mcfg)
+		appNs, controllerNs, clusterAudience, clusterID, monitoringNamespace, mcfg)
 }
 
 // RunPlatformWithReader is RunPlatform with an uncached API reader for safety-
@@ -84,6 +85,7 @@ func RunPlatformWithReader(
 	appNs string,
 	controllerNs string,
 	clusterAudience string,
+	clusterID string,
 	monitoringNamespace string,
 	mcfg *maasv1alpha1.Config,
 ) (*RunResult, error) {
@@ -114,6 +116,7 @@ func RunPlatformWithReader(
 	if err != nil {
 		return nil, fmt.Errorf("build params: %w", err)
 	}
+	params.ClusterID = clusterID
 	applyMaaSAPIEgressConfig(&params, mcfg)
 
 	if !params.SkipIPP {
@@ -383,6 +386,7 @@ func Run(
 	manifestPath string,
 	controllerNs string,
 	clusterAudience string,
+	clusterID string,
 	monitoringNamespace string,
 	mcfg *maasv1alpha1.Config,
 ) (*RunResult, error) {
@@ -415,7 +419,7 @@ func Run(
 		return nil, err
 	}
 
-	return RunPlatform(ctx, log, c, scheme, tenant, platformContext, manifestPath, appNs, controllerNs, clusterAudience, monitoringNamespace, mcfg)
+	return RunPlatform(ctx, log, c, scheme, tenant, platformContext, manifestPath, appNs, controllerNs, clusterAudience, clusterID, monitoringNamespace, mcfg)
 }
 
 const maasParametersConfigMapName = "maas-parameters"

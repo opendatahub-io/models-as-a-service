@@ -79,14 +79,18 @@ const (
 	tlsProfileFetchTimeout    = 10 * time.Second
 	tlsProfileFetchRetryDelay = 2 * time.Second
 
+	clusterIDLookupTimeout = 2 * time.Second
+
 	// metricsCertDir is where OpenShift service-ca mounts the metrics serving cert.
 	// Must match the Deployment volumeMount added for SecureServing.
 	metricsCertDir = "/tmp/k8s-metrics-server/metrics-certs"
 )
 
 var (
-	tlsProfileRetryDelay = tlsProfileFetchRetryDelay
-	fatalExit            = os.Exit
+	tlsProfileRetryDelay       = tlsProfileFetchRetryDelay
+	clusterIDResolveTimeout    = 10 * time.Second
+	clusterIDResolveRetryDelay = time.Second
+	fatalExit                  = os.Exit
 )
 
 func init() {
@@ -613,6 +617,51 @@ func getClusterServiceAccountIssuer(c client.Reader) (string, error) {
 	}
 
 	return issuer, nil
+}
+
+// getOpenShiftClusterID resolves the producer cluster identity from the
+// singleton ClusterVersion object. It returns an empty value on xKS, where the
+// config.openshift.io API is not available.
+func getOpenShiftClusterID(ctx context.Context, c client.Reader) (string, error) {
+	lookupCtx, cancel := context.WithTimeout(ctx, clusterIDLookupTimeout)
+	defer cancel()
+
+	clusterVersion := &confv1.ClusterVersion{}
+	if err := c.Get(lookupCtx, types.NamespacedName{Name: "version"}, clusterVersion); err != nil {
+		if apimeta.IsNoMatchError(err) {
+			return "", nil
+		}
+		return "", err
+	}
+
+	clusterID := string(clusterVersion.Spec.ClusterID)
+	if clusterID == "" {
+		return "", nil
+	}
+	return clusterID, nil
+}
+
+func resolveOpenShiftClusterID(ctx context.Context, c client.Reader) string {
+	var clusterID string
+	pollErr := wait.PollUntilContextTimeout(
+		ctx,
+		clusterIDResolveRetryDelay,
+		clusterIDResolveTimeout,
+		true,
+		func(ctx context.Context) (bool, error) {
+			resolvedClusterID, err := getOpenShiftClusterID(ctx, c)
+			if err == nil {
+				clusterID = resolvedClusterID
+				return true, nil
+			}
+			setupLog.V(1).Info("unable to resolve OpenShift cluster ID; retrying", "error", err)
+			return false, nil
+		},
+	)
+	if pollErr != nil {
+		setupLog.Error(pollErr, "unable to resolve OpenShift cluster ID; telemetry cluster attribution will be omitted")
+	}
+	return clusterID
 }
 
 // ensureDefaultAITenantBootstrap creates the default AITenant once per
@@ -1287,6 +1336,13 @@ func main() {
 		setupLog.Error(err, "unable to auto-detect cluster service account issuer, using default", "default", clusterAudience)
 	}
 
+	clusterID := resolveOpenShiftClusterID(ctx, mgr.GetAPIReader())
+	if clusterID != "" {
+		setupLog.Info("resolved producer cluster ID", "clusterID", clusterID)
+	} else {
+		setupLog.Info("producer cluster ID unavailable; telemetry cluster attribution will be omitted")
+	}
+
 	if err := (&maas.MaaSModelRefReconciler{
 		Client:                          mgr.GetClient(),
 		Scheme:                          mgr.GetScheme(),
@@ -1401,6 +1457,7 @@ func main() {
 		GatewayName:                     gatewayName,
 		GatewayNamespace:                gatewayNamespace,
 		ClusterAudience:                 clusterAudience,
+		ClusterID:                       clusterID,
 		TenantNamespaceDiscoveryEnabled: enableTenantNamespaceDiscovery,
 		MetadataCacheTTL:                metadataCacheTTL,
 		MonitoringNamespace:             monitoringNamespace,
