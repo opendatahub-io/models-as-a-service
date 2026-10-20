@@ -1000,6 +1000,46 @@ func cleanupLegacyMaaSAPIGatewayNetworkPolicy(
 		return nil
 	}
 
+	tenantConfigs := &maasv1alpha1.MaasTenantConfigList{}
+	if err := c.List(ctx, tenantConfigs); err != nil {
+		return fmt.Errorf("list MaasTenantConfigs before gateway NetworkPolicy cleanup: %w", err)
+	}
+	for i := range tenantConfigs.Items {
+		tenantConfig := &tenantConfigs.Items[i]
+		if !tenantConfig.DeletionTimestamp.IsZero() {
+			continue
+		}
+		tenantID, err := TenantIdentifierFor(tenantConfig)
+		if err != nil {
+			return fmt.Errorf("resolve tenant identifier for %s/%s before gateway NetworkPolicy cleanup: %w",
+				tenantConfig.Namespace, tenantConfig.Name, err)
+		}
+		scopedName := MaaSAPIGatewayNetworkPolicyName(tenantID)
+		scopedPolicy := &unstructured.Unstructured{}
+		scopedPolicy.SetGroupVersionKind(GVKNetworkPolicy)
+		if err := c.Get(ctx, types.NamespacedName{Namespace: appNs, Name: scopedName}, scopedPolicy); err != nil {
+			if apierrors.IsNotFound(err) {
+				log.Info("Deferring legacy maas-api gateway NetworkPolicy cleanup; tenant scoped policy is missing",
+					"sharedName", baseMaaSAPIGatewayNetworkPolicyName,
+					"scopedName", scopedName,
+					"namespace", appNs,
+					"tenantNamespace", tenantConfig.Namespace,
+					"tenantName", tenantConfig.Name)
+				return nil
+			}
+			return fmt.Errorf("get tenant scoped NetworkPolicy %s/%s: %w", appNs, scopedName, err)
+		}
+		if !isMaaSManagedNetworkPolicy(scopedPolicy, configUID) {
+			log.Info("Deferring legacy maas-api gateway NetworkPolicy cleanup; tenant scoped policy is not managed by maas-controller",
+				"sharedName", baseMaaSAPIGatewayNetworkPolicyName,
+				"scopedName", scopedName,
+				"namespace", appNs,
+				"tenantNamespace", tenantConfig.Namespace,
+				"tenantName", tenantConfig.Name)
+			return nil
+		}
+	}
+
 	log.Info("Deleting legacy shared maas-api gateway NetworkPolicy",
 		"name", baseMaaSAPIGatewayNetworkPolicyName, "namespace", appNs)
 	deleteOptions, err := validatedDeleteOptions(np)

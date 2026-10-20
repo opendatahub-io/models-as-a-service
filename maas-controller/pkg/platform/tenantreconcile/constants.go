@@ -252,7 +252,7 @@ func GatewayDestinationRuleName(tenantID string) string {
 
 func MaaSAPIGatewayNetworkPolicyName(tenantID string) string {
 	if tenantID == "" {
-		return baseMaaSAPIGatewayNetworkPolicyName + "-default"
+		return baseMaaSAPIGatewayNetworkPolicyName + "--default"
 	}
 	return resourceNameForTenant(baseMaaSAPIGatewayNetworkPolicyName, tenantID)
 }

@@ -614,32 +614,44 @@ func TestCleanupMaaSAPIEgressNetworkPolicy(t *testing.T) {
 func TestCleanupLegacyMaaSAPIGatewayNetworkPolicy(t *testing.T) {
 	const appNs = "maas-system"
 	configUID := types.UID("config-uid")
+	controller := true
 
-	samplePolicy := func() *unstructured.Unstructured {
+	samplePolicy := func(name string) *unstructured.Unstructured {
 		np := &unstructured.Unstructured{Object: map[string]any{
 			"apiVersion": "networking.k8s.io/v1",
 			"kind":       "NetworkPolicy",
 			"metadata": map[string]any{
-				"name": baseMaaSAPIGatewayNetworkPolicyName,
+				"name": name,
 			},
 			"spec": map[string]any{
-				"podSelector": map[string]any{},
+				"podSelector": map[string]any{"matchLabels": map[string]any{}},
 			},
 		}}
 		np.SetNamespace(appNs)
 		np.SetUID("np-uid")
 		np.SetResourceVersion("1")
+		np.SetOwnerReferences([]metav1.OwnerReference{{
+			APIVersion: "maas.opendatahub.io/v1alpha1",
+			Kind:       "Config",
+			Name:       maasv1alpha1.ConfigInstanceName,
+			UID:        configUID,
+			Controller: &controller,
+		}})
 		return np
+	}
+	scopedPolicy := func(tenantID string) *unstructured.Unstructured {
+		return samplePolicy(MaaSAPIGatewayNetworkPolicyName(tenantID))
 	}
 
 	t.Run("no-op when policy is absent", func(t *testing.T) {
-		cl := fake.NewClientBuilder().Build()
+		cl := fake.NewClientBuilder().WithScheme(praxisTestScheme(t)).Build()
 		require.NoError(t, cleanupLegacyMaaSAPIGatewayNetworkPolicy(context.Background(), cl, appNs, configUID, logr.Discard()))
 	})
 
 	t.Run("skips policy not managed by maas-controller", func(t *testing.T) {
-		np := samplePolicy()
-		cl := fake.NewClientBuilder().WithObjects(np).Build()
+		np := samplePolicy(baseMaaSAPIGatewayNetworkPolicyName)
+		np.SetOwnerReferences(nil)
+		cl := fake.NewClientBuilder().WithScheme(praxisTestScheme(t)).WithObjects(np).Build()
 
 		require.NoError(t, cleanupLegacyMaaSAPIGatewayNetworkPolicy(context.Background(), cl, appNs, configUID, logr.Discard()))
 
@@ -652,16 +664,13 @@ func TestCleanupLegacyMaaSAPIGatewayNetworkPolicy(t *testing.T) {
 	})
 
 	t.Run("deletes Config-owned policy", func(t *testing.T) {
-		controller := true
-		np := samplePolicy()
-		np.SetOwnerReferences([]metav1.OwnerReference{{
-			APIVersion: "maas.opendatahub.io/v1alpha1",
-			Kind:       "Config",
-			Name:       maasv1alpha1.ConfigInstanceName,
-			UID:        configUID,
-			Controller: &controller,
-		}})
-		cl := fake.NewClientBuilder().WithObjects(np).Build()
+		np := samplePolicy(baseMaaSAPIGatewayNetworkPolicyName)
+		defaultTenant := praxisTenantConfig("models-as-a-service", DefaultAITenantName)
+		namedTenant := praxisTenantConfig("ai-tenant-default", "default")
+		cl := fake.NewClientBuilder().
+			WithScheme(praxisTestScheme(t)).
+			WithObjects(np, defaultTenant, namedTenant, scopedPolicy(""), scopedPolicy("default")).
+			Build()
 
 		require.NoError(t, cleanupLegacyMaaSAPIGatewayNetworkPolicy(context.Background(), cl, appNs, configUID, logr.Discard()))
 
@@ -672,6 +681,25 @@ func TestCleanupLegacyMaaSAPIGatewayNetworkPolicy(t *testing.T) {
 			Name:      baseMaaSAPIGatewayNetworkPolicyName,
 		}, got)
 		require.Error(t, err)
+	})
+
+	t.Run("defers deletion until every tenant has a scoped policy", func(t *testing.T) {
+		np := samplePolicy(baseMaaSAPIGatewayNetworkPolicyName)
+		defaultTenant := praxisTenantConfig("models-as-a-service", DefaultAITenantName)
+		otherTenant := praxisTenantConfig("ai-tenant-other", "other")
+		cl := fake.NewClientBuilder().
+			WithScheme(praxisTestScheme(t)).
+			WithObjects(np, defaultTenant, otherTenant, scopedPolicy("")).
+			Build()
+
+		require.NoError(t, cleanupLegacyMaaSAPIGatewayNetworkPolicy(context.Background(), cl, appNs, configUID, logr.Discard()))
+
+		got := &unstructured.Unstructured{}
+		got.SetGroupVersionKind(GVKNetworkPolicy)
+		require.NoError(t, cl.Get(context.Background(), types.NamespacedName{
+			Namespace: appNs,
+			Name:      baseMaaSAPIGatewayNetworkPolicyName,
+		}, got))
 	})
 }
 

@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -68,6 +69,61 @@ type failingInvalidateTenantStore struct {
 
 func (s failingInvalidateTenantStore) InvalidateTenant(_ context.Context, _ string) (int, error) {
 	return 0, s.err
+}
+
+type failingSearchStore struct {
+	*MockStore
+
+	err error
+}
+
+func (s failingSearchStore) Search(
+	_ context.Context,
+	_ string,
+	_ string,
+	_ *SearchFilters,
+	_ *SortParams,
+	_ *PaginationParams,
+) (*PaginatedResult, error) {
+	return nil, s.err
+}
+
+type failingBulkRevokeStore struct {
+	*MockStore
+
+	err error
+}
+
+func (s failingBulkRevokeStore) BulkRevoke(
+	_ context.Context,
+	_ string,
+	_ string,
+	_ string,
+	_ bool,
+) (int, error) {
+	return 0, s.err
+}
+
+type failingRevokedMetadataStore struct {
+	*MockStore
+
+	err     error
+	revoked bool
+}
+
+func (s *failingRevokedMetadataStore) Get(ctx context.Context, jti string) (*ApiKey, error) {
+	if s.revoked {
+		return nil, s.err
+	}
+	return s.MockStore.Get(ctx, jti)
+}
+
+func (s *failingRevokedMetadataStore) Revoke(ctx context.Context, jti string) error {
+	if err := s.MockStore.Revoke(ctx, jti); err != nil {
+		return err
+	}
+	s.revoked = true
+	return nil
 }
 
 // Test constants.
@@ -428,7 +484,7 @@ func TestIsAuthorizedForKey(t *testing.T) {
 		c, _ := gin.CreateTestContext(w)
 		c.Request = httptest.NewRequest(http.MethodGet, "/v1/api-keys/"+key.ID, nil)
 
-		authorized, err := handler.isAuthorizedForKey(ctx, c, user, nil, &key, "api-key-get")
+		authorized, _, err := handler.isAuthorizedForKey(ctx, user, nil, &key, "api-key-get")
 		require.NoError(t, err)
 		return authorized
 	}
@@ -3857,6 +3913,276 @@ func TestDelegatedAdminAuditFieldsIncludeFallbackAuthorizationPath(t *testing.T)
 	assert.Equal(t, "allowed", values["audit.outcome"])
 	assert.Equal(t, "platform_admin_fallback", values["audit.reason"])
 	assert.Contains(t, values, "audit.targetUser")
+}
+
+func capturedLogger(t *testing.T) (*logger.Logger, func() string) {
+	t.Helper()
+
+	reader, writer, err := os.Pipe()
+	require.NoError(t, err)
+	originalStdout := os.Stdout
+	os.Stdout = writer
+	captured := logger.NewWithFormat(false, logger.FormatZap)
+	os.Stdout = originalStdout
+
+	t.Cleanup(func() {
+		_ = writer.Close()
+		_ = reader.Close()
+	})
+
+	return captured, func() string {
+		require.NoError(t, writer.Close())
+		output, err := io.ReadAll(reader)
+		require.NoError(t, err)
+		return string(output)
+	}
+}
+
+func requireDelegatedAudit(t *testing.T, output string) map[string]any {
+	t.Helper()
+
+	for line := range strings.SplitSeq(output, "\n") {
+		if !strings.Contains(line, "AUDIT delegated API key administration") {
+			continue
+		}
+		audit := map[string]any{}
+		require.NoError(t, json.Unmarshal([]byte(line), &audit))
+		return audit
+	}
+	t.Fatal("delegated API key administration audit was not emitted")
+	return nil
+}
+
+func newSubscriptionAdminAuditHandler(
+	log *logger.Logger,
+	store MetadataStore,
+	resolver *subscriptionAdminResolverStub,
+) *Handler {
+	return NewHandler(
+		log,
+		NewService(store, &config.Config{}, fixedSubSelector{}),
+		newMockAdminChecker(),
+		nil,
+		resolver,
+	)
+}
+
+func executeSubscriptionAdminAuditRequest(
+	t *testing.T,
+	handler *Handler,
+	method string,
+	path string,
+	body string,
+	invoke func(*Handler, *gin.Context),
+) *httptest.ResponseRecorder {
+	t.Helper()
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(method, path, strings.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Params = gin.Params{{Key: "id", Value: "key-a"}}
+	c.Set("user", &token.UserContext{
+		Username: "alice",
+		Groups:   []string{"admin-users"},
+		Tenant:   "test-tenant",
+	})
+	c.Set("verified_identity", verifiedIdentityForSubscriptionAdmin())
+	invoke(handler, c)
+	return w
+}
+
+func TestIsAuthorizedForKey_DeferredAuditAndResolverError(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	t.Run("authorized event is not emitted before the operation", func(t *testing.T) {
+		log, output := capturedLogger(t)
+		handler := NewHandler(
+			log,
+			NewService(NewMockStore(), &config.Config{}, fixedSubSelector{}),
+			newMockAdminChecker(),
+			nil,
+			&subscriptionAdminResolverStub{scope: &subscription.AdminScope{
+				Tenant:       "test-tenant",
+				Namespace:    "test-ns",
+				Subscription: "subscription-a",
+			}},
+		)
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request = httptest.NewRequest(http.MethodGet, "/v1/api-keys/key-a", nil)
+		user := &token.UserContext{Username: "alice", Tenant: "test-tenant"}
+		key := &ApiKey{ID: "key-a", Username: "bob", Subscription: "subscription-a", Tenant: "test-tenant"}
+
+		authorized, audit, err := handler.isAuthorizedForKey(
+			context.Background(),
+			user,
+			verifiedIdentityForSubscriptionAdmin(),
+			key,
+			"api-key-get",
+		)
+
+		require.NoError(t, err)
+		assert.True(t, authorized)
+		require.NotNil(t, audit)
+		assert.Equal(t, "allowed", audit.Outcome)
+		assert.Empty(t, output())
+	})
+
+	t.Run("resolver error returns an error outcome without emitting early", func(t *testing.T) {
+		log, output := capturedLogger(t)
+		resolveErr := errors.New("resolver unavailable")
+		handler := NewHandler(
+			log,
+			NewService(NewMockStore(), &config.Config{}, fixedSubSelector{}),
+			newMockAdminChecker(),
+			nil,
+			&subscriptionAdminResolverStub{err: resolveErr},
+		)
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request = httptest.NewRequest(http.MethodGet, "/v1/api-keys/key-a", nil)
+		user := &token.UserContext{Username: "alice", Tenant: "test-tenant"}
+		key := &ApiKey{ID: "key-a", Username: "bob", Subscription: "subscription-a", Tenant: "test-tenant"}
+
+		authorized, audit, err := handler.isAuthorizedForKey(
+			context.Background(),
+			user,
+			verifiedIdentityForSubscriptionAdmin(),
+			key,
+			"api-key-get",
+		)
+
+		require.ErrorIs(t, err, resolveErr)
+		assert.False(t, authorized)
+		require.NotNil(t, audit)
+		assert.Equal(t, "error", audit.Outcome)
+		assert.Equal(t, "resolution_error", audit.Reason)
+		assert.Empty(t, output())
+	})
+}
+
+func TestSearchAPIKeys_SubscriptionAdminServiceFailureAuditsError(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	log, output := capturedLogger(t)
+	store := failingSearchStore{MockStore: NewMockStore(), err: errors.New("search unavailable")}
+	handler := newSubscriptionAdminAuditHandler(log, store, &subscriptionAdminResolverStub{
+		scope: &subscription.AdminScope{
+			Tenant:       "test-tenant",
+			Namespace:    "test-ns",
+			Subscription: "subscription-a",
+		},
+	})
+
+	w := executeSubscriptionAdminAuditRequest(
+		t,
+		handler,
+		http.MethodPost,
+		"/v1/api-keys/search",
+		`{"filters":{"subscription":"test-ns/subscription-a"}}`,
+		func(handler *Handler, c *gin.Context) {
+			handler.SearchAPIKeys(c)
+		},
+	)
+
+	require.Equal(t, http.StatusInternalServerError, w.Code)
+	audit := requireDelegatedAudit(t, output())
+	assert.Equal(t, "api-key-search", audit["audit.action"])
+	assert.Equal(t, "error", audit["audit.outcome"])
+	assert.Equal(t, "request_failed", audit["audit.reason"])
+}
+
+func TestBulkRevokeAPIKeys_SubscriptionAdminServiceFailureAuditsError(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	log, output := capturedLogger(t)
+	store := failingBulkRevokeStore{MockStore: NewMockStore(), err: errors.New("bulk revoke unavailable")}
+	handler := newSubscriptionAdminAuditHandler(log, store, &subscriptionAdminResolverStub{
+		scope: &subscription.AdminScope{
+			Tenant:       "test-tenant",
+			Namespace:    "test-ns",
+			Subscription: "subscription-a",
+		},
+	})
+
+	w := executeSubscriptionAdminAuditRequest(
+		t,
+		handler,
+		http.MethodPost,
+		"/v1/api-keys/bulk-revoke",
+		`{"subscription":"test-ns/subscription-a"}`,
+		func(handler *Handler, c *gin.Context) {
+			handler.BulkRevokeAPIKeys(c)
+		},
+	)
+
+	require.Equal(t, http.StatusInternalServerError, w.Code)
+	audit := requireDelegatedAudit(t, output())
+	assert.Equal(t, "api-key-bulk-revoke", audit["audit.action"])
+	assert.Equal(t, "error", audit["audit.outcome"])
+	assert.Equal(t, "request_failed", audit["audit.reason"])
+}
+
+func TestBulkRevokeAPIKeys_DryRunPreservesFallbackReasonAndMarksDryRun(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	log, output := capturedLogger(t)
+	store := NewMockStore()
+	addSubscriptionAdminTestKey(t, store, "key-a", "bob", "subscription-a")
+	handler := newSubscriptionAdminAuditHandler(log, store, &subscriptionAdminResolverStub{
+		canonical: map[string]string{"test-ns/subscription-a": "subscription-a"},
+	})
+
+	w := executeSubscriptionAdminAuditRequest(
+		t,
+		handler,
+		http.MethodPost,
+		"/v1/api-keys/bulk-revoke",
+		`{"subscription":"test-ns/subscription-a","dryRun":true}`,
+		func(handler *Handler, c *gin.Context) {
+			handler.BulkRevokeAPIKeys(c)
+		},
+	)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	audit := requireDelegatedAudit(t, output())
+	assert.Equal(t, "allowed", audit["audit.outcome"])
+	assert.Equal(t, "platform_admin_fallback", audit["audit.reason"])
+	assert.Equal(t, true, audit["audit.dryRun"])
+}
+
+func TestRevokeAPIKeys_MetadataFailurePreservesSuccessfulRevocation(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	log, output := capturedLogger(t)
+	store := &failingRevokedMetadataStore{
+		MockStore: NewMockStore(),
+		err:       errors.New("metadata unavailable"),
+	}
+	addSubscriptionAdminTestKey(t, store.MockStore, "key-a", "bob", "subscription-a")
+	handler := newSubscriptionAdminAuditHandler(log, store, &subscriptionAdminResolverStub{
+		scope: &subscription.AdminScope{
+			Tenant:       "test-tenant",
+			Namespace:    "test-ns",
+			Subscription: "subscription-a",
+		},
+	})
+
+	w := executeSubscriptionAdminAuditRequest(
+		t,
+		handler,
+		http.MethodDelete,
+		"/v1/api-keys/key-a",
+		"",
+		func(handler *Handler, c *gin.Context) {
+			handler.RevokeAPIKey(c)
+		},
+	)
+
+	require.Equal(t, http.StatusInternalServerError, w.Code)
+	audit := requireDelegatedAudit(t, output())
+	assert.Equal(t, "allowed", audit["audit.outcome"])
+	assert.Equal(t, "metadata_retrieval_failed", audit["audit.reason"])
+	key, err := store.MockStore.Get(context.Background(), "key-a")
+	require.NoError(t, err)
+	assert.Equal(t, StatusRevoked, key.Status)
 }
 
 func TestSearchAPIKeys_SubscriptionAdminMissingSubscriptionStaysOwnScope(t *testing.T) {
