@@ -539,10 +539,10 @@ def _is_transient_gateway_response(response) -> bool:
     - Empty 401/403: Envoy has not loaded the AuthPolicy yet (common after
       MaaSAuthPolicy churn; some gateways return 401 instead of 403).
     - 500 with AUTH_FAILURE: Authorino race while AuthConfig is updating.
-    - Empty or plain-text proxy 500/503 ("Internal Server Error" /
-      "Service Unavailable"): Envoy/router failure while upstream or auth
-      filters are mid-reload. Distinct from maas-api JSON errors like
-      {"error":"Failed to create API key"}.
+    - Empty, plain-text, or HTML proxy 500/503 ("Internal Server Error",
+      "Service Unavailable", "Application is not available"): Envoy/router
+      failure while upstream or auth filters are mid-reload. Distinct from
+      maas-api JSON errors like {"error":"Failed to create API key"}.
     """
     body = (response.text or "").strip()
     if response.status_code in (401, 403) and not body:
@@ -558,8 +558,13 @@ def _is_transient_gateway_response(response) -> bool:
         "Service Unavailable.",
     ):
         return True
-    if body.startswith("<") and (
-        "Internal Server Error" in body or "Service Unavailable" in body
+    if body.startswith("<") and any(
+        marker in body
+        for marker in (
+            "Internal Server Error",
+            "Service Unavailable",
+            "Application is not available",
+        )
     ):
         return True
     return False
