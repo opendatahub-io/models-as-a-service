@@ -596,27 +596,16 @@ func newCRDBootstrap(crdName string, register func() error, onEstablished func(c
 // It claims ownership via CompareAndSwap on the first matching event and polls
 // for the Established condition with exponential backoff on a background context
 // that outlives the event handler. The goroutine terminates when the process exits.
-func (b *crdBootstrap) handleMetadata(_ context.Context, name string, reader client.Reader, q workqueue.TypedInterface[reconcile.Request]) {
+func (b *crdBootstrap) handleMetadata(ctx context.Context, name string, reader client.Reader, q workqueue.TypedInterface[reconcile.Request]) {
 	if name != b.crdName || !b.started.CompareAndSwap(false, true) {
 		return
 	}
-	go b.waitForEstablishedAndRun(context.Background(), reader, q) //nolint:gosec,contextcheck // the event handler ctx is cancelled when the handler returns; the retry goroutine must outlive it.
+	go b.waitForEstablishedAndRun(context.WithoutCancel(ctx), reader, q)
 }
 
 func (b *crdBootstrap) waitForEstablishedAndRun(ctx context.Context, reader client.Reader, q workqueue.TypedInterface[reconcile.Request]) {
 	defer close(b.done)
-	if !b.retry(ctx, "check CRD established", func() error {
-		var crd apiextensionsv1.CustomResourceDefinition
-		if err := reader.Get(ctx, types.NamespacedName{Name: b.crdName}, &crd); err != nil {
-			return fmt.Errorf("read CRD: %w", err)
-		}
-		if !crdEstablished(&crd) {
-			return fmt.Errorf("CRD %s not yet established", b.crdName)
-		}
-		return nil
-	}) {
-		return
-	}
+	b.pollEstablished(ctx, reader)
 	if !b.retry(ctx, "register watch", b.register) {
 		return
 	}
@@ -631,6 +620,29 @@ func (b *crdBootstrap) waitForEstablishedAndRun(ctx context.Context, reader clie
 		}
 		return nil
 	})
+}
+
+// pollEstablished polls indefinitely until the CRD reports Established=True.
+// API errors are logged at Error; "not yet established" is logged at V(1)
+// since it is the normal state during CRD install.
+func (b *crdBootstrap) pollEstablished(ctx context.Context, reader client.Reader) {
+	delay := b.initialDelay
+	for {
+		var crd apiextensionsv1.CustomResourceDefinition
+		if err := reader.Get(ctx, types.NamespacedName{Name: b.crdName}, &crd); err != nil {
+			b.log.Error(err, "failed to read CRD for Established check; retrying", "after", delay)
+		} else if crdEstablished(&crd) {
+			return
+		} else {
+			b.log.V(1).Info("CRD not yet established; retrying", "after", delay)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(delay):
+		}
+		delay = min(delay*2, b.maxDelay)
+	}
 }
 
 // retry calls fn until it succeeds, doubling the delay between attempts up to maxDelay.
