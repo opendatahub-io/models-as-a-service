@@ -39,6 +39,7 @@ from test_helper import (
     _get_cr,
     _ns,
     _request_with_gateway_retry,
+    _wait_for_cr_absent,
     _wait_for_httproute_accepted,
     _wait_for_maas_auth_policy_phase,
     _wait_for_maas_subscription_phase,
@@ -1256,6 +1257,12 @@ class TestSharedProviderMultiModel:
     def test_delete_second_model_preserves_first(self):
         """Deleting the second model does not break the first model's routing."""
         _delete_cr(EXTERNAL_MODEL_KIND, SECOND_EXTERNAL_MODEL_NAME, MODEL_NAMESPACE)
+        _wait_for_cr_absent(
+            EXTERNAL_MODEL_KIND,
+            SECOND_EXTERNAL_MODEL_NAME,
+            namespace=MODEL_NAMESPACE,
+            timeout=60,
+        )
         time.sleep(RECONCILE_WAIT)
 
         setup = self._setup
