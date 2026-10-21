@@ -1101,6 +1101,7 @@ def _create_test_subscription(
     priority=None,
     model_namespace=MODEL_NAMESPACE,
     unlimited=False,
+    inference_priority=None,
 ):
     """Create a MaaSSubscription CR for testing.
 
@@ -1115,6 +1116,7 @@ def _create_test_subscription(
         priority: Optional spec.priority (higher wins for default API key binding)
         model_namespace: Namespace containing the referenced MaaSModelRefs
         unlimited: Grant access without a token budget; token_limit and window are ignored
+        inference_priority: Optional spec.inferencePriority (llm-d flow-control priority)
     """
     namespace = namespace or _ns()
     if not isinstance(model_refs, list):
@@ -1139,6 +1141,8 @@ def _create_test_subscription(
     }
     if priority is not None:
         spec["priority"] = int(priority)
+    if inference_priority is not None:
+        spec["inferencePriority"] = int(inference_priority)
 
     log.info("Creating MaaSSubscription: %s", name)
     _apply_cr(
