@@ -8,3 +8,7 @@
 # Now it returns only the openshift.io/description annotation value, which may be unset.
 GET /v1/subscriptions the response property `items/subscription_description` became optional for the status `200`
 GET /v1/model/{model-id}/subscriptions the response property `items/subscription_description` became optional for the status `200`
+
+# PR #1722: /v1/me has not been released yet. Non-OIDC authentication methods
+# do not provide an OIDC issuer claim, so `iss` is intentionally optional.
+GET /v1/me the response property `iss` became optional for the status `200`
