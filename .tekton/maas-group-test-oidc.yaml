@@ -46,6 +46,17 @@ spec:
         value: "true"
       - name: E2E_PARALLEL_WORKERS
         value: "1"
+      # Passes 1-2 already run in /group-test; run only the OIDC tests here.
+      - name: E2E_RUN_ONLY_OIDC_TESTS
+        value: "true"
+      # Strict OIDC contract required by Grid delegated administration; must
+      # match the audience and purpose mappers on the test realm's test-client.
+      - name: OIDC_AUDIENCE
+        value: "maas-api"
+      - name: OIDC_ACCESS_TOKEN_PURPOSE_CLAIM
+        value: "token_use"
+      - name: OIDC_ACCESS_TOKEN_PURPOSE
+        value: "access"
     serviceAccountName: konflux-integration-runner
   taskRunSpecs:
   - pipelineTaskName: e2e-maas-openshift
