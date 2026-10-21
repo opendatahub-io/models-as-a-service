@@ -11,7 +11,7 @@ import requests
 from grid_governance_fixtures import (
     GridGovernanceContext,
 )
-from grid_governance_fixtures import governance_context as grid_governance_context  # noqa: F401 - pytest fixture
+from grid_governance_fixtures import governance_context  # noqa: F401 - pytest fixture
 from grid_cross_tenant_fixtures import GridCrossTenantContext
 from grid_cross_tenant_fixtures import grid_cross_tenant_context as grid_cross_tenant_context_fixture  # noqa: F401 - pytest fixture
 from grid_inventory_fixtures import ORGANIZATION_A

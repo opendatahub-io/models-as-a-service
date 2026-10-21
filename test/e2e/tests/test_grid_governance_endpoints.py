@@ -11,7 +11,7 @@ import requests
 from grid_governance_fixtures import (
     GridGovernanceContext,
 )
-from grid_governance_fixtures import governance_context as grid_governance_context  # noqa: F401 - pytest fixture
+from grid_governance_fixtures import governance_context  # noqa: F401 - pytest fixture
 from grid_oidc_helpers import request_grid_token
 from test_helper import _ns, _request_with_gateway_retry
 

@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from test_helper import (
     MODEL_NAMESPACE,
     MODEL_REF,
+    PREMIUM_MODEL_REF,
     _apply_cr,
     _create_maas_model_ref,
     _delete_crs_and_wait,
@@ -127,6 +128,9 @@ def _apply_subscription(
 
 def apply_grid_inventory_resources(resources: GridInventoryResources) -> None:
     _wait_for_model_ready(MODEL_REF, namespace=MODEL_NAMESPACE, timeout=180)
+    _wait_for_model_ready(
+        PREMIUM_MODEL_REF, namespace=MODEL_NAMESPACE, timeout=180
+    )
     _create_maas_model_ref(
         resources.owner_model_ref,
         MODEL_NAMESPACE,
@@ -135,7 +139,7 @@ def apply_grid_inventory_resources(resources: GridInventoryResources) -> None:
     _create_maas_model_ref(
         resources.unmatched_model_ref,
         MODEL_NAMESPACE,
-        MODEL_REF,
+        PREMIUM_MODEL_REF,
     )
     _wait_for_model_ready(
         resources.owner_model_ref, namespace=MODEL_NAMESPACE, timeout=180
