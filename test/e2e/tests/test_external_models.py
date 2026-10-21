@@ -1117,6 +1117,8 @@ class TestSharedProviderMultiModel:
         """Create a second ExternalModel pointing at the shared provider."""
         self._setup = external_models_setup
         external_applied = False
+        original_auth_model_refs = None
+        original_subscription_model_refs = None
         try:
             _apply_cr({
                 "apiVersion": "inference.opendatahub.io/v1alpha1",
@@ -1151,6 +1153,49 @@ class TestSharedProviderMultiModel:
                 },
             })
 
+            # The shared API key is bound to this subscription, and both the
+            # subscription and auth policy must allow the second model before
+            # its gateway route can be exercised.
+            auth_policy = _get_cr("maasauthpolicy", EXTERNAL_AUTH_POLICY, _subscription_ns())
+            subscription = _get_cr("maassubscription", EXTERNAL_SUBSCRIPTION, _subscription_ns())
+            if auth_policy is None or subscription is None:
+                raise RuntimeError("External model auth policy or subscription not found")
+
+            original_auth_model_refs = auth_policy.get("spec", {}).get("modelRefs", [])
+            original_subscription_model_refs = subscription.get("spec", {}).get("modelRefs", [])
+            second_model_ref = {"name": SECOND_EXTERNAL_MODEL_NAME, "namespace": MODEL_NAMESPACE}
+            updated_auth_model_refs = [*original_auth_model_refs, second_model_ref]
+            updated_subscription_model_refs = [
+                *original_subscription_model_refs,
+                {
+                    **second_model_ref,
+                    "tokenRateLimits": [{"limit": 10000, "window": "1h"}],
+                },
+            ]
+            _patch_cr(
+                "maasauthpolicy",
+                EXTERNAL_AUTH_POLICY,
+                _subscription_ns(),
+                {"spec": {"modelRefs": updated_auth_model_refs}},
+            )
+            _patch_cr(
+                "maassubscription",
+                EXTERNAL_SUBSCRIPTION,
+                _subscription_ns(),
+                {"spec": {"modelRefs": updated_subscription_model_refs}},
+            )
+
+            _wait_for_maas_auth_policy_phase(
+                EXTERNAL_AUTH_POLICY,
+                namespace=_subscription_ns(),
+                require_auth_policies=True,
+            )
+            _wait_for_maas_subscription_phase(
+                EXTERNAL_SUBSCRIPTION,
+                namespace=_subscription_ns(),
+                require_model_statuses=True,
+            )
+
             try:
                 _wait_for_model_ready(
                     SECOND_EXTERNAL_MODEL_NAME,
@@ -1162,6 +1207,20 @@ class TestSharedProviderMultiModel:
 
             yield
         finally:
+            if original_auth_model_refs is not None:
+                _patch_cr(
+                    "maasauthpolicy",
+                    EXTERNAL_AUTH_POLICY,
+                    _subscription_ns(),
+                    {"spec": {"modelRefs": original_auth_model_refs}},
+                )
+            if original_subscription_model_refs is not None:
+                _patch_cr(
+                    "maassubscription",
+                    EXTERNAL_SUBSCRIPTION,
+                    _subscription_ns(),
+                    {"spec": {"modelRefs": original_subscription_model_refs}},
+                )
             if external_applied:
                 _cleanup_second_external_model()
 
@@ -1174,6 +1233,12 @@ class TestSharedProviderMultiModel:
             f"Second ExternalModel phase = {phase!r}, want Ready. "
             "If Failed, the shared-provider stable_id bug may still be present."
         )
+
+    def test_second_model_routes_through_gateway(self):
+        """Requests for the second model reach its gateway route."""
+        setup = self._setup
+        r = _post_external_chat(setup["gateway_url"], SECOND_EXTERNAL_MODEL_NAME, setup["api_key"])
+        log.info("Shared provider (second model): HTTP %d", r.status_code)
 
     def test_first_model_still_routes(self):
         """The original model continues routing after the second is added."""
