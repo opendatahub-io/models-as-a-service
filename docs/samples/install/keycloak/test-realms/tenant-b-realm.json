@@ -35,7 +35,7 @@
           "protocolMapper": "oidc-audience-mapper",
           "consentRequired": false,
           "config": {
-            "included.client.audience": "maas-api",
+            "included.custom.audience": "maas-api",
             "id.token.claim": "false",
             "access.token.claim": "true",
             "userinfo.token.claim": "false"
