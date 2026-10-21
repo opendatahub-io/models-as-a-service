@@ -655,6 +655,27 @@ def apply_gateway_fixture(gateway_name: str, *, fixture_label: str) -> None:
             },
         }
     )
+    https_listener = {
+        "name": "https",
+        "port": 443,
+        "protocol": "HTTPS",
+        "allowedRoutes": {
+            "namespaces": {
+                "from": "Selector",
+                "selector": {
+                    "matchLabels": {
+                        gateway_access_label: "true",
+                    }
+                },
+            }
+        },
+        "tls": {
+            "mode": "Terminate",
+            "certificateRefs": [
+                {"group": "", "kind": "Secret", "name": service_ca_secret}
+            ],
+        },
+    }
     _apply(
         {
             "apiVersion": "gateway.networking.k8s.io/v1",
@@ -683,28 +704,11 @@ def apply_gateway_fixture(gateway_name: str, *, fixture_label: str) -> None:
                         "name": gw_options_name,
                     }
                 },
+                # Keep the named listener first: maas-api selects the first ready HTTPS listener.
+                # The fallback accepts reencrypt Route traffic and health checks without TLS SNI.
                 "listeners": [
-                    {
-                        "name": "https",
-                        "port": 443,
-                        "protocol": "HTTPS",
-                        "allowedRoutes": {
-                            "namespaces": {
-                                "from": "Selector",
-                                "selector": {
-                                    "matchLabels": {
-                                        gateway_access_label: "true",
-                                    }
-                                },
-                            }
-                        },
-                        "tls": {
-                            "mode": "Terminate",
-                            "certificateRefs": [
-                                {"group": "", "kind": "Secret", "name": service_ca_secret}
-                            ],
-                        },
-                    }
+                    dict(https_listener, hostname=f"{gateway_name}.{cluster_domain_from_default_route()}"),
+                    dict(https_listener, name="https-route"),
                 ],
             },
         }
