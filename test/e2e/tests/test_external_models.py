@@ -1186,10 +1186,11 @@ class TestSharedProviderMultiModel:
                 {"spec": {"modelRefs": updated_subscription_model_refs}},
             )
 
+            # Gateway-only reconciliation keeps status.authPolicies empty; the
+            # subscription and model readiness waits below cover the new model.
             _wait_for_maas_auth_policy_phase(
                 EXTERNAL_AUTH_POLICY,
                 namespace=_subscription_ns(),
-                require_auth_policies=True,
             )
             _wait_for_maas_subscription_phase(
                 EXTERNAL_SUBSCRIPTION,
