@@ -49,6 +49,14 @@ spec:
       # Passes 1-2 already run in /group-test; run only the OIDC tests here.
       - name: E2E_RUN_ONLY_OIDC_TESTS
         value: "true"
+      # External OIDC cannot run without Authorino/RHCL. Fail during deployment
+      # readiness instead of letting every OIDC test fail after a long setup.
+      - name: SKIP_AUTH_CHECK
+        value: "false"
+      - name: AUTHORINO_TIMEOUT
+        value: "600"
+      - name: CUSTOM_CHECK_TIMEOUT
+        value: "600"
       # Strict OIDC contract required by Grid delegated administration; must
       # match the audience and purpose mappers on the test realm's test-client.
       - name: OIDC_AUDIENCE
