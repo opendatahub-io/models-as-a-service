@@ -132,9 +132,7 @@ def serial_only_selection(request) -> bool:
 
 
 def build_worker_tenant_case(worker_suffix: str) -> WorkerTenantContext:
-    # Short prefix: AGC longest praxis base is payload-processing-external-model-filters
-    # (41 chars), so tenant id must be <= 21 (63 - 41 - 1). e2e-worker-main-{uuid6} was 22.
-    case = new_named_tenant_case(f"e2e-w-{worker_suffix}")
+    case = new_named_tenant_case(f"e2e-worker-{worker_suffix}")
     return WorkerTenantContext(
         worker_id=worker_suffix,
         suffix=case["suffix"],

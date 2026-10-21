@@ -56,10 +56,8 @@ def single_subscription_tenant(monkeypatch):
         xdist_worker_suffix,
     )
 
-    # Short suffix: with e2e-w- prefix, single-main-{uuid6} exceeded AGC's 21-char
-    # tenant limit (praxis filters base is 41). Also keep
-    # maas-api-key-cleanup-<tenant> within the 52-character CronJob limit.
-    context = build_worker_tenant_case(f"s-{xdist_worker_suffix()}")
+    # Keep maas-api-key-cleanup-<tenant> within the 52-character CronJob limit.
+    context = build_worker_tenant_case(f"single-{xdist_worker_suffix()}")
     try:
         context = bootstrap_worker_tenant(context, baseline=False)
         monkeypatch.setattr(
@@ -424,8 +422,8 @@ def shared_test_tenants(gateway_host: str, is_https: bool):
 
     Returns:
         tuple: (tenant_a_dict, tenant_b_dict) with keys:
-            - name: tenant label name (e.g., "e2e-sa-w0-abc123")
-            - namespace: tenant namespace (e.g., "ai-tenant-e2e-sa-w0-abc123")
+            - name: tenant label name (e.g., "e2e-shared-a-abc123")
+            - namespace: tenant namespace (e.g., "ai-tenant-e2e-shared-a-abc123")
             - base_url: maas-api URL for this tenant (derived from tenant's gateway route)
             - gateway_name: name of the Gateway CR for this tenant
             - suffix: 6-character hex suffix for unique resource names
@@ -435,11 +433,6 @@ def shared_test_tenants(gateway_host: str, is_https: bool):
     Requires:
         - AITenant CRD installed
         - Tenant namespace discovery enabled on maas-controller
-
-    Naming: AITenant.metadata.name is used as the AGC/praxis resource suffix.
-    AGC's longest base name is payload-processing-external-model-filters (41),
-    so tenant id must be <= 21 (63 - 41 - 1). Keep the e2e-sa-/e2e-sb- prefixes
-    short enough that prefix + worker + 6-char uuid stays within that limit.
     """
     from multitenancy_helpers import (
         require_aitenant_crd,
@@ -453,10 +446,8 @@ def shared_test_tenants(gateway_host: str, is_https: bool):
     require_aitenant_crd()
 
     worker = _xdist_worker_suffix()
-    # Short prefixes: e2e-shared-a-{worker}-{uuid6} was 22+ chars and broke AGC
-    # Rename (external-model-filters name > 63). See fixture docstring.
-    case_a = new_named_tenant_case(f"e2e-sa-{worker}")
-    case_b = new_named_tenant_case(f"e2e-sb-{worker}")
+    case_a = new_named_tenant_case(f"e2e-shared-a-{worker}")
+    case_b = new_named_tenant_case(f"e2e-shared-b-{worker}")
 
     try:
         # Bootstrap both tenants (creates gateway + AITenant CR)
