@@ -16,7 +16,7 @@ from grid_governance_fixtures import (
 from grid_governance_fixtures import grid_governance_context  # noqa: F401 - pytest fixture
 from grid_cross_tenant_fixtures import GridCrossTenantContext
 from grid_cross_tenant_fixtures import (
-    grid_cross_tenant_context as grid_cross_tenant_context_fixture,  # noqa: F401 - pytest fixture
+    grid_cross_tenant_context,  # noqa: F401 - pytest fixture
 )  # noqa: F401 - pytest fixture
 from grid_inventory_fixtures import ORGANIZATION_A
 from grid_oidc_helpers import request_grid_token, request_tenant_b_token

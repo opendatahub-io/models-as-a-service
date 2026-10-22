@@ -42,6 +42,7 @@ class GridInventoryResources:
     admin_only_owner_group: str
     other_organization_owner_group: str
     governance_owner_group: str
+    governance_secondary_owner_group: str
     non_owner_group: str
     unqualified_user: str
 
@@ -64,6 +65,7 @@ def new_grid_inventory_resources() -> GridInventoryResources:
         admin_only_owner_group=f"{ORGANIZATION_A}/admin-only-owners",
         other_organization_owner_group=f"{ORGANIZATION_B}/unrelated-owners",
         governance_owner_group="Engineering",
+        governance_secondary_owner_group="Site-Reliability",
         non_owner_group=f"{ORGANIZATION_A}/model-only-users",
         unqualified_user="unqualified-inventory-user",
     )
@@ -160,6 +162,7 @@ def apply_grid_inventory_resources(resources: GridInventoryResources) -> None:
             resources.admin_only_owner_group,
             resources.other_organization_owner_group,
             resources.governance_owner_group,
+            resources.governance_secondary_owner_group,
             resources.non_owner_group,
         ],
         [resources.owner_user, resources.unqualified_user],
@@ -194,7 +197,10 @@ def apply_grid_inventory_resources(resources: GridInventoryResources) -> None:
     _apply_subscription(
         resources.governance_subscription,
         [resources.owner_model_ref],
-        [resources.governance_owner_group],
+        [
+            resources.governance_owner_group,
+            resources.governance_secondary_owner_group,
+        ],
         [],
         ORGANIZATION_A,
     )
