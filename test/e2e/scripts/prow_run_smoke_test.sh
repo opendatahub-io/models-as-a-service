@@ -403,7 +403,8 @@ for organization in organizations:
     if not isinstance(organization, dict) or not organization.get("organization_id") or not organization.get("roles"):
         raise SystemExit(f"Invalid OIDC organization membership: {organization!r}")
 
-print(f"azp={claims.get('azp')}, audience={token_audience!r}, organizations={len(organizations)}")
+authorized_party = claims.get("azp")
+print(f"azp={authorized_party}, audience={token_audience!r}, organizations={len(organizations)}")
                     ' 2>&1); then
                     printf '%s\n' "$oidc_claim_summary" > "${ARTIFACTS_DIR}/oidc-readiness-claim-error.log"
                     echo "❌ ERROR: OIDC readiness token contract validation failed"
