@@ -49,6 +49,10 @@ spec:
       # Passes 1-2 already run in /group-test; run only the OIDC tests here.
       - name: E2E_RUN_ONLY_OIDC_TESTS
         value: "true"
+      # Temporarily narrow this dedicated pipeline to the Grid OIDC suite while
+      # the broader nightly suite remains covered by /group-test.
+      - name: E2E_RUN_ONLY_GRID_TESTS
+        value: "true"
       # External OIDC cannot run without Authorino/RHCL. Fail during deployment
       # readiness instead of letting every OIDC test fail after a long setup.
       - name: SKIP_AUTH_CHECK

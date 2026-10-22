@@ -32,6 +32,8 @@
 #   MAAS_PYTEST_INCLUDE_NIGHTLY   When true, run pass 3 (-m nightly) after serial pass
 #   E2E_RUN_ONLY_OIDC_TESTS       When true, skip passes 1–2 and run only pass 3 (external
 #                                 OIDC tests); requires EXTERNAL_OIDC=true
+#   E2E_RUN_ONLY_GRID_TESTS       When true, restrict the OIDC-only pass to grid_oidc tests;
+#                                 requires E2E_RUN_ONLY_OIDC_TESTS=true
 #
 # Usage:
 #   export GATEWAY_HOST=maas.apps.cluster.example.com TOKEN=$(oc whoami -t) ...
@@ -127,6 +129,10 @@ _run_only_oidc_tests=false
 case "${E2E_RUN_ONLY_OIDC_TESTS:-false}" in
     1 | true | TRUE | yes | YES) _run_only_oidc_tests=true ;;
 esac
+_run_only_grid_tests=false
+case "${E2E_RUN_ONLY_GRID_TESTS:-false}" in
+    1 | true | TRUE | yes | YES) _run_only_grid_tests=true ;;
+esac
 if [[ "$_run_only_oidc_tests" == true ]]; then
     if [[ "${EXTERNAL_OIDC:-false}" != "true" ]]; then
         echo "ERROR: E2E_RUN_ONLY_OIDC_TESTS=true requires EXTERNAL_OIDC=true; the OIDC tests skip without it" >&2
@@ -137,6 +143,14 @@ if [[ "$_run_only_oidc_tests" == true ]]; then
         exit 1
     fi
     _include_nightly_pass=true
+fi
+_nightly_marker="nightly"
+if [[ "$_run_only_grid_tests" == true ]]; then
+    if [[ "$_run_only_oidc_tests" != true ]]; then
+        echo "ERROR: E2E_RUN_ONLY_GRID_TESTS=true requires E2E_RUN_ONLY_OIDC_TESTS=true" >&2
+        exit 1
+    fi
+    _nightly_marker="nightly and grid_oidc"
 fi
 _parallel_marker="not serial and not legacy_ipp${_nightly_exclude}"
 _serial_marker="serial and not legacy_ipp${_nightly_exclude}"
@@ -264,14 +278,14 @@ run_nightly_pass() {
     if [[ "$_include_nightly_pass" != true ]]; then
         return 0
     fi
-    echo "Running E2E pass 3/${_pass_total}: nightly (-m nightly, EXTERNAL_OIDC=${EXTERNAL_OIDC:-false})"
+    echo "Running E2E pass 3/${_pass_total}: nightly (-m ${_nightly_marker}, EXTERNAL_OIDC=${EXTERNAL_OIDC:-false})"
     if ! run_pytest_pass "pass 3 (nightly)" \
         env E2E_PYTEST_PASS=nightly PYTHONPATH="$TEST_DIR:${PYTHONPATH:-}" pytest \
         --maxfail=5 \
         --junitxml="$xml_nightly" \
         --html="${html%.html}-nightly.html" --self-contained-html \
         "${pytest_common_args[@]}" \
-        -m nightly; then
+        -m "${_nightly_marker}"; then
         nightly_rc=1
     fi
 }
