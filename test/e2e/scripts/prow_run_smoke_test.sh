@@ -329,23 +329,87 @@ run_e2e_tests() {
         local oidc_timeout=180
         local oidc_deadline=$((SECONDS + oidc_timeout))
         echo "Verifying OIDC token authentication works (timeout: ${oidc_timeout}s)..."
+        local oidc_readiness_username="${OIDC_READINESS_USERNAME:-${OIDC_USERNAME}}"
+        local oidc_readiness_password="${OIDC_READINESS_PASSWORD:-${OIDC_PASSWORD}}"
         local oidc_token
-        oidc_token=$(curl -sk -m 10 \
-            -d "grant_type=password&client_id=${OIDC_CLIENT_ID}&username=${OIDC_USERNAME}&password=${OIDC_PASSWORD}&scope=openid" \
-            "${OIDC_TOKEN_URL}" 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('access_token',''))" 2>/dev/null || echo "")
+        oidc_token=$(_request_oidc_token "$oidc_readiness_username" "$oidc_readiness_password")
         if [[ -n "$oidc_token" ]]; then
+            if [[ "${OIDC_READINESS_VALIDATE_ORGANIZATIONS:-false}" == "true" ]]; then
+                local oidc_claim_summary
+                if ! oidc_claim_summary=$(OIDC_TOKEN="$oidc_token" \
+                    OIDC_CLIENT_ID="$OIDC_CLIENT_ID" \
+                    OIDC_AUDIENCE="${OIDC_AUDIENCE:-}" \
+                    OIDC_ACCESS_TOKEN_PURPOSE_CLAIM="${OIDC_ACCESS_TOKEN_PURPOSE_CLAIM:-}" \
+                    OIDC_ACCESS_TOKEN_PURPOSE="${OIDC_ACCESS_TOKEN_PURPOSE:-}" \
+                    python3 -c '
+import base64
+import json
+import os
+
+parts = os.environ["OIDC_TOKEN"].split(".")
+if len(parts) != 3:
+    raise SystemExit("OIDC readiness token is not a three-part JWT")
+payload = parts[1]
+payload += "=" * (-len(payload) % 4)
+claims = json.loads(base64.urlsafe_b64decode(payload))
+
+client_id = os.environ.get("OIDC_CLIENT_ID", "")
+if client_id and claims.get("azp") != client_id:
+    actual_client_id = claims.get("azp")
+    raise SystemExit(f"OIDC azp mismatch: expected {client_id}, got {actual_client_id!r}")
+
+audience = os.environ.get("OIDC_AUDIENCE", "")
+token_audience = claims.get("aud")
+if audience and token_audience != audience and audience not in (token_audience if isinstance(token_audience, list) else []):
+    raise SystemExit(f"OIDC audience mismatch: expected {audience}, got {token_audience!r}")
+
+purpose_claim = os.environ.get("OIDC_ACCESS_TOKEN_PURPOSE_CLAIM", "")
+purpose = os.environ.get("OIDC_ACCESS_TOKEN_PURPOSE", "")
+if purpose_claim and claims.get(purpose_claim) != purpose:
+    raise SystemExit(f"OIDC purpose mismatch: {purpose_claim}={claims.get(purpose_claim)!r}, expected {purpose!r}")
+
+organizations = claims.get("https://redhat.com/maas/orgs")
+if not isinstance(organizations, list) or not organizations:
+    raise SystemExit(f"OIDC organization claim must be a non-empty array, got {organizations!r}")
+for organization in organizations:
+    if not isinstance(organization, dict) or not organization.get("organization_id") or not organization.get("roles"):
+        raise SystemExit(f"Invalid OIDC organization membership: {organization!r}")
+
+print(f"azp={claims.get('azp')}, audience={token_audience!r}, organizations={len(organizations)}")
+'); then
+                    echo "❌ ERROR: OIDC readiness token contract validation failed"
+                    exit 1
+                fi
+                echo "✅ OIDC token contract valid (${oidc_claim_summary})"
+            fi
+            mkdir -p "$ARTIFACTS_DIR"
+            local oidc_response_file="${ARTIFACTS_DIR}/oidc-readiness-last-response.json"
+            local oidc_headers_file="${ARTIFACTS_DIR}/oidc-readiness-last-headers.txt"
             while [[ $SECONDS -lt $oidc_deadline ]]; do
                 local oidc_code
-                oidc_code=$(curl -sk -o /dev/null -w '%{http_code}' -m 5 \
+                oidc_code=$(curl -sk -D "$oidc_headers_file" -o "$oidc_response_file" -w '%{http_code}' -m 5 \
                     -H "Authorization: Bearer ${oidc_token}" \
                     -H "Content-Type: application/json" \
                     -d "{\"name\": \"e2e-oidc-readiness-$(date +%s)\"}" \
-                    "${api_base}/v1/api-keys" 2>/dev/null || echo "000")
+                    "${api_base}/v1/api-keys" 2>/dev/null || true)
+                oidc_code="${oidc_code:-000}"
                 if [[ "$oidc_code" =~ ^(200|201)$ ]]; then
                     echo "✅ OIDC token authentication working (HTTP $oidc_code)"
+                    rm -f "$oidc_response_file" "$oidc_headers_file"
                     break
                 fi
-                echo "  OIDC auth check returned HTTP $oidc_code, retrying..."
+                local oidc_reason
+                oidc_reason=$(tr -d '\r' < "$oidc_headers_file" 2>/dev/null | awk 'BEGIN{IGNORECASE=1} /^x-ext-auth-reason:/{sub(/^[^:]*: */, ""); print; exit}' || true)
+                local oidc_response
+                oidc_response=$(tr '\n' ' ' < "$oidc_response_file" 2>/dev/null | cut -c1-500 || true)
+                echo "  OIDC auth check returned HTTP $oidc_code${oidc_reason:+ (x-ext-auth-reason=${oidc_reason})}: ${oidc_response}"
+                if [[ "$oidc_code" == "401" ]]; then
+                    oidc_token=$(_request_oidc_token "$oidc_readiness_username" "$oidc_readiness_password")
+                    if [[ -z "$oidc_token" ]]; then
+                        echo "❌ ERROR: Could not refresh OIDC token from ${OIDC_TOKEN_URL}"
+                        exit 1
+                    fi
+                fi
                 sleep 5
             done
             if [[ $SECONDS -ge $oidc_deadline ]]; then
@@ -371,6 +435,15 @@ run_e2e_tests() {
         export MAAS_PYTEST_INCLUDE_NIGHTLY="${MAAS_PYTEST_INCLUDE_NIGHTLY:-true}"
     fi
     "${SCRIPT_DIR}/run_e2e_tests.sh"
+}
+
+_request_oidc_token() {
+    local username="${1:-${OIDC_USERNAME}}"
+    local password="${2:-${OIDC_PASSWORD}}"
+    curl -sk -m 10 \
+        -d "grant_type=password&client_id=${OIDC_CLIENT_ID}&username=${username}&password=${password}&scope=openid" \
+        "${OIDC_TOKEN_URL}" 2>/dev/null |
+        python3 -c "import sys,json; print(json.load(sys.stdin).get('access_token',''))" 2>/dev/null || echo ""
 }
 
 # ── Artifact collection (EXIT trap) ─────────────────────────────────────
