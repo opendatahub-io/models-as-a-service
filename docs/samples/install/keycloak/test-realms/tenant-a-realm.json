@@ -62,12 +62,12 @@
               "protocolMapper": "oidc-usermodel-attribute-mapper",
               "config": {
                 "user.attribute": "maasOrganizations",
-                "claim.name": "https://redhat.com/maas/orgs",
+                "claim.name": "https://redhat\\.com/maas/orgs",
                 "jsonType.label": "JSON",
                 "id.token.claim": "true",
                 "access.token.claim": "true",
                 "userinfo.token.claim": "true",
-                "multivalued": "false"
+                "multivalued": "true"
               }
         }
       ]
@@ -140,7 +140,8 @@
       "credentials": [{"type": "password", "value": "letmein", "temporary": false}],
       "attributes": {
         "maasOrganizations": [
-          "[{\"organization_id\":\"42c3e46f-2477-44d7-a85b-d3b43f6b31fa\",\"roles\":[\"admins\"]},{\"organization_id\":\"53d4f57e-3588-55e8-b96c-4ec54a7c42fa\",\"roles\":[\"users\"]}]"
+          "{\"organization_id\":\"42c3e46f-2477-44d7-a85b-d3b43f6b31fa\",\"roles\":[\"admins\"]}",
+          "{\"organization_id\":\"53d4f57e-3588-55e8-b96c-4ec54a7c42fa\",\"roles\":[\"users\"]}"
         ]
       },
       "groups": [

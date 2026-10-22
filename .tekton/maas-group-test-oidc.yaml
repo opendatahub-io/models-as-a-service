@@ -65,6 +65,12 @@ spec:
         value: "token_use"
       - name: OIDC_ACCESS_TOKEN_PURPOSE
         value: "access"
+      - name: OIDC_READINESS_USERNAME
+        value: "grid_admin"
+      - name: OIDC_READINESS_PASSWORD
+        value: "letmein"
+      - name: OIDC_READINESS_VALIDATE_ORGANIZATIONS
+        value: "true"
     serviceAccountName: konflux-integration-runner
   taskRunSpecs:
   - pipelineTaskName: e2e-maas-openshift
