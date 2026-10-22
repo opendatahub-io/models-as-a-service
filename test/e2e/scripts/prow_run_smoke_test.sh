@@ -255,6 +255,27 @@ validate_deployment() {
     fi
 }
 
+_request_oidc_token() {
+    local username="${1:-${OIDC_USERNAME}}"
+    local password="${2:-${OIDC_PASSWORD}}"
+    local attempt token_response access_token
+    for ((attempt = 1; attempt <= 12; attempt++)); do
+        if token_response=$(curl -sk -m 10 \
+            -d "grant_type=password&client_id=${OIDC_CLIENT_ID}&username=${username}&password=${password}&scope=openid" \
+            "${OIDC_TOKEN_URL}" 2>/dev/null); then
+            access_token=$(printf '%s' "$token_response" | python3 -c \
+                "import sys,json; print(json.load(sys.stdin).get('access_token',''))" 2>/dev/null || true)
+            if [[ -n "$access_token" ]]; then
+                printf '%s' "$access_token"
+                return 0
+            fi
+        fi
+        sleep 5
+    done
+    echo "Could not obtain an OIDC token for ${username} from ${OIDC_TOKEN_URL} after 12 attempts" >&2
+    return 1
+}
+
 run_e2e_tests() {
     echo "-- E2E Tests (API Keys + Subscription + Models Endpoint) --"
 
@@ -332,7 +353,14 @@ run_e2e_tests() {
         local oidc_readiness_username="${OIDC_READINESS_USERNAME:-${OIDC_USERNAME}}"
         local oidc_readiness_password="${OIDC_READINESS_PASSWORD:-${OIDC_PASSWORD}}"
         local oidc_token
-        oidc_token=$(_request_oidc_token "$oidc_readiness_username" "$oidc_readiness_password")
+        local oidc_token_error_file="${ARTIFACTS_DIR}/oidc-readiness-token-error.log"
+        mkdir -p "$ARTIFACTS_DIR"
+        echo "Using OIDC readiness user: ${oidc_readiness_username}"
+        if ! oidc_token=$(_request_oidc_token "$oidc_readiness_username" "$oidc_readiness_password" 2>"$oidc_token_error_file"); then
+            echo "❌ ERROR: Could not obtain OIDC token from ${OIDC_TOKEN_URL}"
+            exit 1
+        fi
+        rm -f "$oidc_token_error_file"
         if [[ -n "$oidc_token" ]]; then
             if [[ "${OIDC_READINESS_VALIDATE_ORGANIZATIONS:-false}" == "true" ]]; then
                 local oidc_claim_summary
@@ -376,13 +404,14 @@ for organization in organizations:
         raise SystemExit(f"Invalid OIDC organization membership: {organization!r}")
 
 print(f"azp={claims.get('azp')}, audience={token_audience!r}, organizations={len(organizations)}")
-'); then
+                    ' 2>&1); then
+                    printf '%s\n' "$oidc_claim_summary" > "${ARTIFACTS_DIR}/oidc-readiness-claim-error.log"
                     echo "❌ ERROR: OIDC readiness token contract validation failed"
+                    echo "$oidc_claim_summary"
                     exit 1
                 fi
                 echo "✅ OIDC token contract valid (${oidc_claim_summary})"
             fi
-            mkdir -p "$ARTIFACTS_DIR"
             local oidc_response_file="${ARTIFACTS_DIR}/oidc-readiness-last-response.json"
             local oidc_headers_file="${ARTIFACTS_DIR}/oidc-readiness-last-headers.txt"
             while [[ $SECONDS -lt $oidc_deadline ]]; do
@@ -404,8 +433,7 @@ print(f"azp={claims.get('azp')}, audience={token_audience!r}, organizations={len
                 oidc_response=$(tr '\n' ' ' < "$oidc_response_file" 2>/dev/null | cut -c1-500 || true)
                 echo "  OIDC auth check returned HTTP $oidc_code${oidc_reason:+ (x-ext-auth-reason=${oidc_reason})}: ${oidc_response}"
                 if [[ "$oidc_code" == "401" ]]; then
-                    oidc_token=$(_request_oidc_token "$oidc_readiness_username" "$oidc_readiness_password")
-                    if [[ -z "$oidc_token" ]]; then
+                    if ! oidc_token=$(_request_oidc_token "$oidc_readiness_username" "$oidc_readiness_password"); then
                         echo "❌ ERROR: Could not refresh OIDC token from ${OIDC_TOKEN_URL}"
                         exit 1
                     fi
@@ -435,15 +463,6 @@ print(f"azp={claims.get('azp')}, audience={token_audience!r}, organizations={len
         export MAAS_PYTEST_INCLUDE_NIGHTLY="${MAAS_PYTEST_INCLUDE_NIGHTLY:-true}"
     fi
     "${SCRIPT_DIR}/run_e2e_tests.sh"
-}
-
-_request_oidc_token() {
-    local username="${1:-${OIDC_USERNAME}}"
-    local password="${2:-${OIDC_PASSWORD}}"
-    curl -sk -m 10 \
-        -d "grant_type=password&client_id=${OIDC_CLIENT_ID}&username=${username}&password=${password}&scope=openid" \
-        "${OIDC_TOKEN_URL}" 2>/dev/null |
-        python3 -c "import sys,json; print(json.load(sys.stdin).get('access_token',''))" 2>/dev/null || echo ""
 }
 
 # ── Artifact collection (EXIT trap) ─────────────────────────────────────
