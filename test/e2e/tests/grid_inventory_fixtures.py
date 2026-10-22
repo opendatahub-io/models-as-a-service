@@ -5,11 +5,12 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 
+from multitenancy_helpers import DEFAULT_GATEWAY_NAME
 from test_helper import (
+    GATEWAY_NAMESPACE,
     MODEL_NAMESPACE,
-    MODEL_REF,
-    PREMIUM_MODEL_REF,
     _apply_cr,
+    _create_llmis,
     _create_maas_model_ref,
     _delete_crs_and_wait,
     _delete_governance_and_wait,
@@ -26,6 +27,7 @@ ORGANIZATION_B = "53d4f57e-3588-55e8-b96c-4ec54a7c42fa"
 
 @dataclass(frozen=True)
 class GridInventoryResources:
+    suffix: str
     owner_admin_subscription: str
     admin_only_subscription: str
     other_organization_subscription: str
@@ -47,6 +49,7 @@ class GridInventoryResources:
 def new_grid_inventory_resources() -> GridInventoryResources:
     suffix = uuid.uuid4().hex[:8]
     return GridInventoryResources(
+        suffix=suffix,
         owner_admin_subscription=f"grid-inv-{suffix}-owner",
         admin_only_subscription=f"grid-inv-{suffix}-admin",
         other_organization_subscription=f"grid-inv-{suffix}-org-b",
@@ -78,9 +81,7 @@ def _apply_auth_policy(
             "kind": "MaaSAuthPolicy",
             "metadata": {"name": name, "namespace": _subscription_namespace()},
             "spec": {
-                "modelRefs": [
-                    {"name": model_ref, "namespace": MODEL_NAMESPACE}
-                ],
+                "modelRefs": [{"name": model_ref, "namespace": MODEL_NAMESPACE}],
                 "subjects": {
                     "groups": [{"name": group} for group in groups],
                     "users": users,
@@ -127,19 +128,29 @@ def _apply_subscription(
 
 
 def apply_grid_inventory_resources(resources: GridInventoryResources) -> None:
-    _wait_for_model_ready(MODEL_REF, namespace=MODEL_NAMESPACE, timeout=180)
-    _wait_for_model_ready(
-        PREMIUM_MODEL_REF, namespace=MODEL_NAMESPACE, timeout=180
+    _create_llmis(
+        resources.owner_model_ref,
+        MODEL_NAMESPACE,
+        DEFAULT_GATEWAY_NAME,
+        GATEWAY_NAMESPACE,
+        model_name=f"grid-inv-{resources.suffix}-owner",
+    )
+    _create_llmis(
+        resources.unmatched_model_ref,
+        MODEL_NAMESPACE,
+        DEFAULT_GATEWAY_NAME,
+        GATEWAY_NAMESPACE,
+        model_name=f"grid-inv-{resources.suffix}-unmatched",
     )
     _create_maas_model_ref(
         resources.owner_model_ref,
         MODEL_NAMESPACE,
-        MODEL_REF,
+        resources.owner_model_ref,
     )
     _create_maas_model_ref(
         resources.unmatched_model_ref,
         MODEL_NAMESPACE,
-        PREMIUM_MODEL_REF,
+        resources.unmatched_model_ref,
     )
     _wait_for_model_ready(
         resources.owner_model_ref, namespace=MODEL_NAMESPACE, timeout=180
@@ -247,6 +258,8 @@ def cleanup_grid_inventory_resources(resources: GridInventoryResources) -> None:
         [
             ("maasmodelref", resources.owner_model_ref, MODEL_NAMESPACE),
             ("maasmodelref", resources.unmatched_model_ref, MODEL_NAMESPACE),
+            ("llminferenceservice", resources.owner_model_ref, MODEL_NAMESPACE),
+            ("llminferenceservice", resources.unmatched_model_ref, MODEL_NAMESPACE),
         ],
         timeout=120,
     )

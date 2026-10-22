@@ -11,9 +11,11 @@ import requests
 from grid_governance_fixtures import (
     GridGovernanceContext,
 )
-from grid_governance_fixtures import governance_context  # noqa: F401 - pytest fixture
+from grid_governance_fixtures import grid_governance_context  # noqa: F401 - pytest fixture
 from grid_cross_tenant_fixtures import GridCrossTenantContext
-from grid_cross_tenant_fixtures import grid_cross_tenant_context as grid_cross_tenant_context_fixture  # noqa: F401 - pytest fixture
+from grid_cross_tenant_fixtures import (
+    grid_cross_tenant_context as grid_cross_tenant_context_fixture,  # noqa: F401 - pytest fixture
+)  # noqa: F401 - pytest fixture
 from grid_inventory_fixtures import ORGANIZATION_A
 from grid_oidc_helpers import request_grid_token, request_tenant_b_token
 from test_helper import (
@@ -65,19 +67,17 @@ def _grid_admin_identity_envelope() -> dict:
             "aud": claims["aud"],
             "azp": claims["azp"],
             "groups": claims["groups"],
-            "https://redhat.com/maas/orgs": claims[
-                "https://redhat.com/maas/orgs"
-            ],
+            "https://redhat.com/maas/orgs": claims["https://redhat.com/maas/orgs"],
         },
     }
 
 
 class TestGridGovernanceInference:
     def test_grid_models_preserve_inference_discovery(
-        self, maas_api_base_url: str, governance_context: GridGovernanceContext
+        self, maas_api_base_url: str, context: GridGovernanceContext
     ):
         token = request_grid_token("alice_lead")
-        resources = governance_context.resources
+        resources = context.resources
 
         response = _request_with_gateway_retry(
             requests.get,
@@ -96,9 +96,7 @@ class TestGridGovernanceInference:
         models = response.json()["data"]
         expected_owned_by = f"{MODEL_NAMESPACE}/{resources.owner_model_ref}"
         matching_models = [
-            model
-            for model in models
-            if model.get("owned_by") == expected_owned_by
+            model for model in models if model.get("owned_by") == expected_owned_by
         ]
         assert len(matching_models) == 1, (
             f"Expected exactly the governance model {expected_owned_by}, got "
@@ -118,10 +116,10 @@ class TestGridGovernanceInference:
         )
 
     def test_grid_model_subscriptions_preserve_inference_discovery(
-        self, maas_api_base_url: str, governance_context: GridGovernanceContext
+        self, maas_api_base_url: str, context: GridGovernanceContext
     ):
         token = request_grid_token("alice_lead")
-        resources = governance_context.resources
+        resources = context.resources
 
         response = _request_with_gateway_retry(
             requests.get,
@@ -157,9 +155,7 @@ class TestGridGovernanceInference:
 
 
 class TestGridTenantDiscoveryBoundary:
-    def test_grid_oidc_token_cannot_discover_tenants(
-        self, maas_api_internal_url: str
-    ):
+    def test_grid_oidc_token_cannot_discover_tenants(self, maas_api_internal_url: str):
         token = request_grid_token("grid_admin")
 
         status_code, body = kubectl_curl(
@@ -171,9 +167,7 @@ class TestGridTenantDiscoveryBoundary:
             f"got {status_code} {body}"
         )
 
-    def test_grid_tenant_discovery_remains_unroutable(
-        self, maas_api_base_url: str
-    ):
+    def test_grid_tenant_discovery_remains_unroutable(self, maas_api_base_url: str):
         token = request_grid_token("grid_admin")
         gateway_base_url = maas_api_base_url.removesuffix("/maas-api")
 
@@ -193,10 +187,10 @@ class TestGridInternalSubscriptionCallback:
     def test_legacy_grid_subscription_selection_is_unchanged(
         self,
         maas_api_internal_url: str,
-        governance_context: GridGovernanceContext,
+        context: GridGovernanceContext,
     ):
-        resources = governance_context.resources
-        api_key = governance_context.keys[2].secret
+        resources = context.resources
+        api_key = context.keys[2].secret
 
         _, response = _post_internal_json(
             f"{maas_api_internal_url}/internal/v1/subscriptions/select",
@@ -216,9 +210,9 @@ class TestGridInternalSubscriptionCallback:
     def test_grid_subscription_admin_callback_returns_distinct_decision(
         self,
         maas_api_internal_url: str,
-        governance_context: GridGovernanceContext,
+        context: GridGovernanceContext,
     ):
-        resources = governance_context.resources
+        resources = context.resources
 
         _, response = _post_internal_json(
             f"{maas_api_internal_url}/internal/v1/subscriptions/select",
@@ -366,9 +360,9 @@ class TestGridInternalAPIKeyValidation:
     def test_grid_api_key_validation_preserves_stored_identity(
         self,
         maas_api_internal_url: str,
-        governance_context: GridGovernanceContext,
+        context: GridGovernanceContext,
     ):
-        key = governance_context.keys[2]
+        key = context.keys[2]
 
         _, response = _post_internal_json(
             f"{maas_api_internal_url}/internal/v1/api-keys/validate",
@@ -423,9 +417,7 @@ class TestGridInternalLifecycleBoundary:
 
 
 class TestGridHealthBoundary:
-    def test_grid_health_remains_public_and_unaugmented(
-        self, maas_api_base_url: str
-    ):
+    def test_grid_health_remains_public_and_unaugmented(self, maas_api_base_url: str):
         response = _request_with_gateway_retry(
             requests.get,
             f"{maas_api_base_url}/health",

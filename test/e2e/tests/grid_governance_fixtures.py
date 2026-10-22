@@ -128,7 +128,7 @@ def cleanup_grid_governance_context(
 
 
 @pytest.fixture(scope="module")
-def governance_context(
+def grid_governance_context(
     maas_api_base_url: str,
 ) -> Iterator[GridGovernanceContext]:
     resources = new_grid_inventory_resources()
