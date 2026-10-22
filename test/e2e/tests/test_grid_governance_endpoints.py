@@ -333,6 +333,17 @@ class TestGridGovernanceAPIKeys:
     ):
         token = request_grid_token("grid_admin")
 
+        initial_statuses = {}
+        for key in grid_governance_context.keys[:2]:
+            inspection = _request_with_gateway_retry(
+                requests.get,
+                f"{maas_api_base_url}/v1/api-keys/{key.key_id}",
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=30,
+            )
+            assert inspection.status_code == 200
+            initial_statuses[key.key_id] = inspection.json()["status"]
+
         response = _bulk_revoke_grid_api_keys(
             maas_api_base_url,
             token,
@@ -344,7 +355,10 @@ class TestGridGovernanceAPIKeys:
             f"{response.status_code} {response.text}"
         )
         payload = response.json()
-        assert payload["revokedCount"] == 1
+        expected_active_count = sum(
+            status == "active" for status in initial_statuses.values()
+        )
+        assert payload["revokedCount"] == expected_active_count
         assert payload["dryRun"] is True
 
         owner_token = request_grid_token("alice_lead")
@@ -355,7 +369,10 @@ class TestGridGovernanceAPIKeys:
             timeout=30,
         )
         assert inspection.status_code == 200
-        assert inspection.json()["status"] == "active"
+        assert (
+            inspection.json()["status"]
+            == initial_statuses[grid_governance_context.keys[0].key_id]
+        )
 
     def test_grid_admin_cannot_bulk_revoke_other_organization(
         self, maas_api_base_url: str, grid_governance_context: GridGovernanceContext
