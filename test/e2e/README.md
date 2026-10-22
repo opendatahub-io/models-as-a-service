@@ -46,6 +46,7 @@ pytest tests/<file>.py -v
 |------|--------|
 | `test_smoke.py` | Read-only smoke checks: non-streaming and streaming (`text/event-stream`) chat/completions |
 | `test_subscription.py` | Subscription / inference flows |
+| `test_observability_identity.py` | Opt-in organization attribution reproduction on one gateway/model; requires `E2E_OBSERVABILITY_IDENTITY=true` and Limitador telemetry |
 | `test_trlp_rate_grouping.py` | TRLP limits grouped by rate: shared limits, per-subscription and per-user budgets, rate edits, gateway wasm config size guard |
 | `test_api_keys.py` | `/v1/api-keys` |
 | `test_models_endpoint.py` | `/v1/models` |
@@ -66,6 +67,43 @@ pytest tests/<file>.py -v
 | `test_config_tenant.py` | Cluster `Config/default`: anchor present, owner refs on Tenant and `maas-controller` Deployment (skips if Config CRD missing) |
 
 The shared CI runner and `smoke.sh` execute all tests under `tests/`. Individual modules can still be run directly, for example `pytest tests/test_subscription_list_endpoints.py -v`.
+
+To reproduce organization attribution on an existing cluster, export the deployment's
+normal E2E environment (controller/infra namespaces and gateway class), then run
+the established local runner from the repository root. It prepares the Python
+environment and uses your current `oc` login. The case creates its own gateway:
+
+```bash
+ENABLE_TENANT_NAMESPACE_DISCOVERY=true E2E_OBSERVABILITY_IDENTITY=true \
+E2E_PARALLEL_WORKERS=1 ARTIFACT_DIR="$PWD/test/e2e/reports" \
+  ./test/e2e/run-tests-quick.sh tests/test_observability_identity.py
+```
+
+The fixture reuses the worker-tenant bootstrap with one simulator and creates its
+own tenant, gateway and two subscriptions. Both use `spec.organization.id`; one
+also has a conflicting deprecated `tokenMetadata.organizationId`. Three measured
+requests per subscription follow separately recorded warm-up attempts. The test
+checks source Limitador counters and their `organization_id` labels, and revokes
+keys and removes its resources on teardown. It does not require ACM or dashboards.
+JSON evidence is written to `ARTIFACT_DIR/observability-identity-<suffix>/evidence.json`,
+including expected IDs, resource specifications, deployed images, request statuses
+and filtered before/after metric samples. Credentials and response bodies are not
+included. If multiple Limitador instances exist, select the gateway's instance with
+`E2E_IDENTITY_LIMITADOR=namespace/name`.
+
+To verify the collector-to-federation path as well, configure both
+`E2E_IDENTITY_COLLECTOR` and `E2E_IDENTITY_PROMETHEUS` as `namespace/service:port`.
+The first service must expose the collector's Prometheus exporter; the second
+must expose the Prometheus-compatible query API after the federation scrape's
+metric relabeling. The additional checks wait for usage counters to increase
+at both stages, verify that `organization_id` survives export, and require each
+scraped `grid_tenant_id` to equal that subscription's `spec.organization.id`.
+Export verification fails setup if only one endpoint is supplied. Optionally
+set `E2E_IDENTITY_TENANT_ID` to require the scraped samples to retain that
+internal ACM `tenant_id`, independently of the two organization UUIDs.
+Before/after samples for both stages are included in the same evidence JSON.
+These checks use existing monitoring services; the test fixture does not
+install or remove them.
 
 **Skips:** `test_tenant.py` and `test_config_tenant.py` skip the whole module when the needed CRD or object is absent (partial cluster or older bundle). Neither module deletes Config or exercises DSC disable; that stays in operator or manual teardown.
 
