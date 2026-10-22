@@ -1,3 +1,5 @@
+# ruff: noqa: F811
+
 """System-level tests for Grid governance endpoint boundaries."""
 
 from __future__ import annotations
@@ -74,10 +76,10 @@ def _grid_admin_identity_envelope() -> dict:
 
 class TestGridGovernanceInference:
     def test_grid_models_preserve_inference_discovery(
-        self, maas_api_base_url: str, context: GridGovernanceContext
+        self, maas_api_base_url: str, grid_governance_context: GridGovernanceContext
     ):
         token = request_grid_token("alice_lead")
-        resources = context.resources
+        resources = grid_governance_context.resources
 
         response = _request_with_gateway_retry(
             requests.get,
@@ -116,10 +118,10 @@ class TestGridGovernanceInference:
         )
 
     def test_grid_model_subscriptions_preserve_inference_discovery(
-        self, maas_api_base_url: str, context: GridGovernanceContext
+        self, maas_api_base_url: str, grid_governance_context: GridGovernanceContext
     ):
         token = request_grid_token("alice_lead")
-        resources = context.resources
+        resources = grid_governance_context.resources
 
         response = _request_with_gateway_retry(
             requests.get,
@@ -187,10 +189,10 @@ class TestGridInternalSubscriptionCallback:
     def test_legacy_grid_subscription_selection_is_unchanged(
         self,
         maas_api_internal_url: str,
-        context: GridGovernanceContext,
+        grid_governance_context: GridGovernanceContext,
     ):
-        resources = context.resources
-        api_key = context.keys[2].secret
+        resources = grid_governance_context.resources
+        api_key = grid_governance_context.keys[2].secret
 
         _, response = _post_internal_json(
             f"{maas_api_internal_url}/internal/v1/subscriptions/select",
@@ -210,9 +212,9 @@ class TestGridInternalSubscriptionCallback:
     def test_grid_subscription_admin_callback_returns_distinct_decision(
         self,
         maas_api_internal_url: str,
-        context: GridGovernanceContext,
+        grid_governance_context: GridGovernanceContext,
     ):
-        resources = context.resources
+        resources = grid_governance_context.resources
 
         _, response = _post_internal_json(
             f"{maas_api_internal_url}/internal/v1/subscriptions/select",
@@ -360,9 +362,9 @@ class TestGridInternalAPIKeyValidation:
     def test_grid_api_key_validation_preserves_stored_identity(
         self,
         maas_api_internal_url: str,
-        context: GridGovernanceContext,
+        grid_governance_context: GridGovernanceContext,
     ):
-        key = context.keys[2]
+        key = grid_governance_context.keys[2]
 
         _, response = _post_internal_json(
             f"{maas_api_internal_url}/internal/v1/api-keys/validate",
