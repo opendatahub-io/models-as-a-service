@@ -152,13 +152,6 @@ def apply_grid_inventory_resources(resources: GridInventoryResources) -> None:
         MODEL_NAMESPACE,
         resources.unmatched_model_ref,
     )
-    _wait_for_model_ready(
-        resources.owner_model_ref, namespace=MODEL_NAMESPACE, timeout=180
-    )
-    _wait_for_model_ready(
-        resources.unmatched_model_ref, namespace=MODEL_NAMESPACE, timeout=180
-    )
-
     _apply_auth_policy(
         resources.owner_auth_policy,
         resources.owner_model_ref,
@@ -236,6 +229,12 @@ def apply_grid_inventory_resources(resources: GridInventoryResources) -> None:
             namespace=namespace,
             timeout=180,
         )
+    _wait_for_model_ready(
+        resources.owner_model_ref, namespace=MODEL_NAMESPACE, timeout=180
+    )
+    _wait_for_model_ready(
+        resources.unmatched_model_ref, namespace=MODEL_NAMESPACE, timeout=180
+    )
 
 
 def cleanup_grid_inventory_resources(resources: GridInventoryResources) -> None:
