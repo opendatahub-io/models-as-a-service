@@ -1102,6 +1102,8 @@ def _create_test_subscription(
     model_namespace=MODEL_NAMESPACE,
     unlimited=False,
     inference_priority=None,
+    organization_id=None,
+    token_metadata_org_id=None,
 ):
     """Create a MaaSSubscription CR for testing.
 
@@ -1117,6 +1119,8 @@ def _create_test_subscription(
         model_namespace: Namespace containing the referenced MaaSModelRefs
         unlimited: Grant access without a token budget; token_limit and window are ignored
         inference_priority: Optional spec.inferencePriority (llm-d flow-control priority)
+        organization_id: Stable spec.organization.id association
+        token_metadata_org_id: Legacy attribution ID, only for migration/precedence tests
     """
     namespace = namespace or _ns()
     if not isinstance(model_refs, list):
@@ -1143,6 +1147,10 @@ def _create_test_subscription(
         spec["priority"] = int(priority)
     if inference_priority is not None:
         spec["inferencePriority"] = int(inference_priority)
+    if organization_id is not None:
+        spec["organization"] = {"id": organization_id}
+    if token_metadata_org_id is not None:
+        spec["tokenMetadata"] = {"organizationId": token_metadata_org_id}
 
     log.info("Creating MaaSSubscription: %s", name)
     _apply_cr(

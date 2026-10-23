@@ -146,12 +146,23 @@ func TestSelector_OrganizationIDPrecedence(t *testing.T) {
 			}
 
 			selector := subscription.NewSelector(logger.New(false), &fakeLister{subscriptions: []*unstructured.Unstructured{subscriptionObject}}, nil, nil)
-			response, err := selector.Select([]string{"g1"}, "", "", "")
-			if err != nil {
-				t.Fatalf("Select() error = %v", err)
-			}
-			if response.OrganizationID != test.expectedOrgID {
-				t.Fatalf("OrganizationID = %q, want %q", response.OrganizationID, test.expectedOrgID)
+			for _, selection := range []struct {
+				name                  string
+				requestedSubscription string
+			}{
+				{name: "automatic"},
+				{name: "explicit name", requestedSubscription: "test-sub"},
+				{name: "explicit qualified name", requestedSubscription: "test-ns/test-sub"},
+			} {
+				t.Run(selection.name, func(t *testing.T) {
+					response, err := selector.Select([]string{"g1"}, "", selection.requestedSubscription, "")
+					if err != nil {
+						t.Fatalf("Select() error = %v", err)
+					}
+					if response.OrganizationID != test.expectedOrgID {
+						t.Fatalf("OrganizationID = %q, want %q", response.OrganizationID, test.expectedOrgID)
+					}
+				})
 			}
 		})
 	}
