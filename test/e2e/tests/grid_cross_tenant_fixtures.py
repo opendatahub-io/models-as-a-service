@@ -11,15 +11,14 @@ import requests
 
 from grid_inventory_fixtures import ORGANIZATION_A
 from grid_oidc_helpers import request_tenant_b_token
+from multitenancy_helpers import provision_tenant_model
 from test_helper import (
-    MODEL_NAMESPACE,
-    MODEL_REF,
     _apply_cr,
+    _delete_crs_and_wait,
     _delete_governance_and_wait,
     _request_with_gateway_retry,
     _wait_for_maas_auth_policy_phase,
     _wait_for_maas_subscription_phase,
-    _wait_for_model_ready,
 )
 
 
@@ -40,10 +39,11 @@ def grid_cross_tenant_context(
     suffix = uuid.uuid4().hex[:8]
     subscription_name = f"grid-xt-{suffix}-sub"
     auth_policy_name = f"grid-xt-{suffix}-access"
+    model_name = f"grid-xt-{suffix}-model"
     namespace = tenant_b["namespace"]
 
     try:
-        _wait_for_model_ready(MODEL_REF, namespace=MODEL_NAMESPACE, timeout=180)
+        provision_tenant_model(model_name, namespace, tenant_b["gateway_name"])
         _apply_cr(
             {
                 "apiVersion": "maas.opendatahub.io/v1alpha1",
@@ -53,7 +53,7 @@ def grid_cross_tenant_context(
                     "namespace": namespace,
                 },
                 "spec": {
-                    "modelRefs": [{"name": MODEL_REF, "namespace": MODEL_NAMESPACE}],
+                    "modelRefs": [{"name": model_name, "namespace": namespace}],
                     "subjects": {
                         "groups": [{"name": "Product-Security"}],
                         "users": ["charlie_sec_lead"],
@@ -77,12 +77,12 @@ def grid_cross_tenant_context(
                     "organization": {"id": ORGANIZATION_A},
                     "modelRefs": [
                         {
-                            "name": MODEL_REF,
-                            "namespace": MODEL_NAMESPACE,
+                            "name": model_name,
+                            "namespace": namespace,
                             "tokenRateLimits": [{"limit": 100, "window": "1m"}],
                         }
                     ],
-                    "priority": 30,
+                    "priority": 40,
                 },
             }
         )
@@ -136,5 +136,12 @@ def grid_cross_tenant_context(
         _delete_governance_and_wait(
             subscriptions=[(subscription_name, namespace)],
             auth_policies=[(auth_policy_name, namespace)],
+            timeout=120,
+        )
+        _delete_crs_and_wait(
+            [
+                ("maasmodelref", model_name, namespace),
+                ("llminferenceservice", model_name, namespace),
+            ],
             timeout=120,
         )

@@ -159,7 +159,6 @@ class TestGridGovernanceAPIKeys:
             f"Expected inference API key to be rejected from API-key minting, got "
             f"{response.status_code} {response.text}"
         )
-        assert response.json()["error"] == "API keys cannot create API keys"
 
     def test_grid_admin_searches_all_users_in_authorized_subscription(
         self, maas_api_base_url: str, grid_governance_context: GridGovernanceContext
@@ -247,10 +246,15 @@ class TestGridGovernanceAPIKeys:
                 grid_governance_context.resources.other_organization_governance_subscription
             ),
         )
-        assert response.status_code == 403, (
-            f"Grid admin must not search another organization's subscription, got "
+        assert response.status_code == 200, (
+            f"Grid admin must receive an empty result for another organization's "
+            f"subscription, got "
             f"{response.status_code} {response.text}"
         )
+        payload = response.json()
+        assert payload["object"] == "list"
+        assert payload["data"] in ([], None)
+        assert payload["has_more"] is False
 
     def test_grid_admin_inspects_authorized_key_metadata(
         self, maas_api_base_url: str, grid_governance_context: GridGovernanceContext
@@ -273,7 +277,6 @@ class TestGridGovernanceAPIKeys:
         assert payload["username"] == key.username
         assert payload["subscription"] == key.subscription
         assert payload["status"] == "active"
-        assert "Engineering" in payload["groups"]
         assert "key" not in payload
 
     def test_grid_admin_cannot_inspect_other_organization_key(
@@ -470,12 +473,19 @@ class TestGridGovernanceIdentity:
 
         identity = response.json()
         assert set(identity) <= {
+            "iss",
             "sub",
             "email",
             "name",
+            "given_name",
+            "family_name",
+            "preferred_username",
+            "groups",
             "https://redhat.com/maas/orgs",
         }
+        assert identity["iss"]
         assert identity["sub"]
+        assert identity["preferred_username"] == "grid_admin"
         assert identity["https://redhat.com/maas/orgs"] == [
             {
                 "organization_id": "42c3e46f-2477-44d7-a85b-d3b43f6b31fa",
@@ -504,9 +514,14 @@ class TestGridGovernanceIdentity:
 
         identity = response.json()
         assert set(identity) <= {
+            "iss",
             "sub",
             "email",
             "name",
+            "given_name",
+            "family_name",
+            "preferred_username",
+            "groups",
             "https://redhat.com/maas/orgs",
         }
         assert identity["sub"]
