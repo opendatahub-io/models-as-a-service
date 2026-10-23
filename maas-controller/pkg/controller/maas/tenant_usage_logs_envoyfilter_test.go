@@ -82,6 +82,7 @@ func newUsageLogsReconciler(t *testing.T, s *runtime.Scheme, cl client.Client, m
 		Scheme:              s,
 		GatewayNamespace:    usageLogsTestGatewayNS,
 		MonitoringNamespace: usageLogsTestMonitoringNS,
+		ClusterAudience:     "https://kubernetes.default.svc",
 	}
 	if mutate != nil {
 		mutate(r)
@@ -148,6 +149,50 @@ func defaultUsageLogsPlatformContext() tenantreconcile.PlatformContext {
 	return tenantreconcile.PlatformContext{
 		GatewayRef: maasv1alpha1.TenantGatewayRef{Name: tenantreconcile.DefaultAITenantName, Namespace: usageLogsTestGatewayNS},
 	}
+}
+
+func usageLogsResourceAttribute(ef *unstructured.Unstructured, key string) (string, error) {
+	configPatches, _, err := unstructured.NestedSlice(ef.Object, "spec", "configPatches")
+	if err != nil {
+		return "", err
+	}
+	for _, cp := range configPatches {
+		patch, ok := cp.(map[string]any)
+		if !ok {
+			continue
+		}
+		accessLog, found, err := unstructured.NestedSlice(patch, "patch", "value", "typed_config", "access_log")
+		if err != nil {
+			return "", err
+		}
+		if !found {
+			continue
+		}
+		for _, entry := range accessLog {
+			logEntry, ok := entry.(map[string]any)
+			if !ok {
+				continue
+			}
+			values, found, err := unstructured.NestedSlice(logEntry, "typed_config", "resource_attributes", "values")
+			if err != nil {
+				return "", err
+			}
+			if !found {
+				continue
+			}
+			for _, value := range values {
+				attr, ok := value.(map[string]any)
+				if !ok {
+					continue
+				}
+				if attrKey, _, _ := unstructured.NestedString(attr, "key"); attrKey == key {
+					attrValue, _, _ := unstructured.NestedString(attr, "value", "string_value")
+					return attrValue, nil
+				}
+			}
+		}
+	}
+	return "", errors.New(key + " resource attribute not found in EnvoyFilter")
 }
 
 func TestTenantEnsureUsageLogsEnvoyFilter(t *testing.T) {
@@ -233,6 +278,7 @@ func TestTenantEnsureUsageLogsEnvoyFilter(t *testing.T) {
 		cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cfg, tenant).Build()
 		r := newUsageLogsReconciler(t, s, cl, func(r *TenantReconciler) {
 			r.UsageLogsManifestPath = testUsageLogsManifestPath(t)
+			r.ClusterID = "11111111-1111-1111-1111-111111111111"
 		})
 
 		warning, err := r.ensureUsageLogsEnvoyFilter(context.Background(), ctrl.Log, tenant, defaultUsageLogsPlatformContext(), cfg)
@@ -382,6 +428,7 @@ func TestTenantEnsureUsageLogsEnvoyFilter(t *testing.T) {
 		cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cfg, tenant).Build()
 		r := newUsageLogsReconciler(t, s, cl, func(r *TenantReconciler) {
 			r.UsageLogsManifestPath = testUsageLogsManifestPath(t)
+			r.ClusterID = "11111111-1111-1111-1111-111111111111"
 		})
 
 		warning, err := r.ensureUsageLogsEnvoyFilter(context.Background(), ctrl.Log, tenant, tenantreconcile.PlatformContext{
@@ -399,6 +446,43 @@ func TestTenantEnsureUsageLogsEnvoyFilter(t *testing.T) {
 		namespace, err := usageLogsServiceNamespace(ef)
 		g.Expect(err).NotTo(HaveOccurred())
 		g.Expect(namespace).To(Equal("ai-tenant-redteam"))
+		tenantName, err := usageLogsResourceAttribute(ef, "tenant_name")
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(tenantName).To(Equal("redteam"))
+		clusterID, err := usageLogsResourceAttribute(ef, "cluster_id")
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(clusterID).To(Equal("11111111-1111-1111-1111-111111111111"))
+	})
+
+	t.Run("enabled omits cluster attribution on xKS", func(t *testing.T) {
+		g := NewWithT(t)
+		s := tenantTestScheme(t)
+
+		cfg := usageLogsConfig(true)
+		tenant := usageLogsTenantConfig("ai-tenant-redteam", "redteam", usageLogsTestAITenantNS)
+
+		cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cfg, tenant).Build()
+		r := newUsageLogsReconciler(t, s, cl, func(r *TenantReconciler) {
+			r.UsageLogsManifestPath = testUsageLogsManifestPath(t)
+		})
+
+		warning, err := r.ensureUsageLogsEnvoyFilter(context.Background(), ctrl.Log, tenant, tenantreconcile.PlatformContext{
+			GatewayRef: maasv1alpha1.TenantGatewayRef{Name: "redteam", Namespace: usageLogsTestGatewayNS},
+		}, cfg)
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(warning).To(BeEmpty())
+
+		ef := &unstructured.Unstructured{}
+		ef.SetGroupVersionKind(tenantreconcile.GVKEnvoyFilter)
+		g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: tenantreconcile.UsageLogsEnvoyFilterName("redteam"), Namespace: usageLogsTestGatewayNS}, ef)).
+			To(Succeed())
+
+		tenantName, err := usageLogsResourceAttribute(ef, "tenant_name")
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(tenantName).To(Equal("redteam"))
+		_, err = usageLogsResourceAttribute(ef, "cluster_id")
+		g.Expect(err).To(HaveOccurred())
+		g.Expect(err.Error()).To(ContainSubstring("cluster_id resource attribute not found"))
 	})
 
 	t.Run("applies over existing filter when usageLogging is false", func(t *testing.T) {

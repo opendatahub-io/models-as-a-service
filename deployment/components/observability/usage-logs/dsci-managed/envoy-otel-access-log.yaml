@@ -122,6 +122,11 @@ spec:
               metadata_namespace: envoy.filters.http.header_to_metadata
               key: subscription
               type: STRING
+          - header: X-MaaS-Subscription-Namespace
+            on_header_present:
+              metadata_namespace: envoy.filters.http.header_to_metadata
+              key: subscription_namespace
+              type: STRING
           - header: X-MaaS-Group
             on_header_present:
               metadata_namespace: envoy.filters.http.header_to_metadata
@@ -159,6 +164,11 @@ spec:
             on_header_present:
               metadata_namespace: envoy.filters.http.header_to_metadata
               key: subscription
+              type: STRING
+          - header: X-MaaS-Subscription-Namespace
+            on_header_present:
+              metadata_namespace: envoy.filters.http.header_to_metadata
+              key: subscription_namespace
               type: STRING
           - header: X-MaaS-Group
             on_header_present:
@@ -478,6 +488,9 @@ spec:
                 - key: subscription
                   value:
                     string_value: '%CEL("envoy.filters.http.header_to_metadata" in metadata.filter_metadata ? metadata.filter_metadata["envoy.filters.http.header_to_metadata"]["subscription"] : request.headers["x-maas-subscription"])%'
+                - key: subscription_namespace
+                  value:
+                    string_value: '%CEL("envoy.filters.http.header_to_metadata" in metadata.filter_metadata ? metadata.filter_metadata["envoy.filters.http.header_to_metadata"]["subscription_namespace"] : request.headers["x-maas-subscription-namespace"])%'
                 - key: groups
                   value:
                     string_value: '%CEL("envoy.filters.http.header_to_metadata" in metadata.filter_metadata ? metadata.filter_metadata["envoy.filters.http.header_to_metadata"]["groups"] : request.headers["x-maas-group"])%'
@@ -507,6 +520,8 @@ spec:
                     string_value: '%UPSTREAM_HOST%'
               resource_attributes:
                 values:
+                # tenant_name is always injected here by the tenant reconciler.
+                # cluster_id is injected here by the tenant reconciler when available and omitted on xKS.
                 - key: service.name
                   value:
                     string_value: models-as-a-service

@@ -90,6 +90,42 @@ func usageLogsServiceNamespaceOf(g *WithT, ef *unstructured.Unstructured, access
 	return "", false
 }
 
+func usageLogsResourceAttributeOf(g *WithT, ef *unstructured.Unstructured, key string) (string, bool) {
+	g.THelper()
+	configPatches, _, err := unstructured.NestedSlice(ef.Object, "spec", "configPatches")
+	g.Expect(err).NotTo(HaveOccurred())
+	for _, cp := range configPatches {
+		patch, ok := cp.(map[string]any)
+		if !ok {
+			continue
+		}
+		accessLog, _, err := unstructured.NestedSlice(patch, "patch", "value", "typed_config", "access_log")
+		g.Expect(err).NotTo(HaveOccurred())
+		for _, entry := range accessLog {
+			logEntry, ok := entry.(map[string]any)
+			if !ok {
+				continue
+			}
+			values, found, err := unstructured.NestedSlice(logEntry, "typed_config", "resource_attributes", "values")
+			g.Expect(err).NotTo(HaveOccurred())
+			if !found {
+				continue
+			}
+			for _, value := range values {
+				attr, ok := value.(map[string]any)
+				if !ok {
+					continue
+				}
+				if attrKey, _, _ := unstructured.NestedString(attr, "key"); attrKey == key {
+					attrValue, _, _ := unstructured.NestedString(attr, "value", "string_value")
+					return attrValue, true
+				}
+			}
+		}
+	}
+	return "", false
+}
+
 func otelAccessLogEntry(resourceAttributes []any) map[string]any {
 	entry := map[string]any{
 		"name":         "envoy.access_loggers.open_telemetry",
@@ -205,6 +241,42 @@ func TestPatchUsageLogsServiceNamespace(t *testing.T) {
 		err := PatchUsageLogsServiceNamespace(ef, "ai-tenant-redteam")
 		g.Expect(err).To(HaveOccurred())
 		g.Expect(err.Error()).To(ContainSubstring("access_log[0] is not an object"))
+	})
+}
+
+func TestPatchUsageLogsProducerScope(t *testing.T) {
+	t.Run("appends authoritative tenant and cluster attributes", func(t *testing.T) {
+		g := NewWithT(t)
+		ef := usageLogsEFWithAccessLog([]any{otelAccessLogEntry(nil)})
+
+		g.Expect(PatchUsageLogsProducerScope(ef, "redteam", "11111111-1111-1111-1111-111111111111")).To(Succeed())
+
+		tenantName, found := usageLogsResourceAttributeOf(g, ef, "tenant_name")
+		g.Expect(found).To(BeTrue())
+		g.Expect(tenantName).To(Equal("redteam"))
+		clusterID, found := usageLogsResourceAttributeOf(g, ef, "cluster_id")
+		g.Expect(found).To(BeTrue())
+		g.Expect(clusterID).To(Equal("11111111-1111-1111-1111-111111111111"))
+	})
+
+	t.Run("omits cluster attribution when cluster ID is unavailable", func(t *testing.T) {
+		g := NewWithT(t)
+		ef := usageLogsEFWithAccessLog([]any{otelAccessLogEntry(nil)})
+
+		g.Expect(PatchUsageLogsProducerScope(ef, "redteam", "")).To(Succeed())
+
+		tenantName, found := usageLogsResourceAttributeOf(g, ef, "tenant_name")
+		g.Expect(found).To(BeTrue())
+		g.Expect(tenantName).To(Equal("redteam"))
+		_, found = usageLogsResourceAttributeOf(g, ef, "cluster_id")
+		g.Expect(found).To(BeFalse())
+	})
+
+	t.Run("rejects an empty tenant name", func(t *testing.T) {
+		g := NewWithT(t)
+		ef := usageLogsEFWithAccessLog([]any{otelAccessLogEntry(nil)})
+
+		g.Expect(PatchUsageLogsProducerScope(ef, "", "11111111-1111-1111-1111-111111111111")).To(MatchError("tenant name must not be empty"))
 	})
 }
 
