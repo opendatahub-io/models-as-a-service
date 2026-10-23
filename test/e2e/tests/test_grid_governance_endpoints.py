@@ -525,7 +525,7 @@ class TestGridGovernanceIdentity:
             "https://redhat.com/maas/orgs",
         }
         assert identity["sub"]
-        assert identity["https://redhat.com/maas/orgs"] == []
+        assert identity.get("https://redhat.com/maas/orgs", []) == []
 
     def test_me_requires_verified_sso_identity(self, maas_api_base_url: str):
         response = _request_with_gateway_retry(

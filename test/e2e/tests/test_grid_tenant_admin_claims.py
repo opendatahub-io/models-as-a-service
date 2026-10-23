@@ -68,7 +68,7 @@ class TestGridTenantAdminClaims:
         assert all("/" in group for group in groups)
         assert all(group.split("/", 1)[0] in organization_ids for group in groups)
 
-    def test_grid_admin_without_model_access_gets_empty_model_list(
+    def test_grid_admin_without_private_model_access_sees_only_public_models(
         self, maas_api_base_url: str
     ):
         token = request_grid_token("grid_admin")
@@ -83,9 +83,11 @@ class TestGridTenantAdminClaims:
             f"GET /v1/models failed for Grid admin token: "
             f"{response.status_code} {response.text}"
         )
-        assert response.json()["data"] == []
+        models = response.json()["data"]
+        assert len(models) == 1
+        assert models[0]["owned_by"] == f"llm/{test_helper.MODEL_REF}"
 
-    def test_grid_no_org_user_gets_empty_subscription_list(
+    def test_grid_no_org_user_sees_only_public_subscription(
         self, maas_api_base_url: str
     ):
         token = request_grid_token("grid_no_org")
@@ -101,7 +103,10 @@ class TestGridTenantAdminClaims:
             f"{response.status_code} {response.text}"
         )
         assert response.headers.get("Cache-Control") == "no-store"
-        assert response.json() == []
+        subscriptions = response.json()
+        assert [
+            subscription["subscription_id_header"] for subscription in subscriptions
+        ] == [test_helper.SIMULATOR_SUBSCRIPTION]
 
     def test_tampered_grid_token_is_rejected(self, maas_api_base_url: str):
         token = request_grid_token("grid_admin") + "tampered"
