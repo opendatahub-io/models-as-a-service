@@ -1044,6 +1044,54 @@ func TestEnsureUsageLogs(t *testing.T) {
 		g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: "usage-collector-application-logs-write"}, gotCRB)).To(Succeed())
 		g.Expect(gotCRB.GetOwnerReferences()).To(BeEmpty())
 	})
+
+	t.Run("tenancy proxy serves TLS 1.3 with hybrid post-quantum key exchange", func(t *testing.T) {
+		g := NewWithT(t)
+		s := lifecycleTestScheme(t)
+
+		cfg := &maasv1alpha1.Config{
+			ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName, UID: types.UID("cfg-uid")},
+			Spec:       maasv1alpha1.ConfigSpec{UsageLogging: ptr.To(false)},
+		}
+		cl := newSSAFakeClientBuilder(s).WithStatusSubresource(&maasv1alpha1.Config{}).WithObjects(cfg).Build()
+		r := &LifecycleReconciler{
+			Client:                cl,
+			Scheme:                s,
+			MonitoringNamespace:   monitoringNS,
+			UsageLogsManifestPath: usageLogsPath,
+		}
+
+		g.Expect(r.ensureUsageLogs(context.Background(), ctrl.Log)).To(Succeed())
+
+		dep := &appsv1.Deployment{}
+		g.Expect(cl.Get(context.Background(), client.ObjectKey{
+			Name: usageLogsTenancyProxyDeploymentName, Namespace: monitoringNS,
+		}, dep)).To(Succeed())
+
+		var proxy *corev1.Container
+		for i := range dep.Spec.Template.Spec.Containers {
+			if dep.Spec.Template.Spec.Containers[i].Name == usageLogsTenancyProxyContainerName {
+				proxy = &dep.Spec.Template.Spec.Containers[i]
+			}
+		}
+		g.Expect(proxy).NotTo(BeNil(), "proxy container should exist")
+
+		openSSLConf := ""
+		for _, env := range proxy.Env {
+			if env.Name == "OPENSSL_CONF" {
+				openSSLConf = env.Value
+			}
+		}
+		g.Expect(openSSLConf).To(Equal("/opt/app-root/src/proxy/openssl.conf"))
+
+		cm := &corev1.ConfigMap{}
+		g.Expect(cl.Get(context.Background(), client.ObjectKey{
+			Name: "usage-tenancy-proxy-source", Namespace: monitoringNS,
+		}, cm)).To(Succeed())
+		g.Expect(cm.Data).To(HaveKey("openssl.conf"))
+		g.Expect(cm.Data["openssl.conf"]).To(ContainSubstring("X25519MLKEM768"))
+		g.Expect(cm.Data["main.py"]).To(ContainSubstring("TLSVersion.TLSv1_3"))
+	})
 }
 
 func expectUsageLogsOnlyResources(t *testing.T, g *WithT, cl client.Client, namespace string, want bool) {

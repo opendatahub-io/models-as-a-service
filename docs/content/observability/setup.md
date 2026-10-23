@@ -99,7 +99,7 @@ When tenant telemetry is enabled and `usageLogging` is `false` or omitted, `Maas
 
 - **EnvoyFilter** (`maas-model-access-logs`) - emits OTLP structured access logs from the gateway
 - **OpenTelemetry Collector** (`usage-logs-collector`) - collects the logs and exports them to Loki; deployed only when `usageLogging` is `true`
-- **Tenancy Proxy** (`usage-logs-tenancy-proxy`) - filters user-scoped usage data for non-admin users
+- **Tenancy Proxy** (`usage-logs-tenancy-proxy`) - filters user-scoped usage data for non-admin users; serves TLS 1.3 only and negotiates the `X25519MLKEM768` hybrid post-quantum key-exchange group when the client offers it, with classical groups as fallback (OpenSSL configuration in the `usage-tenancy-proxy-source` ConfigMap, selected via `OPENSSL_CONF`)
 - **Perses Dashboard** (`dashboard-4-maas-usage-logs-admin`) - usage dashboard for administrators (shows information on all users)
 - **Perses Dashboard** (`dashboard-5-maas-usage-logs`) - user-scoped usage dashboard
 

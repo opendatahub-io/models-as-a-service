@@ -331,6 +331,23 @@ class ProxyHandler(BaseHTTPRequestHandler):
             self.send_json_error("Bad gateway: upstream request failed", 502)
 
 
+def create_server_ssl_context(tls_cert_file, tls_key_file):
+    """Create the TLS context for the listener.
+
+    TLS 1.3 only. The group list, including the X25519MLKEM768 hybrid
+    post-quantum group, is controlled by the OpenSSL configuration pointed
+    to by OPENSSL_CONF (proxy/openssl.conf). Client certificates are not
+    verified: authentication is via bearer tokens validated by TokenReview.
+    """
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.minimum_version = ssl.TLSVersion.TLSv1_3
+    context.load_cert_chain(tls_cert_file, tls_key_file)
+    # Disable client cert verification - authentication is via bearer tokens
+    context.check_hostname = False
+    context.verify_mode = ssl.CERT_NONE
+    return context
+
+
 def initialize():
     """Initialize global configuration."""
     global loki_upstream, ssl_context, token_review_url, namespace
@@ -372,15 +389,11 @@ def main():
         sys.exit(1)
 
     server = ThreadingHTTPServer(("0.0.0.0", 8443), ProxyHandler)
+    server.socket = create_server_ssl_context(
+        tls_cert_file, tls_key_file
+    ).wrap_socket(server.socket, server_side=True)
 
-    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-    context.load_cert_chain(tls_cert_file, tls_key_file)
-    # Disable client cert verification - authentication is via bearer tokens
-    context.check_hostname = False
-    context.verify_mode = ssl.CERT_NONE
-    server.socket = context.wrap_socket(server.socket, server_side=True)
-
-    logger.info("Proxy listening on https://0.0.0.0:8443")
+    logger.info(f"Proxy listening on https://0.0.0.0:8443 ({ssl.OPENSSL_VERSION})")
 
     try:
         server.serve_forever()
