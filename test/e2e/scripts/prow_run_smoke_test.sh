@@ -38,7 +38,8 @@
 #   RHCL_STARTING_CSV - Optional RHCL operator startingCSV pin
 #   RHCL_NAMESPACE - RHCL/Kuadrant workload namespace (default: kuadrant-system)
 #   INSECURE_HTTP  - Deploy without TLS and use HTTP for tests (default: false)
-#   EXTERNAL_OIDC - Enable external OIDC e2e coverage (default: false)
+#   EXTERNAL_OIDC - Enable external OIDC e2e coverage (default: true). deploy.sh runs with
+#                   --external-oidc and --enable-keycloak; Keycloak test realms (tenant-a) are applied.
 #   OIDC_ISSUER_URL, OIDC_TOKEN_URL, OIDC_CLIENT_ID, OIDC_USERNAME, OIDC_PASSWORD
 #   OIDC_AUDIENCE, OIDC_ACCESS_TOKEN_PURPOSE_CLAIM, OIDC_ACCESS_TOKEN_PURPOSE - Optional strict
 #                   OIDC contract applied to the default AITenant by deploy.sh
@@ -76,7 +77,7 @@ SKIP_DEPLOYMENT=${SKIP_DEPLOYMENT:-false}
 SKIP_VALIDATION=${SKIP_VALIDATION:-false}
 SKIP_AUTH_CHECK=${SKIP_AUTH_CHECK:-true}
 INSECURE_HTTP=${INSECURE_HTTP:-false}
-EXTERNAL_OIDC=${EXTERNAL_OIDC:-false}
+EXTERNAL_OIDC=${EXTERNAL_OIDC:-true}
 
 export MAAS_API_IMAGE=${MAAS_API_IMAGE:-}
 export MAAS_CONTROLLER_IMAGE=${MAAS_CONTROLLER_IMAGE:-}
