@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func TestVerifiedIdentityHeaderRequiresStrictOIDCContract(t *testing.T) {
+func TestVerifiedIdentityHeaderRequiresCoreOIDCContract(t *testing.T) {
 	tests := []struct {
 		name string
 		oidc *oidcConfig
@@ -23,6 +23,35 @@ func TestVerifiedIdentityHeaderRequiresStrictOIDCContract(t *testing.T) {
 			Audience:                "maas-api",
 			AccessTokenPurposeClaim: "token_use",
 			AccessTokenPurpose:      "access",
+		}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			header := verifiedIdentityHeader(test.oidc, `!request.headers.authorization.startsWith("Bearer sk-oai-")`)
+			whenItems, ok := header["when"].([]any)
+			if !ok || len(whenItems) == 0 {
+				t.Fatalf("when conditions are missing: %#v", header)
+			}
+			when, ok := whenItems[0].(map[string]any)
+			if !ok {
+				t.Fatalf("first when condition is not an object: %#v", whenItems[0])
+			}
+			if when["predicate"] != "false" {
+				t.Fatalf("predicate = %v, want false", when["predicate"])
+			}
+		})
+	}
+}
+
+func TestVerifiedIdentityHeaderWithoutOptionalOIDCContract(t *testing.T) {
+	tests := []struct {
+		name string
+		oidc *oidcConfig
+	}{
+		{name: "legacy issuer and client only", oidc: &oidcConfig{
+			IssuerURL: "https://issuer.example.com",
+			ClientID:  "maas-client",
 		}},
 		{name: "missing audience", oidc: &oidcConfig{
 			IssuerURL:               "https://issuer.example.com",
@@ -48,8 +77,8 @@ func TestVerifiedIdentityHeaderRequiresStrictOIDCContract(t *testing.T) {
 			if !ok {
 				t.Fatalf("first when condition is not an object: %#v", whenItems[0])
 			}
-			if when["predicate"] != "false" {
-				t.Fatalf("predicate = %v, want false", when["predicate"])
+			if predicate, ok := when["predicate"].(string); !ok || predicate == "false" {
+				t.Fatalf("predicate = %v, want an enabled OIDC predicate", when["predicate"])
 			}
 		})
 	}
