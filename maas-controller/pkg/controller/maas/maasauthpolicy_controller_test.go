@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
+	corev1 "k8s.io/api/core/v1"
 	discv1 "k8s.io/api/discovery/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
@@ -144,7 +145,7 @@ func TestMaaSAuthPolicyReconciler_ManagedAnnotation(t *testing.T) {
 			c := fake.NewClientBuilder().
 				WithScheme(scheme).
 				WithRESTMapper(testRESTMapper()).
-				WithObjects(model, route, maasPolicy, existingAP, readyEndpoints, readyGatewayPolicy).
+				WithObjects(legacyNamespace(namespace), model, route, maasPolicy, existingAP, readyEndpoints, readyGatewayPolicy).
 				WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
 				Build()
 
@@ -208,7 +209,7 @@ func TestMaaSAuthPolicyReconciler_WaitsForTargetBeforeUpgradeCutover(t *testing.
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithRESTMapper(testRESTMapper()).
-		WithObjects(model, route, maasPolicy, legacyPolicy).
+		WithObjects(legacyNamespace(policyNS), model, route, maasPolicy, legacyPolicy).
 		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
 		Build()
 
@@ -474,7 +475,7 @@ func TestMaaSAuthPolicyReconciler_DuplicateReconciliation(t *testing.T) {
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithRESTMapper(testRESTMapper()).
-		WithObjects(model, route, policyA, policyB).
+		WithObjects(legacyNamespace(namespace), model, route, policyA, policyB).
 		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
 		Build()
 
@@ -625,7 +626,7 @@ func TestMaaSAuthPolicyReconciler_RemoveModelRef(t *testing.T) {
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithRESTMapper(testRESTMapper()).
-		WithObjects(modelRefA, modelRefB, routeA, routeB, maasPolicy).
+		WithObjects(legacyNamespace(namespace), modelRefA, modelRefB, routeA, routeB, maasPolicy).
 		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
 		Build()
 
@@ -724,7 +725,7 @@ func TestMaaSAuthPolicyReconciler_RemoveModelRef_Aggregation(t *testing.T) {
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithRESTMapper(testRESTMapper()).
-		WithObjects(modelRefA, modelRefB, routeA, routeB, ap1, ap2).
+		WithObjects(legacyNamespace(namespace), modelRefA, modelRefB, routeA, routeB, ap1, ap2).
 		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
 		Build()
 
@@ -852,7 +853,7 @@ func TestMaaSAuthPolicyReconciler_MultiplePoliciesDeletion(t *testing.T) {
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithRESTMapper(testRESTMapper()).
-		WithObjects(model, route, policy1, policy2).
+		WithObjects(legacyNamespace(policyNS), model, route, policy1, policy2).
 		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
 		Build()
 
@@ -940,6 +941,133 @@ func TestMaaSAuthPolicyReconciler_MultiplePoliciesDeletion(t *testing.T) {
 	}
 	if !strings.Contains(rego, "accessAllowed") {
 		t.Errorf("rego should reference accessAllowed from subscription-info metadata, got:\n%s", rego)
+	}
+}
+
+func TestMaaSAuthPolicyReconciler_EnsureBaseGatewayAuthPolicyDoesNotResolveGuardrails(t *testing.T) {
+	const (
+		gatewayNamespace = "openshift-ingress"
+		gatewayName      = "maas-default-gateway"
+		tenantNamespace  = "tenant-without-aitenant"
+	)
+
+	// A tenant config without its owning AITenant makes guardrail resolution fail closed.
+	// The empty default-deny policy must still be bootstrappable in this state.
+	tenantConfig := &maasv1alpha1.MaasTenantConfig{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      maasv1alpha1.MaasTenantConfigInstanceName,
+			Namespace: tenantNamespace,
+			Labels: map[string]string{
+				tenantreconcile.LabelManagedByAITenant: "true",
+			},
+		},
+	}
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(testRESTMapper()).
+		WithObjects(tenantConfig).
+		Build()
+	r := &MaaSAuthPolicyReconciler{
+		Client:           c,
+		Scheme:           scheme,
+		GatewayNamespace: gatewayNamespace,
+		GatewayName:      gatewayName,
+	}
+
+	if _, err := r.reconcileGatewayAuthPolicy(context.Background(), logr.Discard(), nil, false, tenantNamespace, "", gatewayNamespace, gatewayName); err == nil {
+		t.Fatal("reconcileGatewayAuthPolicy() error = nil, want guardrail resolution failure")
+	}
+	if err := r.ensureBaseGatewayAuthPolicy(context.Background(), logr.Discard(), nil, false, "", gatewayNamespace, gatewayName); err != nil {
+		t.Fatalf("ensureBaseGatewayAuthPolicy() error = %v", err)
+	}
+
+	policy := &unstructured.Unstructured{}
+	policy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
+	if err := c.Get(context.Background(), types.NamespacedName{Name: maasGatewayAuthPolicyName, Namespace: gatewayNamespace}, policy); err != nil {
+		t.Fatalf("Get base gateway AuthPolicy: %v", err)
+	}
+
+	authorizationRules := nestedMapRequired(t, policy, "spec", "defaults", "rules", "authorization")
+	if _, exists := authorizationRules["guardrail-checks-known"]; exists {
+		t.Fatal("base gateway AuthPolicy must not include the guardrail catalog validation rule")
+	}
+	successHeaders := nestedMapRequired(t, policy, "spec", "defaults", "rules", "response", "success", "headers")
+	for name := range successHeaders {
+		if strings.HasPrefix(strings.ToLower(name), "x-aigateway-guardrail-") {
+			t.Fatalf("base gateway AuthPolicy must not include guardrail response header %q", name)
+		}
+	}
+}
+
+func TestMaaSAuthPolicyReconciler_LastPolicyDeletionDoesNotResolveGuardrails(t *testing.T) {
+	const (
+		gatewayNamespace = "openshift-ingress"
+		gatewayName      = "maas-default-gateway"
+		tenantNamespace  = "tenant-without-aitenant"
+		policyName       = "last-policy"
+	)
+
+	// A tenant config without its owning AITenant makes normal guardrail resolution fail.
+	// Deleting the last policy must still reset to the empty base policy and remove its finalizer.
+	tenantConfig := &maasv1alpha1.MaasTenantConfig{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      maasv1alpha1.MaasTenantConfigInstanceName,
+			Namespace: tenantNamespace,
+		},
+	}
+	policy := &maasv1alpha1.MaaSAuthPolicy{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       policyName,
+			Namespace:  tenantNamespace,
+			Finalizers: []string{maasAuthPolicyFinalizer},
+		},
+	}
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(testRESTMapper()).
+		WithObjects(tenantConfig, policy).
+		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
+		Build()
+	r := &MaaSAuthPolicyReconciler{
+		Client:           c,
+		Scheme:           scheme,
+		GatewayNamespace: gatewayNamespace,
+		GatewayName:      gatewayName,
+		TenantNamespace:  tenantNamespace,
+	}
+	// Simulate the guardrail catalog created before this was the last policy.
+	if _, err := r.reconcileGatewayAuthPolicyWithHeaders(context.Background(), logr.Discard(), nil, false, "", gatewayNamespace, gatewayName, []guardrailHeader{{
+		ID:   "check-a",
+		Name: "x-aigateway-guardrail-check-a",
+	}}); err != nil {
+		t.Fatalf("create gateway AuthPolicy with guardrail catalog: %v", err)
+	}
+
+	if err := c.Delete(context.Background(), policy); err != nil {
+		t.Fatalf("Delete MaaSAuthPolicy: %v", err)
+	}
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: policyName, Namespace: tenantNamespace}}); err != nil {
+		t.Fatalf("Reconcile deleted MaaSAuthPolicy: %v", err)
+	}
+
+	deleted := &maasv1alpha1.MaaSAuthPolicy{}
+	if err := c.Get(context.Background(), types.NamespacedName{Name: policyName, Namespace: tenantNamespace}, deleted); !apierrors.IsNotFound(err) {
+		t.Fatalf("deleted MaaSAuthPolicy still exists: %v", err)
+	}
+	base := &unstructured.Unstructured{}
+	base.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
+	if err := c.Get(context.Background(), types.NamespacedName{Name: maasGatewayAuthPolicyName, Namespace: gatewayNamespace}, base); err != nil {
+		t.Fatalf("Get base gateway AuthPolicy: %v", err)
+	}
+	authorizationRules := nestedMapRequired(t, base, "spec", "defaults", "rules", "authorization")
+	if _, exists := authorizationRules["guardrail-checks-known"]; exists {
+		t.Fatal("base gateway AuthPolicy retained the guardrail catalog validation rule")
+	}
+	successHeaders := nestedMapRequired(t, base, "spec", "defaults", "rules", "response", "success", "headers")
+	for name := range successHeaders {
+		if strings.HasPrefix(strings.ToLower(name), "x-aigateway-guardrail-") {
+			t.Fatalf("base gateway AuthPolicy retained guardrail response header %q", name)
+		}
 	}
 }
 
@@ -1148,7 +1276,7 @@ func TestMaaSAuthPolicyReconciler_CachingConfiguration(t *testing.T) {
 			c := fake.NewClientBuilder().
 				WithScheme(scheme).
 				WithRESTMapper(testRESTMapper()).
-				WithObjects(model, route, maasPolicy).
+				WithObjects(legacyNamespace(namespace), model, route, maasPolicy).
 				WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
 				Build()
 
@@ -1337,7 +1465,7 @@ func TestMaaSAuthPolicyReconciler_CacheKeyIsolation(t *testing.T) {
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithRESTMapper(testRESTMapper()).
-		WithObjects(model, route, maasPolicy).
+		WithObjects(legacyNamespace(namespace), model, route, maasPolicy).
 		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
 		Build()
 
@@ -1457,7 +1585,7 @@ func TestMaaSAuthPolicyReconciler_CacheKeyModelIsolation(t *testing.T) {
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithRESTMapper(testRESTMapper()).
-		WithObjects(model1, route1, policy1, model2, route2, policy2).
+		WithObjects(legacyNamespace(namespace), model1, route1, policy1, model2, route2, policy2).
 		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
 		Build()
 
@@ -1551,7 +1679,7 @@ func TestMaaSAuthPolicyReconciler_IdentityHeadersUpstream(t *testing.T) {
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithRESTMapper(testRESTMapper()).
-		WithObjects(model, route, maasPolicy).
+		WithObjects(legacyNamespace(namespace), model, route, maasPolicy).
 		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
 		Build()
 
@@ -1750,7 +1878,7 @@ func gatewayAuthPolicySpecTestObject(t *testing.T, oidc *oidcConfig) *unstructur
 		MetadataCacheTTL: 60,
 		AuthzCacheTTL:    60,
 	}
-	spec := r.buildGatewayAuthPolicySpec(oidc, false, "", "models-as-a-service", "test-gateway-ns", "test-gateway")
+	spec := r.buildGatewayAuthPolicySpec(oidc, false, "", "models-as-a-service", "test-gateway-ns", "test-gateway", nil)
 	return &unstructured.Unstructured{Object: map[string]any{"spec": spec}}
 }
 
@@ -1902,7 +2030,7 @@ func TestBuildGatewayAuthPolicySpec_DenyClientIdentityHeaders(t *testing.T) {
 		"spec", "defaults", "rules", "authorization", "deny-client-identity-headers", "patternMatching", "patterns",
 	)
 
-	if err != nil || !found || len(patterns) != 8 {
+	if err != nil || !found || len(patterns) != 9 {
 		t.Fatalf("deny-client-identity-headers patterns missing: found=%v len=%d err=%v", found, len(patterns), err)
 	}
 
@@ -1928,6 +2056,7 @@ func TestBuildGatewayAuthPolicySpec_DenyClientIdentityHeaders(t *testing.T) {
 		`!("x-maas-cost-center" in request.headers)`,
 		`!("x-maas-identity" in request.headers)`,
 		`!("x-maas-admin-scope" in request.headers)`,
+		`request.headers.all(name, !name.startsWith("x-aigateway-guardrail-"))`,
 	}
 	if len(got) != len(want) {
 		t.Fatalf("deny-client-identity-headers predicates = %#v, want %#v", got, want)
@@ -2019,7 +2148,7 @@ func TestBuildGatewayAuthPolicySpec_DenyAPIKeyManagement(t *testing.T) {
 			MetadataCacheTTL: 60,
 			AuthzCacheTTL:    60,
 		}
-		spec := r.buildGatewayAuthPolicySpec(nil, true, "", "models-as-a-service", "test-gateway-ns", "test-gateway")
+		spec := r.buildGatewayAuthPolicySpec(nil, true, "", "models-as-a-service", "test-gateway-ns", "test-gateway", nil)
 		enabledObj := &unstructured.Unstructured{Object: map[string]any{"spec": spec}}
 		when, found, err := unstructured.NestedSlice(enabledObj.Object,
 			"spec", "defaults", "rules", "authorization", "deny-api-key-management", "when")
@@ -2133,7 +2262,7 @@ func TestBuildGatewayAuthPolicySpec_XAPIKeyEnabled(t *testing.T) {
 		AuthzCacheTTL:    60,
 	}
 
-	spec := r.buildGatewayAuthPolicySpec(nil, true, "", "models-as-a-service", "gateway-ns", "maas-default-gateway")
+	spec := r.buildGatewayAuthPolicySpec(nil, true, "", "models-as-a-service", "gateway-ns", "maas-default-gateway", nil)
 	obj := &unstructured.Unstructured{Object: map[string]any{"spec": spec}}
 
 	auth, found, err := unstructured.NestedMap(obj.Object, "spec", "defaults", "rules", "authentication")
@@ -2230,7 +2359,7 @@ func TestBuildGatewayAuthPolicySpec_OIDCJWKsTTL(t *testing.T) {
 				ClientID:  "maas-client",
 				TTL:       tc.ttl,
 			}
-			spec := r.buildGatewayAuthPolicySpec(oidc, false, "", "models-as-a-service", "test-gateway-ns", "test-gateway")
+			spec := r.buildGatewayAuthPolicySpec(oidc, false, "", "models-as-a-service", "test-gateway-ns", "test-gateway", nil)
 			obj := &unstructured.Unstructured{Object: map[string]any{"spec": spec}}
 
 			gotTTL, found, err := unstructured.NestedInt64(obj.Object, "spec", "defaults", "rules", "authentication", "oidc-identities", "jwt", "ttl")
@@ -2397,7 +2526,7 @@ func TestMaaSAuthPolicyReconciler_MissingModelRef_FailedPhase(t *testing.T) {
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithRESTMapper(testRESTMapper()).
-		WithObjects(maasAuth, newReadyGatewayAuthPolicy(gatewayNS, maasGatewayAuthPolicyName)).
+		WithObjects(legacyNamespace(namespace), maasAuth, newReadyGatewayAuthPolicy(gatewayNS, maasGatewayAuthPolicyName)).
 		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
 		Build()
 
@@ -2457,7 +2586,7 @@ func TestMaaSAuthPolicyReconciler_PartialModelRefs_DegradedPhase(t *testing.T) {
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithRESTMapper(testRESTMapper()).
-		WithObjects(model, route, maasAuth, newReadyGatewayAuthPolicy(gatewayNS, maasGatewayAuthPolicyName)).
+		WithObjects(legacyNamespace(namespace), model, route, maasAuth, newReadyGatewayAuthPolicy(gatewayNS, maasGatewayAuthPolicyName)).
 		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
 		Build()
 
@@ -2534,6 +2663,7 @@ func TestMaaSAuthPolicyReconciler_AllValidModelRefs_ActivePhase(t *testing.T) {
 		WithScheme(scheme).
 		WithRESTMapper(testRESTMapper()).
 		WithObjects(
+			legacyNamespace(namespace),
 			model,
 			route,
 			maasAuth,
@@ -2650,7 +2780,7 @@ func TestMaaSAuthPolicyReconciler_CanonicalModelIDNormalization(t *testing.T) {
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithRESTMapper(testRESTMapper()).
-		WithObjects(model, route, maasPolicy).
+		WithObjects(legacyNamespace(namespace), model, route, maasPolicy).
 		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
 		Build()
 
@@ -2721,7 +2851,7 @@ func TestMaaSAuthPolicyReconciler_PublisherIDModelAccess(t *testing.T) {
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithRESTMapper(testRESTMapper()).
-		WithObjects(modelRef, route, maasPolicy).
+		WithObjects(legacyNamespace(namespace), modelRef, route, maasPolicy).
 		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
 		Build()
 
@@ -2916,7 +3046,7 @@ func TestMapIPPExternalModelToMaaSAuthPolicies(t *testing.T) {
 			MetadataCacheTTL: 60,
 			AuthzCacheTTL:    60,
 		}
-		baseSpec := r.buildGatewayAuthPolicySpec(nil, false, "", "models-as-a-service", gatewayNS, "maas-default-gateway")
+		baseSpec := r.buildGatewayAuthPolicySpec(nil, false, "", "models-as-a-service", gatewayNS, "maas-default-gateway", nil)
 		gwPolicy := &unstructured.Unstructured{Object: map[string]any{
 			"apiVersion": "kuadrant.io/v1",
 			"kind":       "AuthPolicy",
@@ -2972,6 +3102,88 @@ func TestMapIPPExternalModelToMaaSAuthPolicies(t *testing.T) {
 			t.Fatal("expected api-keys-x-api-key identity after IPP ExternalModel sync")
 		}
 	})
+}
+
+func TestMapMaaSModelRefToMaaSAuthPolicies(t *testing.T) {
+	const tenantNamespace = "tenant-a"
+	model := newMaaSModelRef("qwen3", "models", "ExternalModel", "qwen3")
+	matching := newMaaSAuthPolicy("matching", tenantNamespace, "team-a",
+		maasv1alpha1.ModelRef{Name: "qwen3", Namespace: "models"})
+	differentNamespace := newMaaSAuthPolicy("different-namespace", tenantNamespace, "team-a",
+		maasv1alpha1.ModelRef{Name: "qwen3", Namespace: "other-models"})
+	differentModel := newMaaSAuthPolicy("different-model", tenantNamespace, "team-a",
+		maasv1alpha1.ModelRef{Name: "llama", Namespace: "models"})
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(matching, differentNamespace, differentModel).
+		Build()
+	r := &MaaSAuthPolicyReconciler{Client: c, TenantNamespace: tenantNamespace}
+
+	requests := r.mapMaaSModelRefToMaaSAuthPolicies(context.Background(), model)
+	if len(requests) != 1 {
+		t.Fatalf("reconcile requests = %v, want one", requests)
+	}
+	if got := requests[0].NamespacedName; got.Name != matching.Name || got.Namespace != matching.Namespace {
+		t.Errorf("reconcile request = %s, want %s/%s", got, matching.Namespace, matching.Name)
+	}
+}
+
+func TestMapMaaSModelRefToMaaSAuthPolicies_IncludesSubscriptionReferences(t *testing.T) {
+	model := newMaaSModelRef("qwen3", "models", "ExternalModel", "qwen3")
+	direct := newMaaSAuthPolicy("direct", "tenant-a", "team-a", maasv1alpha1.ModelRef{Name: "qwen3", Namespace: "models"})
+	indirect := newMaaSAuthPolicy("indirect", "tenant-b", "team-b", maasv1alpha1.ModelRef{Name: "llama", Namespace: "models"})
+	unrelated := newMaaSAuthPolicy("unrelated", "tenant-c", "team-c", maasv1alpha1.ModelRef{Name: "qwen3", Namespace: "other-models"})
+	subscriptions := []*maasv1alpha1.MaaSSubscription{
+		{ObjectMeta: metav1.ObjectMeta{Name: "a", Namespace: "tenant-a"}, Spec: maasv1alpha1.MaaSSubscriptionSpec{ModelRefs: []maasv1alpha1.ModelSubscriptionRef{{Name: "qwen3", Namespace: "models"}}}},
+		{ObjectMeta: metav1.ObjectMeta{Name: "b", Namespace: "tenant-b"}, Spec: maasv1alpha1.MaaSSubscriptionSpec{ModelRefs: []maasv1alpha1.ModelSubscriptionRef{{Name: "qwen3", Namespace: "models"}}}},
+		{ObjectMeta: metav1.ObjectMeta{Name: "c", Namespace: "tenant-c"}, Spec: maasv1alpha1.MaaSSubscriptionSpec{ModelRefs: []maasv1alpha1.ModelSubscriptionRef{{Name: "qwen3", Namespace: "other-models"}}}},
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(
+		direct, indirect, unrelated,
+		legacyNamespace("tenant-a"),
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "tenant-b", Labels: map[string]string{tenantreconcile.LabelManagedByAITenant: "true"}}},
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "tenant-c", Labels: map[string]string{tenantreconcile.LabelManagedByAITenant: "true"}}},
+		subscriptions[0], subscriptions[1], subscriptions[2],
+	).Build()
+	r := &MaaSAuthPolicyReconciler{Client: c, TenantNamespace: "tenant-a", TenantNamespaceDiscoveryEnabled: true}
+
+	requests := r.mapMaaSModelRefToMaaSAuthPolicies(context.Background(), model)
+	want := map[types.NamespacedName]bool{
+		{Namespace: "tenant-a", Name: "direct"}:   true,
+		{Namespace: "tenant-b", Name: "indirect"}: true,
+	}
+	if len(requests) != len(want) {
+		t.Fatalf("reconcile requests = %v, want %v", requests, want)
+	}
+	for _, req := range requests {
+		if !want[req.NamespacedName] {
+			t.Fatalf("unexpected reconcile request: %v", req)
+		}
+		delete(want, req.NamespacedName)
+	}
+	if len(want) != 0 {
+		t.Fatalf("missing reconcile requests: %v", want)
+	}
+}
+
+func TestMapMaaSModelRefToMaaSAuthPolicies_PreservesDirectReferencesWhenSubscriptionLookupFails(t *testing.T) {
+	model := newMaaSModelRef("qwen3", "models", "ExternalModel", "qwen3")
+	direct := newMaaSAuthPolicy("direct", "tenant-a", "team-a", maasv1alpha1.ModelRef{Name: "qwen3", Namespace: "models"})
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(direct).WithInterceptorFuncs(interceptor.Funcs{
+		List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+			if _, ok := list.(*maasv1alpha1.MaaSSubscriptionList); ok {
+				return errors.New("subscription list unavailable")
+			}
+			return c.List(ctx, list, opts...)
+		},
+	}).Build()
+	r := &MaaSAuthPolicyReconciler{Client: c, TenantNamespace: "tenant-a"}
+
+	requests := r.mapMaaSModelRefToMaaSAuthPolicies(context.Background(), model)
+	if len(requests) != 1 || requests[0].NamespacedName != (types.NamespacedName{Namespace: "tenant-a", Name: "direct"}) {
+		t.Fatalf("reconcile requests = %v, want direct policy", requests)
+	}
 }
 
 func TestAPIKeyCELPredicates(t *testing.T) {
@@ -3079,7 +3291,7 @@ func TestMaaSAuthPolicyReconciler_TenantGateway_OwnerReference(t *testing.T) {
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithRESTMapper(testRESTMapper()).
-		WithObjects(model, route, maasPolicy, tenant, gateway).
+		WithObjects(legacyNamespace(policyNS), model, route, maasPolicy, tenant, gateway).
 		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
 		Build()
 
@@ -3165,7 +3377,7 @@ func TestMaaSAuthPolicyReconciler_DefaultGateway_OwnerReference(t *testing.T) {
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithRESTMapper(testRESTMapper()).
-		WithObjects(model, route, maasPolicy, gateway).
+		WithObjects(legacyNamespace(namespace), model, route, maasPolicy, gateway).
 		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
 		Build()
 
@@ -3253,7 +3465,7 @@ func TestMaaSAuthPolicyReconciler_TenantGateway_StaleCleanup(t *testing.T) {
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithRESTMapper(testRESTMapper()).
-		WithObjects(model, route, maasPolicy, tenant, staleAP).
+		WithObjects(legacyNamespace(policyNS), model, route, maasPolicy, tenant, staleAP).
 		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
 		Build()
 
@@ -3337,7 +3549,7 @@ func TestMaaSAuthPolicyReconciler_TenantGateway_StaleCleanup_UnmanagedPreserved(
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithRESTMapper(testRESTMapper()).
-		WithObjects(model, route, maasPolicy, tenant, staleAP).
+		WithObjects(legacyNamespace(policyNS), model, route, maasPolicy, tenant, staleAP).
 		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
 		Build()
 
@@ -3382,7 +3594,7 @@ func TestMaaSAuthPolicyReconciler_RequeuesUntilEnforcedAfterUpdate(t *testing.T)
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithRESTMapper(testRESTMapper()).
-		WithObjects(model, route, maasPolicy).
+		WithObjects(legacyNamespace(namespace), model, route, maasPolicy).
 		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
 		Build()
 
@@ -3472,7 +3684,7 @@ func TestMaaSAuthPolicyReconciler_NoRequeueWhenUnchanged(t *testing.T) {
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithRESTMapper(testRESTMapper()).
-		WithObjects(model, route, maasPolicy, readyGatewayPolicy).
+		WithObjects(legacyNamespace(namespace), model, route, maasPolicy, readyGatewayPolicy).
 		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
 		Build()
 
@@ -3524,7 +3736,7 @@ func TestMaaSAuthPolicyReconciler_StatusConflictRequeues(t *testing.T) {
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithRESTMapper(testRESTMapper()).
-		WithObjects(model, route, maasPolicy, newReadyGatewayAuthPolicy(gatewayNS, maasGatewayAuthPolicyName)).
+		WithObjects(legacyNamespace(namespace), model, route, maasPolicy, newReadyGatewayAuthPolicy(gatewayNS, maasGatewayAuthPolicyName)).
 		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
 		WithInterceptorFuncs(interceptor.Funcs{
 			SubResourceUpdate: func(ctx context.Context, cl client.Client, subResource string, obj client.Object, opts ...client.SubResourceUpdateOption) error {
@@ -3603,10 +3815,11 @@ func TestMaaSAuthPolicyReconciler_StatusWriteFailureReturned(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			statusErr := apierrors.NewConflict(schema.GroupResource{Group: "maas.opendatahub.io", Resource: "maasauthpolicies"}, "policy-a", errors.New("stale resource version"))
+			objects := append(tt.objects(), legacyNamespace(namespace))
 			c := fake.NewClientBuilder().
 				WithScheme(scheme).
 				WithRESTMapper(testRESTMapper()).
-				WithObjects(tt.objects()...).
+				WithObjects(objects...).
 				WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
 				WithInterceptorFuncs(failStatusUpdates(statusErr)).
 				Build()

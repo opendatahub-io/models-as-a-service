@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
+	aigatewayv1alpha1 "github.com/opendatahub-io/ai-gateway-controller/api/aigateway/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
 	discv1 "k8s.io/api/discovery/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
@@ -99,6 +100,9 @@ type MaaSAuthPolicyReconciler struct {
 	// ippGatewaySyncQueue retries default-gateway x-api-key sync when an IPP ExternalModel
 	// event cannot be applied inline (transient API errors or empty MaaSAuthPolicy list).
 	ippGatewaySyncQueue workqueue.TypedRateLimitingInterface[struct{}]
+
+	// enqueueGuardrailPolicy is connected before controller workers start.
+	enqueueGuardrailPolicy func(reconcile.Request)
 }
 
 // oidcConfig holds resolved OIDC configuration from AITenant or a legacy Tenant CR.
@@ -503,6 +507,7 @@ func subscriptionGatewayCacheKeySelector() string {
 //+kubebuilder:rbac:groups=discovery.k8s.io,resources=endpointslices,verbs=list;watch
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=maastenantconfigs,verbs=get;list;watch
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=tenants,verbs=get;list;watch
+//+kubebuilder:rbac:groups=aigateway.opendatahub.io,resources=aiguardrails,verbs=get;list;watch
 //+kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 //+kubebuilder:rbac:groups=inference.opendatahub.io,resources=externalmodels,verbs=list;watch
 
@@ -510,6 +515,9 @@ func subscriptionGatewayCacheKeySelector() string {
 const maasAuthPolicyFinalizer = "maas.opendatahub.io/authpolicy-cleanup"
 
 func (r *MaaSAuthPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	if req == guardrailPropagationRequest {
+		return ctrl.Result{}, r.propagateGuardrailChange(ctx)
+	}
 	log := logr.FromContextOrDiscard(ctx).WithValues("MaaSAuthPolicy", req.NamespacedName)
 
 	policy := &maasv1alpha1.MaaSAuthPolicy{}
@@ -612,7 +620,7 @@ func (r *MaaSAuthPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		}
 	}
 
-	gwChanged, reconcileErr := r.reconcileGatewayAuthPolicy(ctx, log, oidc, xAPIKeyEnabled, tenantID, gatewayNs, gatewayName)
+	gwChanged, reconcileErr := r.reconcileGatewayAuthPolicy(ctx, log, oidc, xAPIKeyEnabled, req.Namespace, tenantID, gatewayNs, gatewayName)
 	if reconcileErr != nil {
 		log.Error(reconcileErr, "failed to reconcile gateway AuthPolicy")
 		return r.reconcileFailed(ctx, log, policy, fmt.Sprintf("Failed to reconcile gateway AuthPolicy: %v", reconcileErr), statusSnapshot, reconcileErr)
@@ -768,10 +776,10 @@ func subscriptionInfoStringHeader(jsonField string) map[string]any {
 	}
 }
 
-// buildGatewayAuthPolicySpec returns the Authorino AuthPolicy spec for the singleton
-// Gateway-level policy. Model identity is resolved dynamically via CEL on every request
-// rather than being baked in per-model, so this spec is the same for all MaaSAuthPolicy CRs.
-func (r *MaaSAuthPolicyReconciler) buildGatewayAuthPolicySpec(oidc *oidcConfig, xAPIKeyEnabled bool, tenantID, tenantName, gatewayNamespace, gatewayName string) map[string]any {
+// buildGatewayAuthPolicySpec returns the Authorino AuthPolicy spec for a singleton
+// Gateway-level policy. Model identity is resolved dynamically via CEL on every request.
+// Guardrail response headers are the tenant catalog's selectable checks.
+func (r *MaaSAuthPolicyReconciler) buildGatewayAuthPolicySpec(oidc *oidcConfig, xAPIKeyEnabled bool, tenantID, tenantName, gatewayNamespace, gatewayName string, guardrailHeaders []guardrailHeader) map[string]any {
 	// Construct tenant-specific maas-api service name using TenantIdentifier
 	// Default tenant (tenantID="") uses "maas-api", others use "maas-api-{tenantID}"
 	maasAPIServiceName := "maas-api"
@@ -863,7 +871,6 @@ func (r *MaaSAuthPolicyReconciler) buildGatewayAuthPolicySpec(oidc *oidcConfig, 
 			"priority": int64(1),
 		}
 	}
-
 	authValidCacheKey := `"api-key|" + (` + celExtractKey + `) + "|" + ` + celModelIdentity
 
 	requireGroupMembershipRego := `allow {
@@ -919,6 +926,10 @@ func (r *MaaSAuthPolicyReconciler) buildGatewayAuthPolicySpec(oidc *oidcConfig, 
 					},
 					map[string]any{
 						"predicate": `!("x-maas-admin-scope" in request.headers)`,
+					},
+					map[string]any{
+						// Envoy normalizes HTTP header names to lowercase before Authorino evaluates CEL.
+						"predicate": `request.headers.all(name, !name.startsWith("x-aigateway-guardrail-"))`,
 					},
 				},
 			},
@@ -984,6 +995,21 @@ allow {
 				"ttl": r.authzCacheTTL(),
 			},
 		},
+	}
+	// A non-nil catalog is validated even when it has no checks. An empty
+	// catalog permits only an empty selectedGuardrailChecks map. Nil is used by
+	// the base default-deny policy, which does not consume subscription selection.
+	if guardrailHeaders != nil {
+		authorizationRules["guardrail-checks-known"] = map[string]any{
+			"when": []any{
+				map[string]any{"predicate": celModelIdentityAvailable},
+			},
+			"metrics":  false,
+			"priority": int64(0),
+			"opa": map[string]any{
+				"rego": selectedGuardrailChecksRego(guardrailHeaders),
+			},
+		}
 	}
 	if oidc != nil {
 		authorizationRules["oidc-groups-safe"] = map[string]any{
@@ -1292,6 +1318,11 @@ allow {
 		},
 	}
 
+	successHeaders := requiredMap(defaultsRules, "response", "success", "headers")
+	for _, header := range guardrailHeaders {
+		successHeaders[header.Name] = selectedGuardrailHeader(header.ID)
+	}
+
 	return map[string]any{
 		"targetRef": map[string]any{
 			"group": "gateway.networking.k8s.io",
@@ -1314,6 +1345,18 @@ allow {
 	}
 }
 
+func requiredMap(value map[string]any, fields ...string) map[string]any {
+	current := value
+	for _, field := range fields {
+		next, ok := current[field].(map[string]any)
+		if !ok {
+			panic(fmt.Sprintf("AuthPolicy template field %q is not a map", field))
+		}
+		current = next
+	}
+	return current
+}
+
 // subscriptionInfoHeader is a success response header set from a subscription-info field, or
 // to an empty value when the field is absent. The expression never fails: subscription-info is
 // not fetched for every request, and a failing header drops the others in its priority group.
@@ -1323,6 +1366,42 @@ func subscriptionInfoHeader(field string) map[string]any {
 		"metrics":  false,
 		"priority": int64(0),
 	}
+}
+
+func selectedGuardrailHeader(checkID string) map[string]any {
+	selected := `auth.metadata["subscription-info"].selectedGuardrailChecks`
+	return map[string]any{
+		"when": []any{
+			map[string]any{"predicate": celModelIdentityAvailable},
+		},
+		"plain": map[string]any{
+			"expression": fmt.Sprintf(`(has(%s) && %q in %s && %s[%q] == true) ? "true" : "false"`, selected, checkID, selected, selected, checkID),
+		},
+		"metrics":  false,
+		"priority": int64(0),
+	}
+}
+
+// selectedGuardrailChecksRego rejects selection results with unknown checks.
+func selectedGuardrailChecksRego(headers []guardrailHeader) string {
+	ids := make([]string, 0, len(headers))
+	for _, header := range headers {
+		ids = append(ids, header.ID)
+	}
+	encodedIDs, err := json.Marshal(ids)
+	if err != nil {
+		panic(fmt.Sprintf("marshal guardrail check IDs: %v", err))
+	}
+	return fmt.Sprintf(`import future.keywords.every
+
+allow {
+  selected := object.get(input.auth.metadata["subscription-info"], "selectedGuardrailChecks", null)
+  selected != null
+  every id, value in selected {
+    id in %s
+    value == true
+  }
+}`+"\n", encodedIDs)
 }
 
 // subscriptionInfoFieldExpr is a CEL expression for a subscription-info field, or "" when absent.
@@ -1410,6 +1489,30 @@ func specMatchesDesired(desired, current map[string]any) bool {
 	return reflect.DeepEqual(desiredNorm, currentNorm)
 }
 
+// basePolicyHasStaleGuardrailFields reports whether a base policy would leave
+// controller-owned guardrail fields behind. specMatchesDesired intentionally
+// ignores current-only fields so Kuadrant defaults do not cause update loops,
+// but that behaviour must not retain a removed guardrail catalog.
+func basePolicyHasStaleGuardrailFields(current map[string]any) bool {
+	authorization, found, err := unstructured.NestedMap(current, "defaults", "rules", "authorization")
+	if err == nil && found {
+		if _, exists := authorization["guardrail-checks-known"]; exists {
+			return true
+		}
+	}
+
+	headers, found, err := unstructured.NestedMap(current, "defaults", "rules", "response", "success", "headers")
+	if err != nil || !found {
+		return false
+	}
+	for name := range headers {
+		if strings.HasPrefix(strings.ToLower(name), "x-aigateway-guardrail-") {
+			return true
+		}
+	}
+	return false
+}
+
 // stripExtraFields recursively removes keys from current that do not exist
 // in desired, so that server-added defaults do not cause false mismatches.
 func stripExtraFields(current, desired map[string]any) {
@@ -1478,18 +1581,31 @@ func isEmptyCollection(v any) bool {
 // the gateway namespace. All MaaSAuthPolicy reconciliations converge on this one resource.
 func (r *MaaSAuthPolicyReconciler) reconcileGatewayAuthPolicy(
 	ctx context.Context, log logr.Logger,
-	oidc *oidcConfig, xAPIKeyEnabled bool, tenantID, gatewayNamespace, gatewayName string,
+	oidc *oidcConfig, xAPIKeyEnabled bool, tenantNamespace, tenantID, gatewayNamespace, gatewayName string,
+) (bool, error) {
+	headers, err := r.guardrailHeaders(ctx, tenantNamespace)
+	if err != nil {
+		return false, err
+	}
+	return r.reconcileGatewayAuthPolicyWithHeaders(ctx, log, oidc, xAPIKeyEnabled, tenantID, gatewayNamespace, gatewayName, headers)
+}
+
+// reconcileGatewayAuthPolicyWithHeaders creates or updates the singleton Gateway-level
+// AuthPolicy using an already resolved guardrail catalog. Callers that establish the base
+// default-deny policy pass no headers and do not depend on guardrail resolution.
+func (r *MaaSAuthPolicyReconciler) reconcileGatewayAuthPolicyWithHeaders(
+	ctx context.Context, log logr.Logger,
+	oidc *oidcConfig, xAPIKeyEnabled bool, tenantID, gatewayNamespace, gatewayName string, guardrailHeaders []guardrailHeader,
 ) (bool, error) {
 	log.Info("reconcileGatewayAuthPolicy entered", "gatewayNamespace", gatewayNamespace, "gatewayName", gatewayName, "tenantID", tenantID, "xAPIKeyEnabled", xAPIKeyEnabled)
 
-	// Calculate tenantName from tenantID
-	// Default tenant (tenantID="") uses "models-as-a-service", others use tenantID
+	// Default tenant (tenantID="") uses "models-as-a-service", others use tenantID.
 	tenantName := "models-as-a-service"
 	if tenantID != "" {
 		tenantName = tenantID
 	}
 
-	spec := r.buildGatewayAuthPolicySpec(oidc, xAPIKeyEnabled, tenantID, tenantName, gatewayNamespace, gatewayName)
+	spec := r.buildGatewayAuthPolicySpec(oidc, xAPIKeyEnabled, tenantID, tenantName, gatewayNamespace, gatewayName, guardrailHeaders)
 	authPolicyName := r.gatewayAuthPolicyName(gatewayNamespace, gatewayName)
 	isTenantGateway := gatewayNamespace != r.GatewayNamespace || gatewayName != r.GatewayName
 
@@ -1576,7 +1692,7 @@ func (r *MaaSAuthPolicyReconciler) reconcileGatewayAuthPolicy(
 	if gateway != nil {
 		setGatewayOwnerReference(gateway, existing)
 	}
-	if specMatchesDesired(spec, currentSpec) {
+	if specMatchesDesired(spec, currentSpec) && (guardrailHeaders != nil || !basePolicyHasStaleGuardrailFields(currentSpec)) {
 		log.Info("gateway AuthPolicy unchanged, skipping update", "name", authPolicyName)
 		return false, nil
 	}
@@ -1754,7 +1870,8 @@ func (r *MaaSAuthPolicyReconciler) handleDeletion(ctx context.Context, log logr.
 			return ctrl.Result{}, err
 		}
 
-		// If this is the last MaaSAuthPolicy, also delete the singleton gateway-level AuthPolicy.
+		// If this is the last MaaSAuthPolicy, reset the singleton gateway-level AuthPolicy
+		// to its default-deny base version.
 		remaining := &maasv1alpha1.MaaSAuthPolicyList{}
 		if err := r.List(ctx, remaining, client.InNamespace(policy.Namespace)); err != nil {
 			log.Error(err, "failed to list remaining MaaSAuthPolicies for gateway cleanup check")
@@ -1804,7 +1921,7 @@ func (r *MaaSAuthPolicyReconciler) handleDeletion(ctx context.Context, log logr.
 			} else {
 				oidc := r.fetchOIDCConfig(ctx, log, policy.Namespace)
 				xAPIKeyEnabled := r.discoverXAPIKeyNeeded(ctx, log)
-				if _, err := r.reconcileGatewayAuthPolicy(ctx, log, oidc, xAPIKeyEnabled, tenantID, gatewayNs, gatewayName); err != nil {
+				if _, err := r.reconcileGatewayAuthPolicyWithHeaders(ctx, log, oidc, xAPIKeyEnabled, tenantID, gatewayNs, gatewayName, nil); err != nil {
 					log.Error(err, "failed to reset gateway auth to base version")
 					return ctrl.Result{}, err
 				}
@@ -1841,7 +1958,7 @@ func (r *MaaSAuthPolicyReconciler) ensureBaseGatewayAuthPolicy(
 		return fmt.Errorf("failed to check gateway AuthPolicy %s/%s: %w", gatewayNamespace, authPolicyName, err)
 	}
 
-	_, err := r.reconcileGatewayAuthPolicy(ctx, log, oidc, xAPIKeyEnabled, tenantID, gatewayNamespace, gatewayName)
+	_, err := r.reconcileGatewayAuthPolicyWithHeaders(ctx, log, oidc, xAPIKeyEnabled, tenantID, gatewayNamespace, gatewayName, nil)
 	return err
 }
 
@@ -2147,7 +2264,36 @@ func (r *MaaSAuthPolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		// reconciles for policies in the affected tenant namespace.
 		Watches(&maasv1alpha1.AITenant{}, handler.EnqueueRequestsFromMapFunc(
 			r.mapAITenantToMaaSAuthPolicies,
-		))
+		)).
+		// Guardrail attachments can be configured on AITenant, MaasTenantConfig,
+		// MaaSSubscription, its model entry, and MaaSModelRef. Re-render the
+		// gateway policy when any catalog input changes.
+		Watches(&maasv1alpha1.MaasTenantConfig{}, handler.EnqueueRequestsFromMapFunc(
+			r.mapObjectNamespaceToMaaSAuthPolicies,
+		), builder.WithPredicates(predicate.Or(
+			predicate.GenerationChangedPredicate{},
+			predicate.AnnotationChangedPredicate{},
+			predicate.Funcs{UpdateFunc: deletionTimestampSet},
+		))).
+		Watches(&maasv1alpha1.MaaSSubscription{}, handler.EnqueueRequestsFromMapFunc(
+			r.mapObjectNamespaceToMaaSAuthPolicies,
+		), builder.WithPredicates(predicate.Or(
+			predicate.GenerationChangedPredicate{},
+			predicate.Funcs{UpdateFunc: deletionTimestampSet},
+		)))
+
+	// AIGuardrail is provided by the AI Gateway component. Keep standalone MaaS
+	// deployments working when that optional CRD is not installed.
+	const aiguardrailCRD = "aiguardrails.aigateway.opendatahub.io"
+	if crdExists(context.Background(), mgr.GetAPIReader(), aiguardrailCRD) {
+		b = b.WatchesRawSource(&guardrailPropagationSource{
+			SyncingSource: source.Kind[client.Object](mgr.GetCache(), &aigatewayv1alpha1.AIGuardrail{},
+				handler.EnqueueRequestsFromMapFunc(mapAIGuardrailToPropagation), aiGatewayResolutionChangedPredicate{}),
+			reconciler: r,
+		})
+	} else {
+		log.Info("AIGuardrail CRD not registered; skipping static watch")
+	}
 
 	// Watch generated AuthPolicies — Kuadrant CRD must be present for this watch to succeed.
 	// If not yet registered at startup, the watch is added dynamically when the CRD appears.
@@ -2300,7 +2446,16 @@ func (r *MaaSAuthPolicyReconciler) mapTenantToMaaSAuthPolicies(ctx context.Conte
 // mapNamespaceToMaaSAuthPolicies enqueues all MaaSAuthPolicy resources in a
 // namespace when that namespace's labels change (e.g. AITenant label added or removed).
 func (r *MaaSAuthPolicyReconciler) mapNamespaceToMaaSAuthPolicies(ctx context.Context, obj client.Object) []reconcile.Request {
-	ns := obj.GetName()
+	return r.mapMaaSAuthPoliciesInNamespace(ctx, obj.GetName())
+}
+
+// mapObjectNamespaceToMaaSAuthPolicies enqueues policies in the namespace of a
+// catalog object such as MaasTenantConfig or MaaSSubscription.
+func (r *MaaSAuthPolicyReconciler) mapObjectNamespaceToMaaSAuthPolicies(ctx context.Context, obj client.Object) []reconcile.Request {
+	return r.mapMaaSAuthPoliciesInNamespace(ctx, obj.GetNamespace())
+}
+
+func (r *MaaSAuthPolicyReconciler) mapMaaSAuthPoliciesInNamespace(ctx context.Context, ns string) []reconcile.Request {
 	if ns != r.TenantNamespace && !r.TenantNamespaceDiscoveryEnabled {
 		return nil
 	}
@@ -2378,7 +2533,11 @@ func (r *MaaSAuthPolicyReconciler) syncDefaultGatewayAuthPolicyForXAPIKeyDiscove
 	}
 	oidc := r.fetchOIDCConfig(ctx, log, oidcNS)
 	xAPIKeyEnabled := r.discoverXAPIKeyNeeded(ctx, log)
-	_, err := r.reconcileGatewayAuthPolicy(ctx, log, oidc, xAPIKeyEnabled, "", r.GatewayNamespace, r.GatewayName)
+	// This fallback runs when no MaaSAuthPolicy exists, so there is no tenant
+	// catalog to resolve. Update only the base Gateway AuthPolicy.
+	_, err := r.reconcileGatewayAuthPolicyWithHeaders(
+		ctx, log, oidc, xAPIKeyEnabled, "", r.GatewayNamespace, r.GatewayName, nil,
+	)
 	return err
 }
 
@@ -2454,8 +2613,8 @@ func (r *MaaSAuthPolicyReconciler) mapGeneratedAuthPolicyToParent(ctx context.Co
 	}}
 }
 
-// mapMaaSModelRefToMaaSAuthPolicies returns reconcile requests for all MaaSAuthPolicies
-// that reference the given MaaSModelRef.
+// mapMaaSModelRefToMaaSAuthPolicies returns reconcile requests for policies that
+// reference the model directly or belong to a tenant whose subscription selects it.
 func (r *MaaSAuthPolicyReconciler) mapMaaSModelRefToMaaSAuthPolicies(ctx context.Context, obj client.Object) []reconcile.Request {
 	model, ok := obj.(*maasv1alpha1.MaaSModelRef)
 	if !ok {
@@ -2463,18 +2622,46 @@ func (r *MaaSAuthPolicyReconciler) mapMaaSModelRefToMaaSAuthPolicies(ctx context
 	}
 	var policies maasv1alpha1.MaaSAuthPolicyList
 	if err := r.List(ctx, &policies); err != nil {
+		ctrl.LoggerFrom(ctx).Error(err, "failed to list MaaSAuthPolicy resources for MaaSModelRef change")
 		return nil
 	}
 	policies.Items = filterAuthPoliciesByTenantNamespace(ctx, r.Client, policies.Items, r.TenantNamespace, r.TenantNamespaceDiscoveryEnabled)
-	var requests []reconcile.Request
+	requests := make([]reconcile.Request, 0, len(policies.Items))
+	seen := make(map[reconcile.Request]struct{}, len(policies.Items))
+	add := func(policy maasv1alpha1.MaaSAuthPolicy) {
+		req := reconcile.Request{NamespacedName: types.NamespacedName{Name: policy.Name, Namespace: policy.Namespace}}
+		if _, found := seen[req]; found {
+			return
+		}
+		seen[req] = struct{}{}
+		requests = append(requests, req)
+	}
 	for _, p := range policies.Items {
 		for _, ref := range p.Spec.ModelRefs {
 			if ref.Namespace == model.Namespace && ref.Name == model.Name {
-				requests = append(requests, reconcile.Request{
-					NamespacedName: types.NamespacedName{Name: p.Name, Namespace: p.Namespace},
-				})
+				add(p)
 				break
 			}
+		}
+	}
+
+	var subscriptions maasv1alpha1.MaaSSubscriptionList
+	if err := r.List(ctx, &subscriptions); err != nil {
+		ctrl.LoggerFrom(ctx).Error(err, "failed to list MaaSSubscription resources for MaaSModelRef change")
+		return requests
+	}
+	subscriptionNamespaces := make(map[string]struct{})
+	for _, subscription := range subscriptions.Items {
+		for _, ref := range subscription.Spec.ModelRefs {
+			if ref.Namespace == model.Namespace && ref.Name == model.Name {
+				subscriptionNamespaces[subscription.Namespace] = struct{}{}
+				break
+			}
+		}
+	}
+	for _, policy := range policies.Items {
+		if _, found := subscriptionNamespaces[policy.Namespace]; found {
+			add(policy)
 		}
 	}
 	return requests
