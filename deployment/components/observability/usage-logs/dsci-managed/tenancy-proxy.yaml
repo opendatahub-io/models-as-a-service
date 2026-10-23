@@ -52,6 +52,10 @@ spec:
           value: "1"
         - name: LOG_LEVEL
           value: "INFO"
+        # Loads the image OpenSSL configuration and overrides only Groups,
+        # adding the X25519MLKEM768 hybrid post-quantum group (proxy/openssl.conf).
+        - name: OPENSSL_CONF
+          value: /opt/app-root/src/proxy/openssl.conf
         volumeMounts:
         - name: proxy-source
           mountPath: /opt/app-root/src/proxy
