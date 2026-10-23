@@ -168,12 +168,46 @@ spec:
                     minLength: 1
                     pattern: ^\S+$
                     type: string
+                  clientSecretRef:
+                    description: |-
+                      ClientSecretRef names the Secret in the tenant namespace that holds the
+                      OIDC client secret for the consumer portal auth proxy. The tenant creates
+                      the Secret; the platform copies it next to the proxy and keeps the copy
+                      in sync.
+                    properties:
+                      key:
+                        description: Key in the Secret's data that holds the client
+                          secret.
+                        maxLength: 253
+                        minLength: 1
+                        pattern: ^[-._a-zA-Z0-9]+$
+                        type: string
+                      name:
+                        description: Name of the Secret.
+                        maxLength: 253
+                        minLength: 1
+                        pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                        type: string
+                    required:
+                    - key
+                    - name
+                    type: object
                   issuerUrl:
                     description: IssuerURL is the OIDC issuer URL (e.g. https://keycloak.example.com/realms/maas).
                     maxLength: 2048
                     minLength: 9
                     pattern: ^https://\S+$
                     type: string
+                  refreshInterval:
+                    description: |-
+                      RefreshInterval is how often the consumer portal auth proxy refreshes the
+                      session's access token. It must be shorter than the identity provider's
+                      access token lifetime. Defaults to 4m when unset.
+                    pattern: ^([0-9]+(\.[0-9]+)?(ns|us|ms|s|m|h))+$
+                    type: string
+                    x-kubernetes-validations:
+                    - message: refreshInterval must be a positive duration
+                      rule: duration(self) > duration('0s')
                   ttl:
                     default: 300
                     description: TTL is the JWKS cache duration in seconds.

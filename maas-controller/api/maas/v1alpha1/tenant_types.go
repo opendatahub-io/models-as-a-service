@@ -128,6 +128,37 @@ type TenantExternalOIDCConfig struct {
 	// +kubebuilder:default=300
 	// +kubebuilder:validation:Minimum=30
 	TTL int `json:"ttl,omitempty"`
+
+	// ClientSecretRef names the Secret in the tenant namespace that holds the
+	// OIDC client secret for the consumer portal auth proxy. The tenant creates
+	// the Secret; the platform copies it next to the proxy and keeps the copy
+	// in sync.
+	// +kubebuilder:validation:Optional
+	ClientSecretRef *OIDCClientSecretReference `json:"clientSecretRef,omitempty"`
+
+	// RefreshInterval is how often the consumer portal auth proxy refreshes the
+	// session's access token. It must be shorter than the identity provider's
+	// access token lifetime. Defaults to 4m when unset.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Type=string
+	// +kubebuilder:validation:Pattern=`^([0-9]+(\.[0-9]+)?(ns|us|ms|s|m|h))+$`
+	// +kubebuilder:validation:XValidation:rule="duration(self) > duration('0s')",message="refreshInterval must be a positive duration"
+	RefreshInterval *metav1.Duration `json:"refreshInterval,omitempty"`
+}
+
+// OIDCClientSecretReference selects a key of a Secret in the tenant namespace.
+type OIDCClientSecretReference struct {
+	// Name of the Secret.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`
+	Name string `json:"name"`
+
+	// Key in the Secret's data that holds the client secret.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:Pattern=`^[-._a-zA-Z0-9]+$`
+	Key string `json:"key"`
 }
 
 // TenantTelemetryConfig defines configuration for telemetry collection.
