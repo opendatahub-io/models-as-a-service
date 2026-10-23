@@ -33,7 +33,7 @@ Smoke helper only:
 - OpenShift access (`oc` logged in)
 - From repo root: `cd test/e2e`, create venv, `pip install -r requirements.txt`
 - Most HTTP tests need `GATEWAY_HOST` (and often routes/API reachable). Full env list: `tests/test_helper.py` docstring.
-- Dual-listener AuthConfig regression tests are `@pytest.mark.nightly` (pass 3 only when `MAAS_PYTEST_INCLUDE_NIGHTLY=true`; `/group-test` does not run them). They use `E2E_MODEL_REF` / `E2E_MODEL_NAMESPACE`, `AUTHORINO_NAMESPACE` (default `kuadrant-system`), and `E2E_DUAL_LISTENER_WASM_STABILITY_WINDOW` (default 60s).
+- Dual-listener AuthConfig regression tests are `@pytest.mark.serial` (pass 2 of `/group-test`). They use `E2E_MODEL_REF` / `E2E_MODEL_NAMESPACE`, `AUTHORINO_NAMESPACE` (default `kuadrant-system`), and `E2E_DUAL_LISTENER_WASM_STABILITY_WINDOW` (default 60s).
 
 ## Pytest modules
 
@@ -59,7 +59,7 @@ pytest tests/<file>.py -v
 | `test_gateway_scoped_authpolicy.py` | Gateway-scoped `maas-gateway-auth` (S10 / #912); runs in default CI |
 | `test_multi_tenant_integration.py` | Multi-tenant lifecycle and coexistence scenarios; smoke enables tenant namespace discovery by default |
 | `test_tenant_model_inference.py` | Per-tenant inference, symmetric cross-gateway API-key isolation, AuthPolicy EnvoyFilter workload selectors (RHOAIENG-99372), and per-tenant gateway negative auth (RHOAIENG-100758; `TestTenantGatewayNegativeSecurity`) |
-| `test_multi_tenant_maas_api.py` | Per-tenant `maas-api` infrastructure (default CI); dual HTTP/HTTPS AuthConfig + wasm stability checks are nightly-only |
+| `test_multi_tenant_maas_api.py` | Per-tenant `maas-api` infrastructure (default CI); dual HTTP/HTTPS AuthConfig + wasm stability checks run in the serial pass |
 | `test_tenant_auth_isolation.py` | Tenant-scoped API-key/OIDC isolation (S4); gated by `ENABLE_S4_E2E=true` and tenant API URLs |
 | `test_tenant_subscription_isolation.py` | Tenant-scoped subscription listing/selection (S4); gated by `ENABLE_S4_E2E=true` and tenant API URLs |
 | `test_tenant_rate_limit_isolation.py` | Tenant-scoped rate-limit isolation (S4); gated by `ENABLE_S4_E2E=true` and tenant API URLs |
@@ -92,7 +92,7 @@ Multi-tenancy discovery tests run by default in `prow_run_smoke_test.sh`, which 
 
 The dormant-mode regression inside `test_tenant_namespace_discovery.py` mutates controller flags and only runs when `ENABLE_TENANT_DISCOVERY_DORMANT_E2E=true`.
 
-The tenant authentication, subscription, and rate-limit isolation suites are in the smoke list but skip unless `ENABLE_S4_E2E=true` and both tenant API URLs and namespaces are configured. `test_multi_tenant_maas_api.py` (per-tenant maas-api checks) runs in the default suite; dual-listener AuthConfig regression cases are nightly-only. If the AITenant CRD is missing, `require_aitenant_crd()` skips the module when `ENABLE_TENANT_NAMESPACE_DISCOVERY` is unset or false, and fails when discovery is enabled (`true`) because discovery E2E requires the CRD.
+The tenant authentication, subscription, and rate-limit isolation suites are in the smoke list but skip unless `ENABLE_S4_E2E=true` and both tenant API URLs and namespaces are configured. `test_multi_tenant_maas_api.py` (per-tenant maas-api checks) runs in the default suite; dual-listener AuthConfig regression cases run in the serial pass. If the AITenant CRD is missing, `require_aitenant_crd()` skips the module when `ENABLE_TENANT_NAMESPACE_DISCOVERY` is unset or false, and fails when discovery is enabled (`true`) because discovery E2E requires the CRD.
 
 External OIDC runs require `EXTERNAL_OIDC=true` and `OIDC_ISSUER_URL`, `OIDC_TOKEN_URL`, `OIDC_CLIENT_ID`, `OIDC_USERNAME`, `OIDC_PASSWORD` per your deploy/test setup.
 
