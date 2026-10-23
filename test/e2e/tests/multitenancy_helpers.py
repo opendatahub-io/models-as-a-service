@@ -61,6 +61,7 @@ DEFAULT_AITENANT_NAME = "models-as-a-service"
 
 FINALIZER_SUBSCRIPTION = "maas.opendatahub.io/subscription-cleanup"
 FINALIZER_AUTHPOLICY = "maas.opendatahub.io/authpolicy-cleanup"
+FINALIZER_TENANT_CLEANUP = "maas.opendatahub.io/tenant-cleanup"
 
 GATEWAY_AUTH_POLICY_NAME = "maas-gateway-auth"
 
