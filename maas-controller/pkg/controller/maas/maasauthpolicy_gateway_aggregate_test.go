@@ -12,7 +12,7 @@ func TestRequireGroupMembershipRegoIsFixedSize(t *testing.T) {
 		GatewayName:      "maas-default-gateway",
 	}
 
-	spec := r.buildGatewayAuthPolicySpec(nil, false, "", "models-as-a-service", "test-gateway-ns", "test-gateway")
+	spec := r.buildGatewayAuthPolicySpec(nil, "", "models-as-a-service", "test-gateway-ns", "test-gateway")
 	defaults, ok := spec["defaults"].(map[string]any)
 	if !ok {
 		t.Fatalf("gateway spec missing defaults block")
@@ -54,7 +54,7 @@ func TestRequireGroupMembershipHasWhenGuard(t *testing.T) {
 		GatewayName:      "maas-default-gateway",
 	}
 
-	spec := r.buildGatewayAuthPolicySpec(nil, false, "", "models-as-a-service", "test-gateway-ns", "test-gateway")
+	spec := r.buildGatewayAuthPolicySpec(nil, "", "models-as-a-service", "test-gateway-ns", "test-gateway")
 	defaults, ok := spec["defaults"].(map[string]any)
 	if !ok {
 		t.Fatalf("gateway spec missing defaults block")
@@ -97,7 +97,7 @@ func TestRequireGroupMembershipCacheKey(t *testing.T) {
 		GatewayName:      "maas-default-gateway",
 	}
 
-	spec := r.buildGatewayAuthPolicySpec(nil, false, "", "models-as-a-service", "test-gateway-ns", "test-gateway")
+	spec := r.buildGatewayAuthPolicySpec(nil, "", "models-as-a-service", "test-gateway-ns", "test-gateway")
 	defaults, ok := spec["defaults"].(map[string]any)
 	if !ok {
 		t.Fatalf("gateway spec missing defaults block")
@@ -145,7 +145,7 @@ func TestIdentityFilterHasModelIdentityGuard(t *testing.T) {
 		GatewayName:      "maas-default-gateway",
 	}
 
-	spec := r.buildGatewayAuthPolicySpec(nil, false, "", "models-as-a-service", "test-gateway-ns", "test-gateway")
+	spec := r.buildGatewayAuthPolicySpec(nil, "", "models-as-a-service", "test-gateway-ns", "test-gateway")
 	defaults, ok := spec["defaults"].(map[string]any)
 	if !ok {
 		t.Fatalf("gateway spec missing defaults block")

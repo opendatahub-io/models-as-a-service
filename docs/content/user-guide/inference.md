@@ -34,6 +34,10 @@ The gateway reads the `model` field from the JSON body and routes the request to
 
 Make a simple chat completion request using your API key:
 
+The examples use `Authorization: Bearer`, but you can send the same key as
+`x-api-key: <key>` with no Bearer header. Both work for local and external models;
+see [API Key Authentication](../concepts/api-key-authentication.md#api-key-validation-flow).
+
 ```bash
 # Set up your environment
 CLUSTER_DOMAIN=$(kubectl get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}')
@@ -337,7 +341,7 @@ Common HTTP error codes:
 
 | Code | Meaning | Action |
 |------|---------|--------|
-| 401 | Invalid or malformed API key or authorization header | Verify the key is correctly formatted: `Authorization: Bearer <key>` |
+| 401 | Invalid or malformed API key or authentication header | Verify the key is correctly formatted: `Authorization: Bearer <key>` or `x-api-key: <key>` |
 | 403 | Expired/revoked key or insufficient permissions | Create a new API key if expired/revoked, otherwise contact your administrator |
 | 429 | Rate limit exceeded | Wait before retrying, or contact your administrator to adjust limits |
 | 404 | Model not found | Verify the model ID exists in your subscription via `/maas-api/v1/models` |
