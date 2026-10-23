@@ -13,6 +13,8 @@ markers = [
     "tenant_inference: cross-gateway inference isolation on its own tenants",
     "tenant_ipp: per-tenant IPP stacks and routing isolation on its own tenants",
     "tenant_auto_resolve: MaaSModelRef tenant auto-resolution",
+    "tenant_external_model: multi-tenant AGC/Praxis external models (gateway attachments, shared models, conflicts, legacy compatibility)",
+    "tenant_external_model_crossns: ReferenceGrant-gated cross-namespace external providers (P1; gated on TENANT_EXTERNAL_MODEL_CROSSNS_E2E)",
     "legacy_ipp: legacy maas-controller IPP dataplane; excluded from default e2e passes (run with -m legacy_ipp)",
     "external: external OIDC and ExternalModel integrations",
     "nightly: extended E2E (external OIDC, slow paths); excluded from PR /group-test; run on scheduled nightly only",

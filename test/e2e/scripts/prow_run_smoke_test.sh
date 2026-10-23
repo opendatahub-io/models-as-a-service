@@ -52,6 +52,12 @@
 #   GATEWAY_NAMESPACE - Gateway namespace (default: openshift-ingress)
 #   MODEL_NAMESPACE - Namespace of models (default: llm)
 #   E2E_PARALLEL_WORKERS - pytest-xdist worker count (default: 7)
+#   TENANT_EXTERNAL_MODEL_CROSSNS_E2E - Opt in to P1 cross-namespace external
+#                         provider E2E (needs AGC cross-namespace provider
+#                         support packaged, default: false)
+#   TENANT_EXTERNAL_MODEL_LEGACY_IPP_E2E - Opt in to the legacy IPP coexistence
+#                         E2E (scenario 5; needs the IPP image pin with the
+#                         legacy-controller exclusion guard, default: false)
 #
 # TIMEOUT CONFIGURATION (all in seconds, from deployment-helpers.sh):
 #   CUSTOM_RESOURCE_TIMEOUT, LLMIS_TIMEOUT, MAASMODELREF_TIMEOUT,

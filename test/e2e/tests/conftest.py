@@ -1,3 +1,4 @@
+import logging
 import os
 import socket
 import subprocess
@@ -7,6 +8,8 @@ import requests
 
 from test_helper import MAAS_API_DEPLOYMENT_NAMESPACE
 
+
+log = logging.getLogger(__name__)
 
 _WORKER_ISOLATED_XDIST_GROUPS = frozenset({"api_keys", "models"})
 
@@ -407,6 +410,64 @@ def worker_api_key(worker_tenant_context, headers: dict) -> str:
 def api_key_headers(api_key: str):
     """Headers with API key for model inference requests."""
     return {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+
+
+@pytest.fixture(scope="session")
+def tenant_external_model_tenants():
+    """
+    Shared AGC/Praxis tenants for multi-tenant external model tests.
+
+    Two AITenants with selector-admitting tenant gateways on the praxis
+    dataplane, enriched with gateway/maas-api URLs (see
+    tenant_external_model_helpers.bootstrap_external_model_tenant). Modules in the
+    tenant_external_model xdist group share these tenants; user namespaces, models and
+    tenant-scoped policies are created per module with unique names.
+
+    Skips session-wide when the installed cluster lacks the additive
+    ExternalModel schema (gatewayRefs + status.gateways), the
+    ai-gateway-controller deployment, the
+    AITenant CRD, or tenant namespace discovery.
+    """
+    from multitenancy_helpers import (
+        cleanup_discovery_case,
+        new_named_tenant_case,
+        require_aitenant_crd,
+        require_tenant_namespace_discovery,
+    )
+    from tenant_external_model_helpers import (
+        bootstrap_external_model_tenant,
+        record_tenant_external_model_evidence,
+        require_tenant_external_model_support,
+    )
+
+    require_tenant_external_model_support()
+    require_aitenant_crd()
+    require_tenant_namespace_discovery()
+    record_tenant_external_model_evidence()
+
+    # Tenant names must stay short: AGC renames per-tenant praxis resources
+    # to "<resource>-<tenant-name>" and the longest base name
+    # ("payload-processing-external-model-filters-") leaves only 20 characters
+    # for the tenant before hitting the Kubernetes 63-character name limit.
+    # bootstrap_external_model_tenant enforces this and fails fast.
+    case_a = new_named_tenant_case("e2e-extmod-a")
+    case_b = new_named_tenant_case("e2e-extmod-b")
+    try:
+        for case in (case_a, case_b):
+            bootstrap_external_model_tenant(case)
+        yield {"tenant_a": case_a, "tenant_b": case_b}
+    finally:
+        # Attempt both cleanups even if the first fails: one tenant's
+        # teardown error must not leak the other's cluster resources.
+        cleanup_errors: list[Exception] = []
+        for case in (case_a, case_b):
+            try:
+                cleanup_discovery_case(case)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("cleanup failed for tenant %s: %s", case["tenant_ns"], exc)
+                cleanup_errors.append(exc)
+        if cleanup_errors:
+            raise cleanup_errors[0]
 
 
 @pytest.fixture(scope="session")
