@@ -14,7 +14,7 @@ from multitenancy_helpers import (
     remove_gateway_access_label,
     wait_for_gateway_programmed,
 )
-from test_helper import DEPLOYMENT_NAMESPACE, MAAS_API_DEPLOYMENT_NAMESPACE, _ns
+from test_helper import MAAS_API_DEPLOYMENT_NAMESPACE, _ns
 
 AITENANT_CRD = "aitenants.maas.opendatahub.io"
 AITENANT_KIND = "aitenant"
@@ -403,8 +403,8 @@ class TestAITenantLifecycle:
         assert _wait_for_json("service", "maas-api", INFRA_NAMESPACE, timeout=180) is not None
         assert _wait_for_json("httproute", "maas-api-route", INFRA_NAMESPACE, timeout=180) is not None
         assert _get_json_or_none("deployment", "maas-api-models-as-a-service", INFRA_NAMESPACE) is None
-        assert _get_json_or_none("service", "maas-api-models-as-a-service", DEPLOYMENT_NAMESPACE) is None
-        assert _get_json_or_none("httproute", "maas-api-route-models-as-a-service", DEPLOYMENT_NAMESPACE) is None
+        assert _get_json_or_none("service", "maas-api-models-as-a-service", INFRA_NAMESPACE) is None
+        assert _get_json_or_none("httproute", "maas-api-route-models-as-a-service", INFRA_NAMESPACE) is None
 
         if os.environ.get("EXTERNAL_OIDC") == "true" and os.environ.get("OIDC_ISSUER_URL"):
             expected_issuer = os.environ["OIDC_ISSUER_URL"]

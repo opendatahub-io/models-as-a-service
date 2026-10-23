@@ -632,10 +632,6 @@ class TestHeaderAbuse:
             )
 
 
-class TestWebhookValidation:
-    """Verify admission webhooks enforce namespace labeling requirements."""
-
-
 # ============================================================================
 # P0: Internal Endpoint Isolation (FIND-004)
 # ============================================================================
