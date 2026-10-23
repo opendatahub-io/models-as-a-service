@@ -16,6 +16,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/client-go/util/retry"
 	"k8s.io/utils/ptr"
@@ -814,8 +815,11 @@ func ensureIPPWritersStopped(ctx context.Context, c client.Client, params Platfo
 
 // cleanupIPPExternalModelRoutes removes only routes created by the IPP ExternalModel
 // reconciler. Route names alone do not prove ownership. ModelNamespace is the
-// tenant namespace containing ExternalModels and their routes; AppNamespace may
-// be shared infrastructure and must not be searched by this cleanup. Foreground
+// tenant namespace containing ExternalModels and their routes. The default
+// tenant's IPP also served the namespaces of no tenant, whose models
+// ai-gateway-controller now attaches to the default tenant's Gateway (see
+// tenantNamespaces), so its cleanup searches those too. AppNamespace may be
+// shared infrastructure and must not be searched by this cleanup. Foreground
 // deletion of the IPP Deployments completes before this runs, ensuring their
 // in-process route writer has stopped.
 func cleanupIPPExternalModelRoutes(ctx context.Context, c client.Client, params PlatformParams, log logr.Logger) error {
@@ -824,16 +828,26 @@ func cleanupIPPExternalModelRoutes(ctx context.Context, c client.Client, params 
 	}
 	routes := &unstructured.UnstructuredList{}
 	routes.SetGroupVersionKind(GVKHTTPRoute.GroupVersion().WithKind("HTTPRouteList"))
-	if err := c.List(ctx, routes, client.InNamespace(params.ModelNamespace)); err != nil {
-		return fmt.Errorf("list existing IPP HTTPRoutes in %s: %w", params.ModelNamespace, err)
+	listOpts := []client.ListOption{client.MatchingLabels{"app.kubernetes.io/managed-by": ippExternalModelManagedBy}}
+	var tenantNS sets.Set[string]
+	if params.TenantIdentifier == "" {
+		var err error
+		if tenantNS, err = tenantNamespaces(ctx, c); err != nil {
+			return fmt.Errorf("clean up IPP-owned HTTPRoutes: %w", err)
+		}
+	} else {
+		listOpts = append(listOpts, client.InNamespace(params.ModelNamespace))
+	}
+	if err := c.List(ctx, routes, listOpts...); err != nil {
+		return fmt.Errorf("list existing IPP HTTPRoutes for %s: %w", params.ModelNamespace, err)
 	}
 	for i := range routes.Items {
 		route := &routes.Items[i]
-		labels := route.GetLabels()
-		if labels["app.kubernetes.io/managed-by"] != ippExternalModelManagedBy {
+		namespace := route.GetNamespace()
+		if namespace != params.ModelNamespace && (namespace == params.AppNamespace || tenantNS.Has(namespace)) {
 			continue
 		}
-		modelName := labels[ippExternalModelLabel]
+		modelName := route.GetLabels()[ippExternalModelLabel]
 		if modelName == "" || hasSSAFieldManager(route, aiGatewayControllerFieldOwner) {
 			continue
 		}
@@ -844,11 +858,11 @@ func cleanupIPPExternalModelRoutes(ctx context.Context, c client.Client, params 
 		}
 		inference := &unstructured.Unstructured{}
 		inference.SetGroupVersionKind(inferenceExternalModelRouteOwnerGVK)
-		if err := c.Get(ctx, client.ObjectKey{Namespace: params.ModelNamespace, Name: modelName}, inference); err != nil {
+		if err := c.Get(ctx, client.ObjectKey{Namespace: namespace, Name: modelName}, inference); err != nil {
 			if apierrors.IsNotFound(err) {
 				continue
 			}
-			return fmt.Errorf("get inference ExternalModel %s/%s for IPP-owned route %s: %w", params.ModelNamespace, modelName, route.GetName(), err)
+			return fmt.Errorf("get inference ExternalModel %s/%s for IPP-owned route %s: %w", namespace, modelName, route.GetName(), err)
 		}
 		if inference.GetUID() != owner.UID {
 			continue
