@@ -96,6 +96,22 @@ The tenant authentication, subscription, and rate-limit isolation suites are in 
 
 External OIDC runs require `EXTERNAL_OIDC=true` and `OIDC_ISSUER_URL`, `OIDC_TOKEN_URL`, `OIDC_CLIENT_ID`, `OIDC_USERNAME`, `OIDC_PASSWORD` per your deploy/test setup.
 
+## Coding-agent harness (Codex)
+
+`tests/test_coding_harness_codex.py` runs a **pinned Codex CLI** (`0.144.1`) against the live MaaS gateway chat/completions URL with a minted API key (Praxis-style pin + checksum under `fixtures/codex-cli/`).
+
+- Discovers the model URL via existing `model_v1` / `api_key` fixtures
+- Downloads the pinned musl binary on first use (override with `MAAS_TEST_CODEX_BIN`)
+- Writes stdout/stderr under `ARTIFACT_DIR` when set (`codex-exec.*.log`)
+
+```bash
+# After deploy / with GATEWAY_HOST + TOKEN exported:
+cd test/e2e
+./scripts/run_e2e_tests.sh -- tests/test_coding_harness_codex.py
+```
+
+**Validation note:** this suite currently runs in the **default** e2e passes (not `@pytest.mark.nightly`) so Konflux `/group-test` exercises it. After the harness is proven green, mark it `nightly` so only pass 3 (`MAAS_PYTEST_INCLUDE_NIGHTLY=true`) runs it.
+
 ## Nightly tier (`@pytest.mark.nightly`)
 
 Tests marked `nightly` (for example `test_external_oidc.py` and per-tenant OIDC discovery) are **always excluded from passes 1–2**. They run only in **pass 3** (`-m nightly`) when `MAAS_PYTEST_INCLUDE_NIGHTLY=true` (set automatically when `EXTERNAL_OIDC=true` in prow, or explicitly on the ODH MaaS nightly in shepard). PR `/group-test` does not set that flag, so nightly tests are skipped there.
