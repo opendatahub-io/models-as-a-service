@@ -79,6 +79,7 @@ def _activate_marked_worker_tenant(request):
         request.getfixturevalue("worker_tenant_context")
 
 
+@pytest.hookimpl(trylast=True)
 def pytest_collection_modifyitems(config, items):
     """Tag serial tests and activate explicitly marked worker isolation.
 
@@ -114,6 +115,15 @@ def pytest_collection_modifyitems(config, items):
                 f"{item.nodeid}: mutable xdist group {groups} requires "
                 "@pytest.mark.worker_tenant or @pytest.mark.serial"
             )
+
+    _order_grid_oidc_tests_first(items)
+
+
+def _order_grid_oidc_tests_first(items):
+    """Surface Grid OIDC failures before the longer legacy external suite."""
+    items.sort(
+        key=lambda item: 0 if item.get_closest_marker("grid_oidc") else 1
+    )
 
 
 # TLS verification flag - set E2E_SKIP_TLS_VERIFY=true to disable cert verification
@@ -441,6 +451,7 @@ def shared_test_tenants(gateway_host: str, is_https: bool):
         cleanup_discovery_case,
         wait_for_route_admitted,
         wait_for_deployment_available,
+        tenant_b_external_oidc_from_env,
     )
 
     require_aitenant_crd()
@@ -451,8 +462,10 @@ def shared_test_tenants(gateway_host: str, is_https: bool):
 
     try:
         # Bootstrap both tenants (creates gateway + AITenant CR)
-        for case in (case_a, case_b):
-            bootstrap_aitenant_tenant(case)
+        bootstrap_aitenant_tenant(case_a)
+        bootstrap_aitenant_tenant(
+            case_b, external_oidc=tenant_b_external_oidc_from_env()
+        )
 
         scheme = "https"
         for case in (case_a, case_b):

@@ -2048,7 +2048,6 @@ class TestE2ESubscriptionFlow:
                 PREMIUM_MODEL_REF,
                 namespace=ns,
                 model_namespace=MODEL_NAMESPACE,
-                timeout=180,
             )
 
             # API key bound to this subscription at mint (inference does not send x-maas-subscription)

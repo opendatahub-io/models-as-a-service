@@ -1,0 +1,88 @@
+---
+apiVersion: tekton.dev/v1
+kind: PipelineRun
+metadata:
+  annotations:
+    build.appstudio.openshift.io/repo: https://github.com/opendatahub-io/models-as-a-service?rev={{revision}}
+    build.appstudio.redhat.com/commit_sha: '{{revision}}'
+    build.appstudio.redhat.com/target_branch: '{{target_branch}}'
+    build.appstudio.redhat.com/pull_request_number: '{{pull_request_number}}'
+    pipelinesascode.tekton.dev/cancel-in-progress: "false"
+    pipelinesascode.tekton.dev/max-keep-runs: "3"
+    pipelinesascode.tekton.dev/on-cel-expression: event == "pull_request"
+    pipelinesascode.tekton.dev/on-comment: "^/group-test-oidc$"
+  name: maas-group-test-oidc
+  namespace: open-data-hub-tenant
+  labels:
+    appstudio.openshift.io/application: group-testing
+    appstudio.openshift.io/component: maas-group
+    pipelines.appstudio.openshift.io/type: test
+spec:
+  params:
+  - name: group-components
+    value: '{ "odh-maas-api-ci": "opendatahub/maas-api", "odh-maas-controller-ci": "opendatahub/maas-controller", "odh-maas-discovery-ci": "opendatahub/odh-maas-discovery" }'
+  - name: gather-on-success
+    value: 'false'
+  pipelineRef:
+    resolver: git
+    params:
+    - name: url
+      value: https://github.com/opendatahub-io/odh-konflux-central.git
+    - name: revision
+      value: main
+    - name: pathInRepo
+      value: integration-tests/models-as-a-service/pr-group-testing-pipeline.yaml
+  taskRunTemplate:
+    podTemplate:
+      nodeSelector:
+        konflux-ci.dev/workload: konflux-tenants
+      tolerations:
+      - effect: NoSchedule
+        key: konflux-ci.dev/workload
+        operator: Equal
+        value: konflux-tenants
+      env:
+      - name: EXTERNAL_OIDC
+        value: "true"
+      - name: E2E_PARALLEL_WORKERS
+        value: "1"
+      # Passes 1-2 already run in /group-test; run only the OIDC tests here.
+      - name: E2E_RUN_ONLY_OIDC_TESTS
+        value: "true"
+      # Temporarily narrow this dedicated pipeline to the Grid OIDC suite while
+      # the broader nightly suite remains covered by /group-test.
+      - name: E2E_RUN_ONLY_GRID_TESTS
+        value: "true"
+      # External OIDC cannot run without Authorino/RHCL. Fail during deployment
+      # readiness instead of letting every OIDC test fail after a long setup.
+      - name: SKIP_AUTH_CHECK
+        value: "false"
+      - name: AUTHORINO_TIMEOUT
+        value: "600"
+      - name: CUSTOM_CHECK_TIMEOUT
+        value: "600"
+      # Strict OIDC contract required by Grid delegated administration; must
+      # match the audience and purpose mappers on the test realm's test-client.
+      - name: OIDC_AUDIENCE
+        value: "maas-api"
+      - name: OIDC_ACCESS_TOKEN_PURPOSE_CLAIM
+        value: "token_use"
+      - name: OIDC_ACCESS_TOKEN_PURPOSE
+        value: "access"
+      - name: OIDC_READINESS_USERNAME
+        value: "grid_admin"
+      - name: OIDC_READINESS_PASSWORD
+        value: "letmein"
+      - name: OIDC_READINESS_VALIDATE_ORGANIZATIONS
+        value: "true"
+    serviceAccountName: konflux-integration-runner
+  taskRunSpecs:
+  - pipelineTaskName: e2e-maas-openshift
+    timeout: 2h30m
+  timeouts:
+    pipeline: 4h0m0s
+    tasks: 3h
+  workspaces:
+  - name: git-auth
+    secret:
+      secretName: '{{ git_auth_secret }}'
