@@ -31,7 +31,6 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/util/workqueue"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -1750,7 +1749,7 @@ func gatewayAuthPolicySpecTestObject(t *testing.T, oidc *oidcConfig) *unstructur
 		MetadataCacheTTL: 60,
 		AuthzCacheTTL:    60,
 	}
-	spec := r.buildGatewayAuthPolicySpec(oidc, false, "", "models-as-a-service", "test-gateway-ns", "test-gateway")
+	spec := r.buildGatewayAuthPolicySpec(oidc, "", "models-as-a-service", "test-gateway-ns", "test-gateway")
 	return &unstructured.Unstructured{Object: map[string]any{"spec": spec}}
 }
 
@@ -1802,8 +1801,8 @@ func TestBuildGatewayAuthPolicySpec_K8sAuth(t *testing.T) {
 	if _, exists := auth["oidc-identities"]; exists {
 		t.Error("oidc-identities should NOT be present when OIDC config is nil")
 	}
-	if _, exists := auth["api-keys-x-api-key"]; exists {
-		t.Error("api-keys-x-api-key should NOT be present when xAPIKeyEnabled is false")
+	if _, exists := auth["api-keys-x-api-key"]; !exists {
+		t.Error("api-keys-x-api-key should always be present")
 	}
 
 	authz := nestedMapRequired(t, obj, "spec", "defaults", "rules", "authorization")
@@ -2010,7 +2009,7 @@ func TestBuildGatewayAuthPolicySpec_DenyAPIKeyManagement(t *testing.T) {
 		t.Fatalf("deny-api-key-management must be scoped to API keys: %q", predicate)
 	}
 
-	t.Run("x-api-key enabled parenthesizes API key OR before path guard", func(t *testing.T) {
+	t.Run("parenthesizes API key header OR before path guard", func(t *testing.T) {
 		r := &MaaSAuthPolicyReconciler{
 			InfraNamespace:   "maas-system",
 			GatewayName:      "maas-default-gateway",
@@ -2019,26 +2018,26 @@ func TestBuildGatewayAuthPolicySpec_DenyAPIKeyManagement(t *testing.T) {
 			MetadataCacheTTL: 60,
 			AuthzCacheTTL:    60,
 		}
-		spec := r.buildGatewayAuthPolicySpec(nil, true, "", "models-as-a-service", "test-gateway-ns", "test-gateway")
-		enabledObj := &unstructured.Unstructured{Object: map[string]any{"spec": spec}}
-		when, found, err := unstructured.NestedSlice(enabledObj.Object,
+		spec := r.buildGatewayAuthPolicySpec(nil, "", "models-as-a-service", "test-gateway-ns", "test-gateway")
+		policyObj := &unstructured.Unstructured{Object: map[string]any{"spec": spec}}
+		when, found, err := unstructured.NestedSlice(policyObj.Object,
 			"spec", "defaults", "rules", "authorization", "deny-api-key-management", "when")
 		if err != nil || !found || len(when) == 0 {
-			t.Fatalf("deny-api-key-management when missing for x-api-key enabled spec: found=%v err=%v", found, err)
+			t.Fatalf("deny-api-key-management when missing: found=%v err=%v", found, err)
 		}
 		whenMap, ok := when[0].(map[string]any)
 		if !ok {
 			t.Fatalf("when[0] is not a map: %T", when[0])
 		}
-		enabledPredicate, ok := whenMap["predicate"].(string)
+		guardPredicate, ok := whenMap["predicate"].(string)
 		if !ok {
 			t.Fatal("deny-api-key-management predicate missing")
 		}
-		if !strings.HasPrefix(enabledPredicate, "(") {
-			t.Fatalf("deny-api-key-management predicate must parenthesize celIsAPIKey when x-api-key enabled, got: %q", enabledPredicate)
+		if !strings.HasPrefix(guardPredicate, "(") {
+			t.Fatalf("deny-api-key-management predicate must parenthesize celIsAPIKey, got: %q", guardPredicate)
 		}
-		if strings.Count(enabledPredicate, "||") < 2 {
-			t.Fatalf("expected Bearer and x-api-key OR branches plus path OR, got: %q", enabledPredicate)
+		if strings.Count(guardPredicate, "||") < 2 {
+			t.Fatalf("expected Bearer and x-api-key OR branches plus path OR, got: %q", guardPredicate)
 		}
 	})
 
@@ -2123,7 +2122,7 @@ func TestBuildGatewayAuthPolicySpec_RouteScopedRules(t *testing.T) {
 	})
 }
 
-func TestBuildGatewayAuthPolicySpec_XAPIKeyEnabled(t *testing.T) {
+func TestBuildGatewayAuthPolicySpec_XAPIKeyAlwaysEnabled(t *testing.T) {
 	r := &MaaSAuthPolicyReconciler{
 		InfraNamespace:   "maas-system",
 		GatewayName:      "maas-default-gateway",
@@ -2133,7 +2132,7 @@ func TestBuildGatewayAuthPolicySpec_XAPIKeyEnabled(t *testing.T) {
 		AuthzCacheTTL:    60,
 	}
 
-	spec := r.buildGatewayAuthPolicySpec(nil, true, "", "models-as-a-service", "gateway-ns", "maas-default-gateway")
+	spec := r.buildGatewayAuthPolicySpec(nil, "", "models-as-a-service", "gateway-ns", "maas-default-gateway")
 	obj := &unstructured.Unstructured{Object: map[string]any{"spec": spec}}
 
 	auth, found, err := unstructured.NestedMap(obj.Object, "spec", "defaults", "rules", "authentication")
@@ -2142,7 +2141,7 @@ func TestBuildGatewayAuthPolicySpec_XAPIKeyEnabled(t *testing.T) {
 	}
 	xAPIKey, exists := auth["api-keys-x-api-key"]
 	if !exists {
-		t.Fatal("api-keys-x-api-key should be present when xAPIKeyEnabled is true")
+		t.Fatal("api-keys-x-api-key should always be present")
 	}
 	xAPIKeyMap, ok := xAPIKey.(map[string]any)
 	if !ok {
@@ -2187,7 +2186,7 @@ func TestBuildGatewayAuthPolicySpec_XAPIKeyEnabled(t *testing.T) {
 	}
 	pred, ok := whenMap["predicate"].(string)
 	if !ok {
-		t.Fatal("apiKeyValidation when should use predicate (not selector) when x-api-key enabled")
+		t.Fatal("apiKeyValidation when should use predicate (not selector)")
 	}
 	// Metadata validation uses auth.identity (post-auth, safe) which works for both Bearer and x-api-key
 	// Both auth methods populate auth.identity with an API key format (with or without "Bearer " prefix)
@@ -2230,7 +2229,7 @@ func TestBuildGatewayAuthPolicySpec_OIDCJWKsTTL(t *testing.T) {
 				ClientID:  "maas-client",
 				TTL:       tc.ttl,
 			}
-			spec := r.buildGatewayAuthPolicySpec(oidc, false, "", "models-as-a-service", "test-gateway-ns", "test-gateway")
+			spec := r.buildGatewayAuthPolicySpec(oidc, "", "models-as-a-service", "test-gateway-ns", "test-gateway")
 			obj := &unstructured.Unstructured{Object: map[string]any{"spec": spec}}
 
 			gotTTL, found, err := unstructured.NestedInt64(obj.Object, "spec", "defaults", "rules", "authentication", "oidc-identities", "jwt", "ttl")
@@ -2787,245 +2786,53 @@ func TestMaaSAuthPolicyReconciler_StaleEvent_NoOp(t *testing.T) {
 	}
 }
 
-func TestDiscoverXAPIKeyNeeded(t *testing.T) {
-	t.Run("returns true when ExternalModel has messages apiFormat", func(t *testing.T) {
-		extModel := &unstructured.Unstructured{Object: map[string]any{
-			"apiVersion": "inference.opendatahub.io/v1alpha1",
-			"kind":       "ExternalModel",
-			"metadata":   map[string]any{"name": "claude-model", "namespace": "default"},
-			"spec": map[string]any{
-				"externalProviderRefs": []any{
-					map[string]any{
-						"ref":         map[string]any{"name": "anthropic-provider"},
-						"targetModel": "claude-sonnet-4-5-20241022",
-						"apiFormat":   "messages",
-					},
-				},
-			},
-		}}
-		extModel.SetGroupVersionKind(schema.GroupVersionKind{
-			Group: "inference.opendatahub.io", Version: "v1alpha1", Kind: "ExternalModel",
-		})
-
-		c := fake.NewClientBuilder().
-			WithScheme(scheme).
-			WithRESTMapper(testRESTMapper()).
-			WithObjects(extModel).
-			Build()
-
-		r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme}
-		got := r.discoverXAPIKeyNeeded(context.Background(), logr.Discard())
-		if !got {
-			t.Error("expected true when ExternalModel has apiFormat=messages")
-		}
-	})
-
-	t.Run("returns false when only openai-chat apiFormat", func(t *testing.T) {
-		extModel := &unstructured.Unstructured{Object: map[string]any{
-			"apiVersion": "inference.opendatahub.io/v1alpha1",
-			"kind":       "ExternalModel",
-			"metadata":   map[string]any{"name": "gpt-model", "namespace": "default"},
-			"spec": map[string]any{
-				"externalProviderRefs": []any{
-					map[string]any{
-						"ref":         map[string]any{"name": "openai-provider"},
-						"targetModel": "gpt-4o",
-						"apiFormat":   "openai-chat",
-					},
-				},
-			},
-		}}
-		extModel.SetGroupVersionKind(schema.GroupVersionKind{
-			Group: "inference.opendatahub.io", Version: "v1alpha1", Kind: "ExternalModel",
-		})
-
-		c := fake.NewClientBuilder().
-			WithScheme(scheme).
-			WithRESTMapper(testRESTMapper()).
-			WithObjects(extModel).
-			Build()
-
-		r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme}
-		got := r.discoverXAPIKeyNeeded(context.Background(), logr.Discard())
-		if got {
-			t.Error("expected false when only openai-chat apiFormat is present")
-		}
-	})
-
-	t.Run("returns false when CRD not found", func(t *testing.T) {
-		c := fake.NewClientBuilder().
-			WithScheme(scheme).
-			WithRESTMapper(testRESTMapper()).
-			Build()
-
-		r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme}
-		got := r.discoverXAPIKeyNeeded(context.Background(), logr.Discard())
-		if got {
-			t.Error("expected false when inference CRD is not installed")
-		}
-	})
-}
-
-func TestMapIPPExternalModelToMaaSAuthPolicies(t *testing.T) {
+func TestSyncDefaultGatewayAuthPolicyWithoutExternalModels(t *testing.T) {
 	const gatewayNS = "gateway-ns"
-
-	t.Run("enqueues all MaaSAuthPolicies when present", func(t *testing.T) {
-		policyA := newMaaSAuthPolicy("policy-a", "models-as-a-service", "team-a",
-			maasv1alpha1.ModelRef{Name: "llm", Namespace: "llm"})
-		policyB := newMaaSAuthPolicy("policy-b", "models-as-a-service", "team-b",
-			maasv1alpha1.ModelRef{Name: "llm", Namespace: "llm"})
-
-		c := fake.NewClientBuilder().
-			WithScheme(scheme).
-			WithRESTMapper(testRESTMapper()).
-			WithObjects(policyA, policyB).
-			Build()
-
-		r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme}
-		reqs := r.mapIPPExternalModelToMaaSAuthPolicies(context.Background(), nil)
-		if len(reqs) != 2 {
-			t.Fatalf("expected 2 reconcile requests, got %d", len(reqs))
+	gateway := &gatewayapiv1.Gateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "maas-default-gateway", Namespace: gatewayNS, UID: "gateway-uid"},
+	}
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(testRESTMapper()).
+		WithObjects(gateway).
+		Build()
+	r := &MaaSAuthPolicyReconciler{
+		Client:           c,
+		Scheme:           scheme,
+		InfraNamespace:   "maas-system",
+		GatewayNamespace: gatewayNS,
+		GatewayName:      "maas-default-gateway",
+		ClusterAudience:  "https://kubernetes.default.svc",
+	}
+	if err := r.syncDefaultGatewayAuthPolicy(context.Background(), logr.Discard()); err != nil {
+		t.Fatalf("sync gateway AuthPolicy without ExternalModels: %v", err)
+	}
+	policy := &unstructured.Unstructured{}
+	policy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
+	if err := c.Get(context.Background(), types.NamespacedName{Name: "maas-gateway-auth", Namespace: gatewayNS}, policy); err != nil {
+		t.Fatalf("get gateway AuthPolicy: %v", err)
+	}
+	auth := nestedMapRequired(t, policy, "spec", "defaults", "rules", "authentication")
+	for _, name := range []string{"api-keys", "api-keys-x-api-key"} {
+		if _, exists := auth[name]; !exists {
+			t.Errorf("%s must be present without any ExternalModels", name)
 		}
-	})
-
-	t.Run("syncs default gateway AuthPolicy when no MaaSAuthPolicies exist", func(t *testing.T) {
-		extModel := &unstructured.Unstructured{Object: map[string]any{
-			"apiVersion": "inference.opendatahub.io/v1alpha1",
-			"kind":       "ExternalModel",
-			"metadata":   map[string]any{"name": "claude-model", "namespace": "llm"},
-			"spec": map[string]any{
-				"externalProviderRefs": []any{
-					map[string]any{
-						"ref":         map[string]any{"name": "anthropic-provider"},
-						"targetModel": "claude-sonnet-4-5-20241022",
-						"apiFormat":   "messages",
-						"path":        "/v1/messages",
-					},
-				},
-			},
-		}}
-		extModel.SetGroupVersionKind(schema.GroupVersionKind{
-			Group: "inference.opendatahub.io", Version: "v1alpha1", Kind: "ExternalModel",
-		})
-
-		r := &MaaSAuthPolicyReconciler{
-			InfraNamespace:   "maas-system",
-			GatewayNamespace: gatewayNS,
-			GatewayName:      "maas-default-gateway",
-			ClusterAudience:  "https://kubernetes.default.svc",
-			MetadataCacheTTL: 60,
-			AuthzCacheTTL:    60,
-		}
-		baseSpec := r.buildGatewayAuthPolicySpec(nil, false, "", "models-as-a-service", gatewayNS, "maas-default-gateway")
-		gwPolicy := &unstructured.Unstructured{Object: map[string]any{
-			"apiVersion": "kuadrant.io/v1",
-			"kind":       "AuthPolicy",
-			"metadata": map[string]any{
-				"name":      "maas-gateway-auth",
-				"namespace": gatewayNS,
-				"labels": map[string]any{
-					"app.kubernetes.io/managed-by": "maas-controller",
-				},
-			},
-			"spec": baseSpec,
-		}}
-		gwPolicy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
-		gateway := &gatewayapiv1.Gateway{
-			TypeMeta: metav1.TypeMeta{
-				APIVersion: gatewayapiv1.GroupVersion.String(),
-				Kind:       "Gateway",
-			},
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "maas-default-gateway",
-				Namespace: gatewayNS,
-				UID:       "ipp-sync-gw-uid",
-			},
-		}
-
-		c := fake.NewClientBuilder().
-			WithScheme(scheme).
-			WithRESTMapper(testRESTMapper()).
-			WithObjects(extModel, gwPolicy, gateway).
-			Build()
-		r.Client = c
-		r.Scheme = scheme
-		r.ippGatewaySyncQueue = workqueue.NewTypedRateLimitingQueueWithConfig(
-			workqueue.DefaultTypedControllerRateLimiter[struct{}](),
-			workqueue.TypedRateLimitingQueueConfig[struct{}]{Name: "ipp-gateway-x-api-key-sync-test"},
-		)
-
-		reqs := r.mapIPPExternalModelToMaaSAuthPolicies(context.Background(), extModel)
-		if len(reqs) != 0 {
-			t.Fatalf("expected no MaaSAuthPolicy reconcile requests, got %d", len(reqs))
-		}
-
-		updated := &unstructured.Unstructured{}
-		updated.SetGroupVersionKind(gwPolicy.GroupVersionKind())
-		if err := c.Get(context.Background(), types.NamespacedName{Name: "maas-gateway-auth", Namespace: gatewayNS}, updated); err != nil {
-			t.Fatalf("Get gateway AuthPolicy: %v", err)
-		}
-		auth, found, err := unstructured.NestedMap(updated.Object, "spec", "defaults", "rules", "authentication")
-		if err != nil || !found {
-			t.Fatalf("authentication block missing: found=%v err=%v", found, err)
-		}
-		if _, exists := auth["api-keys-x-api-key"]; !exists {
-			t.Fatal("expected api-keys-x-api-key identity after IPP ExternalModel sync")
-		}
-	})
+	}
 }
 
 func TestAPIKeyCELPredicates(t *testing.T) {
-	t.Run("disabled returns original expressions", func(t *testing.T) {
-		isAPIKey, isNotAPIKey, extractKey := apiKeyCELPredicates(false)
-		if contains(isAPIKey, "x-api-key") {
-			t.Errorf("isAPIKey should not reference x-api-key when disabled, got: %s", isAPIKey)
+	isAPIKey, isNotAPIKey, extractKey := apiKeyCELPredicates()
+	for _, expr := range []string{isAPIKey, isNotAPIKey, extractKey} {
+		if !strings.Contains(expr, `"authorization" in request.headers`) ||
+			!strings.Contains(expr, `"x-api-key" in request.headers`) {
+			t.Errorf("API key expression must check both headers safely: %s", expr)
 		}
-		if contains(isNotAPIKey, "x-api-key") {
-			t.Errorf("isNotAPIKey should not reference x-api-key when disabled, got: %s", isNotAPIKey)
-		}
-		if contains(extractKey, "x-api-key") {
-			t.Errorf("extractKey should not reference x-api-key when disabled, got: %s", extractKey)
-		}
-	})
-
-	t.Run("enabled includes x-api-key in all expressions", func(t *testing.T) {
-		isAPIKey, isNotAPIKey, extractKey := apiKeyCELPredicates(true)
-		if !contains(isAPIKey, "x-api-key") {
-			t.Errorf("isAPIKey should reference x-api-key when enabled, got: %s", isAPIKey)
-		}
-		if !contains(isNotAPIKey, "x-api-key") {
-			t.Errorf("isNotAPIKey should reference x-api-key when enabled, got: %s", isNotAPIKey)
-		}
-		// extractKey now uses explicit presence checks on headers with fallback to empty string.
-		// This avoids CEL errors on absent Authorization header. This is the security fix.
-		if !contains(extractKey, "authorization") || !contains(extractKey, "x-api-key") {
-			t.Errorf("extractKey should check both authorization and x-api-key headers when enabled, got: %s", extractKey)
-		}
-		if !contains(extractKey, `request.headers["authorization"].replace("Bearer ", "")`) {
-			t.Errorf("extractKey should extract from authorization header when present, got: %s", extractKey)
-		}
-		if !contains(extractKey, `request.headers["x-api-key"]`) {
-			t.Errorf("extractKey should extract from x-api-key header when present, got: %s", extractKey)
-		}
-		if !contains(isAPIKey, "authorization") {
-			t.Errorf("isAPIKey should still reference authorization header, got: %s", isAPIKey)
-		}
-	})
-
-	t.Run("enabled extractKey uses explicit presence checks (safe header access)", func(t *testing.T) {
-		_, _, extractKey := apiKeyCELPredicates(true)
-		// Use explicit presence checks ("header" in request.headers) to avoid CEL errors
-		// when headers are absent. Both auth methods (Bearer and x-api-key) work safely.
-		if !strings.Contains(extractKey, `"authorization" in request.headers`) {
-			t.Errorf("extractKey should check authorization header presence before access, got: %s", extractKey)
-		}
-		if !strings.Contains(extractKey, `"x-api-key" in request.headers`) {
-			t.Errorf("extractKey should check x-api-key header presence before access, got: %s", extractKey)
-		}
-		if !strings.Contains(extractKey, ` : ""`) {
-			t.Errorf("extractKey should fallback to empty string when no API key headers present, got: %s", extractKey)
-		}
-	})
+	}
+	if !strings.Contains(extractKey, `request.headers["authorization"].replace("Bearer ", "")`) ||
+		!strings.Contains(extractKey, `request.headers["x-api-key"]`) ||
+		!strings.Contains(extractKey, ` : ""`) {
+		t.Errorf("key extraction must support both headers and absent headers: %s", extractKey)
+	}
 }
 
 // TestMaaSAuthPolicyReconciler_TenantGateway_OwnerReference verifies that the controller
