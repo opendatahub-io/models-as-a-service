@@ -19,7 +19,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: reviewdog/action-actionlint@a0eab306d932827107b47f4c55b1dcceec210352 # v1.77.0
+      - uses: reviewdog/action-actionlint@2085657ab2c7f48c58edcc767fba576f63bea76b # v1.77.0
         with:
           fail_level: any
           # Whole tree, not just changed files, so an actionlint bump surfaces

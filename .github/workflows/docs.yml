@@ -37,7 +37,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
 
       - name: Check Internal Links
-        uses: becheran/mlc@b0d0d353e04fcbcfd1d86716103d78a61e5b25dd # v1.2.2
+        uses: becheran/mlc@d791bd6ae91ea883f02172e21f453ba8da45dfcd # v1.3.0
         with:
           # Only check local/internal links - these must pass
           args: --offline .
@@ -78,7 +78,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
 
       - name: Setup Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.11'
 
@@ -141,7 +141,7 @@ jobs:
           fetch-depth: 0  # Fetch all history for mike
 
       - name: Setup Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.11'
 
