@@ -37,6 +37,7 @@
 #   POLICY_ENGINE - Rate-limiting policy engine (default: rhcl)
 #   RHCL_STARTING_CSV - Optional RHCL operator startingCSV pin
 #   RHCL_NAMESPACE - RHCL/Kuadrant workload namespace (default: kuadrant-system)
+#   OLM_BUNDLE_UNPACK_RETRY - Retry failed OLM bundle unpacks during deploy (default: true)
 #   INSECURE_HTTP  - Deploy without TLS and use HTTP for tests (default: false)
 #   EXTERNAL_OIDC - Enable external OIDC e2e coverage (default: false)
 #   OIDC_ISSUER_URL, OIDC_TOKEN_URL, OIDC_CLIENT_ID, OIDC_USERNAME, OIDC_PASSWORD
@@ -95,6 +96,7 @@ export DEPLOY_MODE=${DEPLOY_MODE:-kustomize}
 export POLICY_ENGINE="${POLICY_ENGINE:-rhcl}"
 export RHCL_NAMESPACE="${RHCL_NAMESPACE:-kuadrant-system}"
 export RHCL_STARTING_CSV="${RHCL_STARTING_CSV:-}"
+export OLM_BUNDLE_UNPACK_RETRY="${OLM_BUNDLE_UNPACK_RETRY:-true}"
 
 AUTHORINO_NAMESPACE="${AUTHORINO_NAMESPACE:-$(resolve_authorino_namespace "$POLICY_ENGINE")}"
 export AUTHORINO_NAMESPACE
