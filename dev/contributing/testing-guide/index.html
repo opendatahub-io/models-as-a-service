@@ -4027,6 +4027,31 @@
 <td>MaaSModelRef tenant auto-resolution from the gateway parentRef</td>
 </tr>
 <tr>
+<td><code>tenant_ipp</code></td>
+<td><code>test_tenant_external_model_attachment.py</code></td>
+<td>Multi-tenant AGC/Praxis external models: user-ns models on tenant gateways, lifecycle cleanup, <code>NotAllowedByListeners</code></td>
+</tr>
+<tr>
+<td><code>tenant_ipp</code></td>
+<td><code>test_tenant_external_model_shared.py</code></td>
+<td>Multi-tenant AGC/Praxis external models: shared model on two gateways, auth/quota isolation</td>
+</tr>
+<tr>
+<td><code>tenant_ipp</code></td>
+<td><code>test_tenant_external_model_conflicts.py</code></td>
+<td>Multi-tenant AGC/Praxis external models: modelName conflicts, same-named objects (overlay collision regression)</td>
+</tr>
+<tr>
+<td><code>tenant_ipp</code></td>
+<td><code>test_tenant_external_model_compat.py</code></td>
+<td>Multi-tenant AGC/Praxis external models: omitted-gatewayRefs compatibility; legacy IPP coexistence (<code>serial</code>, gated on <code>TENANT_EXTERNAL_MODEL_LEGACY_IPP_E2E</code>)</td>
+</tr>
+<tr>
+<td><code>tenant_ipp</code></td>
+<td><code>test_tenant_external_model_crossns.py</code></td>
+<td>ReferenceGrant-gated cross-namespace providers (P1; gated on <code>TENANT_EXTERNAL_MODEL_CROSSNS_E2E</code>)</td>
+</tr>
+<tr>
 <td><code>inference_priority</code></td>
 <td><code>test_inference_priority.py</code></td>
 <td>Subscription <code>inferencePriority</code>: InferenceObjective lifecycle, <code>flowControlStatuses</code>, gateway flow-control headers (<code>serial</code>; skips without the <code>inferenceobjectives.llm-d.ai</code> CRD)</td>
@@ -4043,6 +4068,7 @@
 </tr>
 </tbody>
 </table>
+<p>The <code>test_tenant_external_model_*</code> modules share the <code>tenant_ipp</code> group for now: the legacy IPP controllers do not yet skip ExternalModels with gatewayRefs (upstream image pin pending), so without the guard they adopt this suite's models and flap <code>status.httpRouteName</code> when the groups run concurrently. Split them back into their own <code>tenant_external_model</code> group once the guard ships.</p>
 <h2 id="running-tests">Running Tests</h2>
 <h3 id="unit-tests-go">Unit Tests (Go)</h3>
 <div class="tabbed-set tabbed-alternate" data-tabs="1:2"><input checked="checked" id="__tabbed_1_1" name="__tabbed_1" type="radio" /><input id="__tabbed_1_2" name="__tabbed_1" type="radio" /><div class="tabbed-labels"><label for="__tabbed_1_1">maas-api</label><label for="__tabbed_1_2">maas-controller</label></div>
@@ -4483,7 +4509,7 @@ does not identify the model route. SSE parsing is centralized in
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="October 22, 2026 13:20:42 UTC">October 22, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="October 26, 2026 04:50:03 UTC">October 26, 2026</span>
   </span>
 
     
