@@ -302,7 +302,6 @@ def test_limitador_series_are_producer_scoped_and_isolated() -> None:
                 path=f"/{shared.model_namespace}/{shared.model_ref}",
                 model_name=f"e2e/{shared.model_ref}",
                 extra_headers={
-                    "x-maas-organization-id": "forged-org",
                     "x-maas-subscription-namespace": "forged-namespace",
                 },
             )

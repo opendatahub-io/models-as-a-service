@@ -149,8 +149,8 @@ sum(rate(vllm:request_success_total[5m])) /
 # Rate limit ratio (% rejected)
 (sum(limited_calls) / (sum(authorized_calls) + sum(limited_calls))) OR vector(0)
 
-# Rate limit violations per second by subscription
-sum by (subscription) (rate(limited_calls[5m]))
+# Rate limit violations per second by limitador namespace
+sum by (limitador_namespace) (rate(limited_calls[5m]))
 ```
 
 **Latency (per-subscription SLA):**
