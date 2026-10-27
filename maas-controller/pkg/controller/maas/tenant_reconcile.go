@@ -415,7 +415,7 @@ func (r *TenantReconciler) reconcilePlatform(
 	runRes, err := tenantreconcile.RunPlatformWithReader(
 		ctx, log, r.Client, r.APIReader, r.Scheme, tenant, platformContext,
 		r.ManifestPath, appNs, r.ControllerNamespace, r.ClusterAudience,
-		r.ClusterID, r.MonitoringNamespace, mcfg,
+		r.MonitoringNamespace, mcfg,
 	)
 	if err != nil {
 		log.Error(err, "Tenant platform reconcile failed")

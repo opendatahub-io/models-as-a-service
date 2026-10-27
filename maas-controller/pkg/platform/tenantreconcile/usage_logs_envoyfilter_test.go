@@ -245,38 +245,22 @@ func TestPatchUsageLogsServiceNamespace(t *testing.T) {
 }
 
 func TestPatchUsageLogsProducerScope(t *testing.T) {
-	t.Run("appends authoritative tenant and cluster attributes", func(t *testing.T) {
+	t.Run("appends authoritative tenant attribute", func(t *testing.T) {
 		g := NewWithT(t)
 		ef := usageLogsEFWithAccessLog([]any{otelAccessLogEntry(nil)})
 
-		g.Expect(PatchUsageLogsProducerScope(ef, "redteam", "11111111-1111-1111-1111-111111111111")).To(Succeed())
+		g.Expect(PatchUsageLogsProducerScope(ef, "redteam")).To(Succeed())
 
 		tenantName, found := usageLogsResourceAttributeOf(g, ef, "tenant_name")
 		g.Expect(found).To(BeTrue())
 		g.Expect(tenantName).To(Equal("redteam"))
-		clusterID, found := usageLogsResourceAttributeOf(g, ef, "cluster_id")
-		g.Expect(found).To(BeTrue())
-		g.Expect(clusterID).To(Equal("11111111-1111-1111-1111-111111111111"))
-	})
-
-	t.Run("omits cluster attribution when cluster ID is unavailable", func(t *testing.T) {
-		g := NewWithT(t)
-		ef := usageLogsEFWithAccessLog([]any{otelAccessLogEntry(nil)})
-
-		g.Expect(PatchUsageLogsProducerScope(ef, "redteam", "")).To(Succeed())
-
-		tenantName, found := usageLogsResourceAttributeOf(g, ef, "tenant_name")
-		g.Expect(found).To(BeTrue())
-		g.Expect(tenantName).To(Equal("redteam"))
-		_, found = usageLogsResourceAttributeOf(g, ef, "cluster_id")
-		g.Expect(found).To(BeFalse())
 	})
 
 	t.Run("rejects an empty tenant name", func(t *testing.T) {
 		g := NewWithT(t)
 		ef := usageLogsEFWithAccessLog([]any{otelAccessLogEntry(nil)})
 
-		g.Expect(PatchUsageLogsProducerScope(ef, "", "11111111-1111-1111-1111-111111111111")).To(MatchError("tenant name must not be empty"))
+		g.Expect(PatchUsageLogsProducerScope(ef, "")).To(MatchError("tenant name must not be empty"))
 	})
 }
 

@@ -523,10 +523,8 @@ spec:
                     string_value: '%UPSTREAM_HOST%'
               resource_attributes:
                 values:
-                # The tenant reconciler injects authoritative producer-scope attributes
-                # here. tenant_name always comes from the reconciled Tenant, while
-                # cluster_id comes from controller configuration and is omitted on xKS.
-                # Neither attribute is sourced from request headers.
+                # The tenant reconciler injects the authoritative tenant_name here.
+                # It is sourced from the reconciled Tenant, never from request headers.
                 - key: service.name
                   value:
                     string_value: models-as-a-service

@@ -284,16 +284,8 @@ def test_limitador_series_are_producer_scoped_and_isolated() -> None:
             f"maas-telemetry-{unrelated.tenant_name}"
         )
 
-        shared_has_cluster_id = "cluster_id" in shared_policy
-        unrelated_has_cluster_id = "cluster_id" in unrelated_policy
-        assert shared_has_cluster_id == unrelated_has_cluster_id
-        cluster_id = (
-            _cel_string(shared_policy["cluster_id"])
-            if shared_has_cluster_id
-            else None
-        )
-        if cluster_id is not None:
-            assert cluster_id == _cel_string(unrelated_policy["cluster_id"])
+        assert "cluster_id" not in shared_policy
+        assert "cluster_id" not in unrelated_policy
 
         token = _get_cluster_token()
         with activate_worker_tenant(shared):
@@ -335,9 +327,7 @@ def test_limitador_series_are_producer_scoped_and_isolated() -> None:
             )
             assert response_unrelated.status_code == 200, response_unrelated.text[:500]
 
-        cluster_scope = {"cluster_id": cluster_id} if cluster_id is not None else {}
         expected_a = {
-            **cluster_scope,
             "tenant_name": shared.tenant_name,
             "tenant_namespace": shared.tenant_namespace,
             "subscription": subscription_a,
@@ -346,7 +336,6 @@ def test_limitador_series_are_producer_scoped_and_isolated() -> None:
         }
         expected_b = expected_a | {"subscription": subscription_b, "organization_id": organization_b}
         expected_unrelated = {
-            **cluster_scope,
             "tenant_name": unrelated.tenant_name,
             "tenant_namespace": unrelated.tenant_namespace,
             "subscription": subscription_unrelated,

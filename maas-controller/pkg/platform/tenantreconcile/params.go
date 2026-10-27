@@ -25,7 +25,6 @@ type PlatformParams struct {
 	GatewayNamespace      string
 	GatewayName           string
 	ClusterAudience       string
-	ClusterID             string
 	SubscriptionNamespace string
 	// ModelNamespace is the tenant namespace containing ExternalModels and their HTTPRoutes.
 	ModelNamespace string

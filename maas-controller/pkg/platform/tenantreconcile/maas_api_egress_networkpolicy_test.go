@@ -782,7 +782,6 @@ func TestRunPlatform_DisabledOmitsAndDeletesMaaSAPIEgressNetworkPolicy(t *testin
 		appNs,
 		"controller-ns",
 		"https://kubernetes.default.svc",
-		"",
 		"opendatahub",
 		mcfg,
 	)

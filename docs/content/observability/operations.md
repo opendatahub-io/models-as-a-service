@@ -299,9 +299,9 @@ Watch: `authorized_hits_total{user!="",organization_id!="",tenant_name!="",subsc
 
 | Feature | Metric | Label |
 |---------|--------|-------|
-| **Latency per subscription** | `istio_request_duration_milliseconds_bucket` | `subscription`, `subscription_namespace`, `tenant_name`, `cluster_id` |
-| **Tokens per user** | `authorized_hits_total` | `user`, `tenant_name`, `cluster_id`, `subscription`, `subscription_namespace` |
-| **Tokens per subscription** | `authorized_hits_total` | `subscription`, `subscription_namespace`, `tenant_name`, `cluster_id` |
+| **Latency per subscription** | `istio_request_duration_milliseconds_bucket` | `subscription`, `subscription_namespace`, `tenant_name` |
+| **Tokens per user** | `authorized_hits_total` | `user`, `tenant_name`, `subscription`, `subscription_namespace` |
+| **Tokens per subscription** | `authorized_hits_total` | `subscription`, `subscription_namespace`, `tenant_name` |
 | **Tokens per model** | `authorized_hits_total` | `model` |
 | **Requests per user** | `authorized_calls_total` | `user` |
 | **Requests per subscription** | `authorized_calls_total` | `subscription` |

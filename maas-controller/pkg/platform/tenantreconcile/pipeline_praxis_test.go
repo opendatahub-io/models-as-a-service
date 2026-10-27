@@ -182,7 +182,6 @@ func TestRunPlatform_PraxisSkipsIPPApply(t *testing.T) {
 		appNs,
 		"controller-ns",
 		"https://kubernetes.default.svc",
-		"",
 		"opendatahub",
 		mcfg,
 	)
@@ -243,7 +242,6 @@ func TestRunPlatform_PraxisReadyWithEnvoyFilter(t *testing.T) {
 		appNs,
 		"controller-ns",
 		"https://kubernetes.default.svc",
-		"",
 		"opendatahub",
 		mcfg,
 	)
@@ -298,7 +296,6 @@ func TestRunPlatform_PraxisCleansUpExistingIPPResources(t *testing.T) {
 		appNs,
 		"controller-ns",
 		"https://kubernetes.default.svc",
-		"",
 		"opendatahub",
 		mcfg,
 	)
@@ -386,7 +383,6 @@ profiles:
 		appNs,
 		"controller-ns",
 		"https://kubernetes.default.svc",
-		"",
 		"opendatahub",
 		mcfg,
 	)
@@ -483,7 +479,6 @@ profiles:
 		appNs,
 		"controller-ns",
 		"https://kubernetes.default.svc",
-		"",
 		"opendatahub",
 		mcfg,
 	)
@@ -514,7 +509,7 @@ profiles:
 	// be present on later steady-state reconciles.
 	steadyResult, err := RunPlatform(
 		context.Background(), logr.Discard(), cl, scheme, gotTenant, platformContext,
-		platformOverlayManifestPath(t), appNs, "controller-ns", "https://kubernetes.default.svc", "", "opendatahub", mcfg,
+		platformOverlayManifestPath(t), appNs, "controller-ns", "https://kubernetes.default.svc", "opendatahub", mcfg,
 	)
 	require.NoError(t, err)
 	require.NotEmpty(t, steadyResult.Warnings)
@@ -558,7 +553,6 @@ func TestRunPlatform_PraxisMigrationCleanupSkipsPraxisOwnedResources(t *testing.
 		appNs,
 		"controller-ns",
 		"https://kubernetes.default.svc",
-		"",
 		"opendatahub",
 		mcfg,
 	)
@@ -608,7 +602,6 @@ func TestRunPlatform_PraxisSkipsCleanupAfterMigrationComplete(t *testing.T) {
 		appNs,
 		"controller-ns",
 		"https://kubernetes.default.svc",
-		"",
 		"opendatahub",
 		mcfg,
 	)
@@ -659,7 +652,6 @@ func TestRunPlatform_DefaultTenantAppliesIPPResources(t *testing.T) {
 		appNs,
 		"controller-ns",
 		"https://kubernetes.default.svc",
-		"",
 		"opendatahub",
 		mcfg,
 	)
@@ -724,7 +716,6 @@ func TestRunPlatform_DefaultTenantReadyWithIPPEnvoyFilter(t *testing.T) {
 		appNs,
 		"controller-ns",
 		"https://kubernetes.default.svc",
-		"",
 		"opendatahub",
 		mcfg,
 	)
@@ -774,7 +765,6 @@ func TestRunPlatform_LegacyBlockedDuringInFlightSwap(t *testing.T) {
 		appNs,
 		"controller-ns",
 		"https://kubernetes.default.svc",
-		"",
 		"opendatahub",
 		mcfg,
 	)
@@ -1267,7 +1257,7 @@ func TestRunPlatformDoesNotMarkCleanupCompleteWhileWriterPodRemains(t *testing.T
 	_, err := RunPlatform(
 		context.Background(), logr.Discard(), cl, scheme, tenant,
 		PlatformContext{GatewayRef: maasv1alpha1.TenantGatewayRef{Namespace: gwNS, Name: gwName}, SkipIPP: true, Source: "aitenant"},
-		platformOverlayManifestPath(t), appNs, "controller-ns", "https://kubernetes.default.svc", "", "opendatahub", mcfg,
+		platformOverlayManifestPath(t), appNs, "controller-ns", "https://kubernetes.default.svc", "opendatahub", mcfg,
 	)
 	require.ErrorContains(t, err, "writer pod")
 	persistedTenant := &maasv1alpha1.MaasTenantConfig{}

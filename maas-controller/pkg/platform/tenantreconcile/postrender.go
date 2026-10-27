@@ -289,7 +289,7 @@ func configureTelemetryPolicyResources(log logr.Logger, tenant client.Object, re
 	gatewayNamespace := params.GatewayNamespace
 	gatewayName := params.GatewayName
 	tenantID := params.TenantIdentifier
-	metricLabels := buildTelemetryLabels(log, telemetry, tenant, params)
+	metricLabels := buildTelemetryLabels(log, telemetry, tenant)
 	tp := &unstructured.Unstructured{
 		Object: map[string]any{
 			"apiVersion": "extensions.kuadrant.io/v1alpha1",
@@ -331,7 +331,7 @@ func configureIstioTelemetryResources(log logr.Logger, tenant client.Object, res
 	gatewayNamespace := params.GatewayNamespace
 	gatewayName := params.GatewayName
 	tenantID := params.TenantIdentifier
-	tagOverrides := buildIstioTelemetryTagOverrides(tenant, params, telemetry)
+	tagOverrides := buildIstioTelemetryTagOverrides(tenant, telemetry)
 	istioTelemetry := &unstructured.Unstructured{
 		Object: map[string]any{
 			"apiVersion": "telemetry.istio.io/v1",
@@ -373,7 +373,6 @@ func configureIstioTelemetryResources(log logr.Logger, tenant client.Object, res
 
 func buildIstioTelemetryTagOverrides(
 	tenant client.Object,
-	params PlatformParams,
 	config *maasv1alpha1.TenantTelemetryConfig,
 ) map[string]any {
 	captureOrganization := true
@@ -402,12 +401,6 @@ func buildIstioTelemetryTagOverrides(
 		overrides["organization_id"] = map[string]any{
 			"operation": "UPSERT",
 			"value":     `request.headers["x-maas-organization-id"]`,
-		}
-	}
-	if params.ClusterID != "" {
-		overrides["cluster_id"] = map[string]any{
-			"operation": "UPSERT",
-			"value":     fmt.Sprintf("%q", params.ClusterID),
 		}
 	}
 	return overrides
@@ -552,7 +545,6 @@ func buildTelemetryLabels(
 	log logr.Logger,
 	config *maasv1alpha1.TenantTelemetryConfig,
 	tenant client.Object,
-	params PlatformParams,
 ) map[string]any {
 	captureOrganization := true
 	captureUser := false
@@ -579,9 +571,6 @@ func buildTelemetryLabels(
 		"subscription":           "auth.identity.selected_subscription",
 		"subscription_namespace": `has(auth.identity.subscription_info.namespace) ? auth.identity.subscription_info.namespace : ""`,
 		"cost_center":            `has(auth.identity.subscription_info.costCenter) ? auth.identity.subscription_info.costCenter : ""`,
-	}
-	if params.ClusterID != "" {
-		labels["cluster_id"] = fmt.Sprintf("%q", params.ClusterID)
 	}
 	if captureOrganization {
 		labels["organization_id"] = `has(auth.identity.subscription_info.organizationId) ? auth.identity.subscription_info.organizationId : ""`

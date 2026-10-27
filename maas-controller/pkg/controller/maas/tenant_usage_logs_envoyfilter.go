@@ -195,7 +195,7 @@ func (r *TenantReconciler) applyUsageLogsEnvoyFilter(
 	if err != nil {
 		return false, fmt.Errorf("resolve tenant name for usage logs: %w", err)
 	}
-	if err := tenantreconcile.PatchUsageLogsProducerScope(ef, tenantName, r.ClusterID); err != nil {
+	if err := tenantreconcile.PatchUsageLogsProducerScope(ef, tenantName); err != nil {
 		return false, fmt.Errorf("patch producer scope in EnvoyFilter: %w", err)
 	}
 

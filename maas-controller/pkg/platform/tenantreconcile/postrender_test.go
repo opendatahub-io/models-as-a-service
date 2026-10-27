@@ -124,8 +124,6 @@ func TestBuildTelemetryLabels(t *testing.T) {
 			},
 		},
 	}
-	telemetryParams := PlatformParams{ClusterID: "11111111-1111-1111-1111-111111111111"}
-
 	tests := []struct {
 		name           string
 		config         *maasv1alpha1.TenantTelemetryConfig
@@ -138,7 +136,6 @@ func TestBuildTelemetryLabels(t *testing.T) {
 			expectedLabels: map[string]any{
 				"tenant_name":            `"models-as-a-service"`,
 				"tenant_namespace":       `"models-as-a-service"`,
-				"cluster_id":             `"11111111-1111-1111-1111-111111111111"`,
 				"subscription":           "auth.identity.selected_subscription",
 				"subscription_namespace": `has(auth.identity.subscription_info.namespace) ? auth.identity.subscription_info.namespace : ""`,
 				"cost_center":            `has(auth.identity.subscription_info.costCenter) ? auth.identity.subscription_info.costCenter : ""`,
@@ -209,7 +206,6 @@ func TestBuildTelemetryLabels(t *testing.T) {
 			expectedLabels: map[string]any{
 				"tenant_name":            `"models-as-a-service"`,
 				"tenant_namespace":       `"models-as-a-service"`,
-				"cluster_id":             `"11111111-1111-1111-1111-111111111111"`,
 				"subscription":           "auth.identity.selected_subscription",
 				"subscription_namespace": `has(auth.identity.subscription_info.namespace) ? auth.identity.subscription_info.namespace : ""`,
 				"cost_center":            `has(auth.identity.subscription_info.costCenter) ? auth.identity.subscription_info.costCenter : ""`,
@@ -223,7 +219,7 @@ func TestBuildTelemetryLabels(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			labels := buildTelemetryLabels(logr.Discard(), tt.config, telemetryTenant, telemetryParams)
+			labels := buildTelemetryLabels(logr.Discard(), tt.config, telemetryTenant)
 
 			for k, v := range tt.expectedLabels {
 				assert.Equal(t, v, labels[k], "label %q", k)
@@ -233,23 +229,6 @@ func TestBuildTelemetryLabels(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestBuildTelemetryLabelsOmitsClusterIDWhenUnavailable(t *testing.T) {
-	tenant := &maasv1alpha1.MaasTenantConfig{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      maasv1alpha1.MaasTenantConfigInstanceName,
-			Namespace: "models-as-a-service",
-			Labels: map[string]string{
-				LabelTenantName:      "models-as-a-service",
-				LabelTenantNamespace: "models-as-a-service",
-			},
-		},
-	}
-
-	labels := buildTelemetryLabels(logr.Discard(), nil, tenant, PlatformParams{})
-	assert.Contains(t, labels, "tenant_name")
-	assert.NotContains(t, labels, "cluster_id")
 }
 
 func TestConfigureTelemetryPolicyResourcesIncludesProducerScope(t *testing.T) {
@@ -268,7 +247,6 @@ func TestConfigureTelemetryPolicyResourcesIncludesProducerScope(t *testing.T) {
 		GatewayNamespace: "openshift-ingress",
 		GatewayName:      "redteam",
 		TenantIdentifier: "redteam",
-		ClusterID:        "11111111-1111-1111-1111-111111111111",
 	}
 
 	require.NoError(t, configureTelemetryPolicyResources(logr.Discard(), tenant, &resources, params))
@@ -280,7 +258,6 @@ func TestConfigureTelemetryPolicyResourcesIncludesProducerScope(t *testing.T) {
 	require.True(t, found)
 	assert.Equal(t, `"redteam"`, labels["tenant_name"])
 	assert.Equal(t, `"ai-tenant-redteam"`, labels["tenant_namespace"])
-	assert.Equal(t, `"11111111-1111-1111-1111-111111111111"`, labels["cluster_id"])
 	assert.Equal(t, "auth.identity.selected_subscription", labels["subscription"])
 	assert.Contains(t, labels, "subscription_namespace")
 	assert.Contains(t, labels, "organization_id")
@@ -294,9 +271,7 @@ func TestBuildIstioTelemetryTagOverridesIncludesProducerScope(t *testing.T) {
 			Labels:    map[string]string{LabelTenantName: "redteam"},
 		},
 	}
-	params := PlatformParams{ClusterID: "11111111-1111-1111-1111-111111111111"}
-
-	overrides := buildIstioTelemetryTagOverrides(tenant, params, nil)
+	overrides := buildIstioTelemetryTagOverrides(tenant, nil)
 	assert.Equal(t, map[string]any{
 		"operation": "UPSERT",
 		"value":     `"redteam"`,
@@ -305,10 +280,6 @@ func TestBuildIstioTelemetryTagOverridesIncludesProducerScope(t *testing.T) {
 		"operation": "UPSERT",
 		"value":     `"ai-tenant-redteam"`,
 	}, overrides["tenant_namespace"])
-	assert.Equal(t, map[string]any{
-		"operation": "UPSERT",
-		"value":     `"11111111-1111-1111-1111-111111111111"`,
-	}, overrides["cluster_id"])
 	assert.Equal(t, map[string]any{
 		"operation": "UPSERT",
 		"value":     `request.headers["x-maas-subscription"]`,
@@ -323,18 +294,18 @@ func TestBuildIstioTelemetryTagOverridesIncludesProducerScope(t *testing.T) {
 	}, overrides["organization_id"])
 	assert.NotContains(t, overrides, "user")
 
-	overrides = buildIstioTelemetryTagOverrides(tenant, params, &maasv1alpha1.TenantTelemetryConfig{
+	overrides = buildIstioTelemetryTagOverrides(tenant, &maasv1alpha1.TenantTelemetryConfig{
 		Metrics: &maasv1alpha1.TenantMetricsConfig{CaptureUser: boolPtr(true)},
 	})
 	assert.NotContains(t, overrides, "user")
 
-	overrides = buildIstioTelemetryTagOverrides(tenant, params, &maasv1alpha1.TenantTelemetryConfig{
+	overrides = buildIstioTelemetryTagOverrides(tenant, &maasv1alpha1.TenantTelemetryConfig{
 		Metrics: &maasv1alpha1.TenantMetricsConfig{CaptureOrganization: boolPtr(false)},
 	})
 	assert.NotContains(t, overrides, "organization_id")
 
-	overrides = buildIstioTelemetryTagOverrides(tenant, PlatformParams{}, nil)
-	assert.NotContains(t, overrides, "cluster_id")
+	overrides = buildIstioTelemetryTagOverrides(tenant, nil)
+	assert.NotContains(t, overrides, "user")
 }
 
 func TestConfigurePayloadProcessingHPA(t *testing.T) {

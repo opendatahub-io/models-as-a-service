@@ -6,8 +6,8 @@
 
 | Metric | Type | Labels | Use For |
 |--------|------|--------|---------|
-| `authorized_hits` | Counter | `user`, `tenant_name`, `tenant_namespace`, `cluster_id`, `subscription`, `subscription_namespace`, `model` | **Billing/Cost** - Total tokens consumed (input + output) |
-| `authorized_calls` | Counter | `user`, `tenant_name`, `tenant_namespace`, `cluster_id`, `subscription`, `subscription_namespace` | **API Usage** - Number of API calls allowed |
+| `authorized_hits` | Counter | `user`, `tenant_name`, `tenant_namespace`, `subscription`, `subscription_namespace`, `model` | **Billing/Cost** - Total tokens consumed (input + output) |
+| `authorized_calls` | Counter | `user`, `tenant_name`, `tenant_namespace`, `subscription`, `subscription_namespace` | **API Usage** - Number of API calls allowed |
 | `limited_calls` | Counter | `limitador_namespace` | **Rate Limiting** - Requests denied due to quotas |
 
 !!! note "`model` label availability"
@@ -20,7 +20,7 @@
 
 | Metric | Labels | Description |
 |--------|--------|-------------|
-| `istio_request_duration_milliseconds_bucket` | `destination_service_name`, `tenant_name`, `tenant_namespace`, `cluster_id`, `subscription`, `subscription_namespace`, `organization_id` (optional) | Gateway-level latency (no model or user label) |
+| `istio_request_duration_milliseconds_bucket` | `destination_service_name`, `tenant_name`, `tenant_namespace`, `subscription`, `subscription_namespace`, `organization_id` (optional) | Gateway-level latency (no model or user label) |
 | `vllm:e2e_request_latency_seconds` | `model_name` | Model inference end-to-end latency |
 | `vllm:time_to_first_token_seconds` | `model_name` | Time to First Token (TTFT) |
 | `vllm:inter_token_latency_seconds` | `model_name` | Inter-Token Latency (ITL) |

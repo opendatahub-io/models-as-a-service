@@ -11,7 +11,6 @@ import (
 // usage log records are attributed to.
 const usageLogsServiceNamespaceAttr = "service.namespace"
 const usageLogsTenantNameAttr = "tenant_name"
-const usageLogsClusterIDAttr = "cluster_id"
 
 // otelAccessLoggerName is the Envoy access logger that carries resource_attributes.
 // HttpConnectionManager.access_log is a repeated field, and resource_attributes exists only
@@ -83,10 +82,9 @@ func PatchUsageLogsServiceNamespace(ef *unstructured.Unstructured, namespace str
 	return nil
 }
 
-// PatchUsageLogsProducerScope appends the authoritative tenant and producer-cluster
-// resource attributes. The values come from the reconciled tenant and controller
-// configuration, never from request headers. Cluster attribution is omitted on xKS.
-func PatchUsageLogsProducerScope(ef *unstructured.Unstructured, tenantName, clusterID string) error {
+// PatchUsageLogsProducerScope appends the authoritative tenant resource attribute.
+// Its value comes from the reconciled tenant, never from request headers.
+func PatchUsageLogsProducerScope(ef *unstructured.Unstructured, tenantName string) error {
 	if tenantName == "" {
 		return errors.New("tenant name must not be empty")
 	}
@@ -124,11 +122,6 @@ func PatchUsageLogsProducerScope(ef *unstructured.Unstructured, tenantName, clus
 			}
 			if err := appendUsageLogsResourceAttribute(accessLogEntry, usageLogsTenantNameAttr, tenantName); err != nil {
 				return err
-			}
-			if clusterID != "" {
-				if err := appendUsageLogsResourceAttribute(accessLogEntry, usageLogsClusterIDAttr, clusterID); err != nil {
-					return err
-				}
 			}
 			patched = true
 		}
