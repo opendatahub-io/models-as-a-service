@@ -130,11 +130,16 @@ func (r *LifecycleReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	if err := r.Get(ctx, req.NamespacedName, &dep); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
+	// Older versions left a finalizer on this controller's own Deployment. Remove
+	// it before any setup or teardown step can requeue or fail, so namespace
+	// deletion never waits for this controller to clean up its own workload.
+	if err := r.stripLegacyCleanupFinalizer(ctx, log, req.NamespacedName); err != nil {
+		return ctrl.Result{}, err
+	}
 
 	if dep.DeletionTimestamp.IsZero() {
-		// Strip before anything else so that, if teardown is requested below, Config
-		// deletion can never cascade-delete the Deployment via a stale ownerReference
-		// from a pre-self-teardown install.
+		// Strip the legacy ownerReference before teardown can delete Config and
+		// cascade-delete the Deployment from a pre-self-teardown install.
 		if err := r.stripLegacyDeploymentConfigOwnerReference(ctx, log, req.NamespacedName); err != nil {
 			return ctrl.Result{}, err
 		}
@@ -172,9 +177,6 @@ func (r *LifecycleReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		if err := r.ensureDiscoveryService(ctx, log); err != nil {
 			return ctrl.Result{}, err
 		}
-		if err := r.stripLegacyCleanupFinalizer(ctx, log, req.NamespacedName); err != nil {
-			return ctrl.Result{}, err
-		}
 		if cfg != nil {
 			if err := r.syncModuleStatus(ctx, cfg); err != nil {
 				return ctrl.Result{}, err
@@ -186,10 +188,6 @@ func (r *LifecycleReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		return ctrl.Result{}, nil
 	}
 
-	// Terminating: remove legacy finalizer only so deletion is not blocked.
-	if err := r.stripLegacyCleanupFinalizer(ctx, log, req.NamespacedName); err != nil {
-		return ctrl.Result{}, err
-	}
 	return ctrl.Result{}, nil
 }
 

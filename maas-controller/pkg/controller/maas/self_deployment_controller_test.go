@@ -7,6 +7,7 @@ import (
 	goruntime "runtime"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -134,6 +135,30 @@ func TestLifecycleReconciler_CreatesConfigWhenMissing(t *testing.T) {
 	g.Expect(cfg.Name).To(Equal(maasv1alpha1.ConfigInstanceName))
 }
 
+func TestLifecycleReconciler_StripsLegacyFinalizerBeforeConfigRequeue(t *testing.T) {
+	g := NewWithT(t)
+	s := lifecycleTestScheme(t)
+	dep := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{
+		Name:       "maas-controller",
+		Namespace:  "opendatahub",
+		Finalizers: []string{CleanupFinalizer, "example.com/other"},
+	}}
+	// A Config without a UID makes normal reconciliation requeue before module
+	// setup. Legacy finalizers still need to be cleared on this first pass.
+	cfg := &maasv1alpha1.Config{ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName}}
+	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(dep, cfg).Build()
+	r := &LifecycleReconciler{Client: cl, Scheme: s}
+	key := client.ObjectKeyFromObject(dep)
+
+	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key})
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(res.RequeueAfter).To(Equal(2 * time.Second))
+
+	var updated appsv1.Deployment
+	g.Expect(cl.Get(context.Background(), key, &updated)).To(Succeed())
+	g.Expect(updated.Finalizers).To(Equal([]string{"example.com/other"}))
+}
+
 func TestLifecycleReconciler_DoesNotRecreateConfigWhenTeardownRequested(t *testing.T) {
 	g := NewWithT(t)
 	s := lifecycleTestScheme(t)
@@ -143,6 +168,7 @@ func TestLifecycleReconciler_DoesNotRecreateConfigWhenTeardownRequested(t *testi
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "maas-controller",
 			Namespace: depNS,
+			Finalizers: []string{CleanupFinalizer},
 			Annotations: map[string]string{
 				TeardownRequestedAnnotation: "true",
 			},
@@ -173,6 +199,9 @@ func TestLifecycleReconciler_DoesNotRecreateConfigWhenTeardownRequested(t *testi
 
 	var cfg maasv1alpha1.Config
 	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: maasv1alpha1.ConfigInstanceName}, &cfg)).ToNot(Succeed())
+	var updatedDep appsv1.Deployment
+	g.Expect(cl.Get(context.Background(), client.ObjectKeyFromObject(dep), &updatedDep)).To(Succeed())
+	g.Expect(updatedDep.Finalizers).NotTo(ContainElement(CleanupFinalizer))
 }
 
 func TestLifecycleReconciler_TeardownRequestedDeletesConfigAndMarksCompleted(t *testing.T) {
@@ -277,6 +306,7 @@ func TestLifecycleReconciler_TeardownRequestedWithoutConfigRequestsOrphanCleanup
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "maas-controller",
 			Namespace: depNS,
+			Finalizers: []string{CleanupFinalizer},
 			Annotations: map[string]string{
 				TeardownRequestedAnnotation: "true",
 			},
@@ -322,6 +352,7 @@ func TestLifecycleReconciler_TeardownRequestedWithoutConfigRequestsOrphanCleanup
 	// The completion annotation must not be set yet: AITenant deletion is still pending.
 	var updatedDep appsv1.Deployment
 	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: "maas-controller", Namespace: depNS}, &updatedDep)).To(Succeed())
+	g.Expect(updatedDep.Finalizers).NotTo(ContainElement(CleanupFinalizer))
 	g.Expect(updatedDep.Annotations[TeardownCompletedAnnotation]).To(BeEmpty())
 }
 
