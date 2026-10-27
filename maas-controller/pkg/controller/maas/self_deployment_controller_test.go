@@ -166,8 +166,8 @@ func TestLifecycleReconciler_DoesNotRecreateConfigWhenTeardownRequested(t *testi
 	const depNS = "opendatahub"
 	dep := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "maas-controller",
-			Namespace: depNS,
+			Name:       "maas-controller",
+			Namespace:  depNS,
 			Finalizers: []string{CleanupFinalizer},
 			Annotations: map[string]string{
 				TeardownRequestedAnnotation: "true",
@@ -304,8 +304,8 @@ func TestLifecycleReconciler_TeardownRequestedWithoutConfigRequestsOrphanCleanup
 	const depNS = "opendatahub"
 	dep := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "maas-controller",
-			Namespace: depNS,
+			Name:       "maas-controller",
+			Namespace:  depNS,
 			Finalizers: []string{CleanupFinalizer},
 			Annotations: map[string]string{
 				TeardownRequestedAnnotation: "true",
