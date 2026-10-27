@@ -48,6 +48,8 @@ Environment variables (all optional unless noted):
   - E2E_GATEWAY_PROPAGATION_DELAY: Delay between gateway retries in seconds (default: 5)
   - E2E_GATEWAY_ENFORCED_TIMEOUT: Wait for AuthPolicy Accepted+Enforced (default: 180)
   - E2E_GATEWAY_ENFORCED_MISSING_GRACE: Fail early if AuthPolicy CR absent this long (default: 30)
+  - E2E_AUTHPOLICY_PHASE_TIMEOUT: MaaSAuthPolicy phase wait (default: 120)
+  - E2E_MAAS_SUBSCRIPTION_PHASE_TIMEOUT: MaaSSubscription phase wait (default: 120)
   - E2E_SUBSCRIPTION_INFERENCE_READY_TIMEOUT: Discovery + direct/mirrored TRLP wait (default: 300)
   - E2E_SUBSCRIPTION_TRLP_TIMEOUT: MaaSSubscription mirrored TRLP ready wait (default: 180)
   - E2E_OC_TIMEOUT: Per-attempt `oc` process timeout in seconds (default: 60)
@@ -97,9 +99,9 @@ GATEWAY_ENFORCED_TIMEOUT = int(os.environ.get("E2E_GATEWAY_ENFORCED_TIMEOUT", "1
 # If the AuthPolicy CR is missing this long, fail fast (misconfigured name/namespace)
 # instead of burning the full GATEWAY_ENFORCED_TIMEOUT.
 GATEWAY_ENFORCED_MISSING_GRACE = int(os.environ.get("E2E_GATEWAY_ENFORCED_MISSING_GRACE", "30"))
-# Controller reconcile under pytest-xdist load needs longer phase waits (see prow_run_smoke_test.sh).
-AUTHPOLICY_PHASE_TIMEOUT = int(os.environ.get("E2E_AUTHPOLICY_PHASE_TIMEOUT", "60"))
-MAAS_SUBSCRIPTION_PHASE_TIMEOUT = int(os.environ.get("E2E_MAAS_SUBSCRIPTION_PHASE_TIMEOUT", "60"))
+# Controller reconcile under pytest-xdist load; 120s matches parallel CI (run_e2e_tests.sh).
+AUTHPOLICY_PHASE_TIMEOUT = int(os.environ.get("E2E_AUTHPOLICY_PHASE_TIMEOUT", "120"))
+MAAS_SUBSCRIPTION_PHASE_TIMEOUT = int(os.environ.get("E2E_MAAS_SUBSCRIPTION_PHASE_TIMEOUT", "120"))
 # Parallel group-test can backlog Kuadrant TRLP reconciliation; 180s flaked on worker tenants.
 SUBSCRIPTION_INFERENCE_READY_TIMEOUT = int(
     os.environ.get("E2E_SUBSCRIPTION_INFERENCE_READY_TIMEOUT", "300")
@@ -1481,7 +1483,7 @@ def _wait_for_gateway_auth_enforced(
 
 
 def _wait_for_token_rate_limit_policy(
-    model_ref, model_namespace=MODEL_NAMESPACE, timeout=60, *, subscription_name=None, subscription_namespace=None
+    model_ref, model_namespace=MODEL_NAMESPACE, timeout=180, *, subscription_name=None, subscription_namespace=None
 ):
     """Wait for the current TokenRateLimitPolicy generation to be enforced.
 
@@ -1491,7 +1493,7 @@ def _wait_for_token_rate_limit_policy(
     Args:
         model_ref: Name of the model (e.g., "e2e-distinct-simulated")
         model_namespace: Namespace where the TRLP should be created (default: MODEL_NAMESPACE)
-        timeout: Maximum wait time in seconds (default: 60)
+        timeout: Maximum wait time in seconds (default: 180)
         subscription_name: Subscription that the policy must include, if supplied
         subscription_namespace: Subscription namespace (defaults to _ns())
 
@@ -1613,7 +1615,7 @@ def _wait_for_maas_subscription_phase(name, expected_phase="Active", namespace=N
     )
 
 
-def _wait_for_subscription_discovery_ready(name, namespace=None, timeout=90):
+def _wait_for_subscription_discovery_ready(name, namespace=None, timeout=120):
     """Wait until a subscription can support discovery and management APIs.
 
     A subscription may remain Degraded while its model-wide TRLP is being
@@ -1669,7 +1671,7 @@ def _wait_for_subscription_discovery_ready(name, namespace=None, timeout=90):
     )
 
 
-def _wait_for_subscription_generation_observed(name, generation, namespace=None, timeout=90):
+def _wait_for_subscription_generation_observed(name, generation, namespace=None, timeout=120):
     """Wait until the controller has reconciled a MaaSSubscription at ``generation``.
 
     The controller writes the Ready condition's observedGeneration at the end of
@@ -1720,7 +1722,7 @@ def _wait_for_subscription_trlp_status(
     name,
     expected_ready=True,
     namespace=None,
-    timeout=60,
+    timeout=SUBSCRIPTION_TRLP_STATUS_TIMEOUT,
     model=None,
 ):
     """Wait for MaaSSubscription's TokenRateLimitPolicy status to reach expected ready state.
@@ -1892,13 +1894,13 @@ def _wait_for_maas_auth_policy_phase(name, expected_phase="Active", namespace=No
     )
 
 
-def _wait_for_model_ready(model_ref, namespace=MODEL_NAMESPACE, timeout=60):
+def _wait_for_model_ready(model_ref, namespace=MODEL_NAMESPACE, timeout=120):
     """Wait for MaaSModelRef to reach Ready phase.
 
     Args:
         model_ref: Name of the MaaSModelRef
         namespace: Namespace (default: MODEL_NAMESPACE)
-        timeout: Maximum wait time in seconds (default: 60)
+        timeout: Maximum wait time in seconds (default: 120)
 
     Returns:
         The MaaSModelRef CR dict when Ready

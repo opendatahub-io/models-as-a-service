@@ -221,10 +221,11 @@ def _apply_baseline_stack(context: WorkerTenantContext) -> None:
     _wait_for_maas_auth_policy_phase(
         context.policy_name,
         namespace=context.tenant_namespace,
-        timeout=int(os.environ.get("E2E_AUTHPOLICY_PHASE_TIMEOUT", "120")),
         require_auth_policies=False,
         require_enforced=False,
     )
+    # Worker bootstrap stands up free + premium models at once; subscription Active
+    # can exceed the 120s default while both TRLPs sync under parallel xdist.
     _wait_for_maas_subscription_phase(
         context.subscription_name,
         namespace=context.tenant_namespace,
@@ -233,10 +234,10 @@ def _apply_baseline_stack(context: WorkerTenantContext) -> None:
     _wait_for_maas_auth_policy_phase(
         "premium-simulator-access",
         namespace=context.tenant_namespace,
-        timeout=int(os.environ.get("E2E_AUTHPOLICY_PHASE_TIMEOUT", "120")),
         require_auth_policies=False,
         require_enforced=False,
     )
+    # Same dual-model bootstrap budget as the free-tier subscription above.
     _wait_for_maas_subscription_phase(
         context.premium_subscription_name,
         namespace=context.tenant_namespace,

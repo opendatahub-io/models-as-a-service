@@ -162,7 +162,8 @@ SKIP_DEPLOYMENT=true ./test/e2e/run-tests-quick.sh
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `E2E_PARALLEL_WORKERS` | `7` | Parallel workers for pass 1 (`-m "not serial and not legacy_ipp"`). Pass 2 (`@serial`, not `legacy_ipp`) always runs on one worker. Set to `1` for single-worker pass 1 (no xdist); marker split is unchanged. |
-| `E2E_AUTHPOLICY_PHASE_TIMEOUT` | `120` (parallel) / `60` (serial) | MaaSAuthPolicy phase wait |
+| `E2E_AUTHPOLICY_PHASE_TIMEOUT` | `120` | MaaSAuthPolicy phase wait (`test_helper` default; parallel runner re-exports the same) |
+| `E2E_MAAS_SUBSCRIPTION_PHASE_TIMEOUT` | `120` | MaaSSubscription phase wait |
 | `E2E_GATEWAY_ENFORCED_TIMEOUT` | `240` (parallel) / `180` (serial) | Kuadrant gateway auth enforced wait |
 | `E2E_MULTITENANCY_PHASE_TIMEOUT` | `180` (parallel) / `120` (serial) | Tenant discovery phase wait |
 | `E2E_SUBSCRIPTION_INFERENCE_READY_TIMEOUT` | `300` | Subscription discovery + direct/mirrored TRLP enforcement |
