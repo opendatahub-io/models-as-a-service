@@ -195,6 +195,50 @@ func usageLogsResourceAttribute(ef *unstructured.Unstructured, key string) (stri
 	return "", errors.New(key + " resource attribute not found in EnvoyFilter")
 }
 
+func usageLogsAttribute(ef *unstructured.Unstructured, key string) (string, error) {
+	configPatches, _, err := unstructured.NestedSlice(ef.Object, "spec", "configPatches")
+	if err != nil {
+		return "", err
+	}
+	for _, cp := range configPatches {
+		patch, ok := cp.(map[string]any)
+		if !ok {
+			continue
+		}
+		accessLog, found, err := unstructured.NestedSlice(patch, "patch", "value", "typed_config", "access_log")
+		if err != nil {
+			return "", err
+		}
+		if !found {
+			continue
+		}
+		for _, entry := range accessLog {
+			logEntry, ok := entry.(map[string]any)
+			if !ok {
+				continue
+			}
+			values, found, err := unstructured.NestedSlice(logEntry, "typed_config", "attributes", "values")
+			if err != nil {
+				return "", err
+			}
+			if !found {
+				continue
+			}
+			for _, value := range values {
+				attr, ok := value.(map[string]any)
+				if !ok {
+					continue
+				}
+				if attrKey, _, _ := unstructured.NestedString(attr, "key"); attrKey == key {
+					attrValue, _, _ := unstructured.NestedString(attr, "value", "string_value")
+					return attrValue, nil
+				}
+			}
+		}
+	}
+	return "", errors.New(key + " attribute not found in EnvoyFilter")
+}
+
 func TestTenantEnsureUsageLogsEnvoyFilter(t *testing.T) {
 	usageLogsServiceNamespace := func(ef *unstructured.Unstructured) (string, error) {
 		configPatches, found, err := unstructured.NestedSlice(ef.Object, "spec", "configPatches")
@@ -452,6 +496,11 @@ func TestTenantEnsureUsageLogsEnvoyFilter(t *testing.T) {
 		clusterID, err := usageLogsResourceAttribute(ef, "cluster_id")
 		g.Expect(err).NotTo(HaveOccurred())
 		g.Expect(clusterID).To(Equal("11111111-1111-1111-1111-111111111111"))
+		subscriptionNamespace, err := usageLogsAttribute(ef, "subscription_namespace")
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(subscriptionNamespace).To(ContainSubstring(
+			`response.code == 429 ? request.headers["x-maas-subscription-namespace"] : ""`,
+		))
 	})
 
 	t.Run("enabled omits cluster attribution on xKS", func(t *testing.T) {
