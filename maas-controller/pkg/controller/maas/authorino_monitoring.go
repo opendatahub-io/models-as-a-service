@@ -2,8 +2,9 @@ package maas
 
 import (
 	"context"
-	"embed"
 	"fmt"
+	"os"
+	"path/filepath"
 
 	"github.com/go-logr/logr"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -17,20 +18,20 @@ import (
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 )
 
-//go:embed authorino-monitoring/*.yaml
-var authorinoMonitoringManifests embed.FS
-
 // +kubebuilder:rbac:groups=monitoring.rhobs,resources=prometheusrules,verbs=get;list;watch;create;patch;delete
 
 // ensureAuthorinoMonitoring connects Authorino to the DSCI monitoring stack.
 // The coreos ServiceMonitor is selected by OTEL; rhobs rules are evaluated by
 // the product Prometheus against OTEL-normalized metric names.
 func (r *LifecycleReconciler) ensureAuthorinoMonitoring(ctx context.Context, log logr.Logger) error {
+	if r.AuthorinoMonitoringManifestsPath == "" {
+		return nil
+	}
 	var cfg maasv1alpha1.Config
 	if err := r.Get(ctx, client.ObjectKey{Name: maasv1alpha1.ConfigInstanceName}, &cfg); err != nil {
 		return client.IgnoreNotFound(err)
 	}
-	resources, err := authorinoMonitoringResources(r.MonitoringNamespace)
+	resources, err := authorinoMonitoringResources(r.AuthorinoMonitoringManifestsPath, r.MonitoringNamespace)
 	if err != nil {
 		return err
 	}
@@ -43,8 +44,8 @@ func (r *LifecycleReconciler) ensureAuthorinoMonitoring(ctx context.Context, log
 			return fmt.Errorf("set Authorino monitoring owner: %w", err)
 		}
 		if err := r.Apply(ctx, client.ApplyConfigurationFromUnstructured(res), client.ForceOwnership, client.FieldOwner("maas-controller")); err != nil {
-			// Monitoring APIs are optional, as with the Limitador ServiceMonitor.
-			if apierrors.IsNotFound(err) || apimeta.IsNoMatchError(err) {
+			// COO supplies monitoring.rhobs; core OpenShift supplies monitoring.coreos.com.
+			if isOptionalAPIGroup(res.GroupVersionKind().Group) && (apierrors.IsNotFound(err) || apimeta.IsNoMatchError(err)) {
 				continue
 			}
 			return fmt.Errorf("apply Authorino %s %s/%s: %w", res.GetKind(), res.GetNamespace(), res.GetName(), err)
@@ -53,20 +54,21 @@ func (r *LifecycleReconciler) ensureAuthorinoMonitoring(ctx context.Context, log
 	return nil
 }
 
-func authorinoMonitoringResources(namespace string) ([]unstructured.Unstructured, error) {
-	entries, err := authorinoMonitoringManifests.ReadDir("authorino-monitoring")
-	if err != nil {
-		return nil, fmt.Errorf("read Authorino monitoring manifests: %w", err)
+func authorinoMonitoringResources(manifestsPath, namespace string) ([]unstructured.Unstructured, error) {
+	files := []string{
+		"authorino-maas-metadata-evaluator-prometheusrule.yaml",
+		"authorino-maas-oidc-prometheusrule.yaml",
+		"authorino-server-metrics-servicemonitor.yaml",
 	}
-	resources := make([]unstructured.Unstructured, 0, len(entries))
-	for _, entry := range entries {
-		data, err := authorinoMonitoringManifests.ReadFile("authorino-monitoring/" + entry.Name())
+	resources := make([]unstructured.Unstructured, 0, len(files))
+	for _, name := range files {
+		data, err := os.ReadFile(filepath.Join(manifestsPath, name))
 		if err != nil {
-			return nil, fmt.Errorf("read Authorino manifest %s: %w", entry.Name(), err)
+			return nil, fmt.Errorf("read Authorino manifest %s: %w", name, err)
 		}
 		var resource unstructured.Unstructured
 		if err := yaml.Unmarshal(data, &resource.Object); err != nil {
-			return nil, fmt.Errorf("decode Authorino manifest %s: %w", entry.Name(), err)
+			return nil, fmt.Errorf("decode Authorino manifest %s: %w", name, err)
 		}
 		resource.SetNamespace(namespace)
 		resources = append(resources, resource)

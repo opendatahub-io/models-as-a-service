@@ -87,22 +87,23 @@ const usageLogsTenancyProxyContainerName = "proxy"
 // ownerReference (set by older maas-controller versions) are removed when present.
 type LifecycleReconciler struct {
 	client.Client
-	Scheme                      *runtime.Scheme
-	DeploymentName              string
-	DeploymentNS                string
-	TenantSubscriptionNamespace string
-	AITenantNamespace           string
-	GatewayName                 string
-	GatewayNamespace            string
-	ObservabilityManifestsPath  string
-	MonitoringNamespace         string
-	UsageLogsManifestPath       string
-	DiscoveryEnabled            bool
-	DiscoveryManifestPath       string
-	DiscoveryImage              string
-	DiscoveryLogLevel           string
-	DiscoveryNamespace          string
-	DiscoveryReplicas           *int32
+	Scheme                           *runtime.Scheme
+	DeploymentName                   string
+	DeploymentNS                     string
+	TenantSubscriptionNamespace      string
+	AITenantNamespace                string
+	GatewayName                      string
+	GatewayNamespace                 string
+	ObservabilityManifestsPath       string
+	AuthorinoMonitoringManifestsPath string
+	MonitoringNamespace              string
+	UsageLogsManifestPath            string
+	DiscoveryEnabled                 bool
+	DiscoveryManifestPath            string
+	DiscoveryImage                   string
+	DiscoveryLogLevel                string
+	DiscoveryNamespace               string
+	DiscoveryReplicas                *int32
 
 	staleResourcesCleanupMu        sync.Mutex
 	staleResourcesCleanupCompleted bool

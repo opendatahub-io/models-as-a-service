@@ -1115,6 +1115,7 @@ func main() {
 	var enableTenantNamespaceDiscovery bool
 	var maxConcurrentReconciles int
 	var observabilityManifestsPath string
+	var authorinoMonitoringManifestsPath string
 	var monitoringNamespace string
 	var usageLogsManifestPath string
 	var discoveryManifestPath string
@@ -1132,6 +1133,7 @@ func main() {
 	flag.StringVar(&infraNamespace, "infra-namespace", tenantreconcile.DefaultInfraNamespace,
 		"Infrastructure namespace for maas-api, postgres, and maas-db-config. "+
 			"Defaults to 'AUTO' (namespace separation enabled). Set to empty string to disable for ROSA.")
+	flag.StringVar(&authorinoMonitoringManifestsPath, "authorino-monitoring-manifests-path", "/deployment/base/observability", "Path to Authorino monitoring manifests.")
 	flag.StringVar(&observabilityManifestsPath, "observability-manifests-path", "/deployment/components/observability/observability/dashboards", "Path to observability dashboard kustomize manifests.")
 	flag.StringVar(&usageLogsManifestPath, "usage-logs-manifest-path", "/deployment/components/observability/usage-logs", "Path to usage logs kustomize manifests.")
 	flag.StringVar(&discoveryManifestPath, "discovery-manifest-path", "/deployment/base/maas-discovery", "Path to discovery service kustomize manifests.")
@@ -1415,22 +1417,23 @@ func main() {
 	// Deployment and default-tenant to Config (non-controller owner refs), and strips the legacy
 	// cleanup finalizer if present. controllerNamespace is where maas-controller is deployed.
 	if err := (&maas.LifecycleReconciler{
-		Client:                      mgr.GetClient(),
-		Scheme:                      mgr.GetScheme(),
-		DeploymentName:              "maas-controller",
-		DeploymentNS:                controllerNamespace,
-		TenantSubscriptionNamespace: maasSubscriptionNamespace,
-		AITenantNamespace:           aitenantNamespace,
-		ObservabilityManifestsPath:  observabilityManifestsPath,
-		UsageLogsManifestPath:       usageLogsManifestPath,
-		MonitoringNamespace:         monitoringNamespace,
-		GatewayNamespace:            gatewayNamespace,
-		DiscoveryEnabled:            os.Getenv("MAAS_DISCOVERY_ENABLED") == "true",
-		DiscoveryManifestPath:       discoveryManifestPath,
-		DiscoveryImage:              os.Getenv("RELATED_IMAGE_ODH_MAAS_DISCOVERY_IMAGE"),
-		DiscoveryLogLevel:           discoveryLogLevelOrDefault("MAAS_DISCOVERY_LOG_LEVEL", "info"),
-		DiscoveryNamespace:          controllerNamespace,
-		DiscoveryReplicas:           parseReplicasEnv("MAAS_DISCOVERY_REPLICAS"),
+		Client:                           mgr.GetClient(),
+		Scheme:                           mgr.GetScheme(),
+		DeploymentName:                   "maas-controller",
+		DeploymentNS:                     controllerNamespace,
+		TenantSubscriptionNamespace:      maasSubscriptionNamespace,
+		AITenantNamespace:                aitenantNamespace,
+		ObservabilityManifestsPath:       observabilityManifestsPath,
+		AuthorinoMonitoringManifestsPath: authorinoMonitoringManifestsPath,
+		UsageLogsManifestPath:            usageLogsManifestPath,
+		MonitoringNamespace:              monitoringNamespace,
+		GatewayNamespace:                 gatewayNamespace,
+		DiscoveryEnabled:                 os.Getenv("MAAS_DISCOVERY_ENABLED") == "true",
+		DiscoveryManifestPath:            discoveryManifestPath,
+		DiscoveryImage:                   os.Getenv("RELATED_IMAGE_ODH_MAAS_DISCOVERY_IMAGE"),
+		DiscoveryLogLevel:                discoveryLogLevelOrDefault("MAAS_DISCOVERY_LOG_LEVEL", "info"),
+		DiscoveryNamespace:               controllerNamespace,
+		DiscoveryReplicas:                parseReplicasEnv("MAAS_DISCOVERY_REPLICAS"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "SelfDeployment")
 		os.Exit(1)

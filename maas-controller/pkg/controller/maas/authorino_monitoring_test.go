@@ -23,6 +23,8 @@ import (
 	. "github.com/onsi/gomega"
 )
 
+const authorinoTestManifestsPath = "../../../../deployment/base/observability"
+
 func TestAuthorinoMonitoringGate(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
@@ -36,8 +38,8 @@ func TestAuthorinoMonitoringGate(t *testing.T) {
 			s := lifecycleTestScheme(t)
 			cfg := &maasv1alpha1.Config{ObjectMeta: metav1.ObjectMeta{Name: "default", UID: "config-uid"}, Spec: maasv1alpha1.ConfigSpec{AuthorinoMonitoring: tc.enabled}}
 			cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cfg).Build()
-			r := &LifecycleReconciler{Client: cl, Scheme: s, MonitoringNamespace: "product-monitoring"}
-			resources, err := authorinoMonitoringResources(r.MonitoringNamespace)
+			r := &LifecycleReconciler{Client: cl, Scheme: s, AuthorinoMonitoringManifestsPath: authorinoTestManifestsPath, MonitoringNamespace: "product-monitoring"}
+			resources, err := authorinoMonitoringResources(authorinoTestManifestsPath, r.MonitoringNamespace)
 			g.Expect(err).NotTo(HaveOccurred())
 			g.Expect(resources).To(HaveLen(3))
 			g.Expect(r.ensureAuthorinoMonitoring(ctx, logr.Discard())).To(Succeed())
@@ -78,14 +80,14 @@ func TestAuthorinoMonitoringPreservesUnownedResources(t *testing.T) {
 	g := NewWithT(t)
 	s := lifecycleTestScheme(t)
 	cfg := &maasv1alpha1.Config{ObjectMeta: metav1.ObjectMeta{Name: "default", UID: "config-uid"}, Spec: maasv1alpha1.ConfigSpec{AuthorinoMonitoring: ptr.To(false)}}
-	resources, err := authorinoMonitoringResources("product-monitoring")
+	resources, err := authorinoMonitoringResources(authorinoTestManifestsPath, "product-monitoring")
 	g.Expect(err).NotTo(HaveOccurred())
 	objects := []client.Object{cfg}
 	for _, resource := range resources {
 		objects = append(objects, resource.DeepCopy())
 	}
 	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(objects...).Build()
-	r := &LifecycleReconciler{Client: cl, Scheme: s, MonitoringNamespace: "product-monitoring"}
+	r := &LifecycleReconciler{Client: cl, Scheme: s, AuthorinoMonitoringManifestsPath: authorinoTestManifestsPath, MonitoringNamespace: "product-monitoring"}
 	g.Expect(r.ensureAuthorinoMonitoring(context.Background(), logr.Discard())).To(Succeed())
 	for _, resource := range resources {
 		obj := resource.DeepCopy()
@@ -98,10 +100,12 @@ func TestAuthorinoMonitoringApplyErrors(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
 		applyError error
+		apiVersion string
 		wantError  bool
 	}{
 		{name: "missing API", applyError: &apimeta.NoKindMatchError{GroupKind: schema.GroupKind{Group: "monitoring.rhobs", Kind: "PrometheusRule"}}},
 		{name: "API endpoint not found", applyError: apierrors.NewNotFound(schema.GroupResource{Group: "monitoring.rhobs", Resource: "prometheusrules"}, "")},
+		{name: "missing core API", apiVersion: "monitoring.coreos.com/v1", applyError: &apimeta.NoKindMatchError{GroupKind: schema.GroupKind{Group: "monitoring.coreos.com", Kind: "ServiceMonitor"}}, wantError: true},
 		{name: "forbidden", applyError: apierrors.NewForbidden(schema.GroupResource{Group: "monitoring.rhobs", Resource: "prometheusrules"}, "", errors.New("denied")), wantError: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -110,13 +114,22 @@ func TestAuthorinoMonitoringApplyErrors(t *testing.T) {
 			cfg := &maasv1alpha1.Config{ObjectMeta: metav1.ObjectMeta{Name: "default", UID: "config-uid"}}
 			cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cfg).WithInterceptorFuncs(interceptor.Funcs{
 				Apply: func(ctx context.Context, c client.WithWatch, obj runtime.ApplyConfiguration, opts ...client.ApplyOption) error {
-					return tc.applyError
+					version, ok := obj.(interface{ GetAPIVersion() string })
+					g.Expect(ok).To(BeTrue())
+					targetVersion := tc.apiVersion
+					if targetVersion == "" {
+						targetVersion = "monitoring.rhobs/v1"
+					}
+					if version.GetAPIVersion() == targetVersion {
+						return tc.applyError
+					}
+					return nil
 				},
 			}).Build()
-			r := &LifecycleReconciler{Client: cl, Scheme: s, MonitoringNamespace: "product-monitoring"}
+			r := &LifecycleReconciler{Client: cl, Scheme: s, AuthorinoMonitoringManifestsPath: authorinoTestManifestsPath, MonitoringNamespace: "product-monitoring"}
 			err := r.ensureAuthorinoMonitoring(context.Background(), logr.Discard())
 			if tc.wantError {
-				g.Expect(err).To(MatchError(ContainSubstring("denied")))
+				g.Expect(err).To(MatchError(ContainSubstring(tc.applyError.Error())))
 			} else {
 				g.Expect(err).NotTo(HaveOccurred())
 			}
@@ -126,7 +139,7 @@ func TestAuthorinoMonitoringApplyErrors(t *testing.T) {
 
 func TestAuthorinoMonitoringProductResources(t *testing.T) {
 	g := NewWithT(t)
-	resources, err := authorinoMonitoringResources("product-monitoring")
+	resources, err := authorinoMonitoringResources(authorinoTestManifestsPath, "product-monitoring")
 	g.Expect(err).NotTo(HaveOccurred())
 	alerts := map[string]string{}
 	for _, res := range resources {

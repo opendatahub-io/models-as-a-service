@@ -118,15 +118,14 @@ kubectl patch configs.maas.opendatahub.io default --type=merge \
 
 Setting the field back to `true` recreates them. Disabling removes only resources
 owned by the controller; Authorino and independently managed monitoring resources
-are preserved. Missing monitoring CRDs are tolerated and their installation
-triggers reconciliation.
+are preserved. Missing COO `monitoring.rhobs` CRDs are tolerated and their installation
+triggers reconciliation. The core OpenShift `monitoring.coreos.com` API is required.
 
-These product resources do not require user-workload monitoring (UWM). The
-standalone `install-observability.sh` also labels its Authorino ServiceMonitor for
-DSCI scraping, but its alert-rule manifests under `deployment/base/observability`
-still target UWM and raw metric names. Use the controller-managed rules for
-DSCI alerting. Avoid installing both ServiceMonitors for the same Authorino
-endpoint; remove the script-managed monitor before enabling this feature.
+These resources do not require user-workload monitoring (UWM). The controller
+loads the manifests from `deployment/base/observability/`. For standalone setups
+without `Config/default`, `install-observability.sh` applies the same manifests
+in the DSCI monitoring namespace. When Config exists, the script leaves Authorino
+monitoring to the controller and respects the feature gate.
 
 #### Logs-based usage dashboards
 

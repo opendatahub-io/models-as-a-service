@@ -96,19 +96,14 @@ kubectl logs -n <monitoring-namespace> \
 
 ### Cleanup
 
-For operator-managed Authorino monitoring, set `Config.spec.authorinoMonitoring`
-to `false` to remove the managed ServiceMonitor and both rule resources from the
-monitoring namespace. See [Authorino monitoring](setup.md#authorino-monitoring).
-The script-managed resources below use the legacy UWM integration.
-
 How you remove resources depends on how they were applied. `./scripts/observability/install-observability.sh` applies TelemetryPolicy and Istio Telemetry from `deployment/base/observability/`, plus these resources when their conditions match:
 
 | Resource | When |
 |----------|------|
 | Limitador `ServiceMonitor` (`limitador-metrics`) | Kuadrant is not already scraping Limitador `/metrics` |
-| Authorino `ServiceMonitor` (`authorino-server-metrics`) | Authorino Service exists and nothing else scrapes `/server-metrics` |
+| Authorino `ServiceMonitor` (`authorino-server-metrics`) | No `Config/default` exists, and DSCI monitoring and Authorino are available |
 | Gateway `Service` + `ServiceMonitor` (`istio-gateway-metrics`) | Gateway Deployment exists in `openshift-ingress` |
-| PrometheusRules (`authorino-maas-metadata-evaluator-high-failure-rate`, `authorino-maas-authentication-alerts`) | Authorino Deployment exists (`kuadrant-system` or `rh-connectivity-link`) |
+| PrometheusRules (`authorino-maas-metadata-evaluator-high-failure-rate`, `authorino-maas-authentication-alerts`) | No `Config/default` exists, and DSCI monitoring and Authorino are available |
 
 #### PersesDashboard ownership
 
@@ -180,16 +175,13 @@ kubectl delete telemetry -n openshift-ingress latency-per-subscription
 kubectl delete servicemonitor -n kuadrant-system limitador-metrics --ignore-not-found
 
 # Conditional: Authorino /server-metrics ServiceMonitor
-kubectl delete servicemonitor -n kuadrant-system authorino-server-metrics --ignore-not-found
+kubectl delete servicemonitor -n <monitoring-namespace> authorino-server-metrics --ignore-not-found
 
 # Conditional: Istio Gateway metrics
 kubectl delete servicemonitor,service -n openshift-ingress istio-gateway-metrics --ignore-not-found
 
-# Conditional: PrometheusRules (namespace is kuadrant-system or rh-connectivity-link)
-kubectl delete prometheusrule -n kuadrant-system \
-  authorino-maas-metadata-evaluator-high-failure-rate \
-  authorino-maas-authentication-alerts --ignore-not-found
-kubectl delete prometheusrule -n rh-connectivity-link \
+# Conditional: DSCI PrometheusRules
+kubectl delete prometheusrules.monitoring.rhobs -n <monitoring-namespace> \
   authorino-maas-metadata-evaluator-high-failure-rate \
   authorino-maas-authentication-alerts --ignore-not-found
 ```
