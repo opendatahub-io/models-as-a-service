@@ -168,6 +168,31 @@ func TestValidate(t *testing.T) {
 			expectError: "unsupported log format",
 		},
 		{
+			name: "invalid Loki read endpoint returns error",
+			cfg: Config{
+				DBConnectionURL:           "postgresql://localhost/test",
+				APIKeyMaxExpirationDays:   30,
+				AccessCheckTimeoutSeconds: 15,
+				MetricsPort:               9090,
+				MaaSSubscriptionNamespace: "models-as-a-service",
+				TenantName:                "test-tenant",
+				LokiReadEndpoint:          "not-a-url",
+			},
+			expectError: "LOKI_READ_ENDPOINT must be a valid http(s) URL",
+		},
+		{
+			name: "valid config with Loki read endpoint",
+			cfg: Config{
+				DBConnectionURL:           "postgresql://localhost/test",
+				APIKeyMaxExpirationDays:   30,
+				AccessCheckTimeoutSeconds: 15,
+				MetricsPort:               9090,
+				MaaSSubscriptionNamespace: "models-as-a-service",
+				TenantName:                "test-tenant",
+				LokiReadEndpoint:          "https://loki-gateway.example.svc:8080/api/logs/v1/application",
+			},
+		},
+		{
 			name: "valid insecure config sets default address :8080",
 			cfg: Config{
 				DBConnectionURL:           "postgresql://localhost/test",
