@@ -33,6 +33,7 @@ import (
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/controller/maas"
+	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/informercache"
 	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/platform/tenantreconcile"
 )
 
@@ -267,15 +268,15 @@ func keys[K comparable, V any](m map[K]V) []K {
 }
 
 func TestBuildCacheOptions_SingleNamespaceMode(t *testing.T) {
-	opts := buildCacheOptions(cacheParams{
-		controllerNamespace:   "opendatahub",
-		infraNamespace:        "maas-infra",
-		monitoringNamespace:   "opendatahub",
-		aitenantNamespace:     "ai-tenants",
-		gatewayNamespace:      "openshift-ingress",
-		subscriptionNamespace: "models-as-a-service",
-		enableTenantDiscovery: false,
-		subscriptionNSExists:  true,
+	opts := informercache.BuildCacheOptions(informercache.Params{
+		ControllerNamespace:   "opendatahub",
+		InfraNamespace:        "maas-infra",
+		MonitoringNamespace:   "opendatahub",
+		AITenantNamespace:     "ai-tenants",
+		GatewayNamespace:      "openshift-ingress",
+		SubscriptionNamespace: "models-as-a-service",
+		EnableTenantDiscovery: false,
+		SubscriptionNSExists:  true,
 	})
 
 	assertNamespaces := func(t *testing.T, label string, obj client.Object, want []string) {
@@ -335,15 +336,15 @@ func TestBuildCacheOptions_SingleNamespaceMode(t *testing.T) {
 }
 
 func TestBuildCacheOptions_MultiTenantMode(t *testing.T) {
-	opts := buildCacheOptions(cacheParams{
-		controllerNamespace:   "opendatahub",
-		infraNamespace:        "maas-infra",
-		monitoringNamespace:   "opendatahub",
-		aitenantNamespace:     "ai-tenants",
-		gatewayNamespace:      "openshift-ingress",
-		subscriptionNamespace: "models-as-a-service",
-		enableTenantDiscovery: true,
-		subscriptionNSExists:  true,
+	opts := informercache.BuildCacheOptions(informercache.Params{
+		ControllerNamespace:   "opendatahub",
+		InfraNamespace:        "maas-infra",
+		MonitoringNamespace:   "opendatahub",
+		AITenantNamespace:     "ai-tenants",
+		GatewayNamespace:      "openshift-ingress",
+		SubscriptionNamespace: "models-as-a-service",
+		EnableTenantDiscovery: true,
+		SubscriptionNSExists:  true,
 	})
 
 	// MaasTenantConfig stays cluster-wide in all modes.
@@ -385,15 +386,15 @@ func TestBuildCacheOptions_MultiTenantMode(t *testing.T) {
 }
 
 func TestBuildCacheOptions_DeduplicatesNamespaces(t *testing.T) {
-	opts := buildCacheOptions(cacheParams{
-		controllerNamespace:   "opendatahub",
-		infraNamespace:        "opendatahub",
-		monitoringNamespace:   "opendatahub",
-		aitenantNamespace:     "opendatahub",
-		gatewayNamespace:      "opendatahub",
-		subscriptionNamespace: "opendatahub",
-		enableTenantDiscovery: false,
-		subscriptionNSExists:  true,
+	opts := informercache.BuildCacheOptions(informercache.Params{
+		ControllerNamespace:   "opendatahub",
+		InfraNamespace:        "opendatahub",
+		MonitoringNamespace:   "opendatahub",
+		AITenantNamespace:     "opendatahub",
+		GatewayNamespace:      "opendatahub",
+		SubscriptionNamespace: "opendatahub",
+		EnableTenantDiscovery: false,
+		SubscriptionNSExists:  true,
 	})
 
 	depEntry := findByObjectEntry(t, opts, "Deployment", &appsv1.Deployment{})

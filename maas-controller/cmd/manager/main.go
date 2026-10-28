@@ -36,14 +36,11 @@ import (
 	utiltls "github.com/openshift/controller-runtime-common/pkg/tls"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
-	netwv1 "k8s.io/api/networking/v1"
-	rbacv1 "k8s.io/api/rbac/v1"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
@@ -54,7 +51,6 @@ import (
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
@@ -66,6 +62,7 @@ import (
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/controller/maas"
+	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/informercache"
 	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/oteljson"
 	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/platform/tenantreconcile"
 	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/reconciler/externalmodel"
@@ -936,87 +933,6 @@ func (c managerTLSConfig) registerWatcher(mgr ctrl.Manager, cancel context.Cance
 	}
 }
 
-type cacheParams struct {
-	controllerNamespace   string
-	infraNamespace        string
-	monitoringNamespace   string
-	aitenantNamespace     string
-	gatewayNamespace      string
-	subscriptionNamespace string
-	enableTenantDiscovery bool
-	subscriptionNSExists  bool
-}
-
-// buildCacheOptions configures per-type informer scoping so the controller only caches
-// the Kubernetes resources it actually needs. Without this, controller-runtime defaults
-// to caching every instance of each watched type cluster-wide, which causes OOM on
-// production clusters with hundreds of namespaces and thousands of Deployments/ConfigMaps/CRDs.
-// See RHOAIENG-90683 / GH#1413.
-func buildCacheOptions(p cacheParams) cache.Options {
-	infraNsCfg := map[string]cache.Config{p.infraNamespace: {}}
-
-	// --- MaaSAuthPolicy / MaaSSubscription: scoped per mode ---
-	subscriptionNsCfg := map[string]cache.Config{p.subscriptionNamespace: {}}
-	if p.enableTenantDiscovery || !p.subscriptionNSExists {
-		subscriptionNsCfg = map[string]cache.Config{cache.AllNamespaces: {}}
-	}
-
-	// --- Deployment: controller + infra (teardown check) + gateway (payload-processing) ---
-	deployNsCfg := uniqueNamespaceConfigs(p.controllerNamespace, p.infraNamespace, p.gatewayNamespace)
-
-	// --- ConfigMap: monitoring (usage-logs) + aitenant (gateway claims) + infra (maas-parameters) + gateway (payload-processing-plugins) ---
-	configMapNsCfg := uniqueNamespaceConfigs(p.monitoringNamespace, p.aitenantNamespace, p.infraNamespace, p.gatewayNamespace)
-
-	// --- Pod: only in gateway namespace (IPP writer pod checks in pipeline.go) ---
-	podNsCfg := map[string]cache.Config{p.gatewayNamespace: {}}
-
-	// --- NetworkPolicy: all platform namespaces where NPs are managed ---
-	networkPolicyNsCfg := uniqueNamespaceConfigs(
-		p.monitoringNamespace,
-		p.infraNamespace,
-		p.subscriptionNamespace,
-		p.gatewayNamespace,
-		p.controllerNamespace,
-	)
-
-	return cache.Options{
-		ByObject: map[client.Object]cache.ByObject{
-			// MaasTenantConfig and Tenant stay cluster-wide: AITenant-created tenants
-			// live in tenant-<name> namespaces that aren't known at startup.
-			&maasv1alpha1.MaasTenantConfig{}: {},
-			&maasv1alpha1.Tenant{}:           {},
-			&maasv1alpha1.MaaSAuthPolicy{}:   {Namespaces: subscriptionNsCfg},
-			&maasv1alpha1.MaaSSubscription{}: {Namespaces: subscriptionNsCfg},
-			&corev1.Secret{}:                 {Namespaces: infraNsCfg},
-			&appsv1.Deployment{}:             {Namespaces: deployNsCfg},
-			&corev1.ConfigMap{}:              {Namespaces: configMapNsCfg},
-			// Gateway is intentionally unscoped: tenant gateways live in
-			// per-tenant namespaces not known at startup.
-			&gatewayapiv1.Gateway{}: {},
-			&netwv1.NetworkPolicy{}: {Namespaces: networkPolicyNsCfg},
-			&rbacv1.ClusterRoleBinding{}: {
-				Label: labels.SelectorFromSet(labels.Set{
-					"app.kubernetes.io/managed-by": "maas-controller",
-				}),
-			},
-			&corev1.Pod{}: {Namespaces: podNsCfg},
-			// Namespace is intentionally unscoped: tenant namespace discovery watches
-			// need to see label additions on any namespace.
-		},
-	}
-}
-
-// uniqueNamespaceConfigs builds a deduped Namespaces map, skipping empty strings.
-func uniqueNamespaceConfigs(namespaces ...string) map[string]cache.Config {
-	m := make(map[string]cache.Config, len(namespaces))
-	for _, ns := range namespaces {
-		if ns != "" {
-			m[ns] = cache.Config{}
-		}
-	}
-	return m
-}
-
 // buildMetricsServerOptions configures the controller-runtime metrics endpoint.
 // When secureMetrics is true, metrics are served over HTTPS with authn/authz
 // filters and the cluster TLS profile applied (plus NextProtos).
@@ -1299,15 +1215,15 @@ func main() {
 	defaultSubscriptionNamespaceExists := bootstrapManagedNamespaces(
 		context.Background(), clientset, infraNamespace, controllerNamespace, maasSubscriptionNamespace,
 	)
-	cacheOpts := buildCacheOptions(cacheParams{
-		controllerNamespace:   controllerNamespace,
-		infraNamespace:        infraNamespace,
-		monitoringNamespace:   monitoringNamespace,
-		aitenantNamespace:     aitenantNamespace,
-		gatewayNamespace:      gatewayNamespace,
-		subscriptionNamespace: maasSubscriptionNamespace,
-		enableTenantDiscovery: enableTenantNamespaceDiscovery,
-		subscriptionNSExists:  defaultSubscriptionNamespaceExists,
+	cacheOpts := informercache.BuildCacheOptions(informercache.Params{
+		ControllerNamespace:   controllerNamespace,
+		InfraNamespace:        infraNamespace,
+		MonitoringNamespace:   monitoringNamespace,
+		AITenantNamespace:     aitenantNamespace,
+		GatewayNamespace:      gatewayNamespace,
+		SubscriptionNamespace: maasSubscriptionNamespace,
+		EnableTenantDiscovery: enableTenantNamespaceDiscovery,
+		SubscriptionNSExists:  defaultSubscriptionNamespaceExists,
 	})
 	setupLog.Info("watching namespace for MaaS CRs", "namespace", maasSubscriptionNamespace)
 	if enableTenantNamespaceDiscovery || !defaultSubscriptionNamespaceExists {
