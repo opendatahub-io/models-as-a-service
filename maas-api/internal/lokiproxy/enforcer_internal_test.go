@@ -5,14 +5,13 @@ import (
 	"sort"
 	"testing"
 
+	logqlv2 "github.com/observatorium/api/logql/v2"
 	"github.com/prometheus/prometheus/model/labels"
 	"github.com/stretchr/testify/require"
-
-	logqlv2 "github.com/observatorium/api/logql/v2"
 )
 
-func orgMatcher(value string) *labels.Matcher {
-	return &labels.Matcher{Type: labels.MatchEqual, Name: "organization_id", Value: value}
+func orgMatcher() *labels.Matcher {
+	return &labels.Matcher{Type: labels.MatchEqual, Name: "organization_id", Value: "1234"}
 }
 
 // enforcedQuery applies enforceQueryMatchers and returns the resulting "query"
@@ -39,7 +38,7 @@ func selectorMatchers(t *testing.T, query string) []string {
 	require.NoError(t, err)
 
 	var matchers []string
-	expr.Walk(func(e interface{}) {
+	expr.Walk(func(e any) {
 		if le, ok := e.(*logqlv2.StreamMatcherExpr); ok {
 			for _, m := range le.Matchers() {
 				matchers = append(matchers, m.String())
@@ -51,6 +50,7 @@ func selectorMatchers(t *testing.T, query string) []string {
 }
 
 func TestEnforceQueryMatchersQueryEndpoint(t *testing.T) {
+	t.Parallel()
 	tt := []struct {
 		desc     string
 		query    string
@@ -97,7 +97,7 @@ func TestEnforceQueryMatchersQueryEndpoint(t *testing.T) {
 		t.Run(tc.desc, func(t *testing.T) {
 			t.Parallel()
 
-			query := enforcedQuery(t, url.Values{queryParam: []string{tc.query}}, []*labels.Matcher{orgMatcher("1234")}, true)
+			query := enforcedQuery(t, url.Values{queryParam: []string{tc.query}}, []*labels.Matcher{orgMatcher()}, true)
 			require.Equal(t, tc.expected, selectorMatchers(t, query))
 		})
 	}
@@ -106,12 +106,13 @@ func TestEnforceQueryMatchersQueryEndpoint(t *testing.T) {
 func TestEnforceQueryMatchersQueryEndpointEmptyQuery(t *testing.T) {
 	// On query endpoints an empty query is left untouched; Loki rejects it.
 	v := url.Values{"limit": []string{"10"}}
-	require.NoError(t, enforceQueryMatchers(v, []*labels.Matcher{orgMatcher("1234")}, true))
+	require.NoError(t, enforceQueryMatchers(v, []*labels.Matcher{orgMatcher()}, true))
 	require.Empty(t, v.Get(queryParam))
 	require.Equal(t, "10", v.Get("limit"))
 }
 
 func TestEnforceQueryMatchersLabelEndpoints(t *testing.T) {
+	t.Parallel()
 	tt := []struct {
 		desc     string
 		query    string
@@ -133,7 +134,7 @@ func TestEnforceQueryMatchersLabelEndpoints(t *testing.T) {
 		t.Run(tc.desc, func(t *testing.T) {
 			t.Parallel()
 
-			query := enforcedQuery(t, url.Values{queryParam: []string{tc.query}}, []*labels.Matcher{orgMatcher("1234")}, false)
+			query := enforcedQuery(t, url.Values{queryParam: []string{tc.query}}, []*labels.Matcher{orgMatcher()}, false)
 			require.Equal(t, tc.expected, selectorMatchers(t, query))
 		})
 	}
@@ -141,11 +142,12 @@ func TestEnforceQueryMatchersLabelEndpoints(t *testing.T) {
 
 func TestEnforceQueryMatchersInvalidQuery(t *testing.T) {
 	v := url.Values{queryParam: []string{`{app="unclosed`}}
-	err := enforceQueryMatchers(v, []*labels.Matcher{orgMatcher("1234")}, true)
+	err := enforceQueryMatchers(v, []*labels.Matcher{orgMatcher()}, true)
 	require.ErrorIs(t, err, ErrInvalidQuery)
 }
 
 func TestCombineLabelMatchers(t *testing.T) {
+	t.Parallel()
 	tt := []struct {
 		desc             string
 		queryMatchers    []*labels.Matcher
@@ -155,31 +157,31 @@ func TestCombineLabelMatchers(t *testing.T) {
 		{
 			desc:             "required matcher added when label absent",
 			queryMatchers:    []*labels.Matcher{{Type: labels.MatchEqual, Name: "app", Value: "api"}},
-			requiredMatchers: []*labels.Matcher{orgMatcher("1234")},
+			requiredMatchers: []*labels.Matcher{orgMatcher()},
 			expected:         []string{`app="api"`, `organization_id="1234"`},
 		},
 		{
 			desc:             "conflicting matcher silently overwritten",
 			queryMatchers:    []*labels.Matcher{{Type: labels.MatchEqual, Name: "organization_id", Value: "other"}},
-			requiredMatchers: []*labels.Matcher{orgMatcher("1234")},
+			requiredMatchers: []*labels.Matcher{orgMatcher()},
 			expected:         []string{`organization_id="1234"`},
 		},
 		{
 			desc:             "exact match on allowed value also overwritten",
-			queryMatchers:    []*labels.Matcher{orgMatcher("1234")},
-			requiredMatchers: []*labels.Matcher{orgMatcher("1234")},
+			queryMatchers:    []*labels.Matcher{orgMatcher()},
+			requiredMatchers: []*labels.Matcher{orgMatcher()},
 			expected:         []string{`organization_id="1234"`},
 		},
 		{
 			desc:             "regex matcher overwritten",
 			queryMatchers:    []*labels.Matcher{{Type: labels.MatchRegexp, Name: "organization_id", Value: ".*"}},
-			requiredMatchers: []*labels.Matcher{orgMatcher("1234")},
+			requiredMatchers: []*labels.Matcher{orgMatcher()},
 			expected:         []string{`organization_id="1234"`},
 		},
 		{
 			desc:             "negative matcher overwritten",
 			queryMatchers:    []*labels.Matcher{{Type: labels.MatchNotEqual, Name: "organization_id", Value: "1234"}},
-			requiredMatchers: []*labels.Matcher{orgMatcher("1234")},
+			requiredMatchers: []*labels.Matcher{orgMatcher()},
 			expected:         []string{`organization_id="1234"`},
 		},
 	}
@@ -197,5 +199,28 @@ func TestCombineLabelMatchers(t *testing.T) {
 			sort.Strings(tc.expected)
 			require.Equal(t, tc.expected, got)
 		})
+	}
+}
+
+// The injected matcher must always win over client-supplied matchers for the
+// same label, including regex and pipeline forms (defense in depth on top of
+// the query endpoint tests above).
+func TestInjectedMatcherAlwaysWins(t *testing.T) {
+	t.Parallel()
+
+	required := []*labels.Matcher{orgMatcher()}
+
+	queries := []string{
+		`{organization_id="other"}`,
+		`{organization_id=~".*"}`,
+		`{organization_id!~"12.*"}`,
+		`{organization_id!="1234"} | json`,
+		`sum(count_over_time({organization_id=~"other|12"}[5m]))`,
+	}
+
+	for _, query := range queries {
+		enforced := enforcedQuery(t, url.Values{queryParam: []string{query}}, required, true)
+		matchers := selectorMatchers(t, enforced)
+		require.Contains(t, matchers, `organization_id="1234"`, "query: %s", query)
 	}
 }
