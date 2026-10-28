@@ -36,6 +36,13 @@ spec:
         - name: METRICS_SECURE
           value: "false"
         # METRICS_CERT_DIR defaults in Go (DefaultMetricsCertDir); set explicitly in overlays/tls.
+        # Read-only Loki proxy (GET /v1/logs*). Unset (feature disabled) unless a
+        # Loki read endpoint is available; the value must point at the Loki
+        # read API base path, e.g. the LokiStack gateway tenancy path used by
+        # the usage-logs component:
+        #   https://<loki-gateway-service>.<loki-namespace>.svc:8080/api/logs/v1/application
+        # - name: LOKI_READ_ENDPOINT
+        #   value: "https://data-science-lokistack-gateway-http.opendatahub.svc:8080/api/logs/v1/application"
         resources:
           requests:
             memory: "128Mi"
