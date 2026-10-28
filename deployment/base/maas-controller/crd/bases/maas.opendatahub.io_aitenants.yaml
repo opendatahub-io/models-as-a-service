@@ -192,6 +192,16 @@ spec:
                     - key
                     - name
                     type: object
+                  cookieExpire:
+                    description: |-
+                      CookieExpire is how long a consumer portal session lasts before the auth
+                      proxy signs the user out. It must be longer than RefreshInterval.
+                      Defaults to 6h when unset.
+                    pattern: ^([0-9]+(\.[0-9]+)?(ns|us|ms|s|m|h))+$
+                    type: string
+                    x-kubernetes-validations:
+                    - message: cookieExpire must be a positive duration
+                      rule: duration(self) > duration('0s')
                   issuerUrl:
                     description: IssuerURL is the OIDC issuer URL (e.g. https://keycloak.example.com/realms/maas).
                     maxLength: 2048
@@ -221,6 +231,9 @@ spec:
                 - message: accessTokenPurposeClaim and accessTokenPurpose must be
                     set together
                   rule: has(self.accessTokenPurposeClaim) == has(self.accessTokenPurpose)
+                - message: cookieExpire must be longer than refreshInterval
+                  rule: '!has(self.cookieExpire) || !has(self.refreshInterval) ||
+                    duration(self.cookieExpire) > duration(self.refreshInterval)'
               rbac:
                 description: |-
                   RBAC is retained only for compatibility with existing AITenant manifests.
