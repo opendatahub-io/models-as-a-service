@@ -208,11 +208,12 @@ build_helm_sets() {
     ]'
   )
 
-  # Match the resource sizing applied by the legacy RHCL installer. The
-  # operator's upstream defaults can OOM while reconciling many rate-limit
-  # policies, leaving TokenRateLimitPolicies waiting for Limitador to sync.
+  # RHCL/Kuadrant operator needs headroom while reconciling many rate-limit
+  # policies. Upstream defaults (and even 1Gi) can OOM under RHCL 1.5+, leaving
+  # TokenRateLimitPolicies accepted but Limitador/EnvoyFilter sync incomplete
+  # so validate sees all 200s and no 429s.
   HELM_SETS+=(
-    --set-json 'dependencies.rhcl.olm.config.resources={"requests":{"cpu":"200m","memory":"512Mi"},"limits":{"cpu":"1","memory":"1Gi"}}'
+    --set-json 'dependencies.rhcl.olm.config.resources={"requests":{"cpu":"200m","memory":"512Mi"},"limits":{"cpu":"1","memory":"2Gi"}}'
   )
 
   if [[ -n "$RHCL_STARTING_CSV" ]]; then
