@@ -163,6 +163,7 @@ type subscription struct {
 	OrganizationID           string
 	CostCenter               string
 	Labels                   map[string]string
+	Headers                  map[string][]string
 	ModelRefs                []ModelRefInfo
 	Phase                    string                 // status.phase: "Active", "Failed", "Pending", or ""
 	Ready                    bool                   // computed from status.conditions Ready condition
@@ -863,6 +864,11 @@ func parseSubscription(obj *unstructured.Unstructured) (subscription, error) {
 	if annotations := obj.GetAnnotations(); annotations != nil {
 		sub.DisplayName = annotations[constant.AnnotationDisplayName]
 		sub.Description = annotations[constant.AnnotationDescription]
+		headers, err := parseSubscriptionHeaders(annotations[constant.AnnotationSubscriptionHeaders])
+		if err != nil {
+			return subscription{}, fmt.Errorf("parse subscription headers annotation: %w", err)
+		}
+		sub.Headers = headers
 	}
 
 	// Match controller precedence: spec escape hatch, sticky status, then
@@ -1398,6 +1404,7 @@ func toResponse(sub *subscription) *SelectResponse {
 		AssociatedOrganizationID: sub.AssociatedOrganizationID,
 		CostCenter:               sub.CostCenter,
 		Labels:                   sub.Labels,
+		Headers:                  sub.Headers,
 		Phase:                    sub.Phase,
 		Ready:                    sub.Ready,
 	}

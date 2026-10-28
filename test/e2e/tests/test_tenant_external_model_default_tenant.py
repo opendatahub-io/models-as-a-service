@@ -48,17 +48,18 @@ from multitenancy_helpers import (
     GATEWAY_NAMESPACE,
     _oc_run,
     extproc_deployment_uses_praxis,
+    get_gateway_authpolicy,
     get_json_or_none,
     list_json,
     redact_sensitive,
     wait_until,
 )
+from tenant_external_model_helpers import echo_headers
 from test_helper import (
     MODEL_NAMESPACE,
     _apply_cr,
     _create_api_key,
     _create_test_auth_policy,
-    _create_test_subscription,
     _delete_crs_and_wait,
     _get_cluster_token,
     _get_cr,
@@ -83,6 +84,8 @@ INFERENCE_API_VERSION = "inference.opendatahub.io/v1alpha1"
 
 EXTERNAL_ENDPOINT = os.environ.get("E2E_EXTERNAL_ENDPOINT", "httpbingo.org")
 READY_TIMEOUT = int(os.environ.get("E2E_TENANT_EXTERNAL_MODEL_READY_TIMEOUT", "300"))
+SUBSCRIPTION_HEADER_NAME = "x-grid-geo-fencing"
+SUBSCRIPTION_HEADER_VALUE = "region1, region2"
 
 # A Gateway no AITenant manages (it need not exist): an explicit binding to it
 # is refused with GatewayNotManaged.
@@ -273,27 +276,100 @@ def _wait_not_implicitly_attached(model: dict, route_name: str) -> None:
 # ─── Serving ────────────────────────────────────────────────────────────────
 
 
-def _serve_in_default_tenant(tracked: list, model: dict) -> str:
+def _serve_in_default_tenant(tracked: list, model: dict, gateway_url: str) -> str:
     """MaaSAuthPolicy + MaaSSubscription in the default tenant; returns an API key."""
     policy, subscription = f"{model['name']}-access", f"{model['name']}-sub"
     _create_test_auth_policy(policy, model["name"], groups=["system:authenticated"])
     tracked.append(("maasauthpolicy", policy, _ns()))
     _wait_for_maas_auth_policy_phase(policy, timeout=READY_TIMEOUT)
-    _create_test_subscription(subscription, model["name"], groups=["system:authenticated"])
+    _apply_cr(
+        {
+            "apiVersion": "maas.opendatahub.io/v1alpha1",
+            "kind": "MaaSSubscription",
+            "metadata": {
+                "name": subscription,
+                "namespace": _ns(),
+                "annotations": {
+                    "experimental.maas.opendatahub.io/headers": json.dumps(
+                        {SUBSCRIPTION_HEADER_NAME: ["region1", "region2"]}
+                    ),
+                },
+            },
+            "spec": {
+                "owner": {"groups": [{"name": "system:authenticated"}]},
+                "modelRefs": [
+                    {
+                        "name": model["name"],
+                        "namespace": model["namespace"],
+                        "tokenRateLimits": [{"limit": 100, "window": "1m"}],
+                    }
+                ],
+            },
+        }
+    )
     tracked.append(("maassubscription", subscription, _ns()))
+    _wait_for_subscription_header_policy()
     # The MaaSModelRef is Ready only once the policy and subscription govern it.
     _wait_for_model_ready(model["name"], model["namespace"], timeout=READY_TIMEOUT)
     _wait_for_maas_subscription_phase(subscription, timeout=READY_TIMEOUT)
     _wait_for_subscription_trlp_status(subscription, expected_ready=True, namespace=_ns(), timeout=READY_TIMEOUT)
-    return _create_api_key(_get_cluster_token(), f"e2e-dft-{uuid.uuid4().hex[:8]}", subscription=subscription)
+    api_key = _create_api_key(_get_cluster_token(), f"e2e-dft-{uuid.uuid4().hex[:8]}", subscription=subscription)
+    _wait_for_subscription_header(gateway_url, model, api_key)
+    return api_key
 
 
-def _infer(gateway_url: str, model: dict, api_key: str, **retry) -> requests.Response:
+def _wait_for_subscription_header_policy() -> dict:
+    def _check() -> dict:
+        policy = get_gateway_authpolicy() or {}
+        headers = (
+            ((policy.get("spec") or {}).get("defaults") or {}).get("rules") or {}
+        ).get("response", {}).get("success", {}).get("headers", {})
+        config = headers.get(SUBSCRIPTION_HEADER_NAME) or {}
+        expression = ((config.get("plain") or {}).get("expression") or "")
+        assert f'headers["{SUBSCRIPTION_HEADER_NAME}"]' in expression, (
+            f"gateway AuthPolicy lacks {SUBSCRIPTION_HEADER_NAME}: {redact_sensitive(policy)}"
+        )
+        return policy
+
+    return wait_until(
+        _check, READY_TIMEOUT, f"gateway AuthPolicy never configured {SUBSCRIPTION_HEADER_NAME}"
+    )
+
+
+def _wait_for_subscription_header(gateway_url: str, model: dict, api_key: str) -> None:
+    def _check() -> bool:
+        response = _infer(
+            gateway_url,
+            model,
+            api_key,
+            extra_headers={SUBSCRIPTION_HEADER_NAME: "client-supplied-region"},
+        )
+        assert response.status_code == 200, (
+            f"expected 200 through {DEFAULT_GATEWAY_NAME}, got {response.status_code}: "
+            f"{redact_sensitive(response.text)}"
+        )
+        assert echo_headers(response).get(SUBSCRIPTION_HEADER_NAME) == SUBSCRIPTION_HEADER_VALUE, (
+            f"provider headers: {redact_sensitive(echo_headers(response))}"
+        )
+        return True
+
+    wait_until(
+        _check, READY_TIMEOUT, f"Gateway never applied {SUBSCRIPTION_HEADER_NAME} header injection"
+    )
+
+
+def _infer(
+    gateway_url: str, model: dict, api_key: str, extra_headers: dict | None = None, **retry
+) -> requests.Response:
     """POST a chat completion to the model's echo path through a Gateway."""
     return _request_with_gateway_retry(
         requests.post,
         f"{gateway_url}/{model['namespace']}/{model['name']}/anything/{model['path_tag']}",
-        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            **(extra_headers or {}),
+        },
         json={"model": model["name"], "messages": [{"role": "user", "content": "default tenant e2e"}], "max_tokens": 8},
         **retry,
     )
@@ -307,12 +383,12 @@ class TestDefaultTenantServesModelWithoutGatewayRefs:
     default tenant's Gateway."""
 
     @pytest.fixture(scope="class")
-    def implicit_model(self):
+    def implicit_model(self, gateway_url):
         tracked: list[tuple[str, str, str]] = []
         try:
             model = _provision_model(tracked, "e2e-dft")
             attachment = _wait_implicitly_attached(model)
-            api_key = _serve_in_default_tenant(tracked, model)
+            api_key = _serve_in_default_tenant(tracked, model, gateway_url)
             yield {"model": model, "api_key": api_key, **attachment}
         finally:
             _delete_crs_and_wait(reversed(tracked))
@@ -376,6 +452,24 @@ class TestDefaultTenantServesModelWithoutGatewayRefs:
         assert response.status_code in (401, 403), (
             f"unknown API key must be rejected, got {response.status_code}: {redact_sensitive(response.text)}"
         )
+
+    def test_subscription_header_reaches_provider_and_replaces_client_value(
+        self, gateway_url, implicit_model
+    ):
+        response = _infer(
+            gateway_url,
+            implicit_model["model"],
+            implicit_model["api_key"],
+            extra_headers={SUBSCRIPTION_HEADER_NAME: "client-supplied-region"},
+        )
+        assert response.status_code == 200, (
+            f"expected 200 through {DEFAULT_GATEWAY_NAME}, got {response.status_code}: "
+            f"{redact_sensitive(response.text)}"
+        )
+        assert (
+            echo_headers(response).get(SUBSCRIPTION_HEADER_NAME)
+            == SUBSCRIPTION_HEADER_VALUE
+        ), f"provider headers: {redact_sensitive(echo_headers(response))}"
 
 
 # ─── Implicit attachment lifecycle ──────────────────────────────────────────

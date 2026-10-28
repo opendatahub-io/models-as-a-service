@@ -69,7 +69,7 @@ pytest tests/<file>.py -v
 | `test_tenant_external_model_conflicts.py` | Multi-tenant AGC/Praxis external models: client-facing `modelName` conflicts and same-named objects in two namespaces (P0, overlay collision regression) |
 | `test_tenant_external_model_compat.py` | Multi-tenant AGC/Praxis external models: omitted-`gatewayRefs` compatibility (no-op own-tenant attachment) and legacy IPP coexistence (serial, gated on `TENANT_EXTERNAL_MODEL_LEGACY_IPP_E2E`) |
 | `test_tenant_external_model_crossns.py` | Multi-tenant AGC/Praxis external models: ReferenceGrant-gated cross-namespace providers, grant revoke/narrow, credential source selection (P1; gated on `TENANT_EXTERNAL_MODEL_CROSSNS_E2E`) |
-| `test_tenant_external_model_default_tenant.py` | 3.5-shaped external models (no `gatewayRefs`, `auth.type: simple`) in a namespace of no tenant (`llm`) served through the default tenant's Gateway by ai-gateway-controller; `gatewayRefs` replace the implicit attachment, deleting the model removes its objects (RHOAIENG-101754; skips without the AGC or when the default tenant is on IPP) |
+| `test_tenant_external_model_default_tenant.py` | 3.5-shaped external models (no `gatewayRefs`, `auth.type: simple`) in a namespace of no tenant (`llm`) served through the default tenant's Gateway by ai-gateway-controller; subscription-injected Gateway headers reach the provider and replace client values, `gatewayRefs` replace the implicit attachment, deleting the model removes its objects (RHOAIENG-101754; skips without the AGC or when the default tenant is on IPP) |
 
 The shared CI runner and `smoke.sh` execute all tests under `tests/`. Individual modules can still be run directly, for example `pytest tests/test_subscription_list_endpoints.py -v`.
 
