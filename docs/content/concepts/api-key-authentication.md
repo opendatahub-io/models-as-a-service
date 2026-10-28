@@ -33,6 +33,12 @@ When you create an API key, you trade your OpenShift identity for a long-lived c
 
 The create response includes a `subscription` field echoing the bound subscription name.
 
+When `DB_READ_CONNECTION_URL` is configured, creation commits to the writable primary
+while validation reads the local replica. A newly created key therefore may not validate
+until replication catches up. Not-found validation results are intentionally not retried
+on the primary because retrying would hide replica divergence. Retry after replication
+catches up, or omit the read-replica URL when immediate first-use validation is required.
+
 ### Creation Flow Diagram
 
 This diagram illustrates the process of creating an API key:
@@ -56,7 +62,7 @@ sequenceDiagram
     DB-->>MaaS: Stored
     MaaS-->>User: 4. Return plaintext key ONCE (never stored)
 
-    Note over User,DB: Key is ready for model access
+    Note over User,DB: Key committed; validation may wait for replication
 ```
 
 ---
@@ -100,9 +106,10 @@ The validation endpoint (`/internal/v1/api-keys/validate`) is called by Authorin
 After a successful lookup, maas-api asynchronously updates `last_used_at` in the background. To prevent Postgres row-lock contention when many requests share a single key, these writes are **debounced**: at most one write is issued per key per `LAST_USED_DEBOUNCE_SECS` window (default 60 s). Set `LAST_USED_DEBOUNCE_SECS=0` on the maas-api Deployment to write on every validation.
 
 When `DB_READ_CONNECTION_URL` is configured, the hash lookup uses the cluster-local
-PostgreSQL read replica to avoid a cross-cluster round trip. Revocation is then visible
-after replication lag plus any brief Authorino cache delay. Deployments that require
-strict immediate revocation must omit the read-replica URL. See
+PostgreSQL read replica to avoid a cross-cluster round trip. Newly created keys and
+revocations become visible after replication lag plus any brief Authorino cache delay.
+Deployments that require strict read-your-writes behavior for either operation must omit
+the read-replica URL. See
 [Database Setup](../install/maas-setup.md#optional-postgresql-read-replica).
 
 ---

@@ -64,15 +64,17 @@ fallback.
 
 Migrations and writes always use the writable primary. API-key hash validation and key
 search, get, and list queries use the read replica and fall back to the primary once if
-the replica fails. Secret changes continue to require a `maas-api` pod restart. The
+the replica fails. A not-found result is a completed read and is not retried on the
+primary. Secret changes continue to require a `maas-api` pod restart. The
 `DB_READ_REPLICA_LAG_WARNING_SECONDS` and `DB_READ_REPLICA_LAG_CRITICAL_SECONDS`
 environment variables configure the lag thresholds exposed as metrics.
 
-When the read URL is configured, revocation becomes visible to API-key validation after
-PostgreSQL replication lag plus any brief Authorino cache delay. Omit
-`DB_READ_CONNECTION_URL` if strict immediate revocation is required. The asynchronous,
-debounced `last_used_at` write continues to use the writable primary and does not block
-validation.
+When the read URL is configured, primary commits—including newly created keys and
+revocations—become visible to API-key validation after PostgreSQL replication lag plus
+any brief Authorino cache delay. A new key may therefore be rejected until its local
+replica catches up. Omit `DB_READ_CONNECTION_URL` if strict read-your-writes behavior is
+required. The asynchronous, debounced `last_used_at` write continues to use the writable
+primary and does not block validation.
 
 During rollout, monitor `maas_api_database_queries_total` to confirm local reads select the
 `read` pool, `maas_api_database_read_fallbacks_total` for unexpected primary traffic, and

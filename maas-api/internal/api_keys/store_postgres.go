@@ -69,6 +69,11 @@ func (s *PostgresStore) hasReadReplica() bool {
 // is per request rather than a process-wide circuit breaker: database/sql already owns
 // connection pooling, and fallback metrics plus logs provide the rollout signal without
 // adding hidden routing state.
+//
+// Not-found results are deliberately final. In particular, a key can be committed by
+// AddKey on the primary and remain absent from a lagging replica; retrying that result
+// on the primary would mask replica divergence and make routing semantics depend on
+// when a key was created.
 func readWithFallback[T any](
 	ctx context.Context,
 	store *PostgresStore,
@@ -87,6 +92,12 @@ func readWithFallback[T any](
 		// replica rows. That includes deterministic no-row and invalid-key results,
 		// which must not be retried as though they were infrastructure failures.
 		store.readHealthy.Store(true)
+		return result, err
+	}
+	if ctx.Err() != nil {
+		// Request cancellation or expiration is not a replica-health signal. Preserve
+		// the original result and error so a canceled request cannot add primary load,
+		// increment fallback metrics, or change the read-pool health state.
 		return result, err
 	}
 
@@ -116,26 +127,34 @@ func queryReadRowsWithFallback[T any](
 	// The callback must complete row iteration inside this function. Keeping Scan,
 	// Next, and rows.Err inside the fallback boundary is essential: database/sql can
 	// accept QueryContext and later expose a replica disconnect while streaming rows.
-	run := func(ctx context.Context, db *sql.DB) (result T, err error) {
-		rows, queryErr := db.QueryContext(ctx, query, args...) //nolint:rowserrcheck // consumeRows checks rows.Err after iteration.
+	run := func(ctx context.Context, db *sql.DB) (T, error) {
+		rows, queryErr := db.QueryContext(ctx, query, args...)
 		if queryErr != nil {
 			var zero T
 			return zero, queryErr
 		}
-		// Close is part of consuming database/sql rows. In particular, a callback can
-		// return a deterministic domain error after scanning its final row, while the
+		var result T
+		var consumeErr error
+		// The deferred no-op close protects against a callback panic. The explicit close
+		// below is part of consuming database/sql rows: a callback can return a
+		// deterministic domain error after scanning its final row, while the
 		// driver discovers a replica disconnect only when the rows cursor is closed.
-		// Override the callback result in that case so a domain error cannot bypass
-		// fallback and falsely mark an unhealthy replica as healthy.
-		defer func() {
-			closeErr := rows.Close()
-			if closeErr != nil {
-				var zero T
-				result = zero
-				err = closeErr
-			}
-		}()
-		return consumeRows(rows)
+		// database/sql makes Rows.Close idempotent, so the deferred call is a no-op on
+		// normal returns. Override the callback result on a close failure so a domain
+		// error cannot bypass fallback and falsely mark an unhealthy replica healthy.
+		defer func() { _ = rows.Close() }()
+		result, consumeErr = consumeRows(rows)
+		if iterationErr := rows.Err(); iterationErr != nil {
+			var zero T
+			result = zero
+			consumeErr = iterationErr
+		}
+		if closeErr := rows.Close(); closeErr != nil {
+			var zero T
+			result = zero
+			consumeErr = closeErr
+		}
+		return result, consumeErr
 	}
 	return readWithFallback(ctx, store, operation, run)
 }
@@ -151,6 +170,9 @@ func queryReadRowsWithFallback[T any](
 //
 // Note: keyPrefix is NOT stored (security - reduces brute-force attack surface).
 // labels are stored as JSONB (NULL if empty) for efficient lookups and filtering.
+// AddKey commits to the writable primary. When a read replica is configured, GetByHash
+// may not see the new key until replication catches up; that not-found result is not
+// retried on the primary because doing so would hide replica divergence.
 func (s *PostgresStore) AddKey(
 	ctx context.Context, username, keyID, keyHash, name, description string, userGroups []string, subscription string, tenant string, expiresAt *time.Time, ephemeral bool,
 	labels map[string]string,
@@ -555,6 +577,11 @@ func (s *PostgresStore) Get(ctx context.Context, keyID string) (*ApiKey, error) 
 	// failures until Scan. The no-row case has already returned above as a domain
 	// result, so it cannot hide replica divergence behind a primary retry.
 	if err != nil && s.hasReadReplica() {
+		if ctx.Err() != nil {
+			// A canceled or expired request is not evidence that the replica failed.
+			// Return the original scan result and error without health or routing changes.
+			return nil, err
+		}
 		s.readHealthy.Store(false)
 		s.recordReadFallback()
 		s.recordQuery("get", "write")

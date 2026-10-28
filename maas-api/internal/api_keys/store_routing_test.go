@@ -60,6 +60,7 @@ type fakeConnector struct {
 	emptyRows              bool
 	revokedRows            bool
 	blockPingUntilCanceled bool
+	cancelDuringQuery      func()
 	closed                 bool
 }
 
@@ -102,8 +103,12 @@ func (c *fakeConn) Ping(ctx context.Context) error {
 	return nil
 }
 
-func (c *fakeConn) QueryContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Rows, error) {
+func (c *fakeConn) QueryContext(ctx context.Context, query string, _ []driver.NamedValue) (driver.Rows, error) {
 	c.connector.recorder.record(c.connector.pool, query)
+	if c.connector.cancelDuringQuery != nil {
+		c.connector.cancelDuringQuery()
+		return nil, ctx.Err()
+	}
 	if c.connector.queryErr != nil {
 		return nil, c.connector.queryErr
 	}
@@ -357,6 +362,46 @@ func TestPostgresStore_ReadFallbackCoversRowConsumptionFailures(t *testing.T) {
 			assert.Equal(t, 1, recorder.count("read"))
 			assert.Equal(t, 1, recorder.count("write"))
 			assert.Equal(t, uint64(1), store.metrics.fallbacks.Load())
+			assert.False(t, store.readHealthy.Load())
+		})
+	}
+}
+
+func TestPostgresStore_RequestCancellationDoesNotFallback(t *testing.T) {
+	tests := []struct {
+		name string
+		call func(ctx context.Context, store *PostgresStore) (any, error)
+	}{
+		{
+			name: "get by hash",
+			call: func(ctx context.Context, store *PostgresStore) (any, error) {
+				return store.GetByHash(ctx, "hash")
+			},
+		},
+		{
+			name: "get",
+			call: func(ctx context.Context, store *PostgresStore) (any, error) {
+				return store.Get(ctx, "key-id")
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			store, recorder, _, readConnector := newRoutingStore(t, nil)
+			readConnector.cancelDuringQuery = cancel
+			store.readHealthy.Store(false)
+
+			result, err := test.call(ctx, store)
+			require.ErrorIs(t, err, context.Canceled)
+			require.Nil(t, result)
+
+			// Cancellation belongs to the request, not the replica. It must not trigger
+			// a primary retry or change read-pool health while an outage is visible.
+			assert.Equal(t, 1, recorder.count("read"))
+			assert.Zero(t, recorder.count("write"))
+			assert.Zero(t, store.metrics.fallbacks.Load())
 			assert.False(t, store.readHealthy.Load())
 		})
 	}
