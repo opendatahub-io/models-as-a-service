@@ -56,7 +56,9 @@ func NewHandler(log *logger.Logger, endpoint string) (*Handler, error) {
 	if err != nil {
 		return nil, fmt.Errorf("invalid Loki read endpoint %q: %w", endpoint, err)
 	}
-	if upstream.Scheme != "http" && upstream.Scheme != "https" {
+	switch upstream.Scheme {
+	case "http", "https":
+	default:
 		return nil, fmt.Errorf("invalid Loki read endpoint %q: scheme must be http or https", endpoint)
 	}
 	if upstream.Host == "" {
@@ -100,11 +102,22 @@ func isValidLabelName(name string) bool {
 		return false
 	}
 	for i, r := range name {
-		if !(r == '_' || isAlpha(r) || (isDigit(r) && i > 0)) {
+		if !isLabelNameRune(r, i > 0) {
 			return false
 		}
 	}
 	return true
+}
+
+func isLabelNameRune(r rune, allowDigit bool) bool {
+	switch {
+	case r == '_' || isAlpha(r):
+		return true
+	case isDigit(r):
+		return allowDigit
+	default:
+		return false
+	}
 }
 
 func isAlpha(r rune) bool {

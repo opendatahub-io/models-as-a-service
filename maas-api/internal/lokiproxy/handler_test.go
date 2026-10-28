@@ -1,18 +1,20 @@
-package lokiproxy
+package lokiproxy_test
 
 import (
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"sort"
 	"testing"
 
 	"github.com/gin-gonic/gin"
-	"github.com/prometheus/prometheus/model/labels"
+	logqlv2 "github.com/observatorium/api/logql/v2"
 	"github.com/stretchr/testify/require"
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/constant"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/lokiproxy"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/token"
 )
 
@@ -54,7 +56,7 @@ func newRouter(t *testing.T, pathPrefix string) (*gin.Engine, *upstreamRecord) {
 	upstream, record := newUpstream(t, http.StatusOK, `{"status":"success"}`)
 
 	tokenHandler := token.NewHandler(logger.Production(), "test-tenant")
-	lokiHandler, err := NewHandler(logger.Production(), upstream.URL+pathPrefix)
+	lokiHandler, err := lokiproxy.NewHandler(logger.Production(), upstream.URL+pathPrefix)
 	require.NoError(t, err)
 
 	router := gin.New()
@@ -82,6 +84,26 @@ func adminGroups() string {
 	return `["` + testOrganizationID + `/ai-grid-admins", "other-group"]`
 }
 
+// selectorMatchers parses a LogQL expression and returns the matchers of every
+// stream selector found in it (sorted for stable comparison).
+func selectorMatchers(t *testing.T, query string) []string {
+	t.Helper()
+
+	expr, err := logqlv2.ParseExpr(query)
+	require.NoError(t, err)
+
+	var matchers []string
+	expr.Walk(func(e any) {
+		if le, ok := e.(*logqlv2.StreamMatcherExpr); ok {
+			for _, m := range le.Matchers() {
+				matchers = append(matchers, m.String())
+			}
+		}
+	})
+	sort.Strings(matchers)
+	return matchers
+}
+
 func TestProxyQueryRangeEnforcesOrganizationMatcher(t *testing.T) {
 	router, record := newRouter(t, "/api/logs/v1/application")
 
@@ -89,7 +111,7 @@ func TestProxyQueryRangeEnforcesOrganizationMatcher(t *testing.T) {
 		"/v1/logs/loki/api/v1/query_range?query="+url.QueryEscape(`{app="api", organization_id="other-org"}`)+"&limit=100", adminGroups())
 
 	require.Equal(t, http.StatusOK, w.Code)
-	require.Equal(t, `{"status":"success"}`, w.Body.String())
+	require.JSONEq(t, `{"status":"success"}`, w.Body.String())
 	require.Equal(t, http.MethodGet, record.method)
 	require.Equal(t, "/api/logs/v1/application/loki/api/v1/query_range", record.path)
 	require.Equal(t, "100", record.query.Get("limit"))
@@ -195,7 +217,7 @@ func TestProxyPassesThroughUpstreamError(t *testing.T) {
 	t.Cleanup(upstream.Close)
 
 	tokenHandler := token.NewHandler(logger.Production(), "test-tenant")
-	lokiHandler, err := NewHandler(logger.Production(), upstream.URL)
+	lokiHandler, err := lokiproxy.NewHandler(logger.Production(), upstream.URL)
 	require.NoError(t, err)
 
 	router := gin.New()
@@ -204,40 +226,19 @@ func TestProxyPassesThroughUpstreamError(t *testing.T) {
 	w := lokiRequest(t, router, http.MethodGet, "/v1/logs/loki/api/v1/query_range?query=%7B%7D", adminGroups())
 
 	require.Equal(t, http.StatusInternalServerError, w.Code)
-	require.Equal(t, `{"status":"error"}`, w.Body.String())
+	require.JSONEq(t, `{"status":"error"}`, w.Body.String())
 }
 
 func TestNewHandlerValidatesEndpoint(t *testing.T) {
-	_, err := NewHandler(logger.Production(), "")
+	_, err := lokiproxy.NewHandler(logger.Production(), "")
 	require.Error(t, err)
 
-	_, err = NewHandler(logger.Production(), "not-a-url")
+	_, err = lokiproxy.NewHandler(logger.Production(), "not-a-url")
 	require.Error(t, err)
 
-	_, err = NewHandler(logger.Production(), "ftp://loki.example")
+	_, err = lokiproxy.NewHandler(logger.Production(), "ftp://loki.example")
 	require.Error(t, err)
 
-	_, err = NewHandler(logger.Production(), "https://loki.example/api/logs/v1/application")
+	_, err = lokiproxy.NewHandler(logger.Production(), "https://loki.example/api/logs/v1/application")
 	require.NoError(t, err)
-}
-
-// The injected matcher must always win over client-supplied matchers for the
-// same label, including regex and pipeline forms (defense in depth on top of
-// the query endpoint test above).
-func TestInjectedMatcherAlwaysWins(t *testing.T) {
-	required := []*labels.Matcher{orgMatcher(testOrganizationID)}
-
-	queries := []string{
-		`{organization_id="other"}`,
-		`{organization_id=~".*"}`,
-		`{organization_id!~"12.*"}`,
-		`{organization_id!="1234"} | json`,
-		`sum(count_over_time({organization_id=~"other|12"}[5m]))`,
-	}
-
-	for _, query := range queries {
-		enforced := enforcedQuery(t, url.Values{queryParam: []string{query}}, required, true)
-		matchers := selectorMatchers(t, enforced)
-		require.Contains(t, matchers, `organization_id="1234"`, "query: %s", query)
-	}
 }

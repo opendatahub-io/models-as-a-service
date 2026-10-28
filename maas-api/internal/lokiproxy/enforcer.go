@@ -13,9 +13,8 @@ import (
 	"fmt"
 	"net/url"
 
-	"github.com/prometheus/prometheus/model/labels"
-
 	logqlv2 "github.com/observatorium/api/logql/v2"
+	"github.com/prometheus/prometheus/model/labels"
 )
 
 const queryParam = "query"
@@ -53,7 +52,7 @@ func enforceQueryMatchers(v url.Values, required []*labels.Matcher, queryEndpoin
 		return fmt.Errorf("%w: %w", ErrInvalidQuery, err)
 	}
 
-	expr.Walk(func(e interface{}) {
+	expr.Walk(func(e any) {
 		switch le := e.(type) {
 		case *logqlv2.LogQueryExpr:
 			le.SetMatchers(combineLabelMatchers(le.Matchers(), required))
