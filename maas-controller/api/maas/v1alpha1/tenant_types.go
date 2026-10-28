@@ -84,7 +84,7 @@ type TenantSpec struct {
 
 // TenantExternalOIDCConfig defines the external OIDC provider settings.
 // +kubebuilder:validation:XValidation:rule="has(self.accessTokenPurposeClaim) == has(self.accessTokenPurpose)",message="accessTokenPurposeClaim and accessTokenPurpose must be set together"
-// +kubebuilder:validation:XValidation:rule="!has(self.cookieExpire) || !has(self.refreshInterval) || duration(self.cookieExpire) > duration(self.refreshInterval)",message="cookieExpire must be longer than refreshInterval"
+// +kubebuilder:validation:XValidation:rule="(has(self.cookieExpire) ? duration(self.cookieExpire) : duration('6h')) > (has(self.refreshInterval) ? duration(self.refreshInterval) : duration('4m'))",message="cookieExpire must be longer than refreshInterval"
 type TenantExternalOIDCConfig struct {
 	// IssuerURL is the OIDC issuer URL (e.g. https://keycloak.example.com/realms/maas).
 	// +kubebuilder:validation:MinLength=9
@@ -151,6 +151,7 @@ type TenantExternalOIDCConfig struct {
 	// Defaults to 6h when unset.
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:Type=string
+	// +kubebuilder:validation:MaxLength=32
 	// +kubebuilder:validation:Pattern=`^([0-9]+(\.[0-9]+)?(ns|us|ms|s|m|h))+$`
 	// +kubebuilder:validation:XValidation:rule="duration(self) > duration('0s')",message="cookieExpire must be a positive duration"
 	CookieExpire *metav1.Duration `json:"cookieExpire,omitempty"`
