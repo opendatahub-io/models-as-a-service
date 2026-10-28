@@ -19,6 +19,7 @@ import (
 )
 
 const testOrganizationID = "1234"
+const testUsername = "admin@example.com"
 
 type upstreamRecord struct {
 	method string
@@ -71,7 +72,7 @@ func lokiRequest(t *testing.T, router *gin.Engine, method, target, groups string
 	t.Helper()
 
 	req := httptest.NewRequest(method, target, nil)
-	req.Header.Set(constant.HeaderUsername, "admin@example.com")
+	req.Header.Set(constant.HeaderUsername, testUsername)
 	req.Header.Set(constant.HeaderGroup, groups)
 	req.Header.Set(constant.HeaderOrganizationID, testOrganizationID)
 
@@ -82,6 +83,10 @@ func lokiRequest(t *testing.T, router *gin.Engine, method, target, groups string
 
 func adminGroups() string {
 	return `["` + testOrganizationID + `/ai-grid-admins", "other-group"]`
+}
+
+func userGroups() string {
+	return `["` + testOrganizationID + `/ai-grid-users", "other-group"]`
 }
 
 // selectorMatchers parses a LogQL expression and returns the matchers of every
@@ -160,6 +165,124 @@ func TestProxyRejectsInvalidQuery(t *testing.T) {
 
 	w := lokiRequest(t, router, http.MethodGet, "/v1/logs/loki/api/v1/query_range?query="+url.QueryEscape(`{app=`), adminGroups())
 	require.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestProxyOnlyUserAuthzMatrix(t *testing.T) {
+	query := "?query=" + url.QueryEscape(`{app="api"}`)
+
+	tt := []struct {
+		desc     string
+		groups   string
+		onlyUser string
+		expected int
+	}{
+		{
+			desc:     "admin without flag is authorized",
+			groups:   adminGroups(),
+			onlyUser: "",
+			expected: http.StatusOK,
+		},
+		{
+			desc:     "admin with flag is authorized and self-scoped",
+			groups:   adminGroups(),
+			onlyUser: "true",
+			expected: http.StatusOK,
+		},
+		{
+			desc:     "ai-grid-users member with flag is authorized",
+			groups:   userGroups(),
+			onlyUser: "true",
+			expected: http.StatusOK,
+		},
+		{
+			desc:     "ai-grid-users member without flag is rejected",
+			groups:   userGroups(),
+			onlyUser: "",
+			expected: http.StatusForbidden,
+		},
+		{
+			desc:     "member of neither group is rejected without flag",
+			groups:   `["some-other-group"]`,
+			onlyUser: "",
+			expected: http.StatusForbidden,
+		},
+		{
+			desc:     "member of neither group is rejected with flag",
+			groups:   `["some-other-group"]`,
+			onlyUser: "true",
+			expected: http.StatusForbidden,
+		},
+	}
+
+	for _, tc := range tt {
+		t.Run(tc.desc, func(t *testing.T) {
+			router, record := newRouter(t, "")
+
+			target := "/v1/logs/loki/api/v1/query_range" + query
+			if tc.onlyUser != "" {
+				target += "&only_user=" + tc.onlyUser
+			}
+			w := lokiRequest(t, router, http.MethodGet, target, tc.groups)
+
+			require.Equal(t, tc.expected, w.Code)
+			if tc.expected == http.StatusOK {
+				require.Equal(t, "/loki/api/v1/query_range", record.path)
+			} else {
+				require.Empty(t, record.path, "upstream must not be called")
+			}
+		})
+	}
+}
+
+func TestProxyOnlyUserInjectsUserAndOrganizationMatchers(t *testing.T) {
+	router, record := newRouter(t, "")
+
+	w := lokiRequest(t, router, http.MethodGet,
+		"/v1/logs/loki/api/v1/query_range?only_user=true&query="+url.QueryEscape(`{app="api", organization_id="other-org", user_id="victim"}`),
+		userGroups())
+
+	require.Equal(t, http.StatusOK, w.Code)
+	require.NotContains(t, record.query, "only_user", "only_user must not be forwarded upstream")
+
+	matchers := selectorMatchers(t, record.query.Get("query"))
+	require.Contains(t, matchers, `organization_id="1234"`)
+	require.Contains(t, matchers, `user_id="admin@example.com"`)
+	require.NotContains(t, matchers, `organization_id="other-org"`)
+	require.NotContains(t, matchers, `user_id="victim"`)
+}
+
+func TestProxyOnlyUserInjectsSelectorWhenQueryAbsent(t *testing.T) {
+	router, record := newRouter(t, "")
+
+	w := lokiRequest(t, router, http.MethodGet, "/v1/logs/loki/api/v1/labels?only_user=true&start=1", userGroups())
+
+	require.Equal(t, http.StatusOK, w.Code)
+	require.Equal(t, []string{`organization_id="1234"`, `user_id="admin@example.com"`}, selectorMatchers(t, record.query.Get("query")))
+}
+
+func TestProxyOnlyUserAdminKeepsOrganizationWideViewWithoutFlag(t *testing.T) {
+	router, record := newRouter(t, "")
+
+	// An admin may query arbitrary user_id values via plain LogQL; only the
+	// organization matcher is injected.
+	w := lokiRequest(t, router, http.MethodGet,
+		"/v1/logs/loki/api/v1/query_range?query="+url.QueryEscape(`{user_id="someone-else"}`),
+		adminGroups())
+
+	require.Equal(t, http.StatusOK, w.Code)
+	matchers := selectorMatchers(t, record.query.Get("query"))
+	require.Contains(t, matchers, `organization_id="1234"`)
+	require.Contains(t, matchers, `user_id="someone-else"`)
+	require.NotContains(t, matchers, `user_id="admin@example.com"`)
+}
+
+func TestProxyOnlyUserInvalidFlagValue(t *testing.T) {
+	router, record := newRouter(t, "")
+
+	w := lokiRequest(t, router, http.MethodGet, "/v1/logs/loki/api/v1/query_range?only_user=yes&query=%7B%7D", adminGroups())
+
+	require.Equal(t, http.StatusBadRequest, w.Code)
+	require.Empty(t, record.path, "upstream must not be called")
 }
 
 func TestProxyRejectsNonAdmin(t *testing.T) {

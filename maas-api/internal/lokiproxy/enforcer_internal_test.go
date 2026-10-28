@@ -140,6 +140,53 @@ func TestEnforceQueryMatchersLabelEndpoints(t *testing.T) {
 	}
 }
 
+// The user-scoped view injects both the organization and the user matcher;
+// conflicting client matchers for either label must be overridden.
+func TestEnforceQueryMatchersUserScoped(t *testing.T) {
+	t.Parallel()
+
+	required := []*labels.Matcher{
+		orgMatcher(),
+		{Type: labels.MatchEqual, Name: "user_id", Value: "user-abc"},
+	}
+
+	tt := []struct {
+		desc     string
+		query    string
+		expected []string
+	}{
+		{
+			desc:     "plain selector gains both matchers",
+			query:    `{app="api"}`,
+			expected: []string{`app="api"`, `organization_id="1234"`, `user_id="user-abc"`},
+		},
+		{
+			desc:     "conflicting user matcher is overwritten",
+			query:    `{user_id="victim", organization_id="other"}`,
+			expected: []string{`organization_id="1234"`, `user_id="user-abc"`},
+		},
+		{
+			desc:     "negative user matcher is overwritten",
+			query:    `{user_id!="user-abc"}`,
+			expected: []string{`organization_id="1234"`, `user_id="user-abc"`},
+		},
+		{
+			desc:     "regex user matcher is overwritten",
+			query:    `{user_id=~".*"}`,
+			expected: []string{`organization_id="1234"`, `user_id="user-abc"`},
+		},
+	}
+
+	for _, tc := range tt {
+		t.Run(tc.desc, func(t *testing.T) {
+			t.Parallel()
+
+			query := enforcedQuery(t, url.Values{queryParam: []string{tc.query}}, required, true)
+			require.Equal(t, tc.expected, selectorMatchers(t, query))
+		})
+	}
+}
+
 func TestEnforceQueryMatchersInvalidQuery(t *testing.T) {
 	v := url.Values{queryParam: []string{`{app="unclosed`}}
 	err := enforceQueryMatchers(v, []*labels.Matcher{orgMatcher()}, true)

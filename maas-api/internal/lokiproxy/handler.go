@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -21,10 +22,22 @@ const (
 	// organizationLabel is the Loki label carrying the caller's organization.
 	organizationLabel = "organization_id"
 
+	// userLabel is the Loki label carrying the user that produced a log line.
+	userLabel = "user_id"
+
 	// adminGroupSuffix is appended to the organization ID to derive the
 	// organization admin group ($org_id/ai-grid-admins per the AI Grid
 	// convention).
 	adminGroupSuffix = "/ai-grid-admins"
+
+	// userGroupSuffix is appended to the organization ID to derive the
+	// organization user group ($org_id/ai-grid-users per the AI Grid
+	// convention).
+	userGroupSuffix = "/ai-grid-users"
+
+	// onlyUserParam narrows the query to the calling user's own logs (see
+	// authorize). It is consumed by the proxy and never forwarded upstream.
+	onlyUserParam = "only_user"
 
 	// proxyTimeout bounds a single upstream Loki request.
 	proxyTimeout = 60 * time.Second
@@ -129,9 +142,15 @@ func isDigit(r rune) bool {
 }
 
 // authorize resolves the caller's organization from the auth context and
-// verifies membership in the organization admin group. It writes the error
-// response and returns false when the request must not be proxied.
-func (h *Handler) authorize(c *gin.Context) (string, bool) {
+// verifies group membership according to the requested view. Without the
+// only_user flag the caller must be a member of the organization admin group
+// ($org_id/ai-grid-admins) and gets organization-wide visibility. With the
+// flag the caller must be a member of the organization user group
+// ($org_id/ai-grid-users) — or the admin group, since admins need both views —
+// and the returned username restricts results to the caller's own logs. It
+// writes the error response and returns false when the request must not be
+// proxied.
+func (h *Handler) authorize(c *gin.Context, onlyUser bool) (string, string, bool) {
 	requestLogger := h.requestLogger(c)
 
 	value, ok := c.Get("user")
@@ -142,7 +161,7 @@ func (h *Handler) authorize(c *gin.Context) (string, bool) {
 			"exceptionCode":     "AUTH_FAILURE",
 			"error_description": "authentication is required",
 		})
-		return "", false
+		return "", "", false
 	}
 
 	user, ok := value.(*token.UserContext)
@@ -153,11 +172,36 @@ func (h *Handler) authorize(c *gin.Context) (string, bool) {
 			"exceptionCode":     "AUTH_FAILURE",
 			"error_description": "organization ID is required",
 		})
-		return "", false
+		return "", "", false
 	}
 
 	adminGroup := user.OrganizationID + adminGroupSuffix
-	if !containsGroup(user.Groups, adminGroup) {
+	isAdmin := containsGroup(user.Groups, adminGroup)
+
+	if onlyUser {
+		// The user view accepts both organization users and admins, but always
+		// restricts results to the caller's own user_id (injected below).
+		userGroup := user.OrganizationID + userGroupSuffix
+		if !isAdmin && !containsGroup(user.Groups, userGroup) {
+			requestLogger.Warn("Rejected Loki proxy request from user outside the organization user group",
+				"username", logger.RedactValue(user.Username),
+			)
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
+				"error":             "forbidden",
+				"exceptionCode":     "AUTHZ_FAILURE",
+				"error_description": "organization membership is required",
+			})
+			return "", "", false
+		}
+
+		// The user_id label on usage logs carries the value of X-MaaS-Username
+		// (injected by the usage-logs EnvoyFilter), so the matcher must use the
+		// username from the trusted auth-gateway header. ExtractUserInfo
+		// guarantees it is present.
+		return user.OrganizationID, user.Username, true
+	}
+
+	if !isAdmin {
 		requestLogger.Warn("Rejected Loki proxy request from non-admin user",
 			"username", logger.RedactValue(user.Username),
 		)
@@ -166,10 +210,10 @@ func (h *Handler) authorize(c *gin.Context) (string, bool) {
 			"exceptionCode":     "AUTHZ_FAILURE",
 			"error_description": "organization admin membership is required",
 		})
-		return "", false
+		return "", "", false
 	}
 
-	return user.OrganizationID, true
+	return user.OrganizationID, "", true
 }
 
 // proxyHandler returns a gin handler that enforces the organization matcher and
@@ -179,16 +223,41 @@ func (h *Handler) proxyHandler(upstreamPath string, queryEndpoint bool) gin.Hand
 	return func(c *gin.Context) {
 		requestLogger := h.requestLogger(c)
 
-		organizationID, ok := h.authorize(c)
+		// only_user=true narrows the query to the caller's own logs and lowers
+		// the authorization bar to the organization user group. Any other value
+		// keeps the admin-only organization-wide view.
+		onlyUser := false
+		if raw := c.Query(onlyUserParam); raw != "" {
+			parsed, err := strconv.ParseBool(raw)
+			if err != nil {
+				requestLogger.Warn("Rejected Loki proxy request with invalid only_user value", "value", raw)
+				c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{
+					"error":             "invalid only_user parameter",
+					"exceptionCode":     "INVALID_PARAMETER",
+					"error_description": "the only_user parameter must be a boolean",
+				})
+				return
+			}
+			onlyUser = parsed
+		}
+
+		organizationID, scopedUsername, ok := h.authorize(c, onlyUser)
 		if !ok {
 			return
 		}
 
 		// Copy the query parameters so the client's URL is never mutated;
-		// everything except "query" is passed through verbatim.
+		// everything except "query" is passed through verbatim. The only_user
+		// flag is consumed here and never forwarded upstream.
 		values := c.Request.URL.Query()
+		values.Del(onlyUserParam)
 		required := []*labels.Matcher{
 			{Type: labels.MatchEqual, Name: organizationLabel, Value: organizationID},
+		}
+		if onlyUser {
+			required = append(required, &labels.Matcher{
+				Type: labels.MatchEqual, Name: userLabel, Value: scopedUsername,
+			})
 		}
 
 		if err := enforceQueryMatchers(values, required, queryEndpoint); err != nil {
