@@ -19,8 +19,10 @@ const (
 // when their CRDs are not yet registered, instead of failing the Tenant reconcile.
 // The CRD watch in the controller re-triggers reconcile once the CRDs appear.
 var OptionalAPIGroups = map[string]bool{
-	"perses.dev":       true, // Cluster Observability Operator (COO) — Perses dashboards and datasources
-	"opentelemetry.io": true, // OpenTelemetry Collector
+	"monitoring.coreos.com": true, // ServiceMonitors consumed by the OTEL target allocator
+	"monitoring.rhobs":      true, // Product Prometheus rules supplied by COO
+	"perses.dev":            true, // Cluster Observability Operator (COO) — Perses dashboards and datasources
+	"opentelemetry.io":      true, // OpenTelemetry Collector
 }
 
 // isOptionalAPIGroup returns true when missing CRDs for the given group should not

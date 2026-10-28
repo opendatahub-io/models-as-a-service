@@ -89,6 +89,45 @@ kubectl patch configs.maas.opendatahub.io default --type=merge -p '{"spec":{"usa
 !!! note "Operator prerequisite"
     Operator-managed `PersesDashboard` CRs require a running maas-controller, a `Config` instance, a monitoring namespace, and Perses CRDs (`PersesAvailable` above). Ownership and cleanup differ from Kustomize-applied dashboards — see [Operations: Cleanup](operations.md#cleanup).
 
+#### Authorino monitoring
+
+`Config.spec.authorinoMonitoring` defaults to `true`. When a monitoring namespace
+is configured and exists, the MaaS controller deploys these resources there:
+
+- `ServiceMonitor` (`monitoring.coreos.com/v1`) named `authorino-server-metrics`,
+  labeled `monitoring.opendatahub.io/scrape: "true"` for the DSCI OTEL target
+  allocator. It scrapes `/server-metrics` in `kuadrant-system` or
+  `rh-connectivity-link` every 30 seconds, following the Limitador monitoring pattern.
+- `PrometheusRule` resources (`monitoring.rhobs/v1`) named
+  `authorino-maas-authentication-alerts` and
+  `authorino-maas-metadata-evaluator-high-failure-rate`. These are evaluated by
+  the DSCI-managed Prometheus, using OTEL-normalized counter names ending in
+  `_total`. All three alerts retain their five-minute hold duration.
+
+The alerts cover authentication failure rate, authentication latency, and metadata
+HTTP evaluator failure rate. The metadata alert additionally requires metrics
+enabled for the `apiKeyValidation` and `subscription-info` evaluators. Installing
+rules alone does not enable evaluator metrics or configure external paging.
+
+To disable both the monitor and rules:
+
+```bash
+kubectl patch configs.maas.opendatahub.io default --type=merge \
+  -p '{"spec":{"authorinoMonitoring":false}}'
+```
+
+Setting the field back to `true` recreates them. Disabling removes only resources
+owned by the controller; Authorino and independently managed monitoring resources
+are preserved. Missing monitoring CRDs are tolerated and their installation
+triggers reconciliation.
+
+These product resources do not require user-workload monitoring (UWM). The
+standalone `install-observability.sh` also labels its Authorino ServiceMonitor for
+DSCI scraping, but its alert-rule manifests under `deployment/base/observability`
+still target UWM and raw metric names. Use the controller-managed rules for
+DSCI alerting. Avoid installing both ServiceMonitors for the same Authorino
+endpoint; remove the script-managed monitor before enabling this feature.
+
 #### Logs-based usage dashboards
 
 We have introduced usage dashboards that are based on structured access logs rather than on metrics for both administrators and non-admin users as a tech-preview feature. The data presented in these dashboards is more accurate and consistent, and a bit more enriched, compared to the data in the metrics-based dashboard.

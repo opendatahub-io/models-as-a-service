@@ -1,0 +1,22 @@
+# Managed by Config.spec.authorinoMonitoring; selected by the DSCI OTEL collector.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: authorino-server-metrics
+  labels:
+    monitoring.opendatahub.io/scrape: "true"
+    app.kubernetes.io/part-of: maas-observability
+spec:
+  namespaceSelector:
+    matchNames:
+      - kuadrant-system
+      - rh-connectivity-link
+  selector:
+    matchLabels:
+      control-plane: controller-manager
+      authorino-resource: authorino
+  endpoints:
+    - port: http
+      path: /server-metrics
+      interval: 30s
+      scrapeTimeout: 10s

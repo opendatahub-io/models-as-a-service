@@ -452,6 +452,9 @@ func (r *LifecycleReconciler) ensureObservability(ctx context.Context, log logr.
 	if err := r.ensureLimitadorServiceMonitor(ctx); err != nil {
 		return err
 	}
+	if err := r.ensureAuthorinoMonitoring(ctx, log); err != nil {
+		return err
+	}
 	if err := r.ensureUsageDashboard(ctx, log); err != nil {
 		return err
 	}

@@ -96,6 +96,11 @@ kubectl logs -n <monitoring-namespace> \
 
 ### Cleanup
 
+For operator-managed Authorino monitoring, set `Config.spec.authorinoMonitoring`
+to `false` to remove the managed ServiceMonitor and both rule resources from the
+monitoring namespace. See [Authorino monitoring](setup.md#authorino-monitoring).
+The script-managed resources below use the legacy UWM integration.
+
 How you remove resources depends on how they were applied. `./scripts/observability/install-observability.sh` applies TelemetryPolicy and Istio Telemetry from `deployment/base/observability/`, plus these resources when their conditions match:
 
 | Resource | When |
