@@ -26,6 +26,8 @@ spec:
     value: 'false'
   - name: konflux-integration-ref
     value: maas-tls-scanner-group-test
+  - name: konflux-integration-url
+    value: https://github.com/somya-bhatnagar/odh-konflux-central.git
   pipelineRef:
     resolver: git
     params:
