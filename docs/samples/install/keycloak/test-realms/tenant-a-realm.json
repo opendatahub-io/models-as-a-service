@@ -81,6 +81,17 @@
       "redirectUris": [],
       "webOrigins": [],
       "description": "Test-only client used to verify oidc-client-bound enforcement. Tokens issued to this client carry azp=wrong-client and must be rejected by MaaS even though the issuer is valid."
+    },
+    {
+      "clientId": "maas-consumer-portal",
+      "enabled": true,
+      "publicClient": false,
+      "secret": "maas-e2e-portal-client-secret",
+      "directAccessGrantsEnabled": false,
+      "standardFlowEnabled": true,
+      "redirectUris": ["*"],
+      "webOrigins": ["*"],
+      "description": "Confidential client used by the consumer portal auth proxy (kube-auth-proxy) for the browser login flow. The secret matches MAAS_PORTAL_CLIENT_SECRET in test/e2e/scripts/deploy-maas-portal.sh."
     }
   ],
   "groups": [
