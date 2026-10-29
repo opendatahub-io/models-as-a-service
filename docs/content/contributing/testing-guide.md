@@ -77,7 +77,7 @@ Tests are organized into **xdist groups** for parallel execution. All tests in a
 | `inference_priority` | `test_inference_priority.py` | Subscription `inferencePriority`: InferenceObjective lifecycle, `flowControlStatuses`, gateway flow-control headers (`serial`; skips without the `inferenceobjectives.llm-d.ai` CRD) |
 | `external` | `test_external_oidc.py` | External OIDC token flows (skipped unless `EXTERNAL_OIDC=true`) |
 | `external` | `test_external_models.py` | ExternalModel/ExternalProvider, egress, body routing |
-| `serial` | `test_large_io.py` | Large payload streaming inference (~108KB, gated by `E2E_LARGE_IO=1`); validates that WASM/ext_proc/Envoy buffer limits do not truncate or mutate the streaming response |
+| `serial` | `test_large_io.py` | Large payload streaming inference (~4.3MB, gated by `E2E_LARGE_IO=1`); validates that WASM/ext_proc/Envoy buffer limits do not truncate or mutate the streaming response |
 
 The `test_tenant_external_model_*` modules share the `tenant_ipp` group for now: the legacy IPP controllers do not yet skip ExternalModels with gatewayRefs (upstream image pin pending), so without the guard they adopt this suite's models and flap `status.httpRouteName` when the groups run concurrently. Split them back into their own `tenant_external_model` group once the guard ships.
 

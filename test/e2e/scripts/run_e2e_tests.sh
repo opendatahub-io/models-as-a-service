@@ -347,9 +347,9 @@ fi
 
 # ── Post-run cleanup ─────────────────────────────────────────────────────
 # Scale echo-sim down to 0 replicas after use to free the 1Gi memory limit on
-# the shared cluster. Only runs when E2E_LARGE_IO=1 (i.e. the large_io pass
-# actually ran). The next cluster setup re-applies the fixture at replicas=1.
-if [[ "${E2E_LARGE_IO:-}" == "1" ]]; then
+# the shared cluster. Only runs when E2E_LARGE_IO=1 or true (i.e. the large_io
+# pass actually ran). The next cluster setup re-applies the fixture at replicas=1.
+if [[ "${E2E_LARGE_IO:-}" == "1" || "${E2E_LARGE_IO:-}" == "true" ]]; then
     echo "Scaling down echo-sim after large_io pass (freeing cluster resources)..."
     kubectl patch llminferenceservices/echo-simulator \
         -n "${E2E_MODEL_NAMESPACE:-llm}" \

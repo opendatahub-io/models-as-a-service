@@ -31,6 +31,7 @@ Story: RHOAIENG-94274
 import json
 import logging
 import os
+import time
 
 import pytest
 import requests
@@ -63,7 +64,13 @@ LARGE_IO_TIMEOUT = int(os.environ.get("E2E_LARGE_IO_TIMEOUT", "300"))
 # echo-sim's context window is 1700000 tokens; 800K words × 2 (prompt + echo)
 # = 1.6M tokens, comfortably within the limit.
 LARGE_WORDS = int(os.environ.get("E2E_LARGE_IO_WORDS", "800000"))
-SMALL_WORDS = 1000  # baseline for size-scaling comparison
+SMALL_WORDS = max(1000, LARGE_WORDS // 800)  # ~0.1% of LARGE_WORDS, min 1000
+
+if LARGE_WORDS <= SMALL_WORDS:
+    raise ValueError(
+        f"E2E_LARGE_IO_WORDS ({LARGE_WORDS}) must be larger than SMALL_WORDS ({SMALL_WORDS}); "
+        "increase E2E_LARGE_IO_WORDS (default 800000)"
+    )
 
 # Each streaming round trip bills ~40k tokens (prompt + mirrored completion).
 # Ten million per minute keeps rate limiting out of the way without relying on
@@ -88,8 +95,8 @@ def _lorem(words: int) -> str:
 def _echo_completion_stream(api_key: str, prompt: str) -> requests.Response:
     """POST chat/completions with stream=True to the echo model.
 
-    Uses LARGE_IO_TIMEOUT (120s) because the shared TIMEOUT (45s) is too
-    tight for a 108KB payload traversing the full gateway filter chain.
+    Uses LARGE_IO_TIMEOUT (300s default) because the shared TIMEOUT (45s) is too
+    tight for a ~4.3MB payload traversing the full gateway filter chain.
     """
     return requests.post(
         f"{_gateway_url()}{ECHO_MODEL_PATH}/v1/chat/completions",
@@ -112,9 +119,19 @@ def _collect_stream_content(response: requests.Response) -> tuple[list, str]:
     returned so callers can independently assert on the [DONE] sentinel and
     chunk count.
     """
+    content_type = response.headers.get("Content-Type", "")
+    assert "text/event-stream" in content_type, (
+        f"Expected Content-Type text/event-stream, got: {content_type!r}"
+    )
+
+    deadline = time.monotonic() + LARGE_IO_TIMEOUT
     events = []
     parts = []
     for line in response.iter_lines(decode_unicode=True):
+        if time.monotonic() > deadline:
+            raise AssertionError(
+                f"Stream collection exceeded {LARGE_IO_TIMEOUT}s deadline after {len(events)} events"
+            )
         if not line:
             continue
         events.append(line)
@@ -126,8 +143,10 @@ def _collect_stream_content(response: requests.Response) -> tuple[list, str]:
                 content = choice.get("delta", {}).get("content")
                 if content:
                     parts.append(content)
-        except json.JSONDecodeError:
-            log.warning("Unparseable SSE event: %s", line[:120])
+        except json.JSONDecodeError as exc:
+            raise AssertionError(
+                f"Unparseable SSE event (length={len(line)}): {exc}"
+            ) from exc
     return events, "".join(parts)
 
 
@@ -209,8 +228,8 @@ class TestLargeIOStream:
 
         data_chunks = [e for e in events if e.startswith("data: {")]
         assert data_chunks, f"Stream carried no data chunks. All events: {events[:10]}"
-        assert "data: [DONE]" in events, (
-            f"Stream did not close with [DONE]. Last 3 events: {events[-3:]}"
+        assert events and events[-1] == "data: [DONE]", (
+            f"Stream did not close with [DONE] as the final event. Last 3 events: {events[-3:]}"
         )
 
     def test_stream_content_equals_prompt(self, large_io_access):
