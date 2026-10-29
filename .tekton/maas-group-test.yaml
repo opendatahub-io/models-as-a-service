@@ -24,13 +24,15 @@ spec:
     value: '{ "odh-maas-api-ci": "opendatahub/maas-api", "odh-maas-controller-ci": "opendatahub/maas-controller", "odh-maas-discovery-ci": "opendatahub/odh-maas-discovery" }'
   - name: gather-on-success
     value: 'false'
+  - name: konflux-integration-ref
+    value: maas-tls-scanner-group-test
   pipelineRef:
     resolver: git
     params:
     - name: url
-      value: https://github.com/opendatahub-io/odh-konflux-central.git
+      value: https://github.com/somya-bhatnagar/odh-konflux-central.git
     - name: revision
-      value: main
+      value: maas-tls-scanner-group-test
     - name: pathInRepo
       value: integration-tests/models-as-a-service/pr-group-testing-pipeline.yaml
   taskRunTemplate:
