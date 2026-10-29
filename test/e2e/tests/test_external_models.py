@@ -344,7 +344,7 @@ def external_token_limit_resources():
             time.sleep(2)
         else:
             raise TimeoutError(
-                "unconfigured simulator LLMInferenceService did not report a workload Service "
+                f"LLMInferenceService {MODEL_NAMESPACE}/{EXTERNAL_TOKEN_LIMIT_LLMIS} did not report a workload Service "
                 "with HTTPS port 8000"
             )
         # Target the workload Service directly: its cert is signed by the
