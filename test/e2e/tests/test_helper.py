@@ -184,7 +184,6 @@ EMBEDDING_MODEL_CANONICAL_ID = os.environ.get(
     f"publishers/{MODEL_NAMESPACE}/models/{EMBEDDING_MODEL_NAME}",
 )
 
-
 # ---------------------------------------------------------------------------
 # Environment / URL helpers
 # ---------------------------------------------------------------------------
@@ -1264,14 +1263,14 @@ def _post(url: str, payload: dict, headers: dict, timeout_sec: int = 45) -> requ
 
 
 def chat(prompt: str, model_v1: str, headers: dict, model_name: str, *,
-         stream: bool = False, max_tokens: Optional[int] = None):
+         stream: bool = False, max_tokens: Optional[int] = None, timeout: int = 30):
     url = f"{model_v1}/chat/completions"
     body = {"model": model_name, "messages": [{"role": "user", "content": prompt}]}
     if max_tokens is not None:
         body["max_tokens"] = max_tokens
     if stream:
         body["stream"] = True
-    return requests.post(url, headers=headers, json=body, timeout=30, verify=TLS_VERIFY, stream=stream)
+    return requests.post(url, headers=headers, json=body, timeout=timeout, verify=TLS_VERIFY, stream=stream)
 
 
 OPENAI_SSE_DONE_LINE = "data: [DONE]"

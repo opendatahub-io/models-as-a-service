@@ -62,7 +62,7 @@ done
 # Per-pass -m filters are owned by this script; forwarded markers can defeat the split.
 reject_forwarded_marker_args() {
     local arg
-    for arg in "${extra_pytest_args[@]}"; do
+    for arg in "${extra_pytest_args[@]+"${extra_pytest_args[@]}"}"; do
         case "$arg" in
             -m|--markers|-m*|--markers=*)
                 echo "ERROR: forwarded pytest marker ($arg) is not allowed; run_e2e_tests.sh applies per-pass -m filters" >&2
@@ -164,7 +164,7 @@ fi
 # Resolve relative paths against TEST_DIR so they work regardless of cwd.
 resolved_extra_args=()
 has_path_arg=false
-for arg in "${extra_pytest_args[@]}"; do
+for arg in "${extra_pytest_args[@]+"${extra_pytest_args[@]}"}"; do
     if [[ -e "$TEST_DIR/$arg" ]]; then
         resolved_extra_args+=("$TEST_DIR/$arg")
         has_path_arg=true
@@ -187,7 +187,7 @@ else
         -v --disable-warnings
         --capture=tee-sys --show-capture=all --log-level=INFO
         "$TEST_DIR/tests"
-        "${extra_pytest_args[@]}"
+        "${extra_pytest_args[@]+"${extra_pytest_args[@]}"}"
     )
 fi
 
@@ -343,6 +343,18 @@ else
     snapshot_parallel_pass_pods || echo "WARNING: failed to snapshot pods after the parallel pass"
     maybe_run_serial_pass
     maybe_run_nightly_pass
+fi
+
+# ── Post-run cleanup ─────────────────────────────────────────────────────
+# Scale echo-sim down to 0 replicas after use to free the 1Gi memory limit on
+# the shared cluster. Only runs when E2E_LARGE_IO=1 (i.e. the large_io pass
+# actually ran). The next cluster setup re-applies the fixture at replicas=1.
+if [[ "${E2E_LARGE_IO:-}" == "1" ]]; then
+    echo "Scaling down echo-sim after large_io pass (freeing cluster resources)..."
+    kubectl patch llminferenceservices/echo-simulator \
+        -n "${E2E_MODEL_NAMESPACE:-llm}" \
+        --type merge -p '{"spec":{"replicas":0}}' \
+        || echo "WARNING: failed to scale down echo-sim (non-fatal)"
 fi
 
 # ── Result ───────────────────────────────────────────────────────────────

@@ -77,6 +77,7 @@ Tests are organized into **xdist groups** for parallel execution. All tests in a
 | `inference_priority` | `test_inference_priority.py` | Subscription `inferencePriority`: InferenceObjective lifecycle, `flowControlStatuses`, gateway flow-control headers (`serial`; skips without the `inferenceobjectives.llm-d.ai` CRD) |
 | `external` | `test_external_oidc.py` | External OIDC token flows (skipped unless `EXTERNAL_OIDC=true`) |
 | `external` | `test_external_models.py` | ExternalModel/ExternalProvider, egress, body routing |
+| `serial` | `test_large_io.py` | Large payload streaming inference (~108KB, gated by `E2E_LARGE_IO=1`); validates that WASM/ext_proc/Envoy buffer limits do not truncate or mutate the streaming response |
 
 The `test_tenant_external_model_*` modules share the `tenant_ipp` group for now: the legacy IPP controllers do not yet skip ExternalModels with gatewayRefs (upstream image pin pending), so without the guard they adopt this suite's models and flap `status.httpRouteName` when the groups run concurrently. Split them back into their own `tenant_external_model` group once the guard ships.
 
@@ -191,6 +192,9 @@ The E2E framework auto-discovers most values from the cluster. These are the mos
 | `EXTERNAL_OIDC` | Set `true` to enable external OIDC tests |
 | `E2E_PARALLEL_WORKERS` | pytest-xdist worker count for pass 1 (default `7`). Set to `1` for single-worker pass 1 without xdist; pass 2 stays serial. |
 | `LLMISVC_CONTROLLER_CPU_REQUEST` / `LLMISVC_CONTROLLER_CPU_LIMIT` | CPU that `deploy-platform.sh` gives `llmisvc-controller-manager` on the test cluster (defaults `1` / `2`; shipped is 100m). Set the limit empty to keep the shipped resources. |
+| `E2E_LARGE_IO` | Set `1` or `true` to enable large payload I/O tests. Opt-in because: (1) each request sends and echoes ~4.3MB, making the suite slow (~3 min) and bandwidth-heavy; (2) the echo-sim fixture requires a 1Gi memory limit which is expensive on shared clusters; (3) these tests validate a specific buffer-limit concern (WASM/ext_proc/Envoy truncation) rather than general model serving correctness, so they are not needed on every PR. Intended for nightly or extended runs. |
+| `E2E_LARGE_IO_TIMEOUT` | Request timeout in seconds for large I/O tests (default `300`) |
+| `E2E_LARGE_IO_WORDS` | Prompt size in words for large I/O tests (default `800000`, ~4.3MB) |
 
 See `test/e2e/tests/conftest.py` and individual test module docstrings for the full set of supported variables.
 
