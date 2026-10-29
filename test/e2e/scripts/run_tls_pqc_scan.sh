@@ -4,7 +4,13 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ARTIFACT_DIR="${ARTIFACT_DIR:-${SCRIPT_DIR}/../../tls-scanner-artifacts}"
+# CI (Prow/Konflux) sets ARTIFACT_DIR; local runs use a temp dir (never under the git tree).
+if [[ -n "${ARTIFACT_DIR:-}" ]]; then
+  mkdir -p "${ARTIFACT_DIR}"
+  ARTIFACT_DIR="$(cd "${ARTIFACT_DIR}" && pwd -P)"
+else
+  ARTIFACT_DIR="$(mktemp -d "${TMPDIR:-/tmp}/maas-tls-scanner-artifacts.XXXXXXXX")"
+fi
 TLS_SCANNER_GIT="${TLS_SCANNER_GIT:-https://github.com/openshift/tls-scanner.git}"
 # Pinned commit (includes deploy.sh PQC_CHECK → --pqc-check wiring).
 TLS_SCANNER_REF="${TLS_SCANNER_REF:-df6f8d462cd22d4a515946602936a4ac117e4c74}"
@@ -20,6 +26,15 @@ if [[ -z "${NAMESPACE_FILTER:-}" ]]; then
     opendatahub) _infra_ns="odh-ai-gateway-infra" ;;
     *) _infra_ns="${_deploy_ns}" ;;
   esac
+  if [[ -n "${E2E_MAAS_API_DEPLOYMENT_NAMESPACE:-}" ]]; then
+    _infra_ns="${E2E_MAAS_API_DEPLOYMENT_NAMESPACE}"
+  elif [[ "${INFRA_NAMESPACE+x}" == "x" ]]; then
+    if [[ -z "${INFRA_NAMESPACE}" ]]; then
+      _infra_ns="${_deploy_ns}"
+    elif [[ "${INFRA_NAMESPACE}" != "AUTO" ]]; then
+      _infra_ns="${INFRA_NAMESPACE}"
+    fi
+  fi
   export NAMESPACE_FILTER="${_deploy_ns},${_infra_ns}"
 else
   export NAMESPACE_FILTER
@@ -28,9 +43,6 @@ fi
 export PQC_CHECK="${PQC_CHECK:-true}"
 export SCANNER_IMAGE="${SCANNER_IMAGE:-registry.ci.openshift.org/tls-scanner/tls-scanner:tls-scanner-tool}"
 export ARTIFACT_WAIT="${ARTIFACT_WAIT:-60}"
-
-mkdir -p "${ARTIFACT_DIR}"
-ARTIFACT_DIR="$(cd "${ARTIFACT_DIR}" && pwd -P)"
 
 SCANNER_WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/tls-scanner.XXXXXXXX")"
 cleanup() {
