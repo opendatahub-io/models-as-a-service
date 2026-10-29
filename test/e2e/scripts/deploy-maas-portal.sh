@@ -11,21 +11,64 @@
 #      RHAI-10607: without spec.oidc.clientSecretRef the controller uses the
 #      Secret as-is).
 #
-# This script provides 1 and 3 with test stand-ins:
+# This script provides all three:
+#   - optionally the ai-gateway-controller itself (maas e2e lanes run
+#     DEPLOY_MODE=kustomize, which sets the DSC aigateway component to Removed,
+#     so no controller exists; set AI_GATEWAY_CONTROLLER_IMAGE to fetch the
+#     ai-gateway-controller repo at AIGC_COMMIT and deploy it, mirroring how
+#     the aigc e2e fetches this repo),
 #   - a `maas-portal` Service backed by a minimal placeholder pod (the auth
 #     boundary tests never send traffic through the backend; a TLS-capable
 #     echo backend would be needed to test the signed-in 200 path), and
 #   - the credentials Secret carrying the confidential
 #     `maas-consumer-portal` Keycloak client added to the tenant-a test realm.
 #
-# It must run AFTER deploy.sh has configured the tenant (EXTERNAL_OIDC=true)
-# and the AIGC controller image must carry RHAI-10608; until then the portal
-# reconciler simply keeps requeueing and the portal tests skip.
+# It must run AFTER deploy.sh has configured the tenant (EXTERNAL_OIDC=true).
 # =============================================================================
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="${PROJECT_ROOT:-$(cd "${SCRIPT_DIR}/../../.." && pwd)}"
+
+# Controller deployment (only when AI_GATEWAY_CONTROLLER_IMAGE is set).
+AIGC_REPO="${AIGC_REPO:-https://github.com/opendatahub-io/ai-gateway-controller}"
+# Pinned ai-gateway-controller main; bump when the portal work merges. Override
+# with AIGC_COMMIT to run a PR branch.
+AIGC_COMMIT="${AIGC_COMMIT:-7ee8457d9922394889a4737e6111dbaa2ae706eb}"
+AI_GATEWAY_CONTROLLER_IMAGE="${AI_GATEWAY_CONTROLLER_IMAGE:-}"
+AI_GATEWAY_CONTROLLER_NAMESPACE="${AI_GATEWAY_CONTROLLER_NAMESPACE:-opendatahub}"
+GATEWAY_NAMESPACE="${GATEWAY_NAMESPACE:-openshift-ingress}"
+GATEWAY_NAME="${GATEWAY_NAME:-maas-default-gateway}"
+
+deploy_ai_gateway_controller() {
+    if [[ -z "${AI_GATEWAY_CONTROLLER_IMAGE}" ]]; then
+        echo "AI_GATEWAY_CONTROLLER_IMAGE not set; assuming ai-gateway-controller is already deployed"
+        return 0
+    fi
+    local work_dir
+    work_dir="$(mktemp -d -t aigc-e2e.XXXXXXXXXX)"
+    git clone -q "${AIGC_REPO}" "${work_dir}/aigc"
+    git -C "${work_dir}/aigc" fetch -q --depth 1 origin "${AIGC_COMMIT}"
+    git -C "${work_dir}/aigc" checkout -q FETCH_HEAD
+
+    cp -a "${work_dir}/aigc/config/self" "${work_dir}/self"
+    sed -i "s|^ai-gateway-controller-image=.*|ai-gateway-controller-image=${AI_GATEWAY_CONTROLLER_IMAGE}|" \
+        "${work_dir}/self/default/params.env"
+
+    echo "Deploying ai-gateway-controller ${AI_GATEWAY_CONTROLLER_IMAGE} (AIGC_COMMIT=${AIGC_COMMIT})"
+    if command -v kustomize >/dev/null 2>&1; then
+        kustomize build "${work_dir}/self/default"
+    else
+        kubectl kustomize "${work_dir}/self/default"
+    fi | sed \
+        -e "s|value: maas-default-gateway|value: ${GATEWAY_NAME}|g" \
+        -e "s|value: openshift-ingress|value: ${GATEWAY_NAMESPACE}|g" \
+        | kubectl apply -f -
+    rm -rf "${work_dir}"
+
+    kubectl -n "${AI_GATEWAY_CONTROLLER_NAMESPACE}" rollout status \
+        deployment/ai-gateway-controller --timeout=300s
+}
 
 # MAAS_PORTAL defaults to EXTERNAL_OIDC: portal enablement is only meaningful
 # in OIDC lanes, and the OIDC CI lane keeps it on.
@@ -66,6 +109,9 @@ if [[ -z "${INFRA_NAMESPACE}" ]]; then
     exit 1
 fi
 echo "Consumer portal e2e enablement: infra namespace ${INFRA_NAMESPACE}, applications namespace ${APPLICATIONS_NAMESPACE}"
+
+# --- 0. ai-gateway-controller (kustomize-mode lanes have none) ---
+deploy_ai_gateway_controller
 
 # --- 1. Stand-in maas-portal Service (unblocks the controller's route gate) ---
 # The applications namespace is normally created by the RHOAI dashboard,
