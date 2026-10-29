@@ -10,7 +10,21 @@ TLS_SCANNER_GIT="${TLS_SCANNER_GIT:-https://github.com/openshift/tls-scanner.git
 TLS_SCANNER_REF="${TLS_SCANNER_REF:-df6f8d462cd22d4a515946602936a4ac117e4c74}"
 
 export NAMESPACE="${NAMESPACE:-default}"
-export NAMESPACE_FILTER="${NAMESPACE_FILTER:-redhat-ods-applications,redhat-ai-gateway-infra}"
+
+# Scan workloads in the controller + infra namespaces (matches scripts/deploy.sh / prow e2e defaults).
+# ODH: maas-controller in opendatahub, maas-api in odh-ai-gateway-infra. RHOAI: redhat-ods-applications + redhat-ai-gateway-infra.
+if [[ -z "${NAMESPACE_FILTER:-}" ]]; then
+  _deploy_ns="${DEPLOYMENT_NAMESPACE:-opendatahub}"
+  case "${_deploy_ns}" in
+    redhat-ods-applications) _infra_ns="redhat-ai-gateway-infra" ;;
+    opendatahub) _infra_ns="odh-ai-gateway-infra" ;;
+    *) _infra_ns="${_deploy_ns}" ;;
+  esac
+  export NAMESPACE_FILTER="${_deploy_ns},${_infra_ns}"
+else
+  export NAMESPACE_FILTER
+fi
+
 export PQC_CHECK="${PQC_CHECK:-true}"
 export SCANNER_IMAGE="${SCANNER_IMAGE:-registry.ci.openshift.org/tls-scanner/tls-scanner:tls-scanner-tool}"
 export ARTIFACT_WAIT="${ARTIFACT_WAIT:-60}"
@@ -27,9 +41,22 @@ trap cleanup EXIT
 git clone --filter=blob:none --quiet "${TLS_SCANNER_GIT}" "${SCANNER_WORKDIR}"
 git -C "${SCANNER_WORKDIR}" fetch --depth 1 origin "${TLS_SCANNER_REF}"
 git -C "${SCANNER_WORKDIR}" checkout FETCH_HEAD
+_checked_out="$(git -C "${SCANNER_WORKDIR}" rev-parse HEAD)"
+if [[ "${TLS_SCANNER_REF}" =~ ^[0-9a-f]{40}$ ]] && [[ "${_checked_out}" != "${TLS_SCANNER_REF}" ]]; then
+  echo "TLS scanner checkout ${_checked_out} does not match pinned ref ${TLS_SCANNER_REF}" >&2
+  exit 1
+fi
 
 pushd "${SCANNER_WORKDIR}" >/dev/null
 ./deploy.sh deploy
+
+for _required in results.json results.csv; do
+  if [[ ! -s "artifacts/${_required}" ]]; then
+    echo "Missing or empty scanner artifact: artifacts/${_required}" >&2
+    [[ -f artifacts/scan.log ]] && tail -30 artifacts/scan.log >&2 || true
+    exit 1
+  fi
+done
 
 if [[ -f artifacts/scan.log ]] && grep -E 'Scanner finished with exit code: [1-9][0-9]*' artifacts/scan.log >/dev/null; then
   echo "TLS scanner reported a non-zero exit code" >&2
