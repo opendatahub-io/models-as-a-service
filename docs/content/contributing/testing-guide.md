@@ -114,6 +114,11 @@ Note: `TestPostgres` is compiled with the other unit tests. To avoid the postgre
 - `testing.Short()` check (skipped in short mode)
 - Environment variable check (skips if `TEST_DATABASE_URL` not set)
 
+`TEST_READ_DATABASE_URL` is optional. When it is not set, read-pool integration tests use
+`TEST_DATABASE_URL` for both independent pools, which validates routing and fallback with
+the real PostgreSQL driver. Set it to a real read-replica URL to exercise the deployed
+database topology.
+
 ```bash
 ./test/integration/postgresql.sh
 if [ $? -eq 0 ]; then 

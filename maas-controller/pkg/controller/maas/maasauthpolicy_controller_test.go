@@ -1733,7 +1733,7 @@ func TestMaaSAuthPolicyReconciler_IdentityHeadersUpstream(t *testing.T) {
 		}
 		identityClause, ok := identityWhen[0].(map[string]any)
 		if !ok || identityClause["predicate"] != "false" {
-			t.Fatalf("X-MaaS-Identity must stay disabled without the strict OIDC contract, got %#v", identityWhen)
+			t.Fatalf("X-MaaS-Identity must stay disabled without an OIDC contract, got %#v", identityWhen)
 		}
 		if _, exists := headers["Authorization"]; exists {
 			t.Errorf("Authorization header should NOT be stripped (needed by FilterModelsByAccess)")

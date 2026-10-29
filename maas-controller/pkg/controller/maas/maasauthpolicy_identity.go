@@ -53,11 +53,11 @@ func verifiedIdentityClaimsExpression() string {
 }
 
 // verifiedIdentityHeader returns Authorino's JSON response configuration for
-// the trusted identity transport. The predicate defaults to false so partial
-// or legacy configurations never inject organization claims.
+// the trusted identity transport. The predicate defaults to false so a missing
+// OIDC configuration never injects organization claims.
 func verifiedIdentityHeader(oidc *oidcConfig, notAPIKeyPredicate string) map[string]any {
 	predicate := "false"
-	if strictIdentityContractConfigured(oidc) {
+	if verifiedIdentityContractConfigured(oidc) {
 		predicate = "(" + managementIdentityRoutePredicate + ") && (" + externalOIDCPredicate(notAPIKeyPredicate) + ")"
 	}
 
@@ -76,16 +76,13 @@ func verifiedIdentityHeader(oidc *oidcConfig, notAPIKeyPredicate string) map[str
 	}
 }
 
-func strictIdentityContractConfigured(oidc *oidcConfig) bool {
-	// Do not propagate organization identity unless every binding dimension is
-	// configured. Missing issuer, client, audience, or access-token purpose
-	// would weaken the trust contract while still carrying claims downstream.
+func verifiedIdentityContractConfigured(oidc *oidcConfig) bool {
+	// Require the core issuer and client binding dimensions. Audience and
+	// access-token-purpose checks are optional authorization constraints and
+	// must not disable identity propagation for legacy OIDC deployments.
 	return oidc != nil &&
 		oidc.IssuerURL != "" &&
-		oidc.ClientID != "" &&
-		oidc.Audience != "" &&
-		oidc.AccessTokenPurposeClaim != "" &&
-		oidc.AccessTokenPurpose != ""
+		oidc.ClientID != ""
 }
 
 func externalOIDCPredicate(notAPIKeyPredicate string) string {

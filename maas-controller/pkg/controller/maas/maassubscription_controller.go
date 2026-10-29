@@ -42,6 +42,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/events"
+	"k8s.io/client-go/util/retry"
 	"k8s.io/client-go/util/workqueue"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
@@ -828,47 +829,87 @@ func (r *MaaSSubscriptionReconciler) reconcileTRLPForModel(ctx context.Context, 
 	} else {
 		// Double-check managed status as a safety check for races (TRLP could have been
 		// opted-out between the early check and now).
+		if err := r.updateExistingTRLP(ctx, log, route, policy, spec, policyName, modelNamespace, modelName, subNames); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// updateExistingTRLP merges the desired spec and metadata into the existing managed
+// TokenRateLimitPolicy.
+//
+// The Kuadrant operator writes the TRLP's status (Enforced conditions) on this same
+// object while we write spec/metadata, so a plain Update can lose the resourceVersion
+// race and 409. Failing the whole reconcile here requeues with backoff and delays the
+// rebuild; instead re-read and retry the merge so subscription churn converges promptly.
+func (r *MaaSSubscriptionReconciler) updateExistingTRLP(
+	ctx context.Context,
+	log logr.Logger,
+	route *gatewayapiv1.HTTPRoute,
+	policy *unstructured.Unstructured,
+	spec map[string]any,
+	policyName, modelNamespace, modelName string,
+	subNames []string,
+) error {
+	updateErr := retry.OnError(retry.DefaultBackoff, apierrors.IsConflict, func() error {
+		existing := &unstructured.Unstructured{}
+		existing.SetGroupVersionKind(policy.GroupVersionKind())
+		// Read through the APIReader: after a conflict the informer cache can
+		// still serve the stale resourceVersion that just lost the race, which
+		// would make every retry conflict again.
+		reader := r.APIReader
+		if reader == nil {
+			reader = r.Client
+		}
+		if err := reader.Get(ctx, client.ObjectKeyFromObject(policy), existing); err != nil {
+			return err
+		}
 		if !isManaged(existing) {
 			log.Info("TokenRateLimitPolicy opted out during reconciliation, skipping update", "name", policyName)
-		} else {
-			// Snapshot before any mutation (including owner updates), so owner-only
-			// transitions are persisted.
-			snapshot := existing.DeepCopy()
-			// Ensure owner reference is set on managed existing policy.
-			if err := setHTTPRouteControllerOwner(route, existing, r.Scheme); err != nil {
-				return fmt.Errorf("failed to set owner reference on existing TokenRateLimitPolicy %s/%s: %w", existing.GetNamespace(), existing.GetName(), err)
-			}
-
-			mergedAnnotations := existing.GetAnnotations()
-			if mergedAnnotations == nil {
-				mergedAnnotations = make(map[string]string)
-			}
-			for k, v := range policy.GetAnnotations() {
-				mergedAnnotations[k] = v
-			}
-			existing.SetAnnotations(mergedAnnotations)
-
-			mergedLabels := existing.GetLabels()
-			if mergedLabels == nil {
-				mergedLabels = make(map[string]string)
-			}
-			for k, v := range policy.GetLabels() {
-				mergedLabels[k] = v
-			}
-			existing.SetLabels(mergedLabels)
-			if err := unstructured.SetNestedMap(existing.Object, spec, "spec"); err != nil {
-				return fmt.Errorf("failed to update spec: %w", err)
-			}
-
-			if equality.Semantic.DeepEqual(snapshot.Object, existing.Object) {
-				log.Info("TokenRateLimitPolicy unchanged, skipping update", "name", policyName, "model", modelNamespace+"/"+modelName, "subscriptionCount", len(subNames))
-			} else {
-				if err := r.Update(ctx, existing); err != nil {
-					return fmt.Errorf("failed to update TokenRateLimitPolicy for model %s/%s: %w", modelNamespace, modelName, err)
-				}
-				log.Info("TokenRateLimitPolicy updated", "name", policyName, "model", modelNamespace+"/"+modelName, "subscriptionCount", len(subNames), "subscriptions", subNames)
-			}
+			return nil
 		}
+		// Snapshot before any mutation (including owner updates), so owner-only
+		// transitions are persisted.
+		snapshot := existing.DeepCopy()
+		// Ensure owner reference is set on managed existing policy.
+		if err := setHTTPRouteControllerOwner(route, existing, r.Scheme); err != nil {
+			return fmt.Errorf("failed to set owner reference on existing TokenRateLimitPolicy %s/%s: %w", existing.GetNamespace(), existing.GetName(), err)
+		}
+
+		mergedAnnotations := existing.GetAnnotations()
+		if mergedAnnotations == nil {
+			mergedAnnotations = make(map[string]string)
+		}
+		for k, v := range policy.GetAnnotations() {
+			mergedAnnotations[k] = v
+		}
+		existing.SetAnnotations(mergedAnnotations)
+
+		mergedLabels := existing.GetLabels()
+		if mergedLabels == nil {
+			mergedLabels = make(map[string]string)
+		}
+		for k, v := range policy.GetLabels() {
+			mergedLabels[k] = v
+		}
+		existing.SetLabels(mergedLabels)
+		if err := unstructured.SetNestedMap(existing.Object, spec, "spec"); err != nil {
+			return fmt.Errorf("failed to update spec: %w", err)
+		}
+
+		if equality.Semantic.DeepEqual(snapshot.Object, existing.Object) {
+			log.Info("TokenRateLimitPolicy unchanged, skipping update", "name", policyName, "model", modelNamespace+"/"+modelName, "subscriptionCount", len(subNames))
+			return nil
+		}
+		if err := r.Update(ctx, existing); err != nil {
+			return err
+		}
+		log.Info("TokenRateLimitPolicy updated", "name", policyName, "model", modelNamespace+"/"+modelName, "subscriptionCount", len(subNames), "subscriptions", subNames)
+		return nil
+	})
+	if updateErr != nil {
+		return fmt.Errorf("failed to update TokenRateLimitPolicy for model %s/%s: %w", modelNamespace, modelName, updateErr)
 	}
 	return nil
 }

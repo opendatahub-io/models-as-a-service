@@ -1842,6 +1842,134 @@ func TestMaaSSubscriptionReconciler_StatusConflictWithDuplicateScanRequeues(t *t
 	assertCondition(t, got.Status.Conditions, ConditionSpecPriorityDuplicate, metav1.ConditionFalse, "NoDuplicatePeers")
 }
 
+// TestMaaSSubscriptionReconciler_TRLPUpdateRetriesOnConflict reproduces the Kuadrant
+// operator writing TokenRateLimitPolicy status between our read and our spec write.
+// The update path must re-read (bypassing the informer cache via APIReader) and retry
+// instead of failing the whole reconcile: a failed rebuild here delays subscription
+// churn convergence and keeps Kuadrant's Enforced condition stuck.
+func TestMaaSSubscriptionReconciler_TRLPUpdateRetriesOnConflict(t *testing.T) {
+	const (
+		namespace = "default"
+		subName   = "sub-a"
+		modelName = "llm"
+		trlpName  = "maas-trlp-" + modelName
+	)
+
+	model := newMaaSModelRef(modelName, namespace, "ExternalModel", modelName)
+	route := newHTTPRoute("maas-"+modelName, namespace)
+	sub := newMaaSSubscription(subName, namespace, "team-a", modelName, 100)
+	// A stale subscriptions annotation (and the sentinel targetRef) forces the
+	// reconcile through the TRLP update branch.
+	trlp := newPreexistingTRLP(trlpName, namespace, modelName, map[string]string{
+		"maas.opendatahub.io/subscriptions": "someone-else",
+	})
+
+	raced := false
+	cacheFresh := false // flips once the controller's own update lands (watch event refreshes the cache)
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(testRESTMapper()).
+		WithObjects(model, route, sub, trlp).
+		WithStatusSubresource(&maasv1alpha1.MaaSSubscription{}).
+		WithIndex(&maasv1alpha1.MaaSSubscription{}, "spec.modelRef", subscriptionModelRefIndexer).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Update: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+				u, ok := obj.(*unstructured.Unstructured)
+				if ok && u.GetKind() == "TokenRateLimitPolicy" {
+					if !raced {
+						raced = true
+						// Simulate the Kuadrant status updater winning the race:
+						// write status to the stored object so the controller's
+						// stale-copy update conflicts, exactly like a 409 against
+						// a resourceVersion bumped by another writer.
+						live := &unstructured.Unstructured{}
+						live.SetGroupVersionKind(u.GroupVersionKind())
+						if err := cl.Get(ctx, client.ObjectKeyFromObject(u), live); err != nil {
+							return err
+						}
+						if err := unstructured.SetNestedSlice(live.Object, []any{
+							map[string]any{"type": "Accepted", "status": "True"},
+							map[string]any{"type": "Enforced", "status": "False", "message": "simulated concurrent status write"},
+						}, "status", "conditions"); err != nil {
+							return err
+						}
+						if err := cl.Update(ctx, live); err != nil {
+							return err
+						}
+					}
+					err := cl.Update(ctx, obj, opts...)
+					if err == nil {
+						cacheFresh = true
+					}
+					return err
+				}
+				return cl.Update(ctx, obj, opts...)
+			},
+		}).
+		Build()
+
+	// Model the split between the controller's cached client and its APIReader:
+	// the cache keeps serving the pre-conflict TRLP (stale resourceVersion)
+	// until the controller's own update is observed, while the APIReader always
+	// sees live state. The retry must re-read through the APIReader or every
+	// retry conflicts again.
+	stale := &unstructured.Unstructured{}
+	stale.SetGroupVersionKind(trlp.GroupVersionKind())
+	if err := c.Get(t.Context(), types.NamespacedName{Name: trlpName, Namespace: namespace}, stale); err != nil {
+		t.Fatalf("seed stale TRLP read: %v", err)
+	}
+	cachedClient := &staleTRLPCacheReader{Client: c, stale: stale, fresh: &cacheFresh}
+
+	r := &MaaSSubscriptionReconciler{Client: cachedClient, APIReader: c, Scheme: scheme}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: subName, Namespace: namespace}}
+	if _, err := r.Reconcile(t.Context(), req); err != nil {
+		t.Fatalf("Reconcile error = %v, want TRLP update conflict to be retried successfully", err)
+	}
+	if !raced {
+		t.Fatal("interceptor never simulated a concurrent TRLP status write; test did not exercise the retry path")
+	}
+
+	got := &unstructured.Unstructured{}
+	got.SetGroupVersionKind(trlp.GroupVersionKind())
+	if err := c.Get(t.Context(), types.NamespacedName{Name: trlpName, Namespace: namespace}, got); err != nil {
+		t.Fatalf("Get TRLP: %v", err)
+	}
+	if ann := got.GetAnnotations()["maas.opendatahub.io/subscriptions"]; ann != namespace+"/"+subName {
+		t.Errorf("TRLP subscriptions annotation = %q, want %q (rebuild must land despite the conflict)", ann, namespace+"/"+subName)
+	}
+	// The retry re-reads the object, so the concurrent status write must survive.
+	conditions, found, err := unstructured.NestedSlice(got.Object, "status", "conditions")
+	if err != nil || !found || len(conditions) != 2 {
+		t.Errorf("TRLP status conditions = %v (found=%v, err=%v), want the simulated concurrent status write preserved", conditions, found, err)
+	}
+
+	gotSub := &maasv1alpha1.MaaSSubscription{}
+	if err := c.Get(t.Context(), req.NamespacedName, gotSub); err != nil {
+		t.Fatalf("Get subscription: %v", err)
+	}
+	if gotSub.Status.Phase != maasv1alpha1.PhaseActive {
+		t.Errorf("subscription phase = %q, want %q", gotSub.Status.Phase, maasv1alpha1.PhaseActive)
+	}
+}
+
+// staleTRLPCacheReader wraps a client the way the informer cache behaves for
+// TokenRateLimitPolicies in production: it keeps serving the snapshot taken
+// before a concurrent writer bumped the resourceVersion, while other kinds and
+// all writes pass through unchanged.
+type staleTRLPCacheReader struct {
+	client.Client
+	stale *unstructured.Unstructured
+	fresh *bool
+}
+
+func (s *staleTRLPCacheReader) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+	if u, ok := obj.(*unstructured.Unstructured); ok && u.GetKind() == "TokenRateLimitPolicy" && key.Name == s.stale.GetName() && !*s.fresh {
+		u.Object = s.stale.DeepCopy().Object
+		return nil
+	}
+	return s.Client.Get(ctx, key, obj, opts...)
+}
+
 func TestMaaSSubscriptionReconciler_StatusWriteFailureReturned(t *testing.T) {
 	conflict := apierrors.NewConflict(schema.GroupResource{Group: "maas.opendatahub.io", Resource: "maassubscriptions"}, "no-spec", errors.New("stale resource version"))
 	for _, statusErr := range []error{conflict, errors.New("status unavailable")} {
