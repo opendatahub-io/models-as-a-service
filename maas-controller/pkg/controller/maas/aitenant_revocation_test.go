@@ -172,6 +172,58 @@ func TestEnsureTenantAPIKeysRevoked_NudgesRecoveryWhenOperandsMissing(t *testing
 	g.Expect(updatedTenant.Annotations[maasTenantConfigRevocationOperandsRequestedAnnotation]).To(Equal(revocationOperandsRequestMarker(aitenant)))
 }
 
+func TestEnsureTenantAPIKeysRevoked_SkipsWhenMaasTenantConfigTerminating(t *testing.T) {
+	g := NewWithT(t)
+	s := aitenantTestScheme(t)
+	ctx := context.Background()
+	appNS := "odh-ai-gateway-infra"
+
+	aitenant := &maasv1alpha1.AITenant{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      tenantreconcile.DefaultAITenantName,
+			Namespace: tenantreconcile.DefaultAITenantNamespace,
+			UID:       types.UID("terminating-uid"),
+		},
+	}
+	cfg := &maasv1alpha1.Config{ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName}}
+	// The AITenant and its MaasTenantConfig are removed together (Config owner-ref
+	// cascade). A terminating MaasTenantConfig can never restore the operands, so the
+	// AITenant must skip revocation instead of requeueing forever.
+	deletion := metav1.NewTime(time.Date(2026, 10, 28, 1, 46, 41, 0, time.UTC))
+	tenant := &maasv1alpha1.MaasTenantConfig{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              maasv1alpha1.MaasTenantConfigInstanceName,
+			Namespace:         tenantreconcile.DefaultAITenantName,
+			DeletionTimestamp: &deletion,
+			Finalizers:        []string{tenantFinalizer},
+		},
+	}
+	cl := fake.NewClientBuilder().
+		WithScheme(s).
+		WithStatusSubresource(&maasv1alpha1.AITenant{}).
+		WithObjects(aitenant, cfg, tenant).
+		Build()
+	r := &AITenantReconciler{
+		Client:       cl,
+		Scheme:       s,
+		APIReader:    cl,
+		AppNamespace: appNS,
+		Recorder:     events.NewFakeRecorder(10),
+	}
+
+	revoked, err := r.ensureTenantAPIKeysRevoked(ctx, aitenant)
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(revoked).To(BeTrue())
+
+	var updated maasv1alpha1.AITenant
+	g.Expect(cl.Get(ctx, client.ObjectKeyFromObject(aitenant), &updated)).To(Succeed())
+	cond := apimeta.FindStatusCondition(updated.Status.Conditions, aitenantAPIKeysRevokedCondition)
+	g.Expect(cond).NotTo(BeNil())
+	g.Expect(cond.Status).To(Equal(metav1.ConditionTrue))
+	g.Expect(cond.Reason).To(Equal(aitenantAPIKeysRevokedReasonOperandsUnavailable))
+	g.Expect(cond.Message).To(ContainSubstring("terminating"))
+}
+
 func TestEnsureTenantAPIKeysRevoked_DoesNotSkipOnForbiddenServiceAccountGet(t *testing.T) {
 	g := NewWithT(t)
 	s := aitenantTestScheme(t)
