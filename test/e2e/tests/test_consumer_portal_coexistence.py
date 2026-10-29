@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import os
 import uuid
+from urllib.parse import parse_qs, unquote, urlparse
 
 import pytest
 import requests
@@ -108,11 +109,14 @@ class TestPortalAuthBoundary:
         assert response.status_code == 302, (
             f"Expected 302 to sign-in, got {response.status_code} body_bytes={len(response.content)}"
         )
-        location = response.headers.get("Location", "")
-        assert location.startswith("/oauth2/start"), (
-            f"Expected redirect to /oauth2/start, got Location={location!r}"
+        location = urlparse(response.headers.get("Location", ""))
+        assert location.path == OAUTH2_START_PATH, (
+            f"Expected redirect to {OAUTH2_START_PATH}, got Location={location.geturl()!r}"
         )
-        assert "rd=" in location, f"Expected rd=<original path> in redirect, got {location!r}"
+        # The sign-in flow must return the user to the path they requested.
+        assert unquote(parse_qs(location.query).get("rd", [""])[0]) == PORTAL_PATH, (
+            f"Expected rd={PORTAL_PATH} in redirect, got Location={location.geturl()!r}"
+        )
         assert response.headers.get("Cache-Control") == "no-store"
 
     def test_oauth2_start_is_public(self):
