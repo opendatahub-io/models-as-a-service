@@ -2297,6 +2297,56 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#reduce-llminferenceservice-route-matches" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Reduce LLMInferenceService route matches
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Reduce LLMInferenceService route matches">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#where-to-set-it" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Where to set it
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#verify" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Verify
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#trade-offs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Trade-offs
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#best-practices" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3687,6 +3737,56 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#reduce-llminferenceservice-route-matches" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Reduce LLMInferenceService route matches
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Reduce LLMInferenceService route matches">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#where-to-set-it" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Where to set it
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#verify" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Verify
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#trade-offs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Trade-offs
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#best-practices" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3744,7 +3844,8 @@
 <p>Kuadrant renders every TRLP limit into one wasm config object per gateway, <code>kuadrant-{gateway-name}</code> in the gateway namespace (an <code>EnvoyFilter</code> on Kuadrant 1.5 and later, a <code>WasmPlugin</code> on 1.4.x). Each limit becomes two actions, a request-time check and a response-time token report, in every route-match ActionSet, so the object grows roughly with:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>size ≈ limits × route_matches × listeners × hostnames × 2 actions
 </code></pre></div>
-<p>At 19 route matches, one limit costs about 27 KB per listener. Before RHOAIENG-95277 every subscription and model pair got its own limit, and the object grew until it hit the etcd object size limit (1.5 MiB by default). Now a subscription at an existing rate adds one clause to that limit's predicate: about 80 bytes in the TRLP and about 3 KB per listener in the gateway config. A subscription at a new rate still adds a whole limit.</p>
+<p>At the default LLMInferenceService shape (<strong>19 route matches</strong>), one limit costs about 27 KB per listener. Before RHOAIENG-95277 every subscription and model pair got its own limit, and the object grew until it hit the etcd object size limit (1.5 MiB by default). Now a subscription at an existing rate adds one clause to that limit's predicate: about 80 bytes in the TRLP and about 3 KB per listener in the gateway config. A subscription at a new rate still adds a whole limit.</p>
+<p>When body-based routing is the only path clients use, you can cut each model's match count from <strong>19 to 9</strong> with the KServe LLMInferenceService annotation <code>serving.kserve.io/model-based-routing-only: "true"</code>. That drops the unused per-model path matches (<code>/{namespace}/{name}/...</code> and <code>/publishers/...</code>) and keeps header-based model routing. See <a href="#reduce-llminferenceservice-route-matches">Reduce LLMInferenceService route matches</a>.</p>
 <p>To keep the object small, reuse a small set of standard rates across subscriptions instead of giving each subscription its own numbers. Spell them the same way too: <code>100/1m</code> and <code>100/60s</code> are different rate sets.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1"># Gateway wasm config size in bytes, as compact JSON. Kuadrant 1.5+ writes an EnvoyFilter:</span>
 <a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>kubectl<span class="w"> </span>get<span class="w"> </span>envoyfilter<span class="w"> </span>kuadrant-maas-default-gateway<span class="w"> </span>-n<span class="w"> </span>openshift-ingress<span class="w"> </span>-o<span class="w"> </span>json<span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span>-c<span class="w"> </span>.<span class="w"> </span><span class="p">|</span><span class="w"> </span>wc<span class="w"> </span>-c
@@ -3924,6 +4025,59 @@
 <a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a><span class="w">  </span>sort<span class="w"> </span><span class="p">|</span><span class="w"> </span>uniq<span class="w"> </span>-d<span class="w"> </span>-f2
 </code></pre></div>
 <p><strong>Fix:</strong> Use dedicated HTTPRoutes per model to ensure independent rate limiting.</p>
+<h2 id="reduce-llminferenceservice-route-matches">Reduce LLMInferenceService route matches</h2>
+<p>Kuadrant's gateway config size scales with <strong>HTTPRoute matches</strong>, not with how many <code>backendRef</code>s share a rule. A default LLMInferenceService HTTPRoute still has about <strong>19 matches</strong> even after Exact paths share a single backend. Ten of those matches are per-model path URLs that body-based OpenAI clients never use once IPP (or Praxis) injects the model-routing header.</p>
+<p>KServe LLMInferenceService supports an opt-in annotation that drops those path matches (<a href="https://github.com/kserve/kserve/pull/6306">kserve/kserve#6306</a>):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>serving.kserve.io/model-based-routing-only: &quot;true&quot;
+</code></pre></div>
+<p>Effect on the managed HTTPRoute: about <strong>19 → 9 matches</strong> per model (header-based model routing kept; <code>/{ns}/{name}/...</code> and <code>/publishers/...</code> path trees removed).</p>
+<h3 id="where-to-set-it">Where to set it</h3>
+<table>
+<thead>
+<tr>
+<th>Location</th>
+<th>Behavior</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Gateway</strong> annotation on every parent of the route</td>
+<td>Applies to services that do not override it. All parents must agree.</td>
+</tr>
+<tr>
+<td><strong>LLMInferenceService</strong> <code>spec.annotations</code></td>
+<td>Explicit <code>"true"</code> or <code>"false"</code> wins for that service (overrides Gateway).</td>
+</tr>
+</tbody>
+</table>
+<p>Model-based routing must already be active for the service (<code>serving.kserve.io/model-based-routing-enabled: "true"</code> from the workload preset). Without that, the controller does not strip paths (so the route never becomes empty). Values are parsed as booleans (<code>strconv.ParseBool</code>).</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>kubectl<span class="w"> </span>annotate<span class="w"> </span>gateway<span class="w"> </span>maas-default-gateway<span class="w"> </span>-n<span class="w"> </span>openshift-ingress<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a><span class="w">  </span>serving.kserve.io/model-based-routing-only<span class="o">=</span><span class="nb">true</span><span class="w"> </span>--overwrite
+</code></pre></div>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a>kubectl<span class="w"> </span>patch<span class="w"> </span>llminferenceservice<span class="w"> </span>my-model<span class="w"> </span>-n<span class="w"> </span>llm<span class="w"> </span>--type<span class="w"> </span>merge<span class="w"> </span>-p<span class="w"> </span><span class="s1">&#39;{</span>
+<a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a><span class="s1">  &quot;spec&quot;: {</span>
+<a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a><span class="s1">    &quot;annotations&quot;: {</span>
+<a id="__codelineno-15-4" name="__codelineno-15-4" href="#__codelineno-15-4"></a><span class="s1">      &quot;serving.kserve.io/model-based-routing-only&quot;: &quot;true&quot;</span>
+<a id="__codelineno-15-5" name="__codelineno-15-5" href="#__codelineno-15-5"></a><span class="s1">    }</span>
+<a id="__codelineno-15-6" name="__codelineno-15-6" href="#__codelineno-15-6"></a><span class="s1">  }</span>
+<a id="__codelineno-15-7" name="__codelineno-15-7" href="#__codelineno-15-7"></a><span class="s1">}&#39;</span>
+</code></pre></div>
+<h3 id="verify">Verify</h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="c1"># Matches on the managed route (expect ~9 when the annotation applied)</span>
+<a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a>kubectl<span class="w"> </span>get<span class="w"> </span>httproute<span class="w"> </span>-n<span class="w"> </span>llm<span class="w"> </span>-o<span class="w"> </span>json<span class="w"> </span><span class="p">|</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-16-3" name="__codelineno-16-3" href="#__codelineno-16-3"></a><span class="w">  </span>jq<span class="w"> </span>-r<span class="w"> </span><span class="s1">&#39;.items[] | &quot;\(.metadata.name): rules=\(.spec.rules|length) matches=\([.spec.rules[].matches[]?] | length)&quot;&#39;</span>
+<a id="__codelineno-16-4" name="__codelineno-16-4" href="#__codelineno-16-4"></a>
+<a id="__codelineno-16-5" name="__codelineno-16-5" href="#__codelineno-16-5"></a><span class="c1"># Informational condition on the LLMInferenceService</span>
+<a id="__codelineno-16-6" name="__codelineno-16-6" href="#__codelineno-16-6"></a>kubectl<span class="w"> </span>get<span class="w"> </span>llminferenceservice<span class="w"> </span>my-model<span class="w"> </span>-n<span class="w"> </span>llm<span class="w"> </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">&#39;{range .status.conditions[?(@.type==&quot;PerModelPathsDropped&quot;)]}{.status} {.reason} {.message}{&quot;\n&quot;}{end}&#39;</span>
+</code></pre></div>
+<p><code>PerModelPathsDropped=True</code> means per-model paths were removed. <code>False</code> reasons include <code>DisabledOnService</code>, <code>NotSetOnAllGateways</code>, <code>ModelBasedRoutingNotEnabled</code>, and <code>UnrecognizedValue</code>.</p>
+<h3 id="trade-offs">Trade-offs</h3>
+<ul>
+<li>Per-model path URLs stop working for that service (clients must use body-based routing with IPP/Praxis).</li>
+<li><code>status.url</code> falls back to the Gateway root rather than a path URL.</li>
+<li>Off by default — existing path-based integrations keep working until you opt in.</li>
+</ul>
+<p>Prefer this when the tenant already standardizes on <a href="../../user-guide/inference/#endpoint-overview">body-based inference</a>. Combine it with <a href="#gateway-config-size">reusing a small set of rates</a> for the largest EnvoyFilter / WasmPlugin savings.</p>
 <h2 id="best-practices">Best Practices</h2>
 <ol>
 <li><strong>Use groups, not individual users</strong> — assign human users to Kubernetes groups and reference groups in <code>owner.groups</code>. Reserve <code>owner.users</code> for service accounts.</li>
@@ -3932,10 +4086,12 @@
 <li><strong>Use Redis for Limitador</strong> in production — persistent storage prevents counter resets on pod restarts and provides better visibility into counter counts. See <a href="../limitador-persistence/">Limitador Persistence</a>.</li>
 <li><strong>Use dedicated routes per model</strong> — avoids TRLP conflicts and simplifies cardinality accounting.</li>
 <li><strong>Reuse a small set of rates</strong> - every distinct rate set on a model adds a limit to the gateway wasm config, while another subscription at an existing rate adds only a predicate clause. See <a href="#gateway-config-size">Gateway Config Size</a>.</li>
+<li><strong>Prefer model-based-routing-only when using body-based routing</strong> — drops unused LLMInferenceService path matches (~19 → ~9) so Kuadrant pays less per limit. See <a href="#reduce-llminferenceservice-route-matches">Reduce LLMInferenceService route matches</a>.</li>
 </ol>
 <h2 id="related-documentation">Related Documentation</h2>
 <ul>
 <li><a href="../../configuration-and-management/quota-and-access-configuration/">Quota and Access Configuration</a> — step-by-step subscription setup including the <code>users</code> field warning</li>
+<li><a href="../../user-guide/inference/">Inference</a> — body-based vs path-based client endpoints</li>
 <li><a href="../../observability/">Observability</a> — metrics collection, TelemetryPolicy labels, and dashboard configuration</li>
 <li><a href="../limitador-persistence/">Limitador Persistence</a> — configuring Redis for persistent rate-limit counters</li>
 <li><a href="../../reference/crds/maas-subscription/">MaaSSubscription CRD Reference</a> — full CRD field reference</li>
@@ -3962,7 +4118,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="October 21, 2026 11:39:46 UTC">October 21, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="October 29, 2026 21:56:49 UTC">October 29, 2026</span>
   </span>
 
     
