@@ -30,7 +30,16 @@ PROJECT_ROOT="${PROJECT_ROOT:-$(cd "${SCRIPT_DIR}/../../.." && pwd)}"
 # MAAS_PORTAL defaults to EXTERNAL_OIDC: portal enablement is only meaningful
 # in OIDC lanes, and the OIDC CI lane keeps it on.
 MAAS_PORTAL="${MAAS_PORTAL:-${EXTERNAL_OIDC:-false}}"
-APPLICATIONS_NAMESPACE="${APPLICATIONS_NAMESPACE:-redhat-ods-applications}"
+# The stand-in Service must live where the controller looks for it. The
+# controller resolves the dashboard namespace from the DSCInitialization
+# spec.applicationsNamespace (falling back to redhat-ods-applications), so
+# follow the same source here; APPLICATIONS_NAMESPACE overrides for clusters
+# without a DSCI.
+if [[ -z "${APPLICATIONS_NAMESPACE:-}" ]]; then
+    APPLICATIONS_NAMESPACE="$(kubectl get dscinitializations.dscinitialization.opendatahub.io \
+        -A -o jsonpath='{.items[0].spec.applicationsNamespace}' 2>/dev/null || true)"
+    APPLICATIONS_NAMESPACE="${APPLICATIONS_NAMESPACE:-redhat-ods-applications}"
+fi
 MAAS_SUBSCRIPTION_NAMESPACE="${MAAS_SUBSCRIPTION_NAMESPACE:-models-as-a-service}"
 MAAS_PORTAL_CLIENT_ID="${MAAS_PORTAL_CLIENT_ID:-maas-consumer-portal}"
 # Must match the tenant-a realm's maas-consumer-portal client secret.
