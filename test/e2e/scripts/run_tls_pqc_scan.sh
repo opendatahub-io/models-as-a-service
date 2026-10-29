@@ -12,7 +12,7 @@ else
   ARTIFACT_DIR="$(mktemp -d "${TMPDIR:-/tmp}/maas-tls-scanner-artifacts.XXXXXXXX")"
 fi
 TLS_SCANNER_GIT="${TLS_SCANNER_GIT:-https://github.com/openshift/tls-scanner.git}"
-# Pinned commit (includes deploy.sh PQC_CHECK → --pqc-check wiring).
+# Pinned commit for deploy.sh job flow (PQC flag injected into job template below when PQC_CHECK=true).
 TLS_SCANNER_REF="${TLS_SCANNER_REF:-df6f8d462cd22d4a515946602936a4ac117e4c74}"
 
 export NAMESPACE="${NAMESPACE:-default}"
@@ -57,6 +57,13 @@ _checked_out="$(git -C "${SCANNER_WORKDIR}" rev-parse HEAD)"
 if [[ "${TLS_SCANNER_REF}" =~ ^[0-9a-f]{40}$ ]] && [[ "${_checked_out}" != "${TLS_SCANNER_REF}" ]]; then
   echo "TLS scanner checkout ${_checked_out} does not match pinned ref ${TLS_SCANNER_REF}" >&2
   exit 1
+fi
+
+# openshift/tls-scanner deploy.sh does not read PQC_CHECK; inject --pqc-check into the Job template.
+if [[ "${PQC_CHECK}" == "true" ]]; then
+  _job_template="${SCANNER_WORKDIR}/scanner-job.yaml.template"
+  sed -i.bak 's|\${LIMIT_IPS_ARG}|--pqc-check \${LIMIT_IPS_ARG}|' "${_job_template}"
+  rm -f "${_job_template}.bak"
 fi
 
 pushd "${SCANNER_WORKDIR}" >/dev/null
