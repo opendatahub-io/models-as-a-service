@@ -392,10 +392,6 @@ func buildIstioTelemetryTagOverrides(
 			"operation": "UPSERT",
 			"value":     `request.headers["x-maas-subscription"]`,
 		},
-		"subscription_namespace": map[string]any{
-			"operation": "UPSERT",
-			"value":     `request.headers["x-maas-subscription-namespace"]`,
-		},
 	}
 	if captureOrganization {
 		overrides["organization_id"] = map[string]any{
@@ -566,11 +562,10 @@ func buildTelemetryLabels(
 		}
 	}
 	labels := map[string]any{
-		"tenant_name":            fmt.Sprintf("%q", tenantTrackingName(tenant)),
-		"tenant_namespace":       fmt.Sprintf("%q", tenant.GetNamespace()),
-		"subscription":           "auth.identity.selected_subscription",
-		"subscription_namespace": `has(auth.identity.subscription_info.namespace) ? auth.identity.subscription_info.namespace : ""`,
-		"cost_center":            `has(auth.identity.subscription_info.costCenter) ? auth.identity.subscription_info.costCenter : ""`,
+		"tenant_name":      fmt.Sprintf("%q", tenantTrackingName(tenant)),
+		"tenant_namespace": fmt.Sprintf("%q", tenant.GetNamespace()),
+		"subscription":     "auth.identity.selected_subscription",
+		"cost_center":      `has(auth.identity.subscription_info.costCenter) ? auth.identity.subscription_info.costCenter : ""`,
 	}
 	if captureOrganization {
 		labels["organization_id"] = `has(auth.identity.subscription_info.organizationId) ? auth.identity.subscription_info.organizationId : ""`

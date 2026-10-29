@@ -89,9 +89,8 @@ If you read older notes about a “string trick” solely for TRLP group matchin
 
 For **API keys**, AuthPolicy injects **`X-MaaS-Subscription`** only when validation returns a nonempty bound subscription. For **user tokens**, AuthPolicy preserves a client-supplied subscription header and uses it for subscription selection; it does not inject another copy. A user-token request without that header does not gain one during authentication, so telemetry that reads the header may have an empty subscription label.
 
-AuthPolicy always sets subscription scope, organization scope, and the llm-d flow-control headers, replacing any client-supplied values. Subscription namespace and organization come from the subscription selected by maas-api; empty values identify unresolved scope rather than trusting client input:
+AuthPolicy always sets organization scope and the llm-d flow-control headers, replacing any client-supplied values. Organization comes from the subscription selected by maas-api; an empty value identifies unresolved scope rather than trusting client input:
 
-- **`x-maas-subscription-namespace`**: the namespace of the selected `MaaSSubscription`.
 - **`x-maas-organization-id`**: the stable `MaaSSubscription.spec.organization.id`, with legacy `tokenMetadata.organizationId` as the fallback.
 
 The llm-d flow-control headers are:

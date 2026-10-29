@@ -61,7 +61,7 @@ kubectl patch maastenantconfig default-tenant -n models-as-a-service --type=merg
 
 This creates:
 
-- **TelemetryPolicy** (`maas-telemetry`) - Adds canonical `tenant_name`, `tenant_namespace`, `subscription`, `subscription_namespace`, `organization_id`, and `model` labels to supported Limitador metrics (user and group labels disabled by default)
+- **TelemetryPolicy** (`maas-telemetry`) - Adds canonical `tenant_name`, `tenant_namespace`, `subscription`, `organization_id`, and `model` labels to supported Limitador metrics (user and group labels disabled by default)
 - **Istio Telemetry** (`latency-per-subscription`) - Adds producer scope, subscription, and organization labels to gateway latency; organization is controlled by `metrics.captureOrganization` and defaults to enabled
 
 **Verify:**
@@ -74,7 +74,7 @@ kubectl get telemetry -n openshift-ingress latency-per-subscription
     Requires OpenShift Service Mesh 2.4+, Kuadrant/RHCL, and deployed Gateway.
 
 !!! warning "AuthPolicy Dependency"
-    Istio Telemetry reads `X-MaaS-Subscription`, `X-MaaS-Subscription-Namespace`, and `x-maas-organization-id`. MaaS sets these response headers from resolved subscription data, using empty values when scope is unresolved. The organization label is emitted only when `metrics.captureOrganization` is enabled. See [Identity headers](../architecture-internals/authentication-internals.md#identity-headers-and-defense-in-depth).
+    Istio Telemetry reads `X-MaaS-Subscription` and `x-maas-organization-id`. MaaS sets these response headers from resolved subscription data, using empty values when scope is unresolved. The organization label is emitted only when `metrics.captureOrganization` is enabled. See [Identity headers](../architecture-internals/authentication-internals.md#identity-headers-and-defense-in-depth).
 
 Additionally, a Perses dashboard for metrics-based usage is applied by the operator (`LifecycleReconciler.ensureUsageDashboard`) when `usageMetricsDashboard` is `true` on `Config` (defaults to `false`). It is **not** created by `install-observability.sh`. The dashboard shows data when `captureUser` and `captureModelUsage` are turned on.
 
@@ -106,7 +106,7 @@ When tenant telemetry is enabled and `usageLogging` is `false` or omitted, `Maas
 !!! warning "Privacy"
     Structured access logs record request attributes.
     User identity (`user_id`) is included only when `MaasTenantConfig.spec.telemetry.logs.captureUser` is `true`.
-    Tenant attribution (`tenant_name`) is always included from controller-resolved values. Cluster attribution is owned by the telemetry collector.
+    Tenant attribution (`tenant_name` and `service.namespace`) is always included from controller-resolved values. Cluster attribution is owned by the telemetry collector.
     Organization ID (`organization_id`) is included by default when the field is set on the `MaaSSubscription`. Set `MaasTenantConfig.spec.telemetry.logs.captureOrganization` to `false` to omit it. Independent of `metrics.captureOrganization`.
     Cost center is included when that field is set on the `MaaSSubscription`.
     Review GDPR/privacy requirements, retention, and dashboard access before enabling either setting.

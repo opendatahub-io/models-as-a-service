@@ -302,7 +302,7 @@ def test_limitador_series_are_producer_scoped_and_isolated() -> None:
                 path=f"/{shared.model_namespace}/{shared.model_ref}",
                 model_name=f"e2e/{shared.model_ref}",
                 extra_headers={
-                    "x-maas-subscription-namespace": "forged-namespace",
+                    "x-maas-organization-id": "forged-org",
                 },
             )
             assert rejected_response.status_code == 403, rejected_response.text[:500]
@@ -311,7 +311,10 @@ def test_limitador_series_are_producer_scoped_and_isolated() -> None:
                 key_b,
                 path=f"/{shared.model_namespace}/{shared.model_ref}",
                 model_name=f"e2e/{shared.model_ref}",
-                extra_headers={"x-maas-subscription": "forged-subscription"},
+                extra_headers={
+                    "x-maas-subscription": "forged-subscription",
+                    "x-maas-subscription-namespace": "forged-namespace",
+                },
             )
             assert response_b.status_code == 200, response_b.text[:500]
 
@@ -330,7 +333,6 @@ def test_limitador_series_are_producer_scoped_and_isolated() -> None:
             "tenant_name": shared.tenant_name,
             "tenant_namespace": shared.tenant_namespace,
             "subscription": subscription_a,
-            "subscription_namespace": shared.tenant_namespace,
             "organization_id": organization_a,
         }
         expected_b = expected_a | {"subscription": subscription_b, "organization_id": organization_b}
@@ -338,7 +340,6 @@ def test_limitador_series_are_producer_scoped_and_isolated() -> None:
             "tenant_name": unrelated.tenant_name,
             "tenant_namespace": unrelated.tenant_namespace,
             "subscription": subscription_unrelated,
-            "subscription_namespace": unrelated.tenant_namespace,
             "organization_id": organization_unrelated,
         }
 
@@ -348,18 +349,18 @@ def test_limitador_series_are_producer_scoped_and_isolated() -> None:
 
         for labels in series:
             assert labels.get("organization_id") != "forged-org"
-            assert labels.get("subscription_namespace") != "forged-namespace"
             assert labels.get("subscription") != "forged-subscription"
             organization_id = labels.get("organization_id", "")
             if organization_id in {organization_a, organization_b}:
                 assert labels.get("tenant_name") == shared.tenant_name
-                assert labels.get("subscription_namespace") == shared.tenant_namespace
                 assert labels.get("organization_id") != "forged-org"
-                assert labels.get("subscription_namespace") != "forged-namespace"
+                assert labels.get("tenant_namespace") == shared.tenant_namespace
+                assert "subscription_namespace" not in labels
                 assert labels.get("user", "") != ""
             elif organization_id == organization_unrelated:
                 assert labels.get("tenant_name") == unrelated.tenant_name
-                assert labels.get("subscription_namespace") == unrelated.tenant_namespace
+                assert labels.get("tenant_namespace") == unrelated.tenant_namespace
+                assert "subscription_namespace" not in labels
 
     finally:
         try:

@@ -122,11 +122,6 @@ spec:
               metadata_namespace: envoy.filters.http.header_to_metadata
               key: subscription
               type: STRING
-          - header: X-MaaS-Subscription-Namespace
-            on_header_present:
-              metadata_namespace: envoy.filters.http.header_to_metadata
-              key: subscription_namespace
-              type: STRING
           - header: X-MaaS-Group
             on_header_present:
               metadata_namespace: envoy.filters.http.header_to_metadata
@@ -164,11 +159,6 @@ spec:
             on_header_present:
               metadata_namespace: envoy.filters.http.header_to_metadata
               key: subscription
-              type: STRING
-          - header: X-MaaS-Subscription-Namespace
-            on_header_present:
-              metadata_namespace: envoy.filters.http.header_to_metadata
-              key: subscription_namespace
               type: STRING
           - header: X-MaaS-Group
             on_header_present:
@@ -488,12 +478,6 @@ spec:
                 - key: subscription
                   value:
                     string_value: '%CEL("envoy.filters.http.header_to_metadata" in metadata.filter_metadata ? metadata.filter_metadata["envoy.filters.http.header_to_metadata"]["subscription"] : request.headers["x-maas-subscription"])%'
-                # The raw namespace fallback is allowed only for Limitador 429 responses.
-                # Denied requests do not run header_to_metadata, but must not trust the
-                # client-supplied namespace as subscription identity.
-                - key: subscription_namespace
-                  value:
-                    string_value: '%CEL("envoy.filters.http.header_to_metadata" in metadata.filter_metadata ? metadata.filter_metadata["envoy.filters.http.header_to_metadata"]["subscription_namespace"] : (response.code == 429 ? request.headers["x-maas-subscription-namespace"] : ""))%'
                 - key: groups
                   value:
                     string_value: '%CEL("envoy.filters.http.header_to_metadata" in metadata.filter_metadata ? metadata.filter_metadata["envoy.filters.http.header_to_metadata"]["groups"] : request.headers["x-maas-group"])%'

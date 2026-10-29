@@ -491,11 +491,8 @@ func TestTenantEnsureUsageLogsEnvoyFilter(t *testing.T) {
 		tenantName, err := usageLogsResourceAttribute(ef, "tenant_name")
 		g.Expect(err).NotTo(HaveOccurred())
 		g.Expect(tenantName).To(Equal("redteam"))
-		subscriptionNamespace, err := usageLogsAttribute(ef, "subscription_namespace")
-		g.Expect(err).NotTo(HaveOccurred())
-		g.Expect(subscriptionNamespace).To(ContainSubstring(
-			`response.code == 429 ? request.headers["x-maas-subscription-namespace"] : ""`,
-		))
+		_, err = usageLogsAttribute(ef, "subscription_namespace")
+		g.Expect(err).To(HaveOccurred())
 	})
 
 	t.Run("applies over existing filter when usageLogging is false", func(t *testing.T) {

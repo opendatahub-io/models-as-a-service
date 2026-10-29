@@ -134,15 +134,14 @@ func TestBuildTelemetryLabels(t *testing.T) {
 			name:   "nil config uses defaults",
 			config: nil,
 			expectedLabels: map[string]any{
-				"tenant_name":            `"models-as-a-service"`,
-				"tenant_namespace":       `"models-as-a-service"`,
-				"subscription":           "auth.identity.selected_subscription",
-				"subscription_namespace": `has(auth.identity.subscription_info.namespace) ? auth.identity.subscription_info.namespace : ""`,
-				"cost_center":            `has(auth.identity.subscription_info.costCenter) ? auth.identity.subscription_info.costCenter : ""`,
-				"organization_id":        `has(auth.identity.subscription_info.organizationId) ? auth.identity.subscription_info.organizationId : ""`,
-				"model":                  "responseBodyJSON(\"/model\")",
+				"tenant_name":      `"models-as-a-service"`,
+				"tenant_namespace": `"models-as-a-service"`,
+				"subscription":     "auth.identity.selected_subscription",
+				"cost_center":      `has(auth.identity.subscription_info.costCenter) ? auth.identity.subscription_info.costCenter : ""`,
+				"organization_id":  `has(auth.identity.subscription_info.organizationId) ? auth.identity.subscription_info.organizationId : ""`,
+				"model":            "responseBodyJSON(\"/model\")",
 			},
-			absentKeys: []string{"user", "group"},
+			absentKeys: []string{"user", "group", "subscription_namespace"},
 		},
 		{
 			name: "captureGroup true emits groups_str path",
@@ -204,15 +203,14 @@ func TestBuildTelemetryLabels(t *testing.T) {
 				},
 			},
 			expectedLabels: map[string]any{
-				"tenant_name":            `"models-as-a-service"`,
-				"tenant_namespace":       `"models-as-a-service"`,
-				"subscription":           "auth.identity.selected_subscription",
-				"subscription_namespace": `has(auth.identity.subscription_info.namespace) ? auth.identity.subscription_info.namespace : ""`,
-				"cost_center":            `has(auth.identity.subscription_info.costCenter) ? auth.identity.subscription_info.costCenter : ""`,
-				"organization_id":        `has(auth.identity.subscription_info.organizationId) ? auth.identity.subscription_info.organizationId : ""`,
-				"user":                   "auth.identity.userid",
-				"group":                  "auth.identity.groups_str",
-				"model":                  "responseBodyJSON(\"/model\")",
+				"tenant_name":      `"models-as-a-service"`,
+				"tenant_namespace": `"models-as-a-service"`,
+				"subscription":     "auth.identity.selected_subscription",
+				"cost_center":      `has(auth.identity.subscription_info.costCenter) ? auth.identity.subscription_info.costCenter : ""`,
+				"organization_id":  `has(auth.identity.subscription_info.organizationId) ? auth.identity.subscription_info.organizationId : ""`,
+				"user":             "auth.identity.userid",
+				"group":            "auth.identity.groups_str",
+				"model":            "responseBodyJSON(\"/model\")",
 			},
 		},
 	}
@@ -259,7 +257,7 @@ func TestConfigureTelemetryPolicyResourcesIncludesProducerScope(t *testing.T) {
 	assert.Equal(t, `"redteam"`, labels["tenant_name"])
 	assert.Equal(t, `"ai-tenant-redteam"`, labels["tenant_namespace"])
 	assert.Equal(t, "auth.identity.selected_subscription", labels["subscription"])
-	assert.Contains(t, labels, "subscription_namespace")
+	assert.NotContains(t, labels, "subscription_namespace")
 	assert.Contains(t, labels, "organization_id")
 }
 
@@ -284,10 +282,7 @@ func TestBuildIstioTelemetryTagOverridesIncludesProducerScope(t *testing.T) {
 		"operation": "UPSERT",
 		"value":     `request.headers["x-maas-subscription"]`,
 	}, overrides["subscription"])
-	assert.Equal(t, map[string]any{
-		"operation": "UPSERT",
-		"value":     `request.headers["x-maas-subscription-namespace"]`,
-	}, overrides["subscription_namespace"])
+	assert.NotContains(t, overrides, "subscription_namespace")
 	assert.Equal(t, map[string]any{
 		"operation": "UPSERT",
 		"value":     `request.headers["x-maas-organization-id"]`,

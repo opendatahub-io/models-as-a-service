@@ -502,7 +502,6 @@ func TestBuildGatewayAuthPolicySpec_DeniesNewClientIdentityHeaders(t *testing.T)
 	}
 	assert.True(t, predicates[`!("x-maas-identity" in request.headers)`])
 	assert.True(t, predicates[`!("x-maas-admin-scope" in request.headers)`])
-	assert.True(t, predicates[`!("x-maas-subscription-namespace" in request.headers)`])
 }
 
 func expectPattern(t *testing.T, pattern any, selector, operator, value string) {

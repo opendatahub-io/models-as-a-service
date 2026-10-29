@@ -265,7 +265,7 @@ curl -s -H "Authorization: Bearer $(oc whoami -t)" --get \
   jq '.data.result[] | {metric: .metric.__name__, series: .value[1]}'
 ```
 
-Watch: `authorized_hits_total{user!="",organization_id!="",tenant_name!="",subscription_namespace!=""}`, `authorized_calls_total{user!="",organization_id!="",tenant_name!="",subscription_namespace!=""}`, and `istio_request_duration_milliseconds_bucket{tenant_name!="",subscription!="",subscription_namespace!=""}`. Empty scope labels identify incomplete or unscopable series and must not be included in organization-specific claims.
+Watch: `authorized_hits_total{user!="",organization_id!="",tenant_name!="",tenant_namespace!="",subscription!=""}`, `authorized_calls_total{user!="",organization_id!="",tenant_name!="",tenant_namespace!="",subscription!=""}`, and `istio_request_duration_milliseconds_bucket{tenant_name!="",tenant_namespace!="",subscription!=""}`. Empty scope labels identify incomplete or unscopable series and must not be included in organization-specific claims.
 
 ### Regular Maintenance Tasks
 
@@ -299,9 +299,9 @@ Watch: `authorized_hits_total{user!="",organization_id!="",tenant_name!="",subsc
 
 | Feature | Metric | Label |
 |---------|--------|-------|
-| **Latency per subscription** | `istio_request_duration_milliseconds_bucket` | `subscription`, `subscription_namespace`, `tenant_name` |
-| **Tokens per user** | `authorized_hits_total` | `user`, `tenant_name`, `subscription`, `subscription_namespace` |
-| **Tokens per subscription** | `authorized_hits_total` | `subscription`, `subscription_namespace`, `tenant_name` |
+| **Latency per subscription** | `istio_request_duration_milliseconds_bucket` | `subscription`, `tenant_namespace`, `tenant_name` |
+| **Tokens per user** | `authorized_hits_total` | `user`, `tenant_name`, `tenant_namespace`, `subscription` |
+| **Tokens per subscription** | `authorized_hits_total` | `subscription`, `tenant_namespace`, `tenant_name` |
 | **Tokens per model** | `authorized_hits_total` | `model` |
 | **Requests per user** | `authorized_calls_total` | `user` |
 | **Requests per subscription** | `authorized_calls_total` | `subscription` |
