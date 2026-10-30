@@ -46,6 +46,9 @@ from test_helper import (
 
 log = logging.getLogger(__name__)
 
+LARGE_EMBEDDING_BATCH = 1024
+MIN_LARGE_RESPONSE_BYTES = 1024 * 1024
+
 pytestmark = [pytest.mark.xdist_group("api_keys"), pytest.mark.worker_tenant]
 
 
@@ -133,7 +136,7 @@ def embedding_path_governance(_worker_embedding_context):
             name=subscription_name,
             model_refs=[EMBEDDING_MODEL_REF],
             groups=["system:authenticated"],
-            token_limit=1000,
+            token_limit=10000,
             window="1m",
         )
         _wait_for_maas_auth_policy_phase(
@@ -229,6 +232,24 @@ class TestEmbeddingPathRouting:
         assert len(first["embedding"]) > 0, "embedding vector is empty"
         usage = data.get("usage", {})
         assert usage.get("prompt_tokens", 0) > 0, f"Expected prompt_tokens > 0, got {usage}"
+
+    def test_embedding_large_batch_response_exceeds_default_buffer(self, embedding_path_governance):
+        """Large batched embeddings responses must pass through the gateway intact."""
+        url = f"{_gateway_url()}{EMBEDDING_MODEL_PATH}/v1/embeddings"
+        headers = {
+            "Authorization": f"Bearer {embedding_path_governance['api_key']}",
+            "Content-Type": "application/json",
+        }
+        body = {
+            "model": EMBEDDING_MODEL_NAME,
+            "input": ["large embedding response"] * LARGE_EMBEDDING_BATCH,
+        }
+
+        r = requests.post(url, headers=headers, json=body, timeout=TIMEOUT, verify=TLS_VERIFY)
+        assert r.status_code == 200, f"Expected 200, got {r.status_code}: {r.text[:500]}"
+        data = r.json()
+        assert len(data.get("data", [])) == LARGE_EMBEDDING_BATCH
+        assert len(r.content) > MIN_LARGE_RESPONSE_BYTES
 
     def test_embedding_bbr_llmisvc_200(self, embedding_path_governance):
         """POST /v1/embeddings with canonical model ID routes via BBR."""
