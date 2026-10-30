@@ -121,6 +121,27 @@ def external_oidc_from_env() -> Optional[dict[str, str]]:
     }
 
 
+def tenant_b_external_oidc_from_env() -> Optional[dict[str, str]]:
+    """Return the tenant-b OIDC config used by tenant-isolation tests."""
+    if not env_bool("EXTERNAL_OIDC"):
+        return None
+
+    issuer = os.environ.get("OIDC_ISSUER_URL_TENANT_B", "")
+    if not issuer:
+        default_issuer = os.environ.get("OIDC_ISSUER_URL", "")
+        if "tenant-a" not in default_issuer:
+            raise RuntimeError(
+                "Tenant-isolation OIDC requires OIDC_ISSUER_URL_TENANT_B, or an "
+                f"OIDC_ISSUER_URL containing 'tenant-a' (got {default_issuer!r})"
+            )
+        issuer = default_issuer.replace("tenant-a", "tenant-b")
+
+    return {
+        "issuerUrl": issuer,
+        "clientId": os.environ.get("OIDC_CLIENT_ID_TENANT_B", "test-client"),
+    }
+
+
 def redact_sensitive(value: Any, *, max_length: int = 300) -> str:
     """Return a short string safe enough for CI assertion messages."""
     text = str(value)
@@ -1006,11 +1027,13 @@ def ensure_payload_processing_type_on_tenant_config(
         )
 
 
-def apply_aitenant(case: dict[str, str]) -> None:
+def apply_aitenant(
+    case: dict[str, str], external_oidc: Optional[dict[str, str]] = None
+) -> None:
     spec: dict[str, Any] = {
         "gateway": {"name": case["gateway_name"]},
     }
-    oidc = external_oidc_from_env()
+    oidc = external_oidc if external_oidc is not None else external_oidc_from_env()
     if oidc:
         spec["oidc"] = oidc
 
@@ -1061,6 +1084,7 @@ def bootstrap_aitenant_tenant(
     use_default_gateway: bool = False,
     payload_processing_type: Optional[str] = None,
     dual_http_listener: bool = False,
+    external_oidc: Optional[dict[str, str]] = None,
 ) -> None:
     if not use_default_gateway:
         apply_gateway_fixture(
@@ -1070,7 +1094,7 @@ def bootstrap_aitenant_tenant(
         )
         wait_for_gateway_programmed(case["gateway_name"])
         apply_gateway_route_fixture(case["gateway_name"], fixture_label=case["tenant_label_name"])
-    apply_aitenant(case)
+    apply_aitenant(case, external_oidc=external_oidc)
     wait_for_json(AITENANT_KIND, case["tenant_label_name"], AITENANT_NAMESPACE, predicate=aitenant_ready)
     wait_for_json(
         "maastenantconfig",

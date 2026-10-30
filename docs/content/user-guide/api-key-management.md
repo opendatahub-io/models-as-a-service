@@ -309,7 +309,9 @@ curl -sS -X DELETE "${MAAS_API_URL}/maas-api/v1/api-keys/${KEY_ID}" \
   -H "Authorization: Bearer $(oc whoami -t)"
 ```
 
-Revocation takes effect immediately (Authorino may cache briefly).
+Revocation takes effect immediately on the writable database. If a cluster-local read
+replica is configured, validation observes it after PostgreSQL replication lag plus any
+brief Authorino cache delay.
 
 ### Revoke All Your Keys
 

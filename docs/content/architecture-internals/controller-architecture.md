@@ -24,6 +24,94 @@ MaaS uses multiple namespaces to separate concerns and enable flexible deploymen
 
 ---
 
+## API-Key Database Routing
+
+`maas-api` stores API-key metadata in PostgreSQL. The database topology can provide a
+writable primary through the multi-cluster service and a read replica in each cluster
+where MaaS runs. The database is not deployed or modified by MaaS; GitOps supplies the
+endpoints through the existing `maas-db-config` Secret in the infrastructure namespace.
+
+```mermaid
+flowchart LR
+    Secret["maas-db-config\nDB_CONNECTION_URL\nDB_READ_CONNECTION_URL (optional)"]
+    API["maas-api"]
+    Write["Writable primary\nmigrations and writes"]
+    Read["Cluster-local replica\nAPI-key validation and\nadministrative reads"]
+
+    Secret --> API
+    API -->|DDL and DML| Write
+    API -->|GetByHash, Search, Get, List| Read
+    Read -->|one retry after infrastructure failure| Write
+```
+
+### Secret and pool contract
+
+| Secret key | Required | Pool | Purpose |
+|------------|----------|------|---------|
+| `DB_CONNECTION_URL` | Yes | Writable primary | Schema migrations, writes, and read fallback |
+| `DB_READ_CONNECTION_URL` | No | Cluster-local read replica | API-key validation and administrative reads |
+
+Keeping both keys in one Secret preserves the existing deployment contract and avoids a
+second credential object that GitOps would need to coordinate. The writable key retains
+its original meaning, so deployments that do not configure the optional key keep the
+previous single-pool behavior. Values are trimmed, validated as PostgreSQL URLs, and never
+logged.
+
+Startup deliberately fails closed when an explicitly configured read URL is invalid or
+unreachable. A silent fallback would make a deployment mistake look healthy while sending
+all reads across clusters to the primary, defeating the purpose of the local replica.
+After startup, both pools use the existing maximum-open, maximum-idle, and lifetime
+settings and are closed independently during shutdown.
+
+### Routing and consistency
+
+Routing is method-based rather than based on a generic read-only transaction flag. That
+keeps each method's consistency requirement explicit:
+
+| Store operation | Initial pool | Reason |
+|-----------------|--------------|--------|
+| `GetByHash` | Read replica | This indexed lookup is the synchronous API-key validation hot path; keeping it local avoids a cross-cluster round trip on every authorized request |
+| `Search`, `Get`, `List` | Read replica | Administrative reads tolerate ordinary asynchronous replication lag |
+| `AddKey`, `BulkRevoke`, `InvalidateTenant`, `InvalidateSubscription`, `Revoke`, `UpdateLastUsed`, `DeleteExpiredEphemeral`, `DeleteSoftDeleted` | Writable primary | These operations mutate state or, for `BulkRevoke` dry-run, must count the same rows the subsequent mutation will change |
+
+Configuring `DB_READ_CONNECTION_URL` opts into the hot-path latency optimization and its
+consistency contract. A replica can return a still-active key after `Revoke` has committed
+on the primary, so revocation visibility is bounded by replication lag plus any brief
+Authorino cache. This is appropriate when the database topology provides a low, monitored
+replication-lag objective. Deployments with a strict immediate-revocation requirement must
+omit the read URL; they retain the previous behavior of validating hashes on the primary.
+
+`UpdateLastUsed` remains on the writable primary, but it is asynchronous and debounced, so
+it does not add a cross-cluster round trip to the validation response. Expiration state
+transitions discovered by `GetByHash` are also writes and use the primary.
+
+Schema migrations and concurrent index creation run only against the writable pool.
+Replicas apply DDL through PostgreSQL replication, and sending migrations to a read-only
+endpoint would either fail or create topology divergence.
+
+### Failure and observability
+
+Local reads retry once on the writable primary when the read query fails. The fallback
+keeps API-key validation and key administration available during replica maintenance while
+making the unexpected primary traffic visible. The process health endpoint reports the read
+pool as degraded but remains healthy because an optional replica must not make the API
+instance unready.
+
+Metrics expose:
+
+- Query counts by operation and selected pool
+- Read-to-write fallback count
+- Ping failures by pool
+- Open, in-use, and idle connections by pool
+- Replica lag from `pg_last_xact_replay_timestamp()` plus configured warning and critical thresholds
+
+Lag is monitored but is not a routing input in this implementation. Disabling a replica
+automatically because of lag would require an explicit availability and consistency policy;
+operators should alert on lag and fallback rate instead. See
+[Database Setup](../install/maas-setup.md#optional-postgresql-read-replica) for configuration.
+
+---
+
 ## What Is the MaaS Controller?
 
 The **MaaS Controller** is a Kubernetes controller with two main responsibilities:

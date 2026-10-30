@@ -197,7 +197,7 @@ func TestGetMe(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	handler := token.NewHandler(logger.New(false), "tenant")
 	router := gin.New()
-	router.GET("/v1/me", handler.ExtractVerifiedIdentity(), handler.GetMe)
+	router.GET("/v1/me", handler.ExtractVerifiedIdentityOptional(), handler.ExtractUserInfoOptional(), handler.GetMe)
 
 	request := httptest.NewRequest(http.MethodGet, "/v1/me?organization_id=another-org", nil)
 	request.Header.Set(constant.HeaderIdentity, validIdentityEnvelope)
@@ -232,21 +232,109 @@ func TestGetMe(t *testing.T) {
 	assert.NotContains(t, response, "subscriptions")
 }
 
-func TestGetMeRequiresVerifiedSSOIdentity(t *testing.T) {
+func TestGetMeRequiresAnAuthenticatedIdentity(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	handler := token.NewHandler(logger.New(false), "tenant")
 	router := gin.New()
-	router.GET("/v1/me", handler.ExtractVerifiedIdentity(), handler.GetMe)
+	router.GET("/v1/me", handler.ExtractVerifiedIdentityOptional(), handler.ExtractUserInfoOptional(), handler.GetMe)
 
 	request := httptest.NewRequest(http.MethodGet, "/v1/me", nil)
 	request.Header.Set(constant.HeaderUsername, "alice")
-	request.Header.Set(constant.HeaderGroup, `["team-a"]`)
 	recorder := httptest.NewRecorder()
 	router.ServeHTTP(recorder, request)
 
 	assert.Equal(t, http.StatusUnauthorized, recorder.Code)
 	assert.NotContains(t, recorder.Body.String(), "alice")
 	assert.NotContains(t, recorder.Body.String(), "team-a")
+}
+
+func TestGetMeUsesGatewayIdentityForOtherAuthenticationMethods(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	handler := token.NewHandler(logger.New(false), "tenant")
+	router := gin.New()
+	router.GET("/v1/me", handler.ExtractVerifiedIdentityOptional(), handler.ExtractUserInfoOptional(), handler.GetMe)
+
+	request := httptest.NewRequest(http.MethodGet, "/v1/me", nil)
+	request.Header.Set(constant.HeaderUsername, "alice")
+	request.Header.Set(constant.HeaderGroup, `["team-a","team-b"]`)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	assert.Equal(t, "no-store", recorder.Header().Get("Cache-Control"))
+
+	var response map[string]any
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &response))
+	assert.Equal(t, "alice", response["sub"])
+	assert.Equal(t, "alice", response["name"])
+	assert.Equal(t, "alice", response["preferred_username"])
+	assert.Equal(t, []any{"team-a", "team-b"}, response["groups"])
+	assert.NotContains(t, response, "iss")
+	assert.NotContains(t, response, "https://redhat.com/maas/orgs")
+}
+
+func TestGetMePrefersVerifiedSSOIdentityOverGatewayIdentity(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	handler := token.NewHandler(logger.New(false), "tenant")
+	router := gin.New()
+	router.GET("/v1/me", handler.ExtractVerifiedIdentityOptional(), handler.ExtractUserInfoOptional(), handler.GetMe)
+
+	request := httptest.NewRequest(http.MethodGet, "/v1/me", nil)
+	request.Header.Set(constant.HeaderIdentity, validIdentityEnvelope)
+	request.Header.Set(constant.HeaderUsername, "gateway-user")
+	request.Header.Set(constant.HeaderGroup, `["gateway-group"]`)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+
+	var response token.IdentityResponse
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &response))
+	assert.Equal(t, "https://issuer.example.com", response.Issuer)
+	assert.Equal(t, "user-1", response.Subject)
+	assert.Equal(t, "alex", response.PreferredUsername)
+	assert.Equal(t, []string{"42c3e46f-2477-44d7-a85b-d3b43f6b31fa/users"}, response.Groups)
+}
+
+func TestGetMeIgnoresIncompleteLegacyHeadersWhenVerifiedIdentityPresent(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	handler := token.NewHandler(logger.New(false), "tenant")
+	router := gin.New()
+	router.GET("/v1/me", handler.ExtractVerifiedIdentityOptional(), handler.ExtractUserInfoOptional(), handler.GetMe)
+
+	request := httptest.NewRequest(http.MethodGet, "/v1/me", nil)
+	request.Header.Set(constant.HeaderIdentity, validIdentityEnvelope)
+	request.Header.Set(constant.HeaderGroup, `["gateway-group"]`)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+
+	var response token.IdentityResponse
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &response))
+	assert.Equal(t, "https://issuer.example.com", response.Issuer)
+	assert.Equal(t, "user-1", response.Subject)
+}
+
+func TestGetMeIgnoresMalformedLegacyHeadersWhenVerifiedIdentityPresent(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	handler := token.NewHandler(logger.New(false), "tenant")
+	router := gin.New()
+	router.GET("/v1/me", handler.ExtractVerifiedIdentityOptional(), handler.ExtractUserInfoOptional(), handler.GetMe)
+
+	request := httptest.NewRequest(http.MethodGet, "/v1/me", nil)
+	request.Header.Set(constant.HeaderIdentity, validIdentityEnvelope)
+	request.Header.Set(constant.HeaderUsername, "gateway-user")
+	request.Header.Set(constant.HeaderGroup, "not-valid-format")
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+
+	var response token.IdentityResponse
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &response))
+	assert.Equal(t, "https://issuer.example.com", response.Issuer)
+	assert.Equal(t, "user-1", response.Subject)
 }
 
 func TestGetMeAbsentOptionalMembershipSucceeds(t *testing.T) {
