@@ -1579,11 +1579,21 @@ func isEmptyCollection(v any) bool {
 
 // reconcileGatewayAuthPolicy creates or updates the singleton Gateway-level AuthPolicy in
 // the gateway namespace. All MaaSAuthPolicy reconciliations converge on this one resource.
+//
+// The default gateway's AuthPolicy is written from every namespace that resolves to the
+// default tenant identity, so it always renders the default tenant's guardrail catalog.
+// Resolving it per namespace makes writers with different catalogs rewrite it in turn.
+// An empty TenantNamespace means every namespace is the default tenant's, so there is no
+// single catalog to prefer.
 func (r *MaaSAuthPolicyReconciler) reconcileGatewayAuthPolicy(
 	ctx context.Context, log logr.Logger,
 	oidc *oidcConfig, xAPIKeyEnabled bool, tenantNamespace, tenantID, gatewayNamespace, gatewayName string,
 ) (bool, error) {
-	headers, err := r.guardrailHeaders(ctx, tenantNamespace)
+	catalogNamespace := tenantNamespace
+	if r.TenantNamespace != "" && gatewayNamespace == r.GatewayNamespace && gatewayName == r.GatewayName {
+		catalogNamespace = r.TenantNamespace
+	}
+	headers, err := r.guardrailHeaders(ctx, catalogNamespace)
 	if err != nil {
 		return false, err
 	}
