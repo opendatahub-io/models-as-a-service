@@ -48,8 +48,20 @@ deploy_ai_gateway_controller() {
     local work_dir
     work_dir="$(mktemp -d -t aigc-e2e.XXXXXXXXXX)"
     git clone -q "${AIGC_REPO}" "${work_dir}/aigc"
-    git -C "${work_dir}/aigc" fetch -q --depth 1 origin "${AIGC_COMMIT}"
-    git -C "${work_dir}/aigc" checkout -q FETCH_HEAD
+    # GitHub serves fetch-by-sha only for full 40-char SHAs; branch names and
+    # tags fetch natively. Anything else (e.g. a short SHA) is resolved from
+    # the remote's refs after fetching them.
+    if git -C "${work_dir}/aigc" fetch -q --depth 1 origin "${AIGC_COMMIT}" 2>/dev/null; then
+        git -C "${work_dir}/aigc" checkout -q FETCH_HEAD
+    else
+        git -C "${work_dir}/aigc" fetch -q origin '+refs/heads/*:refs/remotes/origin/*' --tags
+        if ! git -C "${work_dir}/aigc" cat-file -e "${AIGC_COMMIT}^{commit}" 2>/dev/null; then
+            echo "ERROR: AIGC_COMMIT=${AIGC_COMMIT} is neither a ref nor a commit on ${AIGC_REPO}" >&2
+            rm -rf "${work_dir}"
+            return 1
+        fi
+        git -C "${work_dir}/aigc" checkout -q "${AIGC_COMMIT}"
+    fi
 
     cp -a "${work_dir}/aigc/config/self" "${work_dir}/self"
     sed -i "s|^ai-gateway-controller-image=.*|ai-gateway-controller-image=${AI_GATEWAY_CONTROLLER_IMAGE}|" \
