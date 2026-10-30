@@ -10,6 +10,9 @@ P0 scenario 2:
   tenant's gateway (both tenants authorize the model, so the cross-tenant
   rejections prove key isolation rather than an absent grant), and
   exhausting tenant A's token budget does not consume tenant B's.
+- A MaaSModelRef that does not name its tenant on a two-gateway model
+  reports the ambiguity instead of guessing a gateway (see
+  TestSharedModelAmbiguousModelRef).
 
 Shares the tenant_external_model session tenants (see conftest.tenant_external_model_tenants);
 this module creates its own user namespace with unique names.
@@ -38,7 +41,9 @@ own skip gate:
 
 from __future__ import annotations
 
+import json
 import logging
+import re
 import time
 import uuid
 
@@ -50,7 +55,9 @@ from multitenancy_helpers import (
     wait_until,
 )
 from tenant_external_model_helpers import (
+    TENANT_EXTERNAL_MODEL_READY_TIMEOUT,
     TenantExternalModelResources,
+    apply_maas_model_ref_for_external,
     assert_returns_usage,
     assert_served_by_provider,
     external_model_reports_maas_route,
@@ -352,6 +359,127 @@ class TestTenantAuthIsolation:
             assert response.status_code in (401, 403), (
                 f"unknown API key must be rejected by {case['gateway_name']}, got "
                 f"{response.status_code}: {redact_sensitive(response.text)}"
+            )
+
+
+class TestSharedModelAmbiguousModelRef:
+    """A MaaSModelRef that does not name its tenant must not guess one.
+
+    A model attached to two gateways has no unambiguous route for a
+    tenantRef-less modelRef: it must report the ambiguity (Failed phase, a
+    message directing the user to ``spec.tenantRef``) instead of silently
+    selecting one gateway, while the per-tenant modelRefs that do pin
+    ``tenantRef`` stay Ready.
+    """
+
+    @pytest.fixture(scope="class")
+    def ambiguous_stack(self, shared_env):
+        env = shared_env
+        name = f"e2e-shr-amb-{uuid.uuid4().hex[:6]}"
+        model = provision_external_model_stack(
+            env["resources"],
+            name=name,
+            namespace=env["user_ns"],
+            gateway_refs=[
+                gateway_ref(env["tenant_a"]["gateway_name"]),
+                gateway_ref(env["tenant_b"]["gateway_name"]),
+            ],
+            model_name=f"{name}-client",
+            tenant_refs=[
+                env["tenant_a"]["tenant_label_name"],
+                env["tenant_b"]["tenant_label_name"],
+            ],
+        )
+        _wait_attachments_ready(env, model)
+        # The ambiguity verdict is produced from the AGC's per-gateway
+        # status.gateways results; aggregate-status builds report no route
+        # for multi-gateway models and cannot exercise this path.
+        _require_maas_route(model)
+        ambiguous_ref = f"{name}-ambiguous"
+        apply_maas_model_ref_for_external(name, env["user_ns"], ref_name=ambiguous_ref)
+        env["resources"].track("maasmodelref", ambiguous_ref, env["user_ns"])
+        return {"model": model, "ambiguous_ref": ambiguous_ref}
+
+    def test_tenantless_model_ref_reports_ambiguity(self, shared_env, ambiguous_stack):
+        """The tenantRef-less modelRef fails with a message naming
+        spec.tenantRef, and reports no endpoint."""
+        model = ambiguous_stack["model"]
+
+        def _check() -> dict:
+            ref = get_json_or_none("maasmodelref", ambiguous_stack["ambiguous_ref"], model["namespace"])
+            assert ref is not None, "ambiguous MaaSModelRef not found"
+            status = ref.get("status") or {}
+            assert status.get("phase") == "Failed", (
+                f"tenantRef-less modelRef for a two-gateway model must be Failed, "
+                f"got phase={status.get('phase')!r}: {redact_sensitive(status)}"
+            )
+            blob = json.dumps(status)
+            assert re.search(r"tenantref", blob, re.IGNORECASE), (
+                "failure must direct the user to spec.tenantRef: "
+                f"{redact_sensitive(status)}"
+            )
+            return status
+
+        status = wait_until(
+            _check,
+            TENANT_EXTERNAL_MODEL_READY_TIMEOUT,
+            f"MaaSModelRef {model['namespace']}/{ambiguous_stack['ambiguous_ref']} "
+            "report the two-gateway ambiguity",
+        )
+        assert not status.get("endpoint"), (
+            f"ambiguous modelRef must not report an endpoint: {redact_sensitive(status)}"
+        )
+
+    def test_pinned_model_refs_stay_ready(self, shared_env, ambiguous_stack):
+        """The per-tenant modelRefs pinning spec.tenantRef are unaffected by
+        their ambiguous sibling: each resolves its own tenant's attachment
+        (RuntimeReady, resolvedTenantRef and serving gateway set to its own
+        tenant) with no ambiguity error.
+
+        Full phase-Ready additionally needs a governance pairing and unique
+        model identities (RHOAIENG-101609 — two per-tenant refs for one
+        ExternalModel share a resolved alias today), which are separate
+        gaps; this test proves the tenant selection the scenario is about."""
+        env = shared_env
+        model = ambiguous_stack["model"]
+        cases = {
+            env["tenant_a"]["tenant_label_name"]: env["tenant_a"],
+            env["tenant_b"]["tenant_label_name"]: env["tenant_b"],
+        }
+        for tenant_label, ref_name in model["model_refs"].items():
+            case = cases[tenant_label]
+
+            def _check(ref_name=ref_name, case=case) -> dict:
+                ref = get_json_or_none("maasmodelref", ref_name, model["namespace"])
+                assert ref is not None, f"MaaSModelRef {model['namespace']}/{ref_name} not found"
+                status = ref.get("status") or {}
+                assert status.get("phase") != "Failed", (
+                    f"pinned modelRef {ref_name} must not fail: {redact_sensitive(status)}"
+                )
+                conditions = {
+                    c.get("type"): c for c in status.get("conditions") or []
+                }
+                runtime = conditions.get("RuntimeReady")
+                assert runtime is not None and runtime.get("status") == "True", (
+                    f"pinned modelRef {ref_name} runtime not ready: {redact_sensitive(status)}"
+                )
+                assert status.get("resolvedTenantRef") == case["tenant_label_name"], (
+                    f"pinned modelRef {ref_name} resolved tenant "
+                    f"{status.get('resolvedTenantRef')!r}, expected "
+                    f"{case['tenant_label_name']!r}: {redact_sensitive(status)}"
+                )
+                assert status.get("httpRouteGatewayName") == case["gateway_name"], (
+                    f"pinned modelRef {ref_name} resolved gateway "
+                    f"{status.get('httpRouteGatewayName')!r}, expected "
+                    f"{case['gateway_name']!r}: {redact_sensitive(status)}"
+                )
+                return status
+
+            wait_until(
+                _check,
+                TENANT_EXTERNAL_MODEL_READY_TIMEOUT,
+                f"pinned MaaSModelRef {model['namespace']}/{ref_name} resolving tenant "
+                f"{case['tenant_label_name']} (RuntimeReady, own gateway)",
             )
 
 

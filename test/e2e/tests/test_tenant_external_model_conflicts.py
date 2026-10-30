@@ -10,6 +10,8 @@ P0 scenarios:
    attached to one gateway both serve correctly, with no overlay stable_id or
    DestinationRule collision (regression coverage for the shared-provider
    overlay collision bug).
+9. A broken foreign model in another namespace (provider credential Secret
+   missing) never breaks the tenant's own models on the same gateway.
 
 Conflict pairs share the CR name across namespaces (the client-facing name
 defaults to it), which keeps the client-facing name equal to the
@@ -38,9 +40,17 @@ import time
 import uuid
 
 import pytest
-from multitenancy_helpers import GATEWAY_NAMESPACE, delete_namespace_best_effort
+from multitenancy_helpers import (
+    GATEWAY_NAMESPACE,
+    delete_namespace_best_effort,
+    wait_for_not_found,
+)
 from tenant_external_model_helpers import (
+    EXTERNAL_MODEL_KIND,
+    EXTERNAL_PROVIDER_KIND,
     TenantExternalModelResources,
+    apply_external_model,
+    apply_external_provider,
     assert_served_by_provider,
     attachment_httproutes,
     destination_rules_referencing,
@@ -53,9 +63,11 @@ from tenant_external_model_helpers import (
     route_is_for_model,
     serve_external_model_in_tenant,
     wait_for_attachment_httproute,
+    wait_for_gateway_attachment_not_ready,
     wait_for_gateway_attachment_reason,
     wait_for_no_attachment_httproute,
 )
+from test_helper import _delete_cr
 
 log = logging.getLogger(__name__)
 
@@ -374,3 +386,90 @@ class TestSameNamedObjectsTwoNamespaces:
         assert_served_by_provider(
             response, model_2["path_tag"], credential=model_2["credential"]
         )
+
+
+class TestForeignBrokenModelIsolation:
+    """A broken model from another namespace must not take down the tenant's
+    own models on the same gateway.
+
+    The broken model binds to a provider whose credential Secret does not
+    exist, so its attachment can never become serving. The tenant's own
+    healthy model on the same gateway must keep serving both while the
+    broken model exists and after it is deleted."""
+
+    @pytest.fixture(scope="class")
+    def broken_pair(self, conflicts_env):
+        env = conflicts_env
+        tenant_a = env["tenant_a"]
+        gateway = gateway_ref(tenant_a["gateway_name"])
+
+        healthy = provision_external_model_stack(
+            env["resources"],
+            name=f"e2e-cfl-ok-{uuid.uuid4().hex[:6]}",
+            namespace=env["user_ns_1"],
+            gateway_refs=[gateway],
+        )
+        access = _serve_in_tenant(env, tenant_a, healthy)
+
+        # The broken foreign model: its provider references a Secret that is
+        # never created, so the attachment cannot deliver a credential or
+        # publish a working route. Same gateway, different namespace.
+        broken_name = f"e2e-cfl-broken-{uuid.uuid4().hex[:6]}"
+        broken_provider = f"{broken_name}-provider"
+        apply_external_provider(
+            broken_provider,
+            env["user_ns_2"],
+            credential_secret=f"{broken_name}-missing-cred",
+        )
+        env["resources"].track(EXTERNAL_PROVIDER_KIND, broken_provider, env["user_ns_2"])
+        apply_external_model(
+            broken_name,
+            env["user_ns_2"],
+            provider_name=broken_provider,
+            gateway_refs=[gateway],
+        )
+        env["resources"].track(EXTERNAL_MODEL_KIND, broken_name, env["user_ns_2"])
+        return {"healthy": healthy, "access": access, "broken_name": broken_name}
+
+    def test_broken_foreign_model_does_not_break_tenant_models(self, conflicts_env, broken_pair):
+        """The broken foreign attachment reports a failure while the
+        tenant's own healthy model on the same gateway keeps serving."""
+        env = conflicts_env
+        tenant_a = env["tenant_a"]
+        broken_ns = env["user_ns_2"]
+        wait_for_gateway_attachment_not_ready(
+            broken_pair["broken_name"], broken_ns, tenant_a["gateway_name"]
+        )
+        healthy = broken_pair["healthy"]
+        response = infer_external_chat(
+            tenant_a["gateway_url"],
+            healthy["namespace"],
+            healthy["client_name"],
+            broken_pair["access"]["api_key"],
+            path_tag=healthy["path_tag"],
+        )
+        assert_served_by_provider(response, healthy["path_tag"], credential=healthy["credential"])
+
+    def test_tenant_models_serve_after_broken_model_deleted(self, conflicts_env, broken_pair):
+        """Deleting the broken model cleans up its failed attachment without
+        disturbing the tenant's own serving model."""
+        env = conflicts_env
+        tenant_a = env["tenant_a"]
+        broken_ns = env["user_ns_2"]
+        _delete_cr(EXTERNAL_MODEL_KIND, broken_pair["broken_name"], broken_ns)
+        # _delete_cr only logs on failure: confirm the object is gone before
+        # the absence checks, so a failed deletion cannot pass vacuously
+        # (the broken model may have held no route to begin with).
+        wait_for_not_found(EXTERNAL_MODEL_KIND, broken_pair["broken_name"], broken_ns)
+        wait_for_no_attachment_httproute(
+            broken_ns, tenant_a["gateway_name"], model_name=broken_pair["broken_name"]
+        )
+        healthy = broken_pair["healthy"]
+        response = infer_external_chat(
+            tenant_a["gateway_url"],
+            healthy["namespace"],
+            healthy["client_name"],
+            broken_pair["access"]["api_key"],
+            path_tag=healthy["path_tag"],
+        )
+        assert_served_by_provider(response, healthy["path_tag"], credential=healthy["credential"])

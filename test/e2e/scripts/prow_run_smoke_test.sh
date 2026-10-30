@@ -51,7 +51,7 @@
 #   AITENANT_NAMESPACE - Namespace for AITenant CRs (default: ai-tenants)
 #   GATEWAY_NAMESPACE - Gateway namespace (default: openshift-ingress)
 #   MODEL_NAMESPACE - Namespace of models (default: llm)
-#   E2E_PARALLEL_WORKERS - pytest-xdist worker count (default: 7)
+#   E2E_PARALLEL_WORKERS - pytest-xdist worker count (default: 5)
 #   TENANT_EXTERNAL_MODEL_CROSSNS_E2E - Opt in to P1 cross-namespace external
 #                         provider E2E (needs AGC cross-namespace provider
 #                         support packaged, default: false)
@@ -465,7 +465,7 @@ print(f"azp={authorized_party}, audience={token_audience!r}, organizations={len(
 
     # Delegate pytest execution to run_e2e_tests.sh
     export ARTIFACTS_DIR
-    export E2E_PARALLEL_WORKERS="${E2E_PARALLEL_WORKERS:-7}"
+    export E2E_PARALLEL_WORKERS="${E2E_PARALLEL_WORKERS:-5}"
     export E2E_RECONCILE_WAIT="${E2E_RECONCILE_WAIT:-4}"
     # Nightly tier (pass 3) only when EXTERNAL_OIDC is deployed; passes 1–2 always skip nightly.
     if [[ "${EXTERNAL_OIDC}" == "true" ]]; then

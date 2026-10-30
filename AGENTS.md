@@ -137,6 +137,14 @@ If multiple rules apply, use the **highest** justified rating and explain the ma
 - E2E tests are pytest under `test/e2e/tests/`.
 - New functionality must include tests.
 
+### E2E wait timeouts
+
+Defaults live in `test/e2e/tests/test_helper.py` (and optional `E2E_*` env overrides / `run_e2e_tests.sh` parallel exports). When calling `_wait_*` helpers:
+
+- **Do not pass `timeout=`** unless the value is **greater** than that helper’s default.
+- Every increasing override **must** have a one-line comment on the call explaining why the default is insufficient (e.g. Limitador backlog, dual-model bootstrap).
+- **Never** override to shorten a wait. If a shorter bound is truly required, change the helper default (or use a different helper) instead of a call-site decrease.
+
 ## Documentation policy
 
 - **Search before writing.** Before creating or updating any doc, search `docs/content/` and existing markdown files for overlapping content. If the topic is already covered, update that file — do not create a new one.

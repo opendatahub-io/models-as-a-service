@@ -987,8 +987,9 @@ class TestModelsEndpoint:
             _wait_for_maas_auth_policy_phase(
                 auth_policy_name,
                 namespace=maas_ns,
-                timeout=120,
             )
+            # Two freshly created LLMIS backends share one subscription; allow extra
+            # time for both modelRefs to become discovery-ready under parallel load.
             _wait_for_subscription_discovery_ready(
                 subscription_name,
                 namespace=maas_ns,
@@ -2207,11 +2208,12 @@ class TestModelsEndpoint:
         # Expected: 401 Unauthorized
         log.info("Testing: GET /v1/models without Authorization header")
         url = f"{_maas_api_url()}/v1/models"
-        r = requests.get(
-            url,
-            timeout=TIMEOUT,
-            verify=TLS_VERIFY,
-        )
+        # A plain-text proxy 500 ("Internal Server Error.") is Envoy/router
+        # mid-reload, not a maas-api answer; retry it. A 401 carrying a body is
+        # not in the transient classifier, so the expected answer returns on the
+        # first attempt; only an empty-bodied 401 (AuthPolicy not yet loaded) is
+        # retried, and that settles on a 401 too.
+        r = _request_with_gateway_retry(requests.get, url)
 
         assert r.status_code == 401, f"Expected 401 for unauthenticated request, got {r.status_code}: {r.text}"
 
@@ -2248,7 +2250,7 @@ class TestModelsEndpoint:
                 model_refs=[model_ref],
                 groups=["system:authenticated"],
             )
-            _wait_for_maas_auth_policy_phase(auth_policy_name, timeout=90)
+            _wait_for_maas_auth_policy_phase(auth_policy_name)
             _wait_for_gateway_auth_enforced()
 
             _create_test_subscription(
@@ -2258,20 +2260,18 @@ class TestModelsEndpoint:
                 token_limit=token_limit,
                 window="1m",
             )
-            _wait_for_maas_subscription_phase(subscription_name, timeout=90)
+            _wait_for_maas_subscription_phase(subscription_name)
             _wait_for_token_rate_limit_policy(
                 model_ref,
                 model_namespace=MODEL_NAMESPACE,
-                timeout=180,
                 subscription_name=subscription_name,
             )
             _wait_for_subscription_trlp_status(
                 subscription_name,
                 model=model_ref,
                 expected_ready=True,
-                timeout=180,
             )
-            _wait_for_model_ready(model_ref, namespace=MODEL_NAMESPACE, timeout=90)
+            _wait_for_model_ready(model_ref, namespace=MODEL_NAMESPACE)
 
             sa_token = _create_sa_token(sa_name, namespace=_ns())
             api_key = _create_api_key(
