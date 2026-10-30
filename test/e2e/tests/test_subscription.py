@@ -75,6 +75,7 @@ from test_helper import (
     _apply_cr,
     _create_api_key,
     _create_api_key_raw,
+    _create_api_key_with_id,
     _create_sa_token,
     _create_test_auth_policy,
     _create_test_subscription,
@@ -1555,6 +1556,7 @@ class TestRateLimitIdentityGenerations:
         trlp_name = f"maas-trlp-{model_ref}"
         legacy_key = None
         short_key = None
+        minted = []  # (owner token, key id) pairs to revoke in teardown
 
         try:
             _create_test_auth_policy(
@@ -1617,12 +1619,14 @@ class TestRateLimitIdentityGenerations:
             # Service-account tokens → API keys for both generations (old key path + short).
             legacy_token = _create_sa_token(self.LEGACY_SA, namespace=ns)
             short_token = _create_sa_token(self.SHORT_SA, namespace=ns)
-            legacy_key = _create_api_key(
+            legacy_key, legacy_key_id = _create_api_key_with_id(
                 legacy_token, name=f"legacy-{uuid.uuid4().hex[:6]}", subscription=self.LEGACY_SUB
             )
-            short_key = _create_api_key(
+            minted.append((legacy_token, legacy_key_id))
+            short_key, short_key_id = _create_api_key_with_id(
                 short_token, name=f"short-{uuid.uuid4().hex[:6]}", subscription=self.SHORT_SUB
             )
+            minted.append((short_token, short_key_id))
 
             for label, api_key in (("legacy", legacy_key), ("short", short_key)):
                 r = _poll_status(api_key, 200, path=model_path, timeout=90)
@@ -1632,12 +1636,11 @@ class TestRateLimitIdentityGenerations:
             assert _get_cr("tokenratelimitpolicy", trlp_name, namespace=MODEL_NAMESPACE), \
                 f"TRLP {trlp_name} should remain while both subscriptions exist"
         finally:
-            for key in (legacy_key, short_key):
-                if key:
-                    try:
-                        _revoke_api_key(key)
-                    except Exception as e:
-                        log.warning("revoke failed: %s", e)
+            for owner_token, key_id in minted:
+                try:
+                    _revoke_api_key(owner_token, key_id)
+                except Exception as e:
+                    log.warning("revoke failed: %s", e)
             _delete_governance_and_wait(
                 subscriptions=[
                     (self.LEGACY_SUB, ns),

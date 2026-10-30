@@ -723,6 +723,16 @@ def _create_api_key(oc_token: str, name: str = None, subscription: str = None) -
     Returns:
         The plaintext API key (sk-oai-xxx format)
     """
+    return _create_api_key_with_id(oc_token, name, subscription)[0]
+
+
+def _create_api_key_with_id(
+    oc_token: str, name: str | None = None, subscription: str | None = None
+) -> tuple[str, str | None]:
+    """Create an API key and return ``(plaintext key, key id)``.
+
+    The id is what ``_revoke_api_key`` needs; the plaintext key cannot be used to revoke.
+    """
     r = _create_api_key_raw(oc_token, name, subscription)
     if r.status_code not in (200, 201):
         detail = r.text.strip() or (
@@ -737,7 +747,7 @@ def _create_api_key(oc_token: str, name: str = None, subscription: str = None) -
         raise RuntimeError(f"API key response missing 'key' field: {data}")
 
     log.info("Created API key '%s' bound to subscription '%s'", name, subscription)
-    return api_key
+    return api_key, data.get("id")
 
 
 def _revoke_api_key(oc_token: str, key_id: str):
