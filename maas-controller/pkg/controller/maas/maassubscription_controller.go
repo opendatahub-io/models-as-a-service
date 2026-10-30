@@ -1577,9 +1577,11 @@ func (r *MaaSSubscriptionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	}
 	if !llmisvcExists {
 		if err := registerWatchWhenCRDAppears(c, mgr, llmisvcCRD, func() source.Source {
-			llmisvc := &unstructured.Unstructured{}
-			llmisvc.SetGroupVersionKind(kservev1alpha2.SchemeGroupVersion.WithKind("LLMInferenceService"))
-			return source.Kind(mgr.GetCache(), client.Object(llmisvc),
+			// Typed, matching the static path and the InferenceObjective watch below.
+			// See the equivalent comment in maasmodelref_controller.go for the full
+			// explanation: an unstructured watch and typed reads use separate informers,
+			// so events and reads have independent lag.
+			return source.Kind(mgr.GetCache(), client.Object(&kservev1alpha2.LLMInferenceService{}),
 				handler.EnqueueRequestsFromMapFunc(r.mapLLMISvcToMaaSSubscriptions),
 				llmisvcRouterStatusChangedPredicate{},
 			)
