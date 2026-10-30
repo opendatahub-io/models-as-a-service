@@ -16,19 +16,22 @@ classes rely on:
 * **Leaks** — a canary placed in the prompt comes back verbatim, so a test can
   assert exactly where it does and does not appear.
 
-Behaviour of ``llm-d-inference-sim:v0.9.0`` that shaped these tests:
+Behaviour of ``llm-d-inference-sim:v1.0.0`` that shaped these tests:
 
-* ``max_tokens`` does **not** truncate the echo; a small cap still returns the
-  whole payload.
+* ``max_tokens`` **is** enforced in echo mode (changed from v0.9.0, which ignored
+  it). Do not include ``max_tokens`` in requests where a full echo is expected —
+  omitting it causes the simulator to use the remaining context window as the cap,
+  returning the full prompt with ``finish_reason: stop``.
 * Reported ``usage`` counts whitespace-delimited words rather than bytes, so
   these tests never assert on token counts. Use the ``random`` simulators for
   token accounting.
 * The simulator rejects requests above its context window with a 400. The
-  fixture sets ``--max-model-len 131072``; ``LARGE_WORDS`` stays well inside it.
+  fixture sets ``--max-model-len 1700000``; ``LARGE_WORDS`` stays well inside it.
 """
 
 import logging
 import uuid
+from typing import Optional
 
 import pytest
 import requests
@@ -59,7 +62,7 @@ log = logging.getLogger(__name__)
 # second pass gets long, this could move to worker_tenant isolation instead.
 pytestmark = [pytest.mark.xdist_group("echo_io"), pytest.mark.serial]
 
-# ~20k words / ~108KB. Comfortably inside the fixture's 131072-token context
+# ~20k words / ~108KB. Comfortably inside the fixture's 1700000-token context
 # window while still being far larger than any default buffer the request
 # crosses on its way through the gateway.
 LARGE_WORDS = 20000
@@ -75,20 +78,26 @@ def _lorem(words: int) -> str:
     return (("lorem ipsum dolor sit amet " * ((words // 5) + 1)).strip()).rsplit(" ", 1)[0]
 
 
-def _echo_completion(api_key: str, prompt: str, max_tokens: int = 16) -> requests.Response:
+def _echo_completion(api_key: str, prompt: str, max_tokens: Optional[int] = None) -> requests.Response:
     """POST a chat completion to the echo model.
 
     Chat rather than text completions: echo mode mirrors the last *user message*,
     which only exists on the chat endpoint.
+
+    max_tokens is omitted from the request body when not provided — v1.0.0 enforces
+    it and would truncate the echo to that many tokens. Pass it only when the test
+    explicitly wants to exercise the truncation behaviour.
     """
+    body: dict = {
+        "model": ECHO_MODEL_NAME,
+        "messages": [{"role": "user", "content": prompt}],
+    }
+    if max_tokens is not None:
+        body["max_tokens"] = max_tokens
     return requests.post(
         f"{_gateway_url()}{ECHO_MODEL_PATH}/v1/chat/completions",
         headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-        json={
-            "model": ECHO_MODEL_NAME,
-            "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": max_tokens,
-        },
+        json=body,
         timeout=TIMEOUT,
         verify=TLS_VERIFY,
     )
@@ -184,12 +193,15 @@ class TestEchoFidelity:
         assert r.status_code == 200, _detail(r, echo_access)
         assert _content(r) == prompt
 
-    def test_max_tokens_does_not_truncate(self, echo_access):
-        """max_tokens must not clip the echo, or large-I/O assertions are meaningless."""
+    def test_max_tokens_is_respected(self, echo_access):
+        """v1.0.0 enforces max_tokens in echo mode; sending 1 returns exactly 1 token."""
         prompt = _lorem(500)
         r = _echo_completion(echo_access, prompt, max_tokens=1)
         assert r.status_code == 200, _detail(r, echo_access)
-        assert _content(r) == prompt
+        content = _content(r)
+        assert len(content.split()) == 1, (
+            f"expected 1 token with max_tokens=1, got {len(content.split())}: {content!r}"
+        )
 
 
 @pytest.mark.models
