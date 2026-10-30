@@ -29,7 +29,9 @@ Kuadrant renders every TRLP limit into one wasm config object per gateway, `kuad
 size ≈ limits × route_matches × listeners × hostnames × 2 actions
 ```
 
-At 19 route matches, one limit costs about 27 KB per listener. Before RHOAIENG-95277 every subscription and model pair got its own limit, and the object grew until it hit the etcd object size limit (1.5 MiB by default). Now a subscription at an existing rate adds one clause to that limit's predicate: about 80 bytes in the TRLP and about 3 KB per listener in the gateway config. A subscription at a new rate still adds a whole limit.
+At the default LLMInferenceService shape (**19 route matches**), one limit costs about 27 KB per listener. Before RHOAIENG-95277 every subscription and model pair got its own limit, and the object grew until it hit the etcd object size limit (1.5 MiB by default). Now a subscription at an existing rate adds one clause to that limit's predicate: about 80 bytes in the TRLP and about 3 KB per listener in the gateway config. A subscription at a new rate still adds a whole limit.
+
+When body-based routing is the only path clients use, you can cut each model's match count from **19 to 9** with the KServe LLMInferenceService annotation `serving.kserve.io/model-based-routing-only: "true"`. That drops the unused per-model path matches (`/{namespace}/{name}/...` and `/publishers/...`) and keeps header-based model routing. See [Reduce LLMInferenceService route matches](#reduce-llminferenceservice-route-matches).
 
 To keep the object small, reuse a small set of standard rates across subscriptions instead of giving each subscription its own numbers. Spell them the same way too: `100/1m` and `100/60s` are different rate sets.
 
@@ -215,6 +217,63 @@ kubectl get tokenratelimitpolicy -A -o json | \
 
 **Fix:** Use dedicated HTTPRoutes per model to ensure independent rate limiting.
 
+## Reduce LLMInferenceService route matches
+
+Kuadrant's gateway config size scales with **HTTPRoute matches**, not with how many `backendRef`s share a rule. A default LLMInferenceService HTTPRoute still has about **19 matches** even after Exact paths share a single backend. Ten of those matches are per-model path URLs that body-based OpenAI clients never use once IPP (or Praxis) injects the model-routing header.
+
+KServe LLMInferenceService supports an opt-in annotation that drops those path matches ([kserve/kserve#6306](https://github.com/kserve/kserve/pull/6306)):
+
+```text
+serving.kserve.io/model-based-routing-only: "true"
+```
+
+Effect on the managed HTTPRoute: about **19 → 9 matches** per model (header-based model routing kept; `/{ns}/{name}/...` and `/publishers/...` path trees removed).
+
+### Where to set it
+
+| Location | Behavior |
+|----------|----------|
+| **Gateway** annotation on every parent of the route | Applies to services that do not override it. All parents must agree. |
+| **LLMInferenceService** `spec.annotations` | Explicit `"true"` or `"false"` wins for that service (overrides Gateway). |
+
+Model-based routing must already be active for the service (`serving.kserve.io/model-based-routing-enabled: "true"` from the workload preset). Without that, the controller does not strip paths (so the route never becomes empty). Values are parsed as booleans (`strconv.ParseBool`).
+
+```bash
+kubectl annotate gateway maas-default-gateway -n openshift-ingress \
+  serving.kserve.io/model-based-routing-only=true --overwrite
+```
+
+```bash
+kubectl patch llminferenceservice my-model -n llm --type merge -p '{
+  "spec": {
+    "annotations": {
+      "serving.kserve.io/model-based-routing-only": "true"
+    }
+  }
+}'
+```
+
+### Verify
+
+```bash
+# Matches on the managed route (expect ~9 when the annotation applied)
+kubectl get httproute -n llm -o json | \
+  jq -r '.items[] | "\(.metadata.name): rules=\(.spec.rules|length) matches=\([.spec.rules[].matches[]?] | length)"'
+
+# Informational condition on the LLMInferenceService
+kubectl get llminferenceservice my-model -n llm -o jsonpath='{range .status.conditions[?(@.type=="PerModelPathsDropped")]}{.status} {.reason} {.message}{"\n"}{end}'
+```
+
+`PerModelPathsDropped=True` means per-model paths were removed. `False` reasons include `DisabledOnService`, `NotSetOnAllGateways`, `ModelBasedRoutingNotEnabled`, and `UnrecognizedValue`.
+
+### Trade-offs
+
+- Per-model path URLs stop working for that service (clients must use body-based routing with IPP/Praxis).
+- `status.url` falls back to the Gateway root rather than a path URL.
+- Off by default — existing path-based integrations keep working until you opt in.
+
+Prefer this when the tenant already standardizes on [body-based inference](../user-guide/inference.md#endpoint-overview). Combine it with [reusing a small set of rates](#gateway-config-size) for the largest EnvoyFilter / WasmPlugin savings.
+
 ## Best Practices
 
 1. **Use groups, not individual users** — assign human users to Kubernetes groups and reference groups in `owner.groups`. Reserve `owner.users` for service accounts.
@@ -223,10 +282,12 @@ kubectl get tokenratelimitpolicy -A -o json | \
 4. **Use Redis for Limitador** in production — persistent storage prevents counter resets on pod restarts and provides better visibility into counter counts. See [Limitador Persistence](limitador-persistence.md).
 5. **Use dedicated routes per model** — avoids TRLP conflicts and simplifies cardinality accounting.
 6. **Reuse a small set of rates** - every distinct rate set on a model adds a limit to the gateway wasm config, while another subscription at an existing rate adds only a predicate clause. See [Gateway Config Size](#gateway-config-size).
+7. **Prefer model-based-routing-only when using body-based routing** — drops unused LLMInferenceService path matches (~19 → ~9) so Kuadrant pays less per limit. See [Reduce LLMInferenceService route matches](#reduce-llminferenceservice-route-matches).
 
 ## Related Documentation
 
 - [Quota and Access Configuration](../configuration-and-management/quota-and-access-configuration.md) — step-by-step subscription setup including the `users` field warning
+- [Inference](../user-guide/inference.md) — body-based vs path-based client endpoints
 - [Observability](../observability/index.md) — metrics collection, TelemetryPolicy labels, and dashboard configuration
 - [Limitador Persistence](limitador-persistence.md) — configuring Redis for persistent rate-limit counters
 - [MaaSSubscription CRD Reference](../reference/crds/maas-subscription.md) — full CRD field reference

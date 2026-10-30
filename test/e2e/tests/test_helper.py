@@ -1795,21 +1795,36 @@ def _wait_for_subscription_inference_ready(
     namespace=None,
     model_namespace=MODEL_NAMESPACE,
     timeout=SUBSCRIPTION_INFERENCE_READY_TIMEOUT,
+    require_enforced_trlp=True,
 ):
-    """Wait for model discovery plus direct and mirrored TRLP enforcement."""
+    """Wait for model discovery plus direct and mirrored TRLP enforcement.
+
+    Args:
+        require_enforced_trlp: Wait for Kuadrant to report the TRLP as
+            Enforced. Keep True (default) for tests that assert rate-limit
+            behaviour (429s, exemptions, shared limits) — the limit must be
+            programmed on the gateway for those assertions to mean anything.
+            Pass False for access-matrix tests whose assertions are proven by
+            the inference request itself: Kuadrant's TRLP status updater loses
+            optimistic-concurrency races under parallel load and can leave
+            Enforced=False long after the gateway is actually serving, so
+            gating those tests on it measures Kuadrant's status writer rather
+            than the behaviour under test.
+    """
     namespace = namespace or _ns()
     _wait_for_subscription_discovery_ready(
         subscription_name,
         namespace=namespace,
         timeout=timeout,
     )
-    _wait_for_token_rate_limit_policy(
-        model_name,
-        model_namespace=model_namespace,
-        timeout=timeout,
-        subscription_name=subscription_name,
-        subscription_namespace=namespace,
-    )
+    if require_enforced_trlp:
+        _wait_for_token_rate_limit_policy(
+            model_name,
+            model_namespace=model_namespace,
+            timeout=timeout,
+            subscription_name=subscription_name,
+            subscription_namespace=namespace,
+        )
     return _wait_for_subscription_trlp_status(
         subscription_name,
         model=model_name,

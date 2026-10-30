@@ -22,7 +22,7 @@
 #   DEPLOYMENT_NAMESPACE, MAAS_SUBSCRIPTION_NAMESPACE
 #
 # Optional env vars:
-#   E2E_PARALLEL_WORKERS          pytest-xdist worker count (default: 7)
+#   E2E_PARALLEL_WORKERS          pytest-xdist worker count (default: 5)
 #   E2E_AUTHPOLICY_PHASE_TIMEOUT  seconds (default: 120, parallel only)
 #   E2E_MAAS_SUBSCRIPTION_PHASE_TIMEOUT  seconds (default: 90, parallel only)
 #   E2E_GATEWAY_ENFORCED_TIMEOUT  seconds (default: 240, parallel only)
@@ -75,7 +75,7 @@ reject_forwarded_marker_args
 
 # ── Defaults ─────────────────────────────────────────────────────────────
 export E2E_RECONCILE_WAIT="${E2E_RECONCILE_WAIT:-4}"
-E2E_PARALLEL_WORKERS="${E2E_PARALLEL_WORKERS:-7}"
+E2E_PARALLEL_WORKERS="${E2E_PARALLEL_WORKERS:-5}"
 if ! [[ "$E2E_PARALLEL_WORKERS" =~ ^[1-9][0-9]*$ ]]; then
     echo "ERROR: E2E_PARALLEL_WORKERS must be a positive integer (>= 1), got '$E2E_PARALLEL_WORKERS'" >&2
     exit 1
