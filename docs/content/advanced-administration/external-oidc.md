@@ -36,6 +36,8 @@ spec:
 | `accessTokenPurposeClaim` | No | Simple claim name carrying the access-token purpose, such as `token_use`. Must be set with `accessTokenPurpose`; required for delegated Grid administration. |
 | `accessTokenPurpose` | No | Exact value required in `accessTokenPurposeClaim`. Must be set with `accessTokenPurposeClaim`; required for delegated Grid administration. |
 | `ttl` | No | JWKS cache duration in seconds (default `300`, minimum `30`). |
+| `clientSecretRef` | No | `name` and `key` of a Secret in the tenant namespace holding the OIDC client secret for the consumer portal auth proxy. The tenant creates the Secret; ai-gateway-controller copies it next to the proxy and keeps the copy in sync. Register `https://<MaaS gateway hostname>/oauth2/callback` as the client's redirect URI. |
+| `refreshInterval` | No | How often the consumer portal auth proxy refreshes the session access token, for example `4m` (the default). Must be shorter than the identity provider's access token lifetime. |
 
 The controller propagates this configuration to the tenant's gateway-level `maas-gateway-auth` AuthPolicy in the gateway namespace. OIDC is **not** configured by patching route-level auth policies.
 

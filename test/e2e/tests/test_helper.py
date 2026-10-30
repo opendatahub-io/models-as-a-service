@@ -139,6 +139,13 @@ GATEWAY_NAMESPACE = os.environ.get("GATEWAY_NAMESPACE", "openshift-ingress")
 # matching the real traffic path for internal endpoints like /v1/tenants.
 E2E_CURL_POD_NAMESPACE = os.environ.get("E2E_CURL_POD_NAMESPACE", DEPLOYMENT_NAMESPACE)
 E2E_CURL_IMAGE = os.environ.get("E2E_CURL_IMAGE", "registry.access.redhat.com/ubi9/ubi-minimal:9.5")
+# Pinned llm-d-inference-sim used by LLMInferenceService fixtures (and the
+# tenant external model quota test's dedicated provider): --mode random
+# responses carry usage.total_tokens; --mode echo responses do not.
+LLM_D_INFERENCE_SIM_IMAGE = (
+    "ghcr.io/llm-d/llm-d-inference-sim@"
+    "sha256:c3ba435081a4d032676b218ea34eb3a1c54507da0fade2f6297f9c37894fe0d1"
+)
 E2E_CURL_CA_CONFIGMAP = os.environ.get("E2E_CURL_CA_CONFIGMAP", "")
 E2E_CURL_CA_CONFIGMAP_KEY = os.environ.get("E2E_CURL_CA_CONFIGMAP_KEY", "service-ca.crt")
 SIMULATOR_SUBSCRIPTION = os.environ.get("E2E_SIMULATOR_SUBSCRIPTION", "simulator-subscription")
@@ -532,10 +539,10 @@ def _is_transient_gateway_response(response) -> bool:
     - Empty 401/403: Envoy has not loaded the AuthPolicy yet (common after
       MaaSAuthPolicy churn; some gateways return 401 instead of 403).
     - 500 with AUTH_FAILURE: Authorino race while AuthConfig is updating.
-    - Empty or plain-text proxy 500/503 ("Internal Server Error" /
-      "Service Unavailable"): Envoy/router failure while upstream or auth
-      filters are mid-reload. Distinct from maas-api JSON errors like
-      {"error":"Failed to create API key"}.
+    - Empty, plain-text, or HTML proxy 500/503 ("Internal Server Error",
+      "Service Unavailable", "Application is not available"): Envoy/router
+      failure while upstream or auth filters are mid-reload. Distinct from
+      maas-api JSON errors like {"error":"Failed to create API key"}.
     """
     body = (response.text or "").strip()
     if response.status_code in (401, 403) and not body:
@@ -551,8 +558,13 @@ def _is_transient_gateway_response(response) -> bool:
         "Service Unavailable.",
     ):
         return True
-    if body.startswith("<") and (
-        "Internal Server Error" in body or "Service Unavailable" in body
+    if body.startswith("<") and any(
+        marker in body
+        for marker in (
+            "Internal Server Error",
+            "Service Unavailable",
+            "Application is not available",
+        )
     ):
         return True
     return False
@@ -1784,21 +1796,36 @@ def _wait_for_subscription_inference_ready(
     namespace=None,
     model_namespace=MODEL_NAMESPACE,
     timeout=SUBSCRIPTION_INFERENCE_READY_TIMEOUT,
+    require_enforced_trlp=True,
 ):
-    """Wait for model discovery plus direct and mirrored TRLP enforcement."""
+    """Wait for model discovery plus direct and mirrored TRLP enforcement.
+
+    Args:
+        require_enforced_trlp: Wait for Kuadrant to report the TRLP as
+            Enforced. Keep True (default) for tests that assert rate-limit
+            behaviour (429s, exemptions, shared limits) — the limit must be
+            programmed on the gateway for those assertions to mean anything.
+            Pass False for access-matrix tests whose assertions are proven by
+            the inference request itself: Kuadrant's TRLP status updater loses
+            optimistic-concurrency races under parallel load and can leave
+            Enforced=False long after the gateway is actually serving, so
+            gating those tests on it measures Kuadrant's status writer rather
+            than the behaviour under test.
+    """
     namespace = namespace or _ns()
     _wait_for_subscription_discovery_ready(
         subscription_name,
         namespace=namespace,
         timeout=timeout,
     )
-    _wait_for_token_rate_limit_policy(
-        model_name,
-        model_namespace=model_namespace,
-        timeout=timeout,
-        subscription_name=subscription_name,
-        subscription_namespace=namespace,
-    )
+    if require_enforced_trlp:
+        _wait_for_token_rate_limit_policy(
+            model_name,
+            model_namespace=model_namespace,
+            timeout=timeout,
+            subscription_name=subscription_name,
+            subscription_namespace=namespace,
+        )
     return _wait_for_subscription_trlp_status(
         subscription_name,
         model=model_name,
@@ -2207,7 +2234,7 @@ def _create_llmis(
                 "containers": [
                     {
                         "name": "main",
-                        "image": "ghcr.io/llm-d/llm-d-inference-sim@sha256:c3ba435081a4d032676b218ea34eb3a1c54507da0fade2f6297f9c37894fe0d1",
+                        "image": LLM_D_INFERENCE_SIM_IMAGE,
                         "command": ["/app/llm-d-inference-sim"],
                         "args": [
                             "--port", "8000",

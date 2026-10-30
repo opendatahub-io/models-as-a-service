@@ -74,6 +74,19 @@ func (r *AITenantReconciler) prepareRevocationOperands(ctx context.Context, aite
 		return false, fmt.Errorf("get MaasTenantConfig while waiting for revocation operands: %w", err)
 	}
 
+	// A terminating MaasTenantConfig can never restore the operands: its own cleanup
+	// defers until this AITenant reports API-key revocation. Waiting on it deadlocks
+	// deletion whenever both are removed together (for example the Config
+	// owner-reference cascade during teardown), so treat it like a missing owner and
+	// skip revocation explicitly instead of requeueing forever.
+	if !tenant.DeletionTimestamp.IsZero() {
+		if _, err := r.skipTenantAPIKeysRevocation(ctx, aitenant,
+			"MaasTenantConfig is terminating and cannot restore revocation operands"); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+
 	log.Info("revocation operands still not ready after MaasTenantConfig reconcile; requeueing",
 		"aitenant", aitenant.Namespace+"/"+aitenant.Name)
 	return false, nil

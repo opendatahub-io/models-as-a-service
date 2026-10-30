@@ -28,6 +28,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/yaml"
@@ -300,7 +301,8 @@ func persistAPITranslationMigrationIntent(ctx context.Context, c client.Client, 
 // wire format alone is insufficient: Azure, Vertex, and Bedrock providers can
 // use OpenAI-shaped requests while still needing provider-specific legacy
 // path or response handling. Current Praxis ExtProc does not dispatch those
-// legacy transforms after provider selection.
+// legacy transforms after provider selection. The default tenant also covers
+// the models it serves outside tenant namespaces (see tenantNamespaces).
 func legacyIPPTranslationModels(ctx context.Context, reader client.Reader, params PlatformParams, tenant client.Object) ([]string, error) {
 	namespace := params.ModelNamespace
 	if namespace == "" {
@@ -312,56 +314,70 @@ func legacyIPPTranslationModels(ctx context.Context, reader client.Reader, param
 
 	list := &unstructured.UnstructuredList{}
 	list.SetGroupVersionKind(schema.GroupVersionKind{Group: "inference.opendatahub.io", Version: "v1alpha1", Kind: "ExternalModelList"})
-	if err := reader.List(ctx, list, client.InNamespace(namespace)); err != nil {
-		return nil, fmt.Errorf("list ExternalModels in %s for legacy IPP translation compatibility: %w", namespace, err)
+	listOpts := []client.ListOption{client.InNamespace(namespace)}
+	scope := "in " + namespace
+	var tenantNS sets.Set[string]
+	if params.TenantIdentifier == "" {
+		var err error
+		if tenantNS, err = tenantNamespaces(ctx, reader); err != nil {
+			return nil, fmt.Errorf("assess legacy IPP translation compatibility: %w", err)
+		}
+		listOpts, scope = nil, "cluster-wide"
+	}
+	if err := reader.List(ctx, list, listOpts...); err != nil {
+		return nil, fmt.Errorf("list ExternalModels %s for legacy IPP translation compatibility: %w", scope, err)
 	}
 
 	var affected []string
 	for i := range list.Items {
 		model := &list.Items[i]
-		if !model.GetDeletionTimestamp().IsZero() || !externalModelTargetsGateway(model, params) {
+		if !model.GetDeletionTimestamp().IsZero() || !servedByTenant(model, namespace, tenantNS, params) {
 			continue
+		}
+		modelNamespace, label := model.GetNamespace(), model.GetName()
+		if modelNamespace != namespace {
+			label = modelNamespace + "/" + label
 		}
 		refs, found, err := unstructured.NestedSlice(model.Object, "spec", "externalProviderRefs")
 		if err != nil {
-			return nil, fmt.Errorf("read ExternalModel %s/%s provider refs: %w", namespace, model.GetName(), err)
+			return nil, fmt.Errorf("read ExternalModel %s/%s provider refs: %w", modelNamespace, model.GetName(), err)
 		}
 		if !found {
-			return nil, fmt.Errorf("ExternalModel %s/%s has no provider refs; cannot prove legacy IPP translation is unused", namespace, model.GetName())
+			return nil, fmt.Errorf("ExternalModel %s/%s has no provider refs; cannot prove legacy IPP translation is unused", modelNamespace, model.GetName())
 		}
 		for index, raw := range refs {
 			ref, ok := raw.(map[string]any)
 			if !ok {
-				return nil, fmt.Errorf("ExternalModel %s/%s provider ref %d is malformed", namespace, model.GetName(), index)
+				return nil, fmt.Errorf("ExternalModel %s/%s provider ref %d is malformed", modelNamespace, model.GetName(), index)
 			}
 			weight, err := externalProviderRefWeight(ref)
 			if err != nil {
-				return nil, fmt.Errorf("ExternalModel %s/%s provider ref %d: %w", namespace, model.GetName(), index, err)
+				return nil, fmt.Errorf("ExternalModel %s/%s provider ref %d: %w", modelNamespace, model.GetName(), index, err)
 			}
 			if weight <= 0 {
 				continue
 			}
 			apiFormat, found, err := unstructured.NestedString(ref, "apiFormat")
 			if err != nil {
-				return nil, fmt.Errorf("read ExternalModel %s/%s provider ref %d apiFormat: %w", namespace, model.GetName(), index, err)
+				return nil, fmt.Errorf("read ExternalModel %s/%s provider ref %d apiFormat: %w", modelNamespace, model.GetName(), index, err)
 			}
 			if !found || strings.TrimSpace(apiFormat) == "" {
-				return nil, fmt.Errorf("ExternalModel %s/%s provider ref %d has no apiFormat; cannot prove it is safe to migrate", namespace, model.GetName(), index)
+				return nil, fmt.Errorf("ExternalModel %s/%s provider ref %d has no apiFormat; cannot prove it is safe to migrate", modelNamespace, model.GetName(), index)
 			}
 			providerName, found, err := unstructured.NestedString(ref, "ref", "name")
 			if err != nil || !found || strings.TrimSpace(providerName) == "" {
-				affected = append(affected, fmt.Sprintf("%s (apiFormat=%s, provider unresolved)", model.GetName(), apiFormat))
+				affected = append(affected, fmt.Sprintf("%s (apiFormat=%s, provider unresolved)", label, apiFormat))
 				continue
 			}
 			providerNamespace, found, err := unstructured.NestedString(ref, "ref", "namespace")
 			if err != nil {
-				return nil, fmt.Errorf("read ExternalModel %s/%s provider ref %d namespace: %w", namespace, model.GetName(), index, err)
+				return nil, fmt.Errorf("read ExternalModel %s/%s provider ref %d namespace: %w", modelNamespace, model.GetName(), index, err)
 			}
 			if !found || strings.TrimSpace(providerNamespace) == "" {
-				providerNamespace = namespace
+				providerNamespace = modelNamespace
 			}
-			if providerNamespace != namespace {
-				affected = append(affected, fmt.Sprintf("%s (apiFormat=%s, cross-namespace provider %s/%s)", model.GetName(), apiFormat, providerNamespace, providerName))
+			if providerNamespace != modelNamespace {
+				affected = append(affected, fmt.Sprintf("%s (apiFormat=%s, cross-namespace provider %s/%s)", label, apiFormat, providerNamespace, providerName))
 				continue
 			}
 
@@ -369,23 +385,73 @@ func legacyIPPTranslationModels(ctx context.Context, reader client.Reader, param
 			provider.SetGroupVersionKind(schema.GroupVersionKind{Group: "inference.opendatahub.io", Version: "v1alpha1", Kind: "ExternalProvider"})
 			if err := reader.Get(ctx, client.ObjectKey{Namespace: providerNamespace, Name: providerName}, provider); err != nil {
 				if apierrors.IsNotFound(err) {
-					affected = append(affected, fmt.Sprintf("%s (apiFormat=%s, provider %s unresolved)", model.GetName(), apiFormat, providerName))
+					affected = append(affected, fmt.Sprintf("%s (apiFormat=%s, provider %s unresolved)", label, apiFormat, providerName))
 					continue
 				}
-				return nil, fmt.Errorf("read ExternalProvider %s/%s for ExternalModel %s/%s: %w", providerNamespace, providerName, namespace, model.GetName(), err)
+				return nil, fmt.Errorf("read ExternalProvider %s/%s for ExternalModel %s/%s: %w", providerNamespace, providerName, modelNamespace, model.GetName(), err)
 			}
 			providerType, found, err := unstructured.NestedString(provider.Object, "spec", "provider")
 			if err != nil || !found || strings.TrimSpace(providerType) == "" {
-				affected = append(affected, fmt.Sprintf("%s (apiFormat=%s, provider %s has unknown type)", model.GetName(), apiFormat, providerName))
+				affected = append(affected, fmt.Sprintf("%s (apiFormat=%s, provider %s has unknown type)", label, apiFormat, providerName))
 				continue
 			}
 			if apiFormat != "openai-chat" || providerType != "openai" {
-				affected = append(affected, fmt.Sprintf("%s (apiFormat=%s, provider=%s)", model.GetName(), apiFormat, providerType))
+				affected = append(affected, fmt.Sprintf("%s (apiFormat=%s, provider=%s)", label, apiFormat, providerType))
 			}
 		}
 	}
 	sort.Strings(affected)
 	return affected, nil
+}
+
+// servedByTenant reports whether the tenant serves the model: from its own
+// namespace through its Gateway or, for the default tenant (non-nil
+// tenantNS), as a model without gatewayRefs outside tenant namespaces. A model
+// outside them that names a Gateway never used legacy IPP translation: IPP
+// withdraws its route and skips it, and ai-gateway-controller attaches it only
+// to a tenant that selects Praxis. Unlike ai-gateway-controller's implicit
+// attachment, a model holding its home-tenant finalizer is still counted,
+// which errs toward blocking the migration. The shared AppNamespace is out of
+// scope, as for IPP route cleanup. Malformed placement fails closed.
+func servedByTenant(model *unstructured.Unstructured, namespace string, tenantNS sets.Set[string], params PlatformParams) bool {
+	if model.GetNamespace() == namespace {
+		return externalModelTargetsGateway(model, params)
+	}
+	if model.GetNamespace() == params.AppNamespace {
+		return false
+	}
+	refs, found, err := unstructured.NestedSlice(model.Object, "spec", "gatewayRefs")
+	return tenantNS != nil && !tenantNS.Has(model.GetNamespace()) && (err != nil || !found || len(refs) == 0)
+}
+
+// tenantNamespaces returns the namespaces that hold a MaasTenantConfig or that
+// an AITenant claims. The default tenant also serves the ExternalModels without
+// gatewayRefs of every other namespace: ai-gateway-controller attaches them to
+// its Gateway (RHOAIENG-101754), as its IPP served every namespace. Its
+// IPP-to-Praxis migration therefore covers those models too. The CRD admits
+// only the MaasTenantConfig named default-tenant, so any MaasTenantConfig
+// marks a tenant namespace. Claims come from AITenant status.tenantNamespace,
+// as ai-gateway-controller reads them, so both agree on which namespaces are
+// unclaimed.
+func tenantNamespaces(ctx context.Context, reader client.Reader) (sets.Set[string], error) {
+	configs := &maasv1alpha1.MaasTenantConfigList{}
+	if err := reader.List(ctx, configs); err != nil {
+		return nil, fmt.Errorf("list MaasTenantConfigs: %w", err)
+	}
+	aitenants := &maasv1alpha1.AITenantList{}
+	if err := reader.List(ctx, aitenants); err != nil {
+		return nil, fmt.Errorf("list AITenants: %w", err)
+	}
+	namespaces := sets.New[string]()
+	for i := range configs.Items {
+		namespaces.Insert(configs.Items[i].Namespace)
+	}
+	for i := range aitenants.Items {
+		if namespace := aitenants.Items[i].Status.TenantNamespace; namespace != "" {
+			namespaces.Insert(namespace)
+		}
+	}
+	return namespaces, nil
 }
 
 func externalProviderRefWeight(ref map[string]any) (int64, error) {

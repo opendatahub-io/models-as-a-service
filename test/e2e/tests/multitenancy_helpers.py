@@ -61,6 +61,7 @@ DEFAULT_AITENANT_NAME = "models-as-a-service"
 
 FINALIZER_SUBSCRIPTION = "maas.opendatahub.io/subscription-cleanup"
 FINALIZER_AUTHPOLICY = "maas.opendatahub.io/authpolicy-cleanup"
+FINALIZER_TENANT_CLEANUP = "maas.opendatahub.io/tenant-cleanup"
 
 GATEWAY_AUTH_POLICY_NAME = "maas-gateway-auth"
 
@@ -117,6 +118,27 @@ def external_oidc_from_env() -> Optional[dict[str, str]]:
     return {
         "issuerUrl": issuer,
         "clientId": os.environ.get("OIDC_CLIENT_ID", "test-client"),
+    }
+
+
+def tenant_b_external_oidc_from_env() -> Optional[dict[str, str]]:
+    """Return the tenant-b OIDC config used by tenant-isolation tests."""
+    if not env_bool("EXTERNAL_OIDC"):
+        return None
+
+    issuer = os.environ.get("OIDC_ISSUER_URL_TENANT_B", "")
+    if not issuer:
+        default_issuer = os.environ.get("OIDC_ISSUER_URL", "")
+        if "tenant-a" not in default_issuer:
+            raise RuntimeError(
+                "Tenant-isolation OIDC requires OIDC_ISSUER_URL_TENANT_B, or an "
+                f"OIDC_ISSUER_URL containing 'tenant-a' (got {default_issuer!r})"
+            )
+        issuer = default_issuer.replace("tenant-a", "tenant-b")
+
+    return {
+        "issuerUrl": issuer,
+        "clientId": os.environ.get("OIDC_CLIENT_ID_TENANT_B", "test-client"),
     }
 
 
@@ -746,7 +768,10 @@ def cluster_domain_from_default_route() -> str:
     raise RuntimeError(f"could not determine cluster apps domain from routes in {GATEWAY_NAMESPACE}")
 
 
-def wait_for_gateway_programmed(gateway_name: str, *, timeout: int = 180) -> None:
+def wait_for_gateway_programmed(gateway_name: str, *, timeout: int = 300) -> None:
+    # 300s: on a fresh cluster the first per-tenant gateway reconcile waits
+    # on cold image pulls and istiod warm-up; the second tenant can exceed
+    # a tighter window even though nothing is wrong.
     result = _oc_run(
         [
             "wait",
@@ -1002,11 +1027,13 @@ def ensure_payload_processing_type_on_tenant_config(
         )
 
 
-def apply_aitenant(case: dict[str, str]) -> None:
+def apply_aitenant(
+    case: dict[str, str], external_oidc: Optional[dict[str, str]] = None
+) -> None:
     spec: dict[str, Any] = {
         "gateway": {"name": case["gateway_name"]},
     }
-    oidc = external_oidc_from_env()
+    oidc = external_oidc if external_oidc is not None else external_oidc_from_env()
     if oidc:
         spec["oidc"] = oidc
 
@@ -1057,6 +1084,7 @@ def bootstrap_aitenant_tenant(
     use_default_gateway: bool = False,
     payload_processing_type: Optional[str] = None,
     dual_http_listener: bool = False,
+    external_oidc: Optional[dict[str, str]] = None,
 ) -> None:
     if not use_default_gateway:
         apply_gateway_fixture(
@@ -1066,7 +1094,7 @@ def bootstrap_aitenant_tenant(
         )
         wait_for_gateway_programmed(case["gateway_name"])
         apply_gateway_route_fixture(case["gateway_name"], fixture_label=case["tenant_label_name"])
-    apply_aitenant(case)
+    apply_aitenant(case, external_oidc=external_oidc)
     wait_for_json(AITENANT_KIND, case["tenant_label_name"], AITENANT_NAMESPACE, predicate=aitenant_ready)
     wait_for_json(
         "maastenantconfig",

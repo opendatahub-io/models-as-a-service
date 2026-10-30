@@ -119,6 +119,23 @@ replaces it with the Praxis plugins schema; re-apply any still-needed
 customizations in the Praxis ConfigMap shape afterward. An override does not
 establish parity for Azure, Vertex, Bedrock, OpenAI variants, streaming, or
 other provider behavior without matching deployed evidence.
+
+## ExternalModels outside tenant namespaces
+
+In 3.5 the default tenant served ExternalModels in every namespace. 3.6 keeps
+that behavior: ai-gateway-controller serves an ExternalModel without
+`spec.gatewayRefs`, in a namespace with no `MaasTenantConfig` that no
+`AITenant` claims, through the default tenant's Gateway
+(`AITenant/models-as-a-service`) without changing its spec
+([RHOAIENG-101754](https://redhat.atlassian.net/browse/RHOAIENG-101754)). Its
+HTTPRoute stays in the model namespace, so the Gateway listener's
+`allowedRoutes` must still admit that namespace, as in 3.5. `auth.type: simple`
+is served as `apikey`. While the default tenant selects IPP, IPP keeps serving
+these models.
+
+When the default tenant switches to Praxis, the compatibility check above and
+the cleanup of IPP-owned HTTPRoutes also cover these models, not only those in
+the tenant namespace.
 ## Legacy metrics usage dashboard is opt-in
 
 `Config.spec.usageMetricsDashboard` defaults to `false`. After upgrade, the operator removes any controller-owned copy of the Prometheus-based Perses dashboard (`dashboard-3-maas-usage-admin`). To keep it:

@@ -179,7 +179,7 @@ func TestGatewayAuthPolicySpec_AllCEL_RHCLCompatible(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			spec := r.buildGatewayAuthPolicySpec(
-				tc.oidc, tc.xAPIKeyEnabled, tc.tenantID, tc.tenantName, tc.gatewayNS, tc.gatewayName,
+				tc.oidc, tc.xAPIKeyEnabled, tc.tenantID, tc.tenantName, tc.gatewayNS, tc.gatewayName, nil,
 			)
 			assertAllAuthPolicyCEL_RHCLCompatible(t, spec)
 		})
