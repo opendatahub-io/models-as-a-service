@@ -43,6 +43,16 @@ spec:
       env:
       - name: EXTERNAL_OIDC
         value: "true"
+      # Consumer portal (RHAI-10609): maas e2e lanes run DEPLOY_MODE=kustomize,
+      # which sets the DSC aigateway component to Removed, so this lane
+      # deploys the ai-gateway-controller itself. MAAS_PORTAL defaults to
+      # EXTERNAL_OIDC, turning on the portal enablement (stand-in Service,
+      # credentials Secret, AIGC deploy) in deploy-platform.sh. The image
+      # defaults to the published stable tag; override for one-off runs.
+      # Bump AIGC_COMMIT in test/e2e/scripts/deploy-maas-portal.sh alongside
+      # this when the manifests need to move.
+      - name: AI_GATEWAY_CONTROLLER_IMAGE
+        value: "quay.io/opendatahub/odh-ai-gateway-controller:odh-stable"
       - name: E2E_PARALLEL_WORKERS
         value: "1"
       # Passes 1-2 already run in /group-test; run only the OIDC tests here.
