@@ -202,9 +202,10 @@ count_pytest_collected() {
     set +e
     summary=$( "$@" --collect-only -q 2>&1 | tail -1 )
     set -e
-    if [[ "$summary" =~ ([0-9]+)/[0-9]+\ tests\ collected ]]; then
+    # Pytest uses "test" for a single collected item and "tests" otherwise.
+    if [[ "$summary" =~ ([0-9]+)/[0-9]+\ tests?\ collected ]]; then
         collected="${BASH_REMATCH[1]}"
-    elif [[ "$summary" =~ ([0-9]+)\ tests\ collected ]]; then
+    elif [[ "$summary" =~ ([0-9]+)\ tests?\ collected ]]; then
         collected="${BASH_REMATCH[1]}"
     elif [[ "$summary" != *"no tests collected"* ]]; then
         echo "WARNING: could not parse pytest collection summary: ${summary}" >&2
