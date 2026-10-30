@@ -8,16 +8,15 @@ resources:
 # duplicate metrics. The install-observability.sh script conditionally deploys it
 # only when Kuadrant observability is disabled.
 #
-# NOTE: authorino-server-metrics-servicemonitor.yaml is also conditional — deployed
-# by the controller, or by install-observability.sh when Config/default is absent.
+# NOTE: authorino-server-metrics-servicemonitor.yaml is deployed by maas-controller
+# into the DSCI monitoring namespace, gated on Config.spec.authorinoMonitoring.
 #
 # NOTE: istio-gateway-service.yaml and istio-gateway-servicemonitor.yaml are NOT
 # included here. They are applied conditionally by install-observability.sh only
 # when the gateway deployment exists.
 #
-# NOTE: Authorino PrometheusRules are also conditional. The controller and the
-# standalone install script apply them in the DSCI monitoring namespace, using
-# monitoring.rhobs/v1 and OTEL-normalized metric names.
+# NOTE: Authorino PrometheusRules are applied by maas-controller in the DSCI
+# monitoring namespace, using monitoring.rhobs/v1 and OTEL-normalized metric names.
 - gateway-telemetry-policy.yaml
 - istio-gateway-telemetry.yaml
 

@@ -13,7 +13,7 @@
 set -euo pipefail
 
 # Preflight checks
-for cmd in kubectl kustomize yq; do
+for cmd in kubectl kustomize; do
     if ! command -v "$cmd" &>/dev/null; then
         echo "❌ Required command '$cmd' not found. Please install it first."
         exit 1
@@ -82,30 +82,9 @@ else
     echo "   ⚠️  Istio Gateway not found - skipping Istio metrics"
 fi
 
-echo ""
-echo "3️⃣ Configuring Authorino monitoring..."
-
-# The controller uses these same manifests and respects Config.spec.authorinoMonitoring.
-# Never bypass the feature gate or create a second scrape target in operator-managed mode.
-if kubectl get configs.maas.opendatahub.io default &>/dev/null; then
-    echo "   ℹ️  Config/default exists - maas-controller manages Authorino monitoring"
-else
-    MONITORING_NAMESPACE="$(kubectl get dscinitialization -o jsonpath='{.items[0].spec.monitoring.namespace}' 2>/dev/null || true)"
-    if [[ -z "$MONITORING_NAMESPACE" ]]; then
-        echo "   ⚠️  DSCI monitoring namespace not configured - skipping Authorino monitoring"
-    elif ! kubectl get deploy -n kuadrant-system authorino &>/dev/null && \
-         ! kubectl get deploy -n rh-connectivity-link authorino &>/dev/null; then
-        echo "   ⚠️  Authorino deployment not found - skipping Authorino monitoring"
-    else
-        for manifest in authorino-server-metrics-servicemonitor.yaml \
-                        authorino-maas-metadata-evaluator-prometheusrule.yaml \
-                        authorino-maas-oidc-prometheusrule.yaml; do
-            yq eval ".metadata.namespace = \"$MONITORING_NAMESPACE\"" \
-                "$BASE_OBSERVABILITY_DIR/$manifest" | kubectl apply -f -
-        done
-        echo "   ✅ Authorino monitor and monitoring.rhobs rules deployed in $MONITORING_NAMESPACE"
-    fi
-fi
+# Authorino monitoring is owned by maas-controller via Config.spec.authorinoMonitoring.
+# This script deliberately does not apply it: Config/default always exists once the
+# controller is running, so a second apply here would only fight the controller.
 
 # ==========================================
 # Summary
@@ -122,7 +101,8 @@ echo "   Authorino: auth_server_authconfig_duration_seconds, auth_server_authcon
 echo "   Istio:     istio_requests_total, istio_request_duration_milliseconds"
 echo ""
 
-echo "🚨 Alerting configured (if Authorino found):"
+echo "🚨 Authorino alerts are managed by maas-controller via"
+echo "   Config.spec.authorinoMonitoring (enabled by default):"
 echo "   MaaSAuthorinoMetadataEvaluatorHighFailureRate - maas-api metadata call failure rate above configured threshold"
 echo "   MaaSAuthorinoAuthenticationHighFailureRate - gateway authentication failure rate above configured threshold"
 echo "   MaaSAuthorinoAuthenticationHighLatency - gateway authentication P95 latency above configured threshold"

@@ -122,10 +122,9 @@ are preserved. Missing COO `monitoring.rhobs` CRDs are tolerated and their insta
 triggers reconciliation. The core OpenShift `monitoring.coreos.com` API is required.
 
 These resources do not require user-workload monitoring (UWM). The controller
-loads the manifests from `deployment/base/observability/`. For standalone setups
-without `Config/default`, `install-observability.sh` applies the same manifests
-in the DSCI monitoring namespace. When Config exists, the script leaves Authorino
-monitoring to the controller and respects the feature gate.
+loads the manifests from `deployment/base/observability/`.
+`install-observability.sh` does not apply them — Authorino monitoring is
+controller-owned in every mode.
 
 #### Logs-based usage dashboards
 

@@ -101,9 +101,9 @@ How you remove resources depends on how they were applied. `./scripts/observabil
 | Resource | When |
 |----------|------|
 | Limitador `ServiceMonitor` (`limitador-metrics`) | Kuadrant is not already scraping Limitador `/metrics` |
-| Authorino `ServiceMonitor` (`authorino-server-metrics`) | No `Config/default` exists, and DSCI monitoring and Authorino are available |
 | Gateway `Service` + `ServiceMonitor` (`istio-gateway-metrics`) | Gateway Deployment exists in `openshift-ingress` |
-| PrometheusRules (`authorino-maas-metadata-evaluator-high-failure-rate`, `authorino-maas-authentication-alerts`) | No `Config/default` exists, and DSCI monitoring and Authorino are available |
+
+The Authorino `ServiceMonitor` and PrometheusRules are not applied by the script. They are owned by maas-controller and gated on `Config.spec.authorinoMonitoring` — see [Authorino monitoring](#authorino-monitoring) below.
 
 #### PersesDashboard ownership
 
@@ -174,17 +174,27 @@ kubectl delete telemetry -n openshift-ingress latency-per-subscription
 # Conditional: Limitador ServiceMonitor (only if the script deployed it)
 kubectl delete servicemonitor -n kuadrant-system limitador-metrics --ignore-not-found
 
-# Conditional: Authorino /server-metrics ServiceMonitor
-kubectl delete servicemonitor -n <monitoring-namespace> authorino-server-metrics --ignore-not-found
-
 # Conditional: Istio Gateway metrics
 kubectl delete servicemonitor,service -n openshift-ingress istio-gateway-metrics --ignore-not-found
-
-# Conditional: DSCI PrometheusRules
-kubectl delete prometheusrules.monitoring.rhobs -n <monitoring-namespace> \
-  authorino-maas-metadata-evaluator-high-failure-rate \
-  authorino-maas-authentication-alerts --ignore-not-found
 ```
+
+#### Authorino monitoring
+
+The Authorino `ServiceMonitor` (`authorino-server-metrics`) and the PrometheusRules
+(`authorino-maas-metadata-evaluator-high-failure-rate`, `authorino-maas-authentication-alerts`)
+are owned by maas-controller through an `ownerReference` on `Config/default`. Deleting
+them by hand does not work — the controller recreates them on the next reconcile.
+
+Turn them off through the feature gate instead:
+
+```bash
+kubectl patch configs.maas.opendatahub.io default --type=merge \
+  -p '{"spec":{"authorinoMonitoring":false}}'
+```
+
+The controller then removes the resources it owns. Resources it does not own —
+Authorino itself, and any monitoring objects applied independently — are preserved.
+Deleting `Config/default` garbage-collects them as well.
 
 ### Troubleshooting Missing Metrics
 
