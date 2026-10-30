@@ -29,6 +29,17 @@ echo "Deleting tenant: $TENANT_NAME"
 echo "  Deleting AITenant CR..."
 kubectl delete aitenant "$TENANT_NAME" -n "$AITENANT_NAMESPACE" --ignore-not-found=true --wait=false
 
+# Clear the default-tenant bootstrap marker on the Config CR. maas-controller
+# only (re)creates the default AITenant when this annotation is absent, so a
+# teardown that deletes the tenant without clearing it leaves the controller
+# believing the tenant was already bootstrapped — a redeploy then hangs
+# forever waiting for maas-api.
+if [[ "$TENANT_NAME" == "models-as-a-service" ]]; then
+    echo "  Clearing default-aitenant-bootstrapped annotation on Config..."
+    kubectl annotate configs.maas.opendatahub.io default \
+        maas.opendatahub.io/default-aitenant-bootstrapped- --ignore-not-found=true
+fi
+
 # Delete Gateway infrastructure
 echo "  Deleting Gateway..."
 kubectl delete gateway "$TENANT_NAME" -n "$GATEWAY_NAMESPACE" --ignore-not-found=true
