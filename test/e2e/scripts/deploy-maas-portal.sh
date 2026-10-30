@@ -125,6 +125,41 @@ echo "Consumer portal e2e enablement: infra namespace ${INFRA_NAMESPACE}, applic
 # --- 0. ai-gateway-controller (kustomize-mode lanes have none) ---
 deploy_ai_gateway_controller
 
+# --- 0.5. Gateway listener hostname + passthrough Route -----------------------
+# The portal controller requires a concrete HTTPS listener hostname on the
+# Gateway (OIDC callback URL, route hostname). Kustomize-mode deploys the
+# Gateway without one — the OpenShift Route carries the external host — so
+# patch it from the cluster domain. The Route must also be passthrough:
+# reencrypt re-encrypts with the backend Service name as SNI, which matches
+# no filter chain once the listener has a concrete hostname.
+GATEWAY_LISTENER_HOSTNAME="$(kubectl get gateway "${GATEWAY_NAME}" -n "${GATEWAY_NAMESPACE}" \
+    -o jsonpath='{.spec.listeners[0].hostname}' 2>/dev/null || true)"
+CLUSTER_DOMAIN="$(oc get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}')"
+PORTAL_HOSTNAME="${PORTAL_HOSTNAME:-maas.${CLUSTER_DOMAIN}}"
+if [[ -z "${GATEWAY_LISTENER_HOSTNAME}" ]]; then
+    LISTENER_JSON="$(kubectl get gateway "${GATEWAY_NAME}" -n "${GATEWAY_NAMESPACE}" -o json)"
+    LISTENER_PATCH="$(python3 -c "
+import json,sys
+gw=json.loads('''${LISTENER_JSON}''')
+listeners=[]
+for l in gw['spec']['listeners']:
+    if not l.get('hostname'):
+        l['hostname']='${PORTAL_HOSTNAME}'
+    listeners.append(l)
+print(json.dumps({'spec':{'listeners':listeners}}))" 2>/dev/null || true)"
+    if [[ -n "${LISTENER_PATCH}" ]]; then
+        echo "Patching Gateway ${GATEWAY_NAMESPACE}/${GATEWAY_NAME} listener hostname to ${PORTAL_HOSTNAME}"
+        kubectl patch gateway "${GATEWAY_NAME}" -n "${GATEWAY_NAMESPACE}" --type=merge -p "${LISTENER_PATCH}"
+    fi
+fi
+ROUTE_TERMINATION="$(kubectl get route maas-gateway-route -n openshift-ingress \
+    -o jsonpath='{.spec.tls.termination}' 2>/dev/null || true)"
+if [[ "${ROUTE_TERMINATION}" == "reencrypt" ]]; then
+    echo "Switching maas-gateway-route to passthrough so the client SNI reaches the Gateway"
+    kubectl patch route maas-gateway-route -n openshift-ingress --type=merge \
+        -p '{"spec":{"tls":{"termination":"passthrough","insecureEdgeTerminationPolicy":"Redirect","destCACertificate":null}}}'
+fi
+
 # --- 1. Stand-in maas-portal Service (unblocks the controller's route gate) ---
 # The applications namespace is normally created by the RHOAI dashboard,
 # which e2e does not install (dashboard: Removed in the DSC).
@@ -179,7 +214,9 @@ echo "Created stand-in maas-portal Service in ${APPLICATIONS_NAMESPACE}"
 # Without spec.oidc.clientSecretRef on the AITenant, the controller uses this
 # Secret verbatim, so the client id here may differ from the AITenant's
 # spec.oidc.clientId (which maas-api validates JWTs against).
-COOKIE_SECRET="$(openssl rand -base64 32)"
+# oauth2-proxy requires the cookie secret to be exactly 16, 24, or 32 bytes;
+# hex output of 16 random bytes is a 32-character string.
+COOKIE_SECRET="$(openssl rand -hex 16)"
 sed \
     -e "s|CREDENTIALS_SECRET_NAME|${CREDENTIALS_SECRET_NAME}|g" \
     -e "s|CLIENT_ID_PLACEHOLDER|${MAAS_PORTAL_CLIENT_ID}|g" \
