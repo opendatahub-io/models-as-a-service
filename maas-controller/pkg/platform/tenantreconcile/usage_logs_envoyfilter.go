@@ -10,6 +10,7 @@ import (
 // usageLogsServiceNamespaceAttr is the OTel resource attribute carrying the namespace that
 // usage log records are attributed to.
 const usageLogsServiceNamespaceAttr = "service.namespace"
+const usageLogsTenantNameAttr = "tenant_name"
 
 // otelAccessLoggerName is the Envoy access logger that carries resource_attributes.
 // HttpConnectionManager.access_log is a repeated field, and resource_attributes exists only
@@ -70,6 +71,56 @@ func PatchUsageLogsServiceNamespace(ef *unstructured.Unstructured, namespace str
 				continue
 			}
 			if err := appendUsageLogsResourceAttribute(accessLogEntry, usageLogsServiceNamespaceAttr, namespace); err != nil {
+				return err
+			}
+			patched = true
+		}
+	}
+	if !patched {
+		return fmt.Errorf("no %s access_log entry found in configPatches", otelAccessLoggerName)
+	}
+	return nil
+}
+
+// PatchUsageLogsProducerScope appends the authoritative tenant resource attribute.
+// Its value comes from the reconciled tenant, never from request headers.
+func PatchUsageLogsProducerScope(ef *unstructured.Unstructured, tenantName string) error {
+	if tenantName == "" {
+		return errors.New("tenant name must not be empty")
+	}
+
+	raw, found, err := unstructured.NestedFieldNoCopy(ef.Object, "spec", "configPatches")
+	if err != nil {
+		return fmt.Errorf("read configPatches: %w", err)
+	}
+	configPatches, ok := raw.([]any)
+	if !found || !ok || len(configPatches) == 0 {
+		return errors.New("configPatches not found or empty")
+	}
+
+	patched := false
+	for _, cp := range configPatches {
+		patch, ok := cp.(map[string]any)
+		if !ok {
+			continue
+		}
+		accessLogRaw, found, err := unstructured.NestedFieldNoCopy(patch, "patch", "value", "typed_config", "access_log")
+		if err != nil {
+			return fmt.Errorf("read access_log: %w", err)
+		}
+		accessLog, ok := accessLogRaw.([]any)
+		if !found || !ok {
+			continue
+		}
+		for i, entry := range accessLog {
+			accessLogEntry, ok := entry.(map[string]any)
+			if !ok {
+				return fmt.Errorf("access_log[%d] is not an object", i)
+			}
+			if name, _, _ := unstructured.NestedString(accessLogEntry, "name"); name != otelAccessLoggerName {
+				continue
+			}
+			if err := appendUsageLogsResourceAttribute(accessLogEntry, usageLogsTenantNameAttr, tenantName); err != nil {
 				return err
 			}
 			patched = true

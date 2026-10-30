@@ -7,6 +7,7 @@ import (
 	"github.com/go-logr/logr"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
@@ -113,6 +114,16 @@ func TestPatchAuthPolicyWithOIDCTokenContract(t *testing.T) {
 }
 
 func TestBuildTelemetryLabels(t *testing.T) {
+	telemetryTenant := &maasv1alpha1.MaasTenantConfig{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      maasv1alpha1.MaasTenantConfigInstanceName,
+			Namespace: "models-as-a-service",
+			Labels: map[string]string{
+				LabelTenantName:      "models-as-a-service",
+				LabelTenantNamespace: "models-as-a-service",
+			},
+		},
+	}
 	tests := []struct {
 		name           string
 		config         *maasv1alpha1.TenantTelemetryConfig
@@ -123,12 +134,14 @@ func TestBuildTelemetryLabels(t *testing.T) {
 			name:   "nil config uses defaults",
 			config: nil,
 			expectedLabels: map[string]any{
-				"subscription":    "auth.identity.selected_subscription",
-				"cost_center":     `has(auth.identity.subscription_info.costCenter) ? auth.identity.subscription_info.costCenter : ""`,
-				"organization_id": `has(auth.identity.subscription_info.organizationId) ? auth.identity.subscription_info.organizationId : ""`,
-				"model":           "responseBodyJSON(\"/model\")",
+				"tenant_name":      `"models-as-a-service"`,
+				"tenant_namespace": `"models-as-a-service"`,
+				"subscription":     "auth.identity.selected_subscription",
+				"cost_center":      `has(auth.identity.subscription_info.costCenter) ? auth.identity.subscription_info.costCenter : ""`,
+				"organization_id":  `has(auth.identity.subscription_info.organizationId) ? auth.identity.subscription_info.organizationId : ""`,
+				"model":            "responseBodyJSON(\"/model\")",
 			},
-			absentKeys: []string{"user", "group"},
+			absentKeys: []string{"user", "group", "subscription_namespace"},
 		},
 		{
 			name: "captureGroup true emits groups_str path",
@@ -190,19 +203,21 @@ func TestBuildTelemetryLabels(t *testing.T) {
 				},
 			},
 			expectedLabels: map[string]any{
-				"subscription":    "auth.identity.selected_subscription",
-				"cost_center":     `has(auth.identity.subscription_info.costCenter) ? auth.identity.subscription_info.costCenter : ""`,
-				"organization_id": `has(auth.identity.subscription_info.organizationId) ? auth.identity.subscription_info.organizationId : ""`,
-				"user":            "auth.identity.userid",
-				"group":           "auth.identity.groups_str",
-				"model":           "responseBodyJSON(\"/model\")",
+				"tenant_name":      `"models-as-a-service"`,
+				"tenant_namespace": `"models-as-a-service"`,
+				"subscription":     "auth.identity.selected_subscription",
+				"cost_center":      `has(auth.identity.subscription_info.costCenter) ? auth.identity.subscription_info.costCenter : ""`,
+				"organization_id":  `has(auth.identity.subscription_info.organizationId) ? auth.identity.subscription_info.organizationId : ""`,
+				"user":             "auth.identity.userid",
+				"group":            "auth.identity.groups_str",
+				"model":            "responseBodyJSON(\"/model\")",
 			},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			labels := buildTelemetryLabels(logr.Discard(), tt.config)
+			labels := buildTelemetryLabels(logr.Discard(), tt.config, telemetryTenant)
 
 			for k, v := range tt.expectedLabels {
 				assert.Equal(t, v, labels[k], "label %q", k)
@@ -212,6 +227,80 @@ func TestBuildTelemetryLabels(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestConfigureTelemetryPolicyResourcesIncludesProducerScope(t *testing.T) {
+	tenant := &maasv1alpha1.MaasTenantConfig{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      maasv1alpha1.MaasTenantConfigInstanceName,
+			Namespace: "ai-tenant-redteam",
+			Labels: map[string]string{
+				LabelTenantName:      "redteam",
+				LabelTenantNamespace: "ai-tenant-redteam",
+			},
+		},
+	}
+	var resources []unstructured.Unstructured
+	params := PlatformParams{
+		GatewayNamespace: "openshift-ingress",
+		GatewayName:      "redteam",
+		TenantIdentifier: "redteam",
+	}
+
+	require.NoError(t, configureTelemetryPolicyResources(logr.Discard(), tenant, &resources, params))
+	require.Len(t, resources, 1)
+
+	labels, found, err := unstructured.NestedMap(resources[0].Object,
+		"spec", "metrics", "default", "labels")
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, `"redteam"`, labels["tenant_name"])
+	assert.Equal(t, `"ai-tenant-redteam"`, labels["tenant_namespace"])
+	assert.Equal(t, "auth.identity.selected_subscription", labels["subscription"])
+	assert.NotContains(t, labels, "subscription_namespace")
+	assert.Contains(t, labels, "organization_id")
+}
+
+func TestBuildIstioTelemetryTagOverridesIncludesProducerScope(t *testing.T) {
+	tenant := &maasv1alpha1.MaasTenantConfig{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      maasv1alpha1.MaasTenantConfigInstanceName,
+			Namespace: "ai-tenant-redteam",
+			Labels:    map[string]string{LabelTenantName: "redteam"},
+		},
+	}
+	overrides := buildIstioTelemetryTagOverrides(tenant, nil)
+	assert.Equal(t, map[string]any{
+		"operation": "UPSERT",
+		"value":     `"redteam"`,
+	}, overrides["tenant_name"])
+	assert.Equal(t, map[string]any{
+		"operation": "UPSERT",
+		"value":     `"ai-tenant-redteam"`,
+	}, overrides["tenant_namespace"])
+	assert.Equal(t, map[string]any{
+		"operation": "UPSERT",
+		"value":     `request.headers["x-maas-subscription"]`,
+	}, overrides["subscription"])
+	assert.NotContains(t, overrides, "subscription_namespace")
+	assert.Equal(t, map[string]any{
+		"operation": "UPSERT",
+		"value":     `request.headers["x-maas-organization-id"]`,
+	}, overrides["organization_id"])
+	assert.NotContains(t, overrides, "user")
+
+	overrides = buildIstioTelemetryTagOverrides(tenant, &maasv1alpha1.TenantTelemetryConfig{
+		Metrics: &maasv1alpha1.TenantMetricsConfig{CaptureUser: boolPtr(true)},
+	})
+	assert.NotContains(t, overrides, "user")
+
+	overrides = buildIstioTelemetryTagOverrides(tenant, &maasv1alpha1.TenantTelemetryConfig{
+		Metrics: &maasv1alpha1.TenantMetricsConfig{CaptureOrganization: boolPtr(false)},
+	})
+	assert.NotContains(t, overrides, "organization_id")
+
+	overrides = buildIstioTelemetryTagOverrides(tenant, nil)
+	assert.NotContains(t, overrides, "user")
 }
 
 func TestConfigurePayloadProcessingHPA(t *testing.T) {

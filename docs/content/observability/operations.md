@@ -265,7 +265,7 @@ curl -s -H "Authorization: Bearer $(oc whoami -t)" --get \
   jq '.data.result[] | {metric: .metric.__name__, series: .value[1]}'
 ```
 
-Watch: `authorized_hits_total{user!=""}`, `authorized_calls_total{user!=""}`, `istio_request_duration_milliseconds_bucket{subscription!=""}`.
+Watch: `authorized_hits_total{user!="",organization_id!="",tenant_name!="",tenant_namespace!="",subscription!=""}`, `authorized_calls_total{user!="",organization_id!="",tenant_name!="",tenant_namespace!="",subscription!=""}`, and `istio_request_duration_milliseconds_bucket{tenant_name!="",tenant_namespace!="",subscription!=""}`. Empty scope labels identify incomplete or unscopable series and must not be included in organization-specific claims.
 
 ### Regular Maintenance Tasks
 
@@ -290,6 +290,7 @@ Watch: `authorized_hits_total{user!=""}`, `authorized_calls_total{user!=""}`, `i
 | **Policy health metrics** | `kuadrant_policies_enforced`, `kuadrant_policies_total` not in RHCL 1.x | `limitador_up` and `datastore_partitioned` available now |
 | **maas-api metrics** | Requires HTTPS scrape + `/metrics` get RBAC | Use ServiceMonitor `maas-api-metrics` with bearer token; grant scrapers `nonResourceURLs: ["/metrics"]` get |
 | **PromQL `_total` suffix** | OTel prometheus receiver stores Limitador counters as `authorized_hits_total` (and the same for `authorized_calls` / `limited_calls`) | Query the `_total` names; Grafana panels that omit `_total` return no data |
+| **MaaS labels on `limited_calls_total`** | Limitador emits only `limitador_namespace` for this family | Use `authorized_hits_total` or `authorized_calls_total` for tenant/subscription/organization attribution |
 
 !!! note "Total vs Split"
     Total token consumption per user **is available** via `authorized_hits_total{user!=""}`. Input/output split at gateway requires wasm-shim to send two counter updates.
@@ -298,14 +299,13 @@ Watch: `authorized_hits_total{user!=""}`, `authorized_calls_total{user!=""}`, `i
 
 | Feature | Metric | Label |
 |---------|--------|-------|
-| **Latency per subscription** | `istio_request_duration_milliseconds_bucket` | `subscription` |
-| **Tokens per user** | `authorized_hits_total` | `user` |
-| **Tokens per subscription** | `authorized_hits_total` | `subscription` |
+| **Latency per subscription** | `istio_request_duration_milliseconds_bucket` | `subscription`, `tenant_namespace`, `tenant_name` |
+| **Tokens per user** | `authorized_hits_total` | `user`, `tenant_name`, `tenant_namespace`, `subscription` |
+| **Tokens per subscription** | `authorized_hits_total` | `subscription`, `tenant_namespace`, `tenant_name` |
 | **Tokens per model** | `authorized_hits_total` | `model` |
 | **Requests per user** | `authorized_calls_total` | `user` |
 | **Requests per subscription** | `authorized_calls_total` | `subscription` |
-| **Rate limited per user** | `limited_calls_total` | `user` |
-| **Rate limited per subscription** | `limited_calls_total` | `subscription` |
+| **Rate limited totals** | `limited_calls_total` | `limitador_namespace` only |
 
 ## Reporting Issues
 

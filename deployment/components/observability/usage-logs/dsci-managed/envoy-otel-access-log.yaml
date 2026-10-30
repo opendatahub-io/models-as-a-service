@@ -507,6 +507,8 @@ spec:
                     string_value: '%UPSTREAM_HOST%'
               resource_attributes:
                 values:
+                # The tenant reconciler injects the authoritative tenant_name here.
+                # It is sourced from the reconciled Tenant, never from request headers.
                 - key: service.name
                   value:
                     string_value: models-as-a-service
