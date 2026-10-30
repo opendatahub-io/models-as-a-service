@@ -1,6 +1,6 @@
 # E2E Test Fixtures Kustomization
 # Combines public samples (free, premium) with e2e-only test fixtures
-# (unconfigured, distinct, distinct-2) for comprehensive testing.
+# (unconfigured, distinct, distinct-2, external-token-limit) for comprehensive testing.
 # Use this for CI/e2e tests instead of the public samples kustomization.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
@@ -16,3 +16,4 @@ resources:
   - trlp-test     # TRLP test model (validates TRLP validation behavior)
   - embedding     # Embedding model (validates /v1/embeddings, TRLP, default-deny)
   - echo-sim      # Echo-mode sim (validates large mirrored I/O and credential leaks)
+  - external-token-limit # LLMIS-only backend for ExternalModel token-rate enforcement

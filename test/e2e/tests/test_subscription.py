@@ -103,6 +103,7 @@ from test_helper import (
     _wait_for_subscription_generation_observed,
     _wait_for_subscription_inference_ready,
     _wait_for_cr_absent,
+    exercise_until_token_limited,
 )
 
 log = logging.getLogger(__name__)
@@ -661,53 +662,13 @@ class TestSubscriptionEnforcement:
                 subscription=subscription_name,
             )
 
-            # 4. Send requests to exhaust the limit
-            rate_limited = False
-            success_count = 0
-
-            for i in range(total_requests):
-                r = _inference(api_key, path=model_path, max_tokens=1)
-                request_num = i + 1
-                log.info(f"Request {request_num}/{total_requests}: {r.status_code}")
-
-                if r.status_code == 200:
-                    success_count += 1
-                elif r.status_code == 429:
-                    rate_limited = True
-                    log.info(f"Rate limit exceeded after {success_count} successful requests")
-
-                    # Verify it's a rate limit 429, not a subscription error
-                    response_text = r.text.lower() if r.text else ""
-                    # Rate limit 429s typically mention "rate", "limit", or "quota"
-                    # Subscription 429s mention "subscription" without "rate"
-                    is_rate_limit_error = any(keyword in response_text
-                                             for keyword in ["rate", "limit", "quota", "too many"])
-                    is_subscription_error = "subscription" in response_text and not is_rate_limit_error
-
-                    assert is_rate_limit_error or not is_subscription_error, \
-                        f"Expected rate limit 429, not subscription error. Response: {r.text[:500]}"
-
-                    # Check for Retry-After header (optional but good practice)
-                    retry_after = r.headers.get("Retry-After") or r.headers.get("retry-after")
-                    if retry_after:
-                        log.info(f"Retry-After header present: {retry_after}")
-
-                    break
-                else:
-                    # Unexpected status code
-                    raise AssertionError(f"Unexpected status {r.status_code} at request {request_num}: {r.text[:200]}")
-
-                # Brief pause to avoid overwhelming the system, but stay within the window
-                time.sleep(0.1)
-
-            # Verify we actually exhausted the limit (at least one successful request)
-            assert success_count > 0, \
-                f"Got 429 on request #{request_num} without any successful requests. " \
-                f"This indicates a configuration issue, not rate limit exhaustion. Response: {r.text[:500]}"
-
-            assert rate_limited, \
-                f"Expected 429 with {token_limit} tokens/{window} limit, " \
-                f"but got {success_count} successful requests without hitting limit"
+            # 4. The driver validates OpenAI usage, a success-before-429
+            # transition, and that confirmation traffic cannot become 200.
+            result = exercise_until_token_limited(
+                lambda: _inference(api_key, path=model_path, max_tokens=1),
+                max_attempts=total_requests,
+            )
+            log.info("Rate limit exceeded after %s successful requests", result.success_count)
 
             # Note: Skipping rate limit reset test to keep test fast (<5s)
             # Reset behavior is tested manually via scripts/test-rate-limit.sh

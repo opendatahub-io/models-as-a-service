@@ -41,6 +41,14 @@ from test_helper import (
     _wait_for_maas_auth_policy_phase,
     _wait_for_maas_subscription_phase,
     _wait_for_model_ready,
+    _wait_for_subscription_inference_ready,
+    _get_cluster_token,
+    _create_api_key_raw,
+    _create_test_auth_policy,
+    _revoke_api_key,
+    _create_test_subscription,
+    openai_usage_from_response,
+    exercise_until_token_limited,
 )
 
 log = logging.getLogger(__name__)
@@ -58,6 +66,8 @@ TARGET_MODEL = "gpt-3.5-turbo"
 
 EXTERNAL_MODEL_NAME = "e2e-external-model"
 EXTERNAL_PROVIDER_NAME = "e2e-external-provider"
+EXTERNAL_TOKEN_LIMIT_LLMIS = "e2e-external-token-limit-simulated"
+EXTERNAL_TOKEN_LIMIT_MODEL = "e2e-external-token-limit-model"
 
 # Canonical inference.opendatahub.io CRDs. maas-controller's MaaSModelRef
 # externalModelHandler and the IPP model-provider-resolver plugin both watch
@@ -66,9 +76,11 @@ EXTERNAL_PROVIDER_NAME = "e2e-external-provider"
 EXTERNAL_MODEL_KIND = "externalmodels.inference.opendatahub.io"
 EXTERNAL_PROVIDER_KIND = "externalproviders.inference.opendatahub.io"
 
-# The canonical reconciler (ai-gateway-payload-processing) names the HTTPRoute
-# after the ExternalModel itself (no "maas-" prefix) and the backend Service
-# after the ExternalProvider (the HTTPRoute's backendRef).
+# CA bundle the gateway proxy mounts; KServe workload Services use it.
+OPENSHIFT_SERVICE_CA_PATH = "/var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt"
+
+# Legacy reconciler names the HTTPRoute after the ExternalModel itself. The
+# canonical reconciler reports the generated name in status.httpRouteName.
 EXTERNAL_MODEL_HTTPROUTE_NAME = EXTERNAL_MODEL_NAME
 EXTERNAL_PROVIDER_SERVICE_NAME = EXTERNAL_PROVIDER_NAME
 
@@ -125,14 +137,14 @@ def _check_external_endpoint_reachable():
     return False
 
 
-pytestmark = [
-    pytest.mark.legacy_ipp,
-    pytest.mark.skipif(
-        not _check_external_endpoint_reachable(),
-        reason=f"External endpoint {EXTERNAL_ENDPOINT} is not reachable (disconnected environment?)",
-    ),
-    pytest.mark.xdist_group("external"),
-]
+pytestmark = [pytest.mark.xdist_group("external")]
+
+
+@pytest.fixture(scope="module")
+def external_endpoint_reachable():
+    """Gate only legacy public-egress coverage at execution time, not import."""
+    if not _check_external_endpoint_reachable():
+        pytest.skip(f"External endpoint {EXTERNAL_ENDPOINT} is not reachable (disconnected environment?)")
 
 
 # ─── Fixture: Create external model resources ────────────────────────────────
@@ -292,8 +304,168 @@ def external_models_setup(gateway_url, headers, api_keys_base_url):
         _delete_cr("secret", f"{EXTERNAL_MODEL_NAME}-api-key", MODEL_NAMESPACE)
 
 
+@pytest.fixture
+def external_token_limit_resources():
+    """Provision fresh simulator-backed ExternalModel token-limit resources.
+
+    Separate from ``external_models_setup``, whose public provider and fixed
+    names aren't safe for a repeatable exhaustion test.
+    """
+    suffix = uuid.uuid4().hex[:10]
+    prefix = f"e2e-ext-tokens-{suffix}"
+    provider_name = f"{prefix}-provider"
+    # This simulator has no MaaSModelRef of its own, so the temporary
+    # ExternalModel and MaaSModelRef can share its Kubernetes-safe served ID.
+    model_name = EXTERNAL_TOKEN_LIMIT_MODEL
+    secret_name = f"{prefix}-credential"
+    auth_name = f"{prefix}-auth"
+    subscription_name = f"{prefix}-sub"
+    token_limit, window = 10, "10m"
+    api_key_id = None
+    oc_token = None
+    try:
+        # The fixture is deployed by the aggregate kustomization; do not
+        # create a second simulator deployment or service.
+        deadline = time.monotonic() + 300
+        workload_service = None
+        while time.monotonic() < deadline:
+            llmis = _get_cr("llminferenceservice", EXTERNAL_TOKEN_LIMIT_LLMIS, MODEL_NAMESPACE)
+            workload_service = (
+                ((llmis or {}).get("status") or {}).get("workloads") or {}
+            ).get("service", {}).get("name")
+            service = _get_cr("service", workload_service, MODEL_NAMESPACE) if workload_service else None
+            service_ports = ((service or {}).get("spec") or {}).get("ports") or []
+            has_https_port = any(
+                port.get("port") == 8000 and str(port.get("name", "")).lower().startswith("https")
+                for port in service_ports
+            )
+            if llmis and workload_service and service and has_https_port:
+                break
+            time.sleep(2)
+        else:
+            raise TimeoutError(
+                f"LLMInferenceService {MODEL_NAMESPACE}/{EXTERNAL_TOKEN_LIMIT_LLMIS} did not report a workload Service "
+                "with HTTPS port 8000"
+            )
+        # Target the workload Service directly: its cert is signed by the
+        # OpenShift service CA Envoy trusts, unlike Route ingress certs.
+        # endpoint is FQDN-only; the port goes in the ExternalProvider annotation.
+        provider_endpoint = f"{workload_service}.{MODEL_NAMESPACE}.svc"
+
+        _apply_cr({
+            "apiVersion": "v1", "kind": "Secret",
+            "metadata": {"name": secret_name, "namespace": MODEL_NAMESPACE,
+                         "labels": {"inference.llm-d.ai/ipp-managed": "true"}},
+            "type": "Opaque", "stringData": {"api-key": "test-only-provider-credential"},
+        })
+        _apply_cr({
+            "apiVersion": "inference.opendatahub.io/v1alpha1", "kind": "ExternalProvider",
+            "metadata": {
+                "name": provider_name,
+                "namespace": MODEL_NAMESPACE,
+                "annotations": {"inference.opendatahub.io/port": "8000"},
+            },
+            "spec": {
+                "provider": "openai",
+                "endpoint": provider_endpoint,
+                "auth": {"type": "simple", "secretRef": {"name": secret_name}},
+                "config": {"tls.caCertificates": OPENSHIFT_SERVICE_CA_PATH},
+            },
+        })
+        _apply_cr({
+            "apiVersion": "inference.opendatahub.io/v1alpha1", "kind": "ExternalModel",
+            "metadata": {"name": model_name, "namespace": MODEL_NAMESPACE},
+            "spec": {"externalProviderRefs": [{"ref": {"name": provider_name},
+                "targetModel": EXTERNAL_TOKEN_LIMIT_MODEL, "apiFormat": "openai-chat",
+                "path": "/v1/chat/completions"}]},
+        })
+        _apply_cr({
+            "apiVersion": "maas.opendatahub.io/v1alpha1", "kind": "MaaSModelRef",
+            "metadata": {"name": model_name, "namespace": MODEL_NAMESPACE},
+            "spec": {"modelRef": {"kind": "ExternalModel", "name": model_name}},
+        })
+        _create_test_auth_policy(auth_name, [model_name], groups=["system:authenticated"], model_namespace=MODEL_NAMESPACE)
+        _create_test_subscription(subscription_name, [model_name], groups=["system:authenticated"],
+                                  token_limit=token_limit, window=window, model_namespace=MODEL_NAMESPACE)
+        _wait_for_model_ready(model_name, namespace=MODEL_NAMESPACE, timeout=180)
+        external_model = _get_cr(EXTERNAL_MODEL_KIND, model_name, MODEL_NAMESPACE)
+        external_http_route_name = ((external_model or {}).get("status") or {}).get("httpRouteName")
+        if not external_http_route_name:
+            raise AssertionError(
+                f"ExternalModel {model_name} did not report status.httpRouteName: "
+                f"{json.dumps((external_model or {}).get('status', {}))[:1000]}"
+            )
+        _wait_for_httproute_accepted(external_http_route_name, namespace=MODEL_NAMESPACE, timeout=180)
+        _wait_for_maas_subscription_phase(subscription_name, timeout=180)
+        _wait_for_subscription_inference_ready(subscription_name, model_name, model_namespace=MODEL_NAMESPACE, timeout=300)
+
+        trlp = _get_cr("tokenratelimitpolicy", f"maas-trlp-{model_name}", MODEL_NAMESPACE)
+        assert trlp, f"Generated token policy maas-trlp-{model_name} was not found"
+        serialized_policy = json.dumps(trlp)[:1000]
+        trlp_labels = trlp.get("metadata", {}).get("labels", {}) or {}
+        assert trlp_labels.get("maas.opendatahub.io/model") == model_name, (
+            f"Generated token policy is not labeled for MaaSModelRef {model_name}: "
+            f"labels={trlp_labels}"
+        )
+        assert trlp.get("spec", {}).get("targetRef", {}).get("name") == external_http_route_name, (
+            f"Generated token policy does not target external HTTPRoute {external_http_route_name}: "
+            f"{serialized_policy}"
+        )
+        subscriptions_annotation = trlp.get("metadata", {}).get("annotations", {}).get(
+            "maas.opendatahub.io/subscriptions", ""
+        )
+        subscription_entries = [s for s in subscriptions_annotation.split(",") if s]
+        assert any(
+            entry == subscription_name or entry.endswith(f"/{subscription_name}")
+            for entry in subscription_entries
+        ), (
+            f"Generated token policy does not include subscription {subscription_name} in its "
+            f"managed-subscriptions annotation: {subscriptions_annotation!r}"
+        )
+        configured_rates = [
+            rate
+            for limit in (trlp.get("spec", {}).get("limits", {}) or {}).values()
+            for rate in (limit.get("rates") or [])
+        ]
+        assert any(
+            rate.get("limit") == token_limit and rate.get("window") == window
+            for rate in configured_rates
+        ), (
+            f"Generated token policy does not contain the configured rate {token_limit}/{window}: "
+            f"limits={trlp.get('spec', {}).get('limits')}"
+        )
+        oc_token = _get_cluster_token()
+        key_response = _create_api_key_raw(oc_token, name=f"{prefix}-key", subscription=subscription_name)
+        if key_response.status_code not in (200, 201):
+            raise RuntimeError(f"Failed to create external token-limit API key: {key_response.status_code}")
+        key_data = key_response.json()
+        api_key = key_data.get("key")
+        api_key_id = key_data.get("id")
+        if not api_key or not api_key_id:
+            raise RuntimeError("External token-limit API key response omitted key or id")
+        yield {
+            "api_key": api_key,
+            "subscription": subscription_name,
+            "model": model_name,
+            "token_limit": token_limit,
+        }
+    finally:
+        # Delete owned resources in reverse dependency order. The plaintext
+        # key is deliberately never logged.
+        if api_key_id and oc_token:
+            _revoke_api_key(oc_token, api_key_id)
+        _delete_cr("maassubscription", subscription_name, _subscription_ns())
+        _delete_cr("maasauthpolicy", auth_name, _subscription_ns())
+        _delete_cr("maasmodelref", model_name, MODEL_NAMESPACE)
+        _delete_cr(EXTERNAL_MODEL_KIND, model_name, MODEL_NAMESPACE)
+        _delete_cr(EXTERNAL_PROVIDER_KIND, provider_name, MODEL_NAMESPACE)
+        _delete_cr("secret", secret_name, MODEL_NAMESPACE)
+
+
 # ─── Tests: Discovery ───────────────────────────────────────────────────────
 
+@pytest.mark.legacy_ipp
+@pytest.mark.usefixtures("external_endpoint_reachable")
 class TestExternalModelDiscovery:
     """Verify ExternalModel reconciler creates the expected Istio resources."""
 
@@ -315,6 +487,8 @@ class TestExternalModelDiscovery:
 
 # ─── Tests: Auth ─────────────────────────────────────────────────────────────
 
+@pytest.mark.legacy_ipp
+@pytest.mark.usefixtures("external_endpoint_reachable")
 class TestExternalModelAuth:
     """Verify auth enforcement for external model routes."""
 
@@ -337,6 +511,8 @@ class TestExternalModelAuth:
 
 # ─── Tests: Egress ───────────────────────────────────────────────────────────
 
+@pytest.mark.legacy_ipp
+@pytest.mark.usefixtures("external_endpoint_reachable")
 class TestExternalModelEgress:
     """Verify requests are forwarded to the external endpoint."""
 
@@ -366,6 +542,8 @@ class TestExternalModelEgress:
 
 # ─── Tests: Cleanup ─────────────────────────────────────────────────────────
 
+@pytest.mark.legacy_ipp
+@pytest.mark.usefixtures("external_endpoint_reachable")
 class TestExternalModelCleanup:
     """Verify resource cleanup when external models are deleted."""
 
@@ -415,6 +593,8 @@ class TestExternalModelCleanup:
 
 
 
+@pytest.mark.legacy_ipp
+@pytest.mark.usefixtures("external_endpoint_reachable")
 class TestExternalModelPathRouting:
     """Verify path-based routing for external model endpoints.
 
@@ -448,6 +628,8 @@ requires_ipp = pytest.mark.skipif(
 )
 
 
+@pytest.mark.legacy_ipp
+@pytest.mark.usefixtures("external_endpoint_reachable")
 @requires_ipp
 class TestLegacyExternalModelMigration:
     """Verify IPP migration is reflected on the retained legacy CR."""
@@ -530,6 +712,8 @@ class TestLegacyExternalModelMigration:
             _delete_cr("secret", secret_name, MODEL_NAMESPACE)
 
 
+@pytest.mark.legacy_ipp
+@pytest.mark.usefixtures("external_endpoint_reachable")
 @requires_ipp
 class TestExternalModelBodyRouting:
     """Verify body-based routing for external models.
@@ -594,3 +778,33 @@ class TestExternalModelBodyRouting:
             "a 200 means body routing may not be active."
         )
         log.info("Body routing (%s): HTTP %d", case_name, r.status_code)
+
+
+@pytest.mark.external
+@pytest.mark.serial
+class TestExternalModelTokenRateLimit:
+    """Deterministically prove response usage is charged for an ExternalModel."""
+
+    def test_external_model_usage_exhaustion_gets_429(self, external_token_limit_resources, gateway_url):
+        resources = external_token_limit_resources
+
+        def infer():
+            return requests.post(
+                f"{gateway_url}/{MODEL_NAMESPACE}/{resources['model']}/v1/chat/completions",
+                headers={"Authorization": f"Bearer {resources['api_key']}", "Content-Type": "application/json"},
+                json={
+                    "model": resources["model"],
+                    "messages": [{"role": "user", "content": "one"}],
+                    "max_tokens": 1,
+                },
+                timeout=30,
+                verify=TLS_VERIFY,
+            )
+
+        result = exercise_until_token_limited(
+            infer, max_attempts=15, interval_seconds=0.1,
+        )
+        log.info(
+            "External token limit subscription=%s statuses=%s usage=%s",
+            resources["subscription"], result.status_codes, result.successful_usages,
+        )
