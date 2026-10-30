@@ -30,19 +30,22 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="${PROJECT_ROOT:-$(cd "${SCRIPT_DIR}/../../.." && pwd)}"
 
-# Controller deployment (only when AI_GATEWAY_CONTROLLER_IMAGE is set).
+# Controller deployment. Defaults track the published stable artifacts: the
+# stable branch and the odh-stable image are fed by the same promotion
+# pipeline, so the manifests always match the binary. Override either to run
+# a PR (e.g. AIGC_COMMIT=<branch>, AI_GATEWAY_CONTROLLER_IMAGE=<pr build>),
+# or set AI_GATEWAY_CONTROLLER_IMAGE= to skip the deploy entirely on clusters
+# that already run the controller.
 AIGC_REPO="${AIGC_REPO:-https://github.com/opendatahub-io/ai-gateway-controller}"
-# Pinned ai-gateway-controller main; bump when the portal work merges. Override
-# with AIGC_COMMIT to run a PR branch.
-AIGC_COMMIT="${AIGC_COMMIT:-7ee8457d9922394889a4737e6111dbaa2ae706eb}"
-AI_GATEWAY_CONTROLLER_IMAGE="${AI_GATEWAY_CONTROLLER_IMAGE:-}"
+AIGC_COMMIT="${AIGC_COMMIT:-stable}"
+AI_GATEWAY_CONTROLLER_IMAGE="${AI_GATEWAY_CONTROLLER_IMAGE:-quay.io/opendatahub/odh-ai-gateway-controller:odh-stable}"
 AI_GATEWAY_CONTROLLER_NAMESPACE="${AI_GATEWAY_CONTROLLER_NAMESPACE:-opendatahub}"
 GATEWAY_NAMESPACE="${GATEWAY_NAMESPACE:-openshift-ingress}"
 GATEWAY_NAME="${GATEWAY_NAME:-maas-default-gateway}"
 
 deploy_ai_gateway_controller() {
     if [[ -z "${AI_GATEWAY_CONTROLLER_IMAGE}" ]]; then
-        echo "AI_GATEWAY_CONTROLLER_IMAGE not set; assuming ai-gateway-controller is already deployed"
+        echo "AI_GATEWAY_CONTROLLER_IMAGE is empty; skipping the ai-gateway-controller deploy"
         return 0
     fi
     local work_dir
