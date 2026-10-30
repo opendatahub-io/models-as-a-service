@@ -477,6 +477,13 @@ const (
 		`auth.metadata["subscription-info"].resolvedModel != "" ` +
 		`? auth.metadata["subscription-info"].resolvedModel ` +
 		`: ` + celModelIdentity + `)`
+	// celSubscriptionInfoPresent guards a subscription-info dereference.
+	// has() covers the final field selection, not the map index, so an
+	// expression that goes straight to auth.metadata["subscription-info"].x
+	// raises whenever the evaluator did not run. It runs only when
+	// celModelIdentityAvailable holds, which leaves the key absent on
+	// /v1/models and /maas-api.
+	celSubscriptionInfoPresent = `has(auth.metadata) && "subscription-info" in auth.metadata`
 )
 
 // maasGatewayAuthPolicyName is the singleton AuthPolicy that targets the Gateway.
@@ -1297,10 +1304,17 @@ allow {
 					},
 				},
 			},
+			// Both expressions carry celSubscriptionInfoPresent. A refusal is not
+			// confined to the model paths -- the deny-client-identity-headers rule
+			// has no "when" -- so these run on requests where the subscription-info
+			// evaluator never did. An unguarded index there costs the whole
+			// response, not just the one field: Authorino drops the body and the
+			// reason header, and the client gets a bare 403.
 			"unauthorized": map[string]any{
 				"code": int64(403),
 				"body": map[string]any{
-					"expression": `'{"error":{"message":"' + (has(auth.metadata["subscription-info"].message)` +
+					"expression": `'{"error":{"message":"' + ((` + celSubscriptionInfoPresent +
+						` && has(auth.metadata["subscription-info"].message))` +
 						` ? auth.metadata["subscription-info"].message` +
 						`.replace('\\', '\\\\').replace('"', '\\"')` +
 						`.replace('\n', '\\n').replace('\r', '\\r').replace('\t', '\\t')` +
@@ -1308,7 +1322,9 @@ allow {
 				},
 				"headers": map[string]any{
 					"x-ext-auth-reason": map[string]any{
-						"expression": `has(auth.metadata["subscription-info"].error) ? auth.metadata["subscription-info"].error : "unauthorized"`,
+						"expression": `(` + celSubscriptionInfoPresent +
+							` && has(auth.metadata["subscription-info"].error))` +
+							` ? auth.metadata["subscription-info"].error : "unauthorized"`,
 					},
 					"content-type": map[string]any{
 						"value": "application/json",
@@ -1406,7 +1422,7 @@ allow {
 
 // subscriptionInfoFieldExpr is a CEL expression for a subscription-info field, or "" when absent.
 func subscriptionInfoFieldExpr(field string) string {
-	return fmt.Sprintf(`has(auth.metadata) && "subscription-info" in auth.metadata && `+
+	return fmt.Sprintf(celSubscriptionInfoPresent+` && `+
 		`has(auth.metadata["subscription-info"].%[1]s) ? auth.metadata["subscription-info"].%[1]s : ""`, field)
 }
 
