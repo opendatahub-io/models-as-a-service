@@ -110,7 +110,7 @@ type OrganizationMembership struct {
 // It is deliberately separate from VerifiedIdentity so transport provenance
 // and internal claim representations cannot leak into the public response.
 type IdentityResponse struct {
-	Issuer            string                   `json:"iss"`
+	Issuer            string                   `json:"iss,omitempty"`
 	Subject           string                   `json:"sub"`
 	Name              string                   `json:"name,omitempty"`
 	GivenName         string                   `json:"given_name,omitempty"`
@@ -372,31 +372,45 @@ func (h *Handler) ExtractVerifiedIdentity() gin.HandlerFunc {
 	}
 }
 
-// GetMe returns the caller's verified identity. It performs no authorization
-// or inventory computation and accepts no target filter.
+// GetMe returns the caller's verified OIDC identity when available. Other
+// gateway-authenticated callers receive the same response shape using the
+// trusted username/group identity headers.
 func (h *Handler) GetMe(c *gin.Context) {
-	value, exists := c.Get("verified_identity")
-	if !exists {
-		h.rejectIdentity(c, errors.New("trusted identity is required"))
+	if value, exists := c.Get("verified_identity"); exists {
+		identity, ok := value.(*VerifiedIdentity)
+		if !ok || identity == nil {
+			h.rejectIdentity(c, errors.New("trusted identity is invalid"))
+			return
+		}
+
+		c.Header("Cache-Control", "no-store")
+		c.JSON(http.StatusOK, IdentityResponse{
+			Issuer:            identity.Claims.Issuer,
+			Subject:           identity.Claims.Subject,
+			Name:              identity.Claims.Name,
+			GivenName:         identity.Claims.GivenName,
+			FamilyName:        identity.Claims.FamilyName,
+			PreferredUsername: identity.Claims.PreferredUsername,
+			Email:             identity.Claims.Email,
+			Groups:            identity.Claims.Groups,
+			Organizations:     identity.Claims.Organizations,
+		})
 		return
 	}
-	identity, ok := value.(*VerifiedIdentity)
-	if !ok || identity == nil {
-		h.rejectIdentity(c, errors.New("trusted identity is invalid"))
+
+	userValue, userExists := c.Get("user")
+	user, userOK := userValue.(*UserContext)
+	if !userExists || !userOK || user == nil || user.Username == "" {
+		h.rejectIdentity(c, errors.New("trusted identity is required"))
 		return
 	}
 
 	c.Header("Cache-Control", "no-store")
 	c.JSON(http.StatusOK, IdentityResponse{
-		Issuer:            identity.Claims.Issuer,
-		Subject:           identity.Claims.Subject,
-		Name:              identity.Claims.Name,
-		GivenName:         identity.Claims.GivenName,
-		FamilyName:        identity.Claims.FamilyName,
-		PreferredUsername: identity.Claims.PreferredUsername,
-		Email:             identity.Claims.Email,
-		Groups:            identity.Claims.Groups,
-		Organizations:     identity.Claims.Organizations,
+		Subject:           user.Username,
+		Name:              user.Username,
+		PreferredUsername: user.Username,
+		Groups:            user.Groups,
 	})
 }
 

@@ -10,8 +10,10 @@ import uuid
 import pytest
 
 from multitenancy_helpers import (
+    FINALIZER_TENANT_CLEANUP,
     apply_gateway_fixture as apply_https_gateway_fixture,
     remove_gateway_access_label,
+    wait_for_finalizer,
     wait_for_gateway_programmed,
 )
 from test_helper import DEPLOYMENT_NAMESPACE, MAAS_API_DEPLOYMENT_NAMESPACE, _ns
@@ -641,6 +643,28 @@ class TestAITenantLifecycle:
             gateway = _get_json_or_none("gateway", case["gateway_name"], GATEWAY_NAMESPACE)
             assert gateway is not None
             assert gateway["metadata"]["labels"]["e2e.maas.opendatahub.io/fixture"] == case["aitenant_name"]
+        finally:
+            _cleanup_aitenant_fixture(case["aitenant_name"], case["gateway_name"])
+
+    def test_aitenant_delete_releases_tenantconfig_finalizer(self):
+        """RHOAIENG-101737: AITenant-managed MaasTenantConfig carries the tenant-cleanup finalizer and releases it on delete."""
+        case = _new_aitenant_case()
+
+        try:
+            _apply_gateway_fixture(case)
+            _apply_aitenant(case)
+            _assert_aitenant_bootstrap_resources(case)
+
+            wait_for_finalizer(
+                TENANT_CONFIG_KIND,
+                TENANT_NAME,
+                case["tenant_ns"],
+                FINALIZER_TENANT_CLEANUP,
+            )
+
+            
+            _delete_aitenant(case)
+            _wait_for_not_found(TENANT_CONFIG_KIND, TENANT_NAME, case["tenant_ns"], timeout=240)
         finally:
             _cleanup_aitenant_fixture(case["aitenant_name"], case["gateway_name"])
 

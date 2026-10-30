@@ -139,7 +139,6 @@ def embedding_path_governance(_worker_embedding_context):
         _wait_for_maas_auth_policy_phase(
             auth_policy_name,
             namespace=maas_ns,
-            timeout=90,
             require_auth_policies=False,
         )
         _wait_for_subscription_inference_ready(
@@ -147,7 +146,6 @@ def embedding_path_governance(_worker_embedding_context):
             EMBEDDING_MODEL_REF,
             namespace=maas_ns,
             model_namespace=MODEL_NAMESPACE,
-            timeout=180,
         )
         api_key = _create_api_key(
             _get_cluster_token(),
@@ -284,12 +282,11 @@ class TestEmbeddingGovernance:
                 token_limit=token_limit,
                 window=window,
             )
-            _wait_for_maas_auth_policy_phase(auth_policy_name, timeout=90, require_auth_policies=False)
+            _wait_for_maas_auth_policy_phase(auth_policy_name, require_auth_policies=False)
             _wait_for_subscription_inference_ready(
                 subscription_name,
                 EMBEDDING_MODEL_REF,
                 model_namespace=MODEL_NAMESPACE,
-                timeout=180,
             )
 
             oc_token = _get_cluster_token()
@@ -359,12 +356,11 @@ class TestEmbeddingGovernance:
                 token_limit=1000,
                 window="1m",
             )
-            _wait_for_maas_auth_policy_phase(auth_policy_name, timeout=90, require_auth_policies=False)
+            _wait_for_maas_auth_policy_phase(auth_policy_name, require_auth_policies=False)
             _wait_for_subscription_inference_ready(
                 subscription_name,
                 EMBEDDING_MODEL_REF,
                 model_namespace=MODEL_NAMESPACE,
-                timeout=180,
             )
 
             oc_token = _get_cluster_token()

@@ -18,11 +18,13 @@ How the test actually verifies the rotation (not just "egress still works"):
   no ExtProc/ExternalModel teardown.
 
 Praxis topology notes (why the resources live where they do):
-  * The praxis ``ai-gateway-controller`` only reconciles an inference.opendatahub.io
-    ExternalModel when its namespace carries a MaasTenantConfig — i.e. the tenant
-    (subscription) namespace. An ExternalModel in a plain model namespace (llm) is
-    left Pending ("no MaasTenantConfig"). So the ExternalProvider/ExternalModel,
-    the MaaSModelRef, and the credential Secret all live in the tenant namespace.
+  * The ExternalProvider/ExternalModel, the MaaSModelRef, and the credential
+    Secret all live in the tenant (subscription) namespace. The AIGC-generated
+    route only attaches once that tenant Gateway's ``allowedRoutes`` admits the
+    namespace, and the credential Secret has to sit next to the model it backs.
+    (A ref-less ExternalModel elsewhere is implicitly attached to the default
+    tenant's Gateway by ai-gateway-controller, so co-locating in the tenant
+    namespace is the reliable choice here rather than a hard requirement.)
   * The route AIGC creates (``external-model-<name>``) attaches to the tenant's
     Gateway, so that Gateway's ``allowedRoutes`` must admit the tenant namespace
     (deploy.sh adds it to ALLOWED_ROUTE_NAMESPACES).
@@ -61,6 +63,7 @@ from test_helper import (
     _get_cr,
     _is_transient_gateway_response,
     _ns,
+    _revoke_api_key,
     _wait_for_httproute_accepted,
     _wait_for_maas_auth_policy_phase,
     _wait_for_maas_subscription_phase,
@@ -208,6 +211,63 @@ def _extproc_uids_for(deployment: str) -> set[str]:
     return _extproc_pod_uids(deployment, GATEWAY_NAMESPACE)
 
 
+def _deployment_ns(deployment: str) -> str:
+    """Namespace a given ExtProc Deployment lives in."""
+    return EXTERNAL_NS if deployment == EXTERNAL_MODEL_DEPLOYMENT else GATEWAY_NAMESPACE
+
+
+def _extproc_selector(deployment: str) -> str:
+    """Pod label selector for an ExtProc Deployment (same as the UID snapshot)."""
+    if deployment == EXTERNAL_MODEL_DEPLOYMENT:
+        return f"app={deployment}"
+    return f"{LABEL_TENANT_INSTANCE}={deployment}"
+
+
+def _extproc_generation(deployment: str) -> str:
+    """``.metadata.generation`` of an ExtProc Deployment.
+
+    An in-place Secret data change does not touch the Deployment, so its
+    generation stays constant across rotation. Anything that *restarts* the
+    ExtProc (a spec change or ``rollout restart``) bumps it. Generation is
+    therefore a no-restart signal that is insensitive to scale/eviction events.
+    """
+    result = _oc_run(
+        ["get", "deployment", deployment, "-n", _deployment_ns(deployment),
+         "-o", "jsonpath={.metadata.generation}"]
+    )
+    return (result.stdout or "").strip()
+
+
+def _extproc_restart_counts(deployment: str) -> dict[tuple[str, str], int]:
+    """Container restart counts keyed by ``(pod UID, container name)``.
+
+    The pod-UID and Deployment-generation checks miss an *in-place* container
+    restart: the ExtProc process crashing (or being killed by a liveness probe)
+    and restarting inside the same pod bumps ``restartCount`` without changing
+    the pod UID or the Deployment generation. Rotation must not restart the
+    container either, so snapshot these and require them unchanged.
+    """
+    result = _oc_run(
+        ["get", "pods", "-n", _deployment_ns(deployment),
+         "-l", _extproc_selector(deployment), "-o", "json"]
+    )
+    try:
+        items = json.loads(result.stdout or "{}").get("items", [])
+    except (json.JSONDecodeError, TypeError):
+        return {}
+    counts: dict[tuple[str, str], int] = {}
+    for pod in items:
+        meta = pod.get("metadata", {})
+        uid = meta.get("uid")
+        if not uid or meta.get("deletionTimestamp"):
+            continue
+        for cs in pod.get("status", {}).get("containerStatuses", []) or []:
+            name = cs.get("name")
+            if name is not None:
+                counts[(uid, name)] = cs.get("restartCount", 0)
+    return counts
+
+
 def _apply_provider_secret(value: str):
     """Create/replace the provider credential Secret in place (same name/key)."""
     _apply_cr(
@@ -217,8 +277,11 @@ def _apply_provider_secret(value: str):
             "metadata": {
                 "name": SECRET_NAME,
                 "namespace": EXTERNAL_NS,
-                # praxis-extproc's secret store only watches Secrets carrying this
-                # label; without it credential lookups silently fail.
+                # Retained for parity with the legacy IPP secret store, which
+                # selected credential Secrets by this label. The praxis (Rust)
+                # extproc instead reads the credential from a projected Secret
+                # volume rendered from the ExternalProvider spec, so the label is
+                # harmless here but kept to stay compatible across dataplanes.
                 "labels": {"inference.llm-d.ai/ipp-managed": "true"},
             },
             "type": "Opaque",
@@ -253,6 +316,7 @@ def _poll_injected_credential(url: str, headers: dict, body: dict, *, expected: 
     deadline = time.time() + timeout
     last_status = None
     last_cred = None
+    saw_non_auth_response = False
     while time.time() < deadline:
         try:
             r = requests.post(url, headers=headers, json=body, timeout=30, verify=TLS_VERIFY)
@@ -262,6 +326,7 @@ def _poll_injected_credential(url: str, headers: dict, body: dict, *, expected: 
             continue
         last_status = r.status_code
         if r.status_code not in (401, 403) and not _is_transient_gateway_response(r):
+            saw_non_auth_response = True
             last_cred = _echoed_authorization(r)
             if last_cred == expected:
                 return last_cred
@@ -276,9 +341,19 @@ def _poll_injected_credential(url: str, headers: dict, body: dict, *, expected: 
         else:
             log.info("Echo poll got transient %d, retrying...", r.status_code)
         time.sleep(2)
+    # Persistent 401/403 (never a single authorized response) is an authorization
+    # problem — AuthPolicy not enforced, or the key not bound to the subscription —
+    # not a credential-rotation failure. Call it out so the two don't get confused.
+    hint = ""
+    if not saw_non_auth_response and last_status in (401, 403):
+        hint = (
+            " — every response was 401/403, which indicates an authorization problem "
+            "(AuthPolicy not enforced or API key not bound to the subscription), "
+            "not the credential rotation"
+        )
     raise AssertionError(
         f"upstream never received the expected credential within {timeout}s "
-        f"(last status={last_status}, credential present={last_cred is not None})"
+        f"(last status={last_status}, credential present={last_cred is not None}){hint}"
     )
 
 
@@ -291,6 +366,7 @@ def rotation_setup(gateway_url, headers, api_keys_base_url):
 
     log.info("Setting up external provider rotation fixture (endpoint: %s, ns: %s)...",
              EXTERNAL_ENDPOINT, EXTERNAL_NS)
+    api_key_id = None
     try:
         _apply_provider_secret(SECRET_VALUE_V1)
 
@@ -393,12 +469,19 @@ def rotation_setup(gateway_url, headers, api_keys_base_url):
         if r.status_code not in (200, 201):
             pytest.fail(f"Failed to create API key: {r.status_code} {r.text}")
         api_key = r.json().get("key")
+        api_key_id = r.json().get("id")
         if not api_key:
             pytest.fail("API key creation response missing 'key' field")
 
         yield {"api_key": api_key, "gateway_url": gateway_url}
     finally:
         log.info("Cleaning up external provider rotation fixtures...")
+        # Best-effort: deleting the subscription invalidates the key, but revoke
+        # it explicitly so repeated runs don't accumulate key records.
+        if api_key_id:
+            oc_token = headers.get("Authorization", "").removeprefix("Bearer ").strip()
+            if oc_token:
+                _revoke_api_key(oc_token, api_key_id)
         _delete_cr("maasauthpolicy", AUTH_POLICY_NAME, EXTERNAL_NS)
         _delete_cr("maassubscription", SUBSCRIPTION_NAME, EXTERNAL_NS)
         _delete_cr("maasmodelref", EXTERNAL_MODEL_NAME, EXTERNAL_NS)
@@ -433,6 +516,8 @@ class TestPraxisExtProcSecretRotation:
         before_uids = _all_extproc_uids()
         for deployment, uids in before_uids.items():
             assert uids, f"no {deployment} pods found before rotation"
+        before_gens = {d: _extproc_generation(d) for d in before_uids}
+        before_restarts = {d: _extproc_restart_counts(d) for d in before_uids}
 
         model_before = _get_cr(EXTERNAL_MODEL_KIND, EXTERNAL_MODEL_NAME, EXTERNAL_NS)
         assert model_before is not None, "ExternalModel missing before rotation"
@@ -450,11 +535,32 @@ class TestPraxisExtProcSecretRotation:
         log.info("After rotation: upstream receives the v2 credential")
 
         for deployment, uids in before_uids.items():
+            # No rollout was triggered: an in-place Secret change must not bump
+            # the Deployment generation. This catches a restart without being
+            # sensitive to scale/eviction events (unlike exact pod-set equality).
+            after_gen = _extproc_generation(deployment)
+            assert after_gen == before_gens[deployment], (
+                f"{deployment} Deployment generation changed during in-place rotation "
+                f"({before_gens[deployment]} -> {after_gen}); rotation must not roll ExtProc"
+            )
+            # Every pod that existed before must still be present (excluding
+            # terminating pods), so none were replaced.
             after_uids = _extproc_uids_for(deployment)
-            assert after_uids == uids, (
-                f"{deployment} pods changed during in-place rotation "
+            assert uids <= after_uids, (
+                f"{deployment} pods were replaced during in-place rotation "
                 f"(before={uids}, after={after_uids}); rotation must not restart ExtProc"
             )
+            # No in-place container restart: every container we saw before must
+            # still be present with the same restartCount (a crash/liveness kill
+            # within the same pod would bump it without changing pod UID/gen).
+            after_restarts = _extproc_restart_counts(deployment)
+            for key, count in before_restarts[deployment].items():
+                pod_uid, container = key
+                assert after_restarts.get(key) == count, (
+                    f"{deployment} container {container} restarted during in-place rotation "
+                    f"(pod {pod_uid}: {count} -> {after_restarts.get(key)}); "
+                    "rotation must not restart ExtProc"
+                )
 
         model_after = _get_cr(EXTERNAL_MODEL_KIND, EXTERNAL_MODEL_NAME, EXTERNAL_NS)
         assert model_after is not None, (

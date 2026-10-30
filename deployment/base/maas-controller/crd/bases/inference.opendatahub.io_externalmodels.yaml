@@ -91,7 +91,7 @@ spec:
                           description: |-
                             Type identifies the auth type for this provider.
                             e.g. "apikey" (header based), "sigv4", etc.
-                            "simple" is retained for installed-schema compatibility.
+                            "simple" is retained for installed-schema compatibility and is served as "apikey".
                           enum:
                           - apikey
                           - simple
@@ -169,7 +169,8 @@ spec:
               gatewayRefs:
                 description: |-
                   GatewayRefs explicitly selects the Praxis gateways that serve this model.
-                  Omission retains tenant-local resolution; it does not select a global gateway.
+                  When omitted, the tenant whose MaasTenantConfig is in the model namespace
+                  serves the model; in a namespace of no tenant, the default tenant's Gateway does.
                   Names are distinct across namespaces. An explicit empty list is invalid.
                 items:
                   description: NamespacedObjectReference identifies a Gateway or HTTPRoute

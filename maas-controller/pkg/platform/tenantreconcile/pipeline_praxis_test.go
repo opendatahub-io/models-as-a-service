@@ -1267,23 +1267,60 @@ func TestRunPlatformDoesNotMarkCleanupCompleteWhileWriterPodRemains(t *testing.T
 
 func TestCleanupIPPExternalModelRoutes_IsNamespaceScoped(t *testing.T) {
 	const (
-		ns      = "llm"
-		infraNS = "maas-system"
+		ns        = "llm"
+		infraNS   = "maas-system"
+		unclaimed = "unclaimed"
 	)
 	route := ippOwnedExternalModelRoute(ns, "demo", types.UID("uid"))
 	sharedRoute := ippOwnedExternalModelRoute(infraNS, "shared", types.UID("shared-uid"))
+	unclaimedRoute := ippOwnedExternalModelRoute(unclaimed, "other", types.UID("other-uid"))
 	cl := fake.NewClientBuilder().WithScheme(praxisTestScheme(t)).WithObjects(
 		route,
 		sharedRoute,
+		unclaimedRoute,
 		ippExternalModel(ns, "demo", types.UID("uid")),
 		ippExternalModel(infraNS, "shared", types.UID("shared-uid")),
+		ippExternalModel(unclaimed, "other", types.UID("other-uid")),
 	).Build()
-	require.NoError(t, cleanupIPPExternalModelRoutes(context.Background(), cl, PlatformParams{AppNamespace: infraNS, ModelNamespace: ns}, logr.Discard()))
+	require.NoError(t, cleanupIPPExternalModelRoutes(context.Background(), cl, PlatformParams{TenantIdentifier: "tenant-a", AppNamespace: infraNS, ModelNamespace: ns}, logr.Discard()))
 
 	got := &unstructured.Unstructured{}
 	got.SetGroupVersionKind(GVKHTTPRoute)
 	assert.True(t, apierrors.IsNotFound(cl.Get(context.Background(), client.ObjectKey{Namespace: ns, Name: "demo"}, got)))
 	assert.NoError(t, cl.Get(context.Background(), client.ObjectKey{Namespace: infraNS, Name: "shared"}, got), "a model in shared infrastructure is not proven to belong exclusively to this tenant")
+	assert.NoError(t, cl.Get(context.Background(), client.ObjectKey{Namespace: unclaimed, Name: "other"}, got), "only the default tenant cleans up namespaces of no tenant")
+}
+
+func TestCleanupIPPExternalModelRoutes_DefaultTenantCoversNamespacesOfNoTenant(t *testing.T) {
+	const (
+		tenantNS = "models-as-a-service"
+		infraNS  = "maas-system"
+	)
+	objects := tenantNamespaceObjects([]string{tenantNS, "tenant-b"}, []string{"claimed"})
+	for _, namespace := range []string{tenantNS, "llm", "tenant-b", "claimed", infraNS} {
+		uid := types.UID(namespace + "-uid")
+		objects = append(objects, ippOwnedExternalModelRoute(namespace, "demo", uid), ippExternalModel(namespace, "demo", uid))
+	}
+	routeExists := func(cl client.Client, namespace string) bool {
+		got := &unstructured.Unstructured{}
+		got.SetGroupVersionKind(GVKHTTPRoute)
+		err := cl.Get(context.Background(), client.ObjectKey{Namespace: namespace, Name: "demo"}, got)
+		require.True(t, err == nil || apierrors.IsNotFound(err), "get route: %v", err)
+		return err == nil
+	}
+
+	cl := fake.NewClientBuilder().WithScheme(praxisTestScheme(t)).WithObjects(objects...).Build()
+	require.NoError(t, cleanupIPPExternalModelRoutes(context.Background(), cl, PlatformParams{AppNamespace: infraNS, ModelNamespace: tenantNS}, logr.Discard()))
+	for namespace, kept := range map[string]bool{tenantNS: false, "llm": false, "tenant-b": true, "claimed": true, infraNS: true} {
+		assert.Equal(t, kept, routeExists(cl, namespace), "route in %s", namespace)
+	}
+
+	// Another tenant cleans up only its own namespace.
+	cl = fake.NewClientBuilder().WithScheme(praxisTestScheme(t)).WithObjects(objects...).Build()
+	require.NoError(t, cleanupIPPExternalModelRoutes(context.Background(), cl, PlatformParams{TenantIdentifier: "tenant-b", AppNamespace: infraNS, ModelNamespace: "tenant-b"}, logr.Discard()))
+	for namespace, kept := range map[string]bool{"tenant-b": false, "llm": true} {
+		assert.Equal(t, kept, routeExists(cl, namespace), "route in %s", namespace)
+	}
 }
 
 func TestCleanupIPPExternalModelRoutesRequiresModelNamespace(t *testing.T) {

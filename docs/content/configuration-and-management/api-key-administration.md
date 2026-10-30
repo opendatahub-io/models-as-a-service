@@ -37,7 +37,7 @@ curl -sS -X POST "${MAAS_API_URL}/maas-api/v1/api-keys/bulk-revoke" \
   -d '{"username": "alice"}'
 ```
 
-This updates the status of all API keys belonging to the specified user to `revoked` in the database. The next validation request for any of those keys will reject them. Authorino may cache validation results briefly; revocation is effective as soon as the cache expires.
+This updates the status of all API keys belonging to the specified user to `revoked` in the writable database. Validation rejects them after PostgreSQL replication lag when a read replica is configured, plus any brief Authorino cache delay. Without a read replica, the next validation request rejects them directly from the primary.
 
 ### Revoking All Keys for a Subscription
 

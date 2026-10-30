@@ -48,6 +48,8 @@ Environment variables (all optional unless noted):
   - E2E_GATEWAY_PROPAGATION_DELAY: Delay between gateway retries in seconds (default: 5)
   - E2E_GATEWAY_ENFORCED_TIMEOUT: Wait for AuthPolicy Accepted+Enforced (default: 180)
   - E2E_GATEWAY_ENFORCED_MISSING_GRACE: Fail early if AuthPolicy CR absent this long (default: 30)
+  - E2E_AUTHPOLICY_PHASE_TIMEOUT: MaaSAuthPolicy phase wait (default: 120)
+  - E2E_MAAS_SUBSCRIPTION_PHASE_TIMEOUT: MaaSSubscription phase wait (default: 120)
   - E2E_SUBSCRIPTION_INFERENCE_READY_TIMEOUT: Discovery + direct/mirrored TRLP wait (default: 300)
   - E2E_SUBSCRIPTION_TRLP_TIMEOUT: MaaSSubscription mirrored TRLP ready wait (default: 180)
   - E2E_OC_TIMEOUT: Per-attempt `oc` process timeout in seconds (default: 60)
@@ -97,9 +99,9 @@ GATEWAY_ENFORCED_TIMEOUT = int(os.environ.get("E2E_GATEWAY_ENFORCED_TIMEOUT", "1
 # If the AuthPolicy CR is missing this long, fail fast (misconfigured name/namespace)
 # instead of burning the full GATEWAY_ENFORCED_TIMEOUT.
 GATEWAY_ENFORCED_MISSING_GRACE = int(os.environ.get("E2E_GATEWAY_ENFORCED_MISSING_GRACE", "30"))
-# Controller reconcile under pytest-xdist load needs longer phase waits (see prow_run_smoke_test.sh).
-AUTHPOLICY_PHASE_TIMEOUT = int(os.environ.get("E2E_AUTHPOLICY_PHASE_TIMEOUT", "60"))
-MAAS_SUBSCRIPTION_PHASE_TIMEOUT = int(os.environ.get("E2E_MAAS_SUBSCRIPTION_PHASE_TIMEOUT", "60"))
+# Controller reconcile under pytest-xdist load; 120s matches parallel CI (run_e2e_tests.sh).
+AUTHPOLICY_PHASE_TIMEOUT = int(os.environ.get("E2E_AUTHPOLICY_PHASE_TIMEOUT", "120"))
+MAAS_SUBSCRIPTION_PHASE_TIMEOUT = int(os.environ.get("E2E_MAAS_SUBSCRIPTION_PHASE_TIMEOUT", "120"))
 # Parallel group-test can backlog Kuadrant TRLP reconciliation; 180s flaked on worker tenants.
 SUBSCRIPTION_INFERENCE_READY_TIMEOUT = int(
     os.environ.get("E2E_SUBSCRIPTION_INFERENCE_READY_TIMEOUT", "300")
@@ -139,6 +141,13 @@ GATEWAY_NAMESPACE = os.environ.get("GATEWAY_NAMESPACE", "openshift-ingress")
 # matching the real traffic path for internal endpoints like /v1/tenants.
 E2E_CURL_POD_NAMESPACE = os.environ.get("E2E_CURL_POD_NAMESPACE", DEPLOYMENT_NAMESPACE)
 E2E_CURL_IMAGE = os.environ.get("E2E_CURL_IMAGE", "registry.access.redhat.com/ubi9/ubi-minimal:9.5")
+# Pinned llm-d-inference-sim used by LLMInferenceService fixtures (and the
+# tenant external model quota test's dedicated provider): --mode random
+# responses carry usage.total_tokens; --mode echo responses do not.
+LLM_D_INFERENCE_SIM_IMAGE = (
+    "ghcr.io/llm-d/llm-d-inference-sim@"
+    "sha256:c3ba435081a4d032676b218ea34eb3a1c54507da0fade2f6297f9c37894fe0d1"
+)
 E2E_CURL_CA_CONFIGMAP = os.environ.get("E2E_CURL_CA_CONFIGMAP", "")
 E2E_CURL_CA_CONFIGMAP_KEY = os.environ.get("E2E_CURL_CA_CONFIGMAP_KEY", "service-ca.crt")
 SIMULATOR_SUBSCRIPTION = os.environ.get("E2E_SIMULATOR_SUBSCRIPTION", "simulator-subscription")
@@ -532,10 +541,10 @@ def _is_transient_gateway_response(response) -> bool:
     - Empty 401/403: Envoy has not loaded the AuthPolicy yet (common after
       MaaSAuthPolicy churn; some gateways return 401 instead of 403).
     - 500 with AUTH_FAILURE: Authorino race while AuthConfig is updating.
-    - Empty or plain-text proxy 500/503 ("Internal Server Error" /
-      "Service Unavailable"): Envoy/router failure while upstream or auth
-      filters are mid-reload. Distinct from maas-api JSON errors like
-      {"error":"Failed to create API key"}.
+    - Empty, plain-text, or HTML proxy 500/503 ("Internal Server Error",
+      "Service Unavailable", "Application is not available"): Envoy/router
+      failure while upstream or auth filters are mid-reload. Distinct from
+      maas-api JSON errors like {"error":"Failed to create API key"}.
     """
     body = (response.text or "").strip()
     if response.status_code in (401, 403) and not body:
@@ -551,8 +560,13 @@ def _is_transient_gateway_response(response) -> bool:
         "Service Unavailable.",
     ):
         return True
-    if body.startswith("<") and (
-        "Internal Server Error" in body or "Service Unavailable" in body
+    if body.startswith("<") and any(
+        marker in body
+        for marker in (
+            "Internal Server Error",
+            "Service Unavailable",
+            "Application is not available",
+        )
     ):
         return True
     return False
@@ -654,6 +668,30 @@ def _request_with_gateway_retry(method, url, retries=None, delay=None, deadline=
     return r
 
 
+def create_api_key_at(base_url: str, oc_token: str, name: str, *, subscription: str | None = None):
+    """Create an API key against a maas-api base URL (any tenant's).
+
+    Shared by the default-tenant helpers and the tenant-scoped maas-api
+    callers. Retries empty 403 / Authorino AUTH_FAILURE while gateway
+    AuthPolicy enforcement catches up.
+    """
+    body = {"name": name}
+    if subscription:
+        body["subscription"] = subscription
+
+    return _request_with_gateway_retry(
+        requests.post,
+        f"{base_url}/v1/api-keys",
+        headers={
+            "Authorization": f"Bearer {oc_token}",
+            "Content-Type": "application/json",
+        },
+        json=body,
+        timeout=TIMEOUT,
+        verify=TLS_VERIFY,
+    )
+
+
 def _create_api_key_raw(oc_token: str, name: str = None, subscription: str = None):
     """Create an API key and return the raw response (for testing error cases).
 
@@ -669,24 +707,9 @@ def _create_api_key_raw(oc_token: str, name: str = None, subscription: str = Non
     Returns:
         requests.Response object
     """
-    url = f"{_maas_api_url()}/v1/api-keys"
     key_name = name or f"e2e-test-{uuid.uuid4().hex[:8]}"
 
-    body = {"name": key_name}
-    if subscription:
-        body["subscription"] = subscription
-
-    return _request_with_gateway_retry(
-        requests.post,
-        url,
-        headers={
-            "Authorization": f"Bearer {oc_token}",
-            "Content-Type": "application/json",
-        },
-        json=body,
-        timeout=TIMEOUT,
-        verify=TLS_VERIFY,
-    )
+    return create_api_key_at(_maas_api_url(), oc_token, key_name, subscription=subscription)
 
 
 def _create_api_key(oc_token: str, name: str = None, subscription: str = None) -> str:
@@ -1101,6 +1124,7 @@ def _create_test_subscription(
     priority=None,
     model_namespace=MODEL_NAMESPACE,
     unlimited=False,
+    inference_priority=None,
 ):
     """Create a MaaSSubscription CR for testing.
 
@@ -1115,6 +1139,7 @@ def _create_test_subscription(
         priority: Optional spec.priority (higher wins for default API key binding)
         model_namespace: Namespace containing the referenced MaaSModelRefs
         unlimited: Grant access without a token budget; token_limit and window are ignored
+        inference_priority: Optional spec.inferencePriority (llm-d flow-control priority)
     """
     namespace = namespace or _ns()
     if not isinstance(model_refs, list):
@@ -1139,6 +1164,8 @@ def _create_test_subscription(
     }
     if priority is not None:
         spec["priority"] = int(priority)
+    if inference_priority is not None:
+        spec["inferencePriority"] = int(inference_priority)
 
     log.info("Creating MaaSSubscription: %s", name)
     _apply_cr(
@@ -1470,7 +1497,7 @@ def _wait_for_gateway_auth_enforced(
 
 
 def _wait_for_token_rate_limit_policy(
-    model_ref, model_namespace=MODEL_NAMESPACE, timeout=60, *, subscription_name=None, subscription_namespace=None
+    model_ref, model_namespace=MODEL_NAMESPACE, timeout=180, *, subscription_name=None, subscription_namespace=None
 ):
     """Wait for the current TokenRateLimitPolicy generation to be enforced.
 
@@ -1480,7 +1507,7 @@ def _wait_for_token_rate_limit_policy(
     Args:
         model_ref: Name of the model (e.g., "e2e-distinct-simulated")
         model_namespace: Namespace where the TRLP should be created (default: MODEL_NAMESPACE)
-        timeout: Maximum wait time in seconds (default: 60)
+        timeout: Maximum wait time in seconds (default: 180)
         subscription_name: Subscription that the policy must include, if supplied
         subscription_namespace: Subscription namespace (defaults to _ns())
 
@@ -1602,7 +1629,7 @@ def _wait_for_maas_subscription_phase(name, expected_phase="Active", namespace=N
     )
 
 
-def _wait_for_subscription_discovery_ready(name, namespace=None, timeout=90):
+def _wait_for_subscription_discovery_ready(name, namespace=None, timeout=120):
     """Wait until a subscription can support discovery and management APIs.
 
     A subscription may remain Degraded while its model-wide TRLP is being
@@ -1658,7 +1685,7 @@ def _wait_for_subscription_discovery_ready(name, namespace=None, timeout=90):
     )
 
 
-def _wait_for_subscription_generation_observed(name, generation, namespace=None, timeout=90):
+def _wait_for_subscription_generation_observed(name, generation, namespace=None, timeout=120):
     """Wait until the controller has reconciled a MaaSSubscription at ``generation``.
 
     The controller writes the Ready condition's observedGeneration at the end of
@@ -1709,7 +1736,7 @@ def _wait_for_subscription_trlp_status(
     name,
     expected_ready=True,
     namespace=None,
-    timeout=60,
+    timeout=SUBSCRIPTION_TRLP_STATUS_TIMEOUT,
     model=None,
 ):
     """Wait for MaaSSubscription's TokenRateLimitPolicy status to reach expected ready state.
@@ -1780,21 +1807,36 @@ def _wait_for_subscription_inference_ready(
     namespace=None,
     model_namespace=MODEL_NAMESPACE,
     timeout=SUBSCRIPTION_INFERENCE_READY_TIMEOUT,
+    require_enforced_trlp=True,
 ):
-    """Wait for model discovery plus direct and mirrored TRLP enforcement."""
+    """Wait for model discovery plus direct and mirrored TRLP enforcement.
+
+    Args:
+        require_enforced_trlp: Wait for Kuadrant to report the TRLP as
+            Enforced. Keep True (default) for tests that assert rate-limit
+            behaviour (429s, exemptions, shared limits) — the limit must be
+            programmed on the gateway for those assertions to mean anything.
+            Pass False for access-matrix tests whose assertions are proven by
+            the inference request itself: Kuadrant's TRLP status updater loses
+            optimistic-concurrency races under parallel load and can leave
+            Enforced=False long after the gateway is actually serving, so
+            gating those tests on it measures Kuadrant's status writer rather
+            than the behaviour under test.
+    """
     namespace = namespace or _ns()
     _wait_for_subscription_discovery_ready(
         subscription_name,
         namespace=namespace,
         timeout=timeout,
     )
-    _wait_for_token_rate_limit_policy(
-        model_name,
-        model_namespace=model_namespace,
-        timeout=timeout,
-        subscription_name=subscription_name,
-        subscription_namespace=namespace,
-    )
+    if require_enforced_trlp:
+        _wait_for_token_rate_limit_policy(
+            model_name,
+            model_namespace=model_namespace,
+            timeout=timeout,
+            subscription_name=subscription_name,
+            subscription_namespace=namespace,
+        )
     return _wait_for_subscription_trlp_status(
         subscription_name,
         model=model_name,
@@ -1881,13 +1923,13 @@ def _wait_for_maas_auth_policy_phase(name, expected_phase="Active", namespace=No
     )
 
 
-def _wait_for_model_ready(model_ref, namespace=MODEL_NAMESPACE, timeout=60):
+def _wait_for_model_ready(model_ref, namespace=MODEL_NAMESPACE, timeout=120):
     """Wait for MaaSModelRef to reach Ready phase.
 
     Args:
         model_ref: Name of the MaaSModelRef
         namespace: Namespace (default: MODEL_NAMESPACE)
-        timeout: Maximum wait time in seconds (default: 60)
+        timeout: Maximum wait time in seconds (default: 120)
 
     Returns:
         The MaaSModelRef CR dict when Ready
@@ -2203,7 +2245,7 @@ def _create_llmis(
                 "containers": [
                     {
                         "name": "main",
-                        "image": "ghcr.io/llm-d/llm-d-inference-sim@sha256:c3ba435081a4d032676b218ea34eb3a1c54507da0fade2f6297f9c37894fe0d1",
+                        "image": LLM_D_INFERENCE_SIM_IMAGE,
                         "command": ["/app/llm-d-inference-sim"],
                         "args": [
                             "--port", "8000",
