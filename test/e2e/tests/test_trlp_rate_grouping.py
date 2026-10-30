@@ -418,6 +418,7 @@ def cleanup():
         subscriptions = [name for kind, name in created.crs if kind == "maassubscription"]
         for name in subscriptions:
             try:
+                # Multi-sub TRLP rebuild can delay finalizers past the 30s default.
                 _wait_for_cr_absent("maassubscription", name, namespace=ns, timeout=60)
             except Exception as e:
                 log.warning("maassubscription %s/%s not removed: %s", ns, name, e)

@@ -308,7 +308,6 @@ class TestTenantAuthIsolation:
             tenant_auth_setup["subscription"],
             expected_ready=True,
             namespace=tenant_a["namespace"],
-            timeout=120,
         )
         response = select_subscription_at(
             tenant_internal_url(tenant_a["name"]),

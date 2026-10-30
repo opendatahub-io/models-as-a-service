@@ -24,7 +24,7 @@
 # Optional env vars:
 #   E2E_PARALLEL_WORKERS          pytest-xdist worker count (default: 5)
 #   E2E_AUTHPOLICY_PHASE_TIMEOUT  seconds (default: 120, parallel only)
-#   E2E_MAAS_SUBSCRIPTION_PHASE_TIMEOUT  seconds (default: 90, parallel only)
+#   E2E_MAAS_SUBSCRIPTION_PHASE_TIMEOUT  seconds (default: 120, parallel only)
 #   E2E_GATEWAY_ENFORCED_TIMEOUT  seconds (default: 240, parallel only)
 #   E2E_MULTITENANCY_PHASE_TIMEOUT seconds (default: 180, parallel only)
 #   E2E_RECONCILE_WAIT            seconds between reconcile polls (default: 4)
@@ -87,7 +87,7 @@ mkdir -p "$ARTIFACTS_DIR"
 # ── Phase timeouts (parallel only) ───────────────────────────────────────
 if [[ "$E2E_PARALLEL_WORKERS" -gt 1 ]]; then
     export E2E_AUTHPOLICY_PHASE_TIMEOUT="${E2E_AUTHPOLICY_PHASE_TIMEOUT:-120}"
-    export E2E_MAAS_SUBSCRIPTION_PHASE_TIMEOUT="${E2E_MAAS_SUBSCRIPTION_PHASE_TIMEOUT:-90}"
+    export E2E_MAAS_SUBSCRIPTION_PHASE_TIMEOUT="${E2E_MAAS_SUBSCRIPTION_PHASE_TIMEOUT:-120}"
     export E2E_GATEWAY_ENFORCED_TIMEOUT="${E2E_GATEWAY_ENFORCED_TIMEOUT:-240}"
     export E2E_MULTITENANCY_PHASE_TIMEOUT="${E2E_MULTITENANCY_PHASE_TIMEOUT:-180}"
 fi
