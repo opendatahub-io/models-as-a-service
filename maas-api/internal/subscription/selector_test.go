@@ -2179,6 +2179,151 @@ func TestSelector_ResolvedModelFromAlias(t *testing.T) {
 	}
 }
 
+// A subscription may list several modelRefs sharing one client-facing name
+// (per-tenant modelRefs for a shared model, or distinct models with one
+// client-facing name) while the caller's authorized set covers only some of
+// them. findModelRef returns the first alias match, so authorization must
+// not consider unauthorized refs: an unauthorized ref listed first must not
+// deny a request that a later, authorized ref serves.
+func TestSelect_SharedAliasAuthorizationOrdering(t *testing.T) {
+	log := logger.New(false)
+	sub := createSubscriptionWithModelRefs("sub1", []string{"g1"}, []map[string]any{
+		{"name": "model-a", "namespace": "ns1"},
+		{"name": "model-b", "namespace": "ns2"},
+	})
+	aliased := func(name, ns string) *unstructured.Unstructured {
+		ref := createMaaSModelRef(name, ns, "ExternalModel")
+		if err := unstructured.SetNestedField(ref.Object, "client-name", "status", "resolvedModelAlias"); err != nil {
+			t.Fatalf("SetNestedField: %v", err)
+		}
+		return ref
+	}
+	modelLister := &fakeModelLister{items: []*unstructured.Unstructured{
+		aliased("model-a", "ns1"),
+		aliased("model-b", "ns2"),
+	}}
+	accessChecker := &fakeAccessChecker{
+		authorized: map[authpolicy.ModelKey]bool{
+			{Namespace: "ns2", Name: "model-b"}: true,
+		},
+	}
+	selector := subscription.NewSelector(log, &fakeLister{subscriptions: []*unstructured.Unstructured{sub}}, modelLister, accessChecker)
+
+	t.Run("auto selection allows the authorized carrier", func(t *testing.T) {
+		result, err := selector.Select([]string{"g1"}, "", "", "client-name")
+		if err != nil {
+			t.Fatalf("Select: %v", err)
+		}
+		if !result.AccessAllowed {
+			t.Error("AccessAllowed = false, want true when a later same-alias ref is authorized")
+		}
+	})
+
+	t.Run("explicit selection allows the authorized carrier", func(t *testing.T) {
+		result, err := selector.Select([]string{"g1"}, "", "sub1", "client-name")
+		if err != nil {
+			t.Fatalf("Select: %v", err)
+		}
+		if !result.AccessAllowed {
+			t.Error("AccessAllowed = false, want true when a later same-alias ref is authorized")
+		}
+	})
+
+	t.Run("no authorized carrier denies", func(t *testing.T) {
+		none := &fakeAccessChecker{authorized: map[authpolicy.ModelKey]bool{}}
+		selector := subscription.NewSelector(log, &fakeLister{subscriptions: []*unstructured.Unstructured{sub}}, modelLister, none)
+		_, err := selector.Select([]string{"g1"}, "", "", "client-name")
+		var denied *subscription.AccessDeniedError
+		if !errors.As(err, &denied) {
+			t.Fatalf("expected AccessDeniedError, got %T: %v", err, err)
+		}
+	})
+}
+
+// An exact namespace/name request must not be authorized through a different
+// reference that merely carries the same client-facing name: the exact
+// reference identifies the routed model, and its authorization result is the
+// answer even when an alias carrier in the same namespace is authorized.
+func TestSelect_ExactRefNotSubstitutedByAuthorizedAliasCarrier(t *testing.T) {
+	log := logger.New(false)
+	sub := createSubscriptionWithModelRefs("sub1", []string{"g1"}, []map[string]any{
+		{"name": "client-name", "namespace": "tenant-b"},
+		{"name": "modelref-b", "namespace": "tenant-b"},
+	})
+	aliased := func(name, ns string) *unstructured.Unstructured {
+		ref := createMaaSModelRef(name, ns, "ExternalModel")
+		if err := unstructured.SetNestedField(ref.Object, "client-name", "status", "resolvedModelAlias"); err != nil {
+			t.Fatalf("SetNestedField: %v", err)
+		}
+		return ref
+	}
+	modelLister := &fakeModelLister{items: []*unstructured.Unstructured{
+		aliased("client-name", "tenant-b"),
+		aliased("modelref-b", "tenant-b"),
+	}}
+	accessChecker := &fakeAccessChecker{
+		authorized: map[authpolicy.ModelKey]bool{
+			{Namespace: "tenant-b", Name: "modelref-b"}: true,
+		},
+	}
+	selector := subscription.NewSelector(log, &fakeLister{subscriptions: []*unstructured.Unstructured{sub}}, modelLister, accessChecker)
+
+	t.Run("explicit selection denies the unauthorized exact reference", func(t *testing.T) {
+		result, err := selector.Select([]string{"g1"}, "", "sub1", "tenant-b/client-name")
+		if err != nil {
+			t.Fatalf("Select: %v", err)
+		}
+		if result.AccessAllowed {
+			t.Error("AccessAllowed = true, want false when the exact reference is unauthorized")
+		}
+	})
+
+	t.Run("auto selection denies the unauthorized exact reference", func(t *testing.T) {
+		_, err := selector.Select([]string{"g1"}, "", "", "tenant-b/client-name")
+		var denied *subscription.AccessDeniedError
+		if !errors.As(err, &denied) {
+			t.Fatalf("expected AccessDeniedError, got %T: %v", err, err)
+		}
+	})
+}
+
+// The auto-selection pre-filter must admit a subscription whose refs share a
+// client-facing name in one namespace when the authorized subset resolves the
+// ambiguity, instead of dropping it with NoSubscriptionError before the
+// authorization filter can run.
+func TestSelect_AmbiguousAliasAuthorizedSubsetAutoSelection(t *testing.T) {
+	log := logger.New(false)
+	sub := createSubscriptionWithModelRefs("sub1", []string{"g1"}, []map[string]any{
+		{"name": "modelref-a", "namespace": "tenant-a"},
+		{"name": "modelref-b", "namespace": "tenant-a"},
+	})
+	aliased := func(name, ns string) *unstructured.Unstructured {
+		ref := createMaaSModelRef(name, ns, "ExternalModel")
+		if err := unstructured.SetNestedField(ref.Object, "client-name", "status", "resolvedModelAlias"); err != nil {
+			t.Fatalf("SetNestedField: %v", err)
+		}
+		return ref
+	}
+	modelLister := &fakeModelLister{items: []*unstructured.Unstructured{
+		aliased("modelref-a", "tenant-a"),
+		aliased("modelref-b", "tenant-a"),
+	}}
+	accessChecker := &fakeAccessChecker{
+		authorized: map[authpolicy.ModelKey]bool{
+			{Namespace: "tenant-a", Name: "modelref-b"}: true,
+		},
+	}
+	selector := subscription.NewSelector(log, &fakeLister{subscriptions: []*unstructured.Unstructured{sub}}, modelLister, accessChecker)
+
+	result, err := selector.Select([]string{"g1"}, "", "", "tenant-a/client-name")
+	if err != nil {
+		t.Fatalf("Select: %v, want selection via the authorized carrier", err)
+	}
+	if !result.AccessAllowed {
+		t.Error("AccessAllowed = false, want true when exactly one ambiguous carrier is authorized")
+	}
+}
+
 func TestSelect_RateLimitIDOnlyForShortIdentity(t *testing.T) {
 	log := logger.New(false)
 	requestedModel := "ns1/model-a"
@@ -2217,6 +2362,93 @@ func TestSelect_RateLimitIDOnlyForShortIdentity(t *testing.T) {
 		want := subscription.RateLimitIDFor("test-ns", "fresh-sub", requestedModel)
 		if result.RateLimitID != want {
 			t.Errorf("RateLimitID = %q, want %q", result.RateLimitID, want)
+		}
+	})
+}
+
+// TRLP limits are keyed on the modelref, not the requested identity: a
+// request carrying a client-facing alias — bare or as a path pair's name
+// segment — must resolve ResolvedModel (and with it RateLimitID) to the
+// matched ref's namespace/name so the modelref's rate limits apply.
+func TestSelect_RateLimitIDUsesMatchedRefOnAliasPath(t *testing.T) {
+	log := logger.New(false)
+	sub := createSubscriptionWithModelRefs("fresh-sub", []string{"g1"}, []map[string]any{
+		{"name": "model-a", "namespace": "ns1"},
+	})
+	if status, ok := sub.Object["status"].(map[string]any); ok {
+		status["rateLimitIdentity"] = constant.RateLimitIdentityShort
+	} else {
+		sub.Object["status"] = map[string]any{
+			"rateLimitIdentity": constant.RateLimitIdentityShort,
+		}
+	}
+	modelRef := createMaaSModelRef("model-a", "ns1", "ExternalModel")
+	if err := unstructured.SetNestedField(modelRef.Object, "client-name", "status", "resolvedModelAlias"); err != nil {
+		t.Fatalf("SetNestedField: %v", err)
+	}
+	selector := subscription.NewSelector(
+		log,
+		&fakeLister{subscriptions: []*unstructured.Unstructured{sub}},
+		&fakeModelLister{items: []*unstructured.Unstructured{modelRef}},
+		nil,
+	)
+
+	wantModel := "ns1/model-a"
+	wantRateLimitID := subscription.RateLimitIDFor("test-ns", "fresh-sub", wantModel)
+
+	for _, requested := range []string{"ns1/client-name", "client-name"} {
+		t.Run("request "+requested, func(t *testing.T) {
+			//nolint:unqueryvet,nolintlint // False positive - not a SQL query
+			result, err := selector.Select([]string{"g1"}, "", "", requested)
+			if err != nil {
+				t.Fatalf("Select: %v", err)
+			}
+			if result.ResolvedModel != wantModel {
+				t.Errorf("ResolvedModel = %q, want %q", result.ResolvedModel, wantModel)
+			}
+			if result.RateLimitID != wantRateLimitID {
+				t.Errorf("RateLimitID = %q, want %q", result.RateLimitID, wantRateLimitID)
+			}
+		})
+	}
+	t.Run("bare alias with several carriers resolves to the matched ref", func(t *testing.T) {
+		sharedSub := createSubscriptionWithModelRefs("fresh-sub", []string{"g1"}, []map[string]any{
+			{"name": "model-a", "namespace": "ns1"},
+			{"name": "model-b", "namespace": "ns2"},
+		})
+		if status, ok := sharedSub.Object["status"].(map[string]any); ok {
+			status["rateLimitIdentity"] = constant.RateLimitIdentityShort
+		} else {
+			sharedSub.Object["status"] = map[string]any{
+				"rateLimitIdentity": constant.RateLimitIdentityShort,
+			}
+		}
+		aliased := func(name, ns string) *unstructured.Unstructured {
+			ref := createMaaSModelRef(name, ns, "ExternalModel")
+			if err := unstructured.SetNestedField(ref.Object, "client-name", "status", "resolvedModelAlias"); err != nil {
+				t.Fatalf("SetNestedField: %v", err)
+			}
+			return ref
+		}
+		sharedSelector := subscription.NewSelector(
+			log,
+			&fakeLister{subscriptions: []*unstructured.Unstructured{sharedSub}},
+			&fakeModelLister{items: []*unstructured.Unstructured{
+				aliased("model-a", "ns1"),
+				aliased("model-b", "ns2"),
+			}},
+			nil,
+		)
+		//nolint:unqueryvet,nolintlint // False positive - not a SQL query
+		result, err := sharedSelector.Select([]string{"g1"}, "", "", "client-name")
+		if err != nil {
+			t.Fatalf("Select: %v", err)
+		}
+		if result.ResolvedModel != wantModel {
+			t.Errorf("ResolvedModel = %q, want %q", result.ResolvedModel, wantModel)
+		}
+		if result.RateLimitID != wantRateLimitID {
+			t.Errorf("RateLimitID = %q, want %q", result.RateLimitID, wantRateLimitID)
 		}
 	})
 }
