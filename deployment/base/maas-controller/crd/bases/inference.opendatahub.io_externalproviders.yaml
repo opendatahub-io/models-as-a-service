@@ -78,7 +78,7 @@ spec:
                     description: |-
                       Type identifies the auth type for this provider.
                       e.g. "apikey" (header based), "sigv4", etc.
-                      "simple" is retained for installed-schema compatibility.
+                      "simple" is retained for installed-schema compatibility and is served as "apikey".
                     enum:
                     - apikey
                     - simple

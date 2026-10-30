@@ -40,6 +40,7 @@ These realms contain security issues intentional for testing:
 - Client ID: `test-client`
 - Type: Public (no authentication)
 - Groups claim configured in tokens
+- Access tokens include `aud: maas-api` and `token_use: access` for the strict MaaS OIDC contract
 
 ### Tenant-B Realm
 
@@ -57,6 +58,7 @@ These realms contain security issues intentional for testing:
 - Client ID: `test-client`
 - Type: Public (no authentication)
 - Groups claim configured in tokens
+- Access tokens include `aud: maas-api` and `token_use: access` for the strict MaaS OIDC contract
 
 ## How to Deploy
 

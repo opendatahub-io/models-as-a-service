@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"flag"
@@ -59,6 +60,16 @@ type Config struct {
 	// DBConnectionURL is the PostgreSQL connection URL.
 	// Format: postgresql://user:password@host:port/database
 	DBConnectionURL string
+
+	// DBReadConnectionURL is the optional cluster-local PostgreSQL read-replica URL.
+	// It is empty for deployments that intentionally use only the writable primary.
+	//
+	// The URL is stored separately from DBConnectionURL because the two endpoints have
+	// different consistency and availability contracts. DBConnectionURL must always
+	// remain writable: it runs migrations and mutations and is the fallback for reads.
+	// The optional URL serves cluster-local reads, including API-key hash validation,
+	// but must never become an implicit replacement for the primary.
+	DBReadConnectionURL string
 
 	// APIKeyMaxExpirationDays is the maximum allowed expiration in days for API keys.
 	// Users cannot create API keys with expiration longer than this value.
@@ -160,7 +171,8 @@ func Load() *Config {
 		TLS:                         loadTLSConfig(),
 		DebugMode:                   debugMode,
 		LogFormat:                   logFormat,
-		DBConnectionURL:             "", // Loaded from K8s secret via LoadDatabaseURL()
+		DBConnectionURL:             "", // Loaded from K8s secret via LoadDatabaseURLs()
+		DBReadConnectionURL:         "", // Loaded from K8s secret via LoadDatabaseURLs()
 		APIKeyMaxExpirationDays:     maxExpirationDays,
 		AccessCheckTimeoutSeconds:   accessCheckTimeoutSeconds,
 		SARCacheMaxSize:             sarCacheMaxSize,
@@ -230,6 +242,11 @@ func (c *Config) Validate() error {
 	// Validate required fields
 	if c.DBConnectionURL == "" {
 		return errors.New("db connection URL is required (loaded from K8s secret 'maas-db-config')")
+	}
+	if c.DBReadConnectionURL != "" {
+		if err := validatePostgresURL([]byte(c.DBReadConnectionURL)); err != nil {
+			return fmt.Errorf("invalid db read connection URL: %w", err)
+		}
 	}
 
 	if err := c.TLS.validate(); err != nil {
@@ -337,18 +354,21 @@ func (c *Config) MetricsAddress() string {
 	return fmt.Sprintf(":%d", c.MetricsPort)
 }
 
-// LoadDatabaseURL reads the database connection URL from the Kubernetes secret.
+// LoadDatabaseURLs reads the writable and optional read-only PostgreSQL connection
+// URLs from the Kubernetes secret.
 // This replaces the previous approach of reading from environment variables.
 //
 // Secret: maas-db-config (in the same namespace as the pod)
-// Key: DB_CONNECTION_URL
+// Keys: DB_CONNECTION_URL and optional DB_READ_CONNECTION_URL
 //
-// Returns an error if the secret is missing or the key is not found.
-func (c *Config) LoadDatabaseURL(ctx context.Context, clientset *kubernetes.Clientset) error {
+// Returns an error if the secret is missing, the writable key is missing, or either
+// configured value is not a supported PostgreSQL URL. Values are never logged.
+func (c *Config) LoadDatabaseURLs(ctx context.Context, clientset kubernetes.Interface) error {
 	const (
 		//nolint:gosec // This is the documented name of the secret, not a hardcoded credential.
-		secretName = "maas-db-config"
-		secretKey  = "DB_CONNECTION_URL"
+		secretName  = "maas-db-config"
+		writeSecret = "DB_CONNECTION_URL"
+		readSecret  = "DB_READ_CONNECTION_URL"
 	)
 
 	secret, err := clientset.CoreV1().Secrets(c.Namespace).Get(ctx, secretName, metav1.GetOptions{})
@@ -356,11 +376,40 @@ func (c *Config) LoadDatabaseURL(ctx context.Context, clientset *kubernetes.Clie
 		return fmt.Errorf("failed to read secret %s/%s: %w (ensure the secret exists before starting maas-api)", c.Namespace, secretName, err)
 	}
 
-	dbURL, ok := secret.Data[secretKey]
-	if !ok || len(dbURL) == 0 {
-		return fmt.Errorf("key %q not found or empty in secret %s/%s", secretKey, c.Namespace, secretName)
+	writeURL, ok := secret.Data[writeSecret]
+	if !ok || len(bytes.TrimSpace(writeURL)) == 0 {
+		return fmt.Errorf("key %q not found or empty in secret %s/%s", writeSecret, c.Namespace, secretName)
 	}
 
-	c.DBConnectionURL = string(dbURL)
+	c.DBConnectionURL = string(bytes.TrimSpace(writeURL))
+	c.DBReadConnectionURL = string(bytes.TrimSpace(secret.Data[readSecret]))
+
+	// Validation happens here, before Validate and store construction, so a bad URL is
+	// attributed to its Secret key without exposing the URL or credentials. Whitespace is
+	// removed before assignment because Kubernetes Secret values commonly include a
+	// trailing newline when generated from files or templates.
+
+	if err := validatePostgresURL(writeURL); err != nil {
+		return fmt.Errorf("invalid %q in secret %s/%s: %w", writeSecret, c.Namespace, secretName, err)
+	}
+	if c.DBReadConnectionURL != "" {
+		if err := validatePostgresURL([]byte(c.DBReadConnectionURL)); err != nil {
+			return fmt.Errorf("invalid %q in secret %s/%s: %w", readSecret, c.Namespace, secretName, err)
+		}
+	}
+	return nil
+}
+
+// LoadDatabaseURL is a compatibility wrapper for callers that only need the
+// writable connection URL. It still loads and validates the optional read URL.
+func (c *Config) LoadDatabaseURL(ctx context.Context, clientset kubernetes.Interface) error {
+	return c.LoadDatabaseURLs(ctx, clientset)
+}
+
+func validatePostgresURL(value []byte) error {
+	value = bytes.TrimSpace(value)
+	if !bytes.HasPrefix(value, []byte("postgresql://")) && !bytes.HasPrefix(value, []byte("postgres://")) {
+		return errors.New("must start with postgresql:// or postgres://")
+	}
 	return nil
 }
