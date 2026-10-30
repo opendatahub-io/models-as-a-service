@@ -9,7 +9,8 @@ spec:
   metrics:
     default:
       labels:
-        model: responseBodyJSON("/model")
+        # Use the gateway-published model identity, including when inference fails.
+        model: '"x-gateway-model-name" in request.headers ? request.headers["x-gateway-model-name"] : ""'
         user: auth.identity.userid
         # Subscription metadata for usage attribution and billing
         subscription: auth.identity.selected_subscription

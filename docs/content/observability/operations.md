@@ -283,7 +283,6 @@ Watch: `authorized_hits_total{user!=""}`, `authorized_calls_total{user!=""}`, `i
 
 | Feature | Blocker | Workaround |
 |---------|---------|------------|
-| **`model` label on `authorized_calls_total` / `limited_calls_total`** | Kuadrant wasm-shim doesn't pass `responseBodyJSON` context | Use `authorized_hits_total` for per-model breakdown |
 | **Input/output token split** | TokenRateLimitPolicy sends single `hits_addend` | Total tokens via `authorized_hits_total`; response body has `usage.prompt_tokens` and `usage.completion_tokens` but wasm-shim doesn't split |
 | **Input/output per user** | vLLM doesn't label with `user` | Total tokens per user via `authorized_hits_total{user!=""}`; vLLM prompt/gen metrics are per-model only |
 | **Rate-limited in Istio metrics** | WASM plugin `sendLocalReply()` short-circuits filter chain | Use `limited_calls_total` from Limitador (has correct labels) |

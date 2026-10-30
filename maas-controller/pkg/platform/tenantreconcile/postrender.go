@@ -544,7 +544,10 @@ func buildTelemetryLabels(log logr.Logger, config *maasv1alpha1.TenantTelemetryC
 		labels["group"] = "auth.identity.groups_str"
 	}
 	if captureModelUsage {
-		labels["model"] = "responseBodyJSON(\"/model\")"
+		// Attribute usage to the published model selected by this gateway. The
+		// pre-auth payload processor derives this header from the request body;
+		// error and management responses need not contain a model field.
+		labels["model"] = `"x-gateway-model-name" in request.headers ? request.headers["x-gateway-model-name"] : ""`
 	}
 	return labels
 }
