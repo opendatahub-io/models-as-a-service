@@ -183,6 +183,7 @@ class TestTenantNamespaceDiscovery:
         finally:
             cleanup_discovery_case(case, delete_gateway=False)
 
+    @pytest.mark.nightly
     def test_per_tenant_oidc_configuration(self):
         """1.4: Gateway-scoped maas-gateway-auth issuerUrl reflects AITenant OIDC."""
         if os.environ.get("EXTERNAL_OIDC") != "true" or not os.environ.get("OIDC_ISSUER_URL"):

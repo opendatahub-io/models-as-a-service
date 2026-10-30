@@ -1,5 +1,7 @@
 package api_keys
 
+import "time"
+
 // Status represents the lifecycle state of an API key.
 // API keys follow a one-way state transition: active → revoked/expired.
 type Status string
@@ -20,19 +22,19 @@ func (s Status) String() string {
 // Note: KeyPrefix is NOT included - it's only shown once at creation (show-once pattern).
 // Users should identify keys by name/description for security.
 type ApiKey struct {
-	ID             string   `json:"id"`
-	Name           string   `json:"name"`
-	Description    string   `json:"description,omitempty"`
-	Username       string   `json:"username,omitempty"`
-	Subscription   string   `json:"subscription,omitempty"` // MaaSSubscription name bound at mint time
-	Tenant         string   `json:"tenant,omitempty"`
-	Groups         []string `json:"groups,omitempty"` // User's groups at creation (immutable snapshot for authorization)
-	CreationDate   string   `json:"creationDate"`
-	ExpirationDate string   `json:"expirationDate,omitempty"` // Empty for permanent keys
-	Status         Status   `json:"status"`                   // "active", "expired", "revoked"
-	LastUsedAt     string   `json:"lastUsedAt,omitempty"`     // Tracks when key was last used for validation
-	Ephemeral      bool     `json:"ephemeral"`                // Short-lived programmatic key
-	Labels         map[string]string `json:"labels,omitempty"`   // Structured key-value pairs for API key metadata
+	ID             string            `json:"id"`
+	Name           string            `json:"name"`
+	Description    string            `json:"description,omitempty"`
+	Username       string            `json:"username,omitempty"`
+	Subscription   string            `json:"subscription,omitempty"` // MaaSSubscription name bound at mint time
+	Tenant         string            `json:"tenant,omitempty"`
+	Groups         []string          `json:"groups,omitempty"` // User's groups at creation (immutable snapshot for authorization)
+	CreationDate   string            `json:"creationDate"`
+	ExpirationDate string            `json:"expirationDate,omitempty"` // Empty for permanent keys
+	Status         Status            `json:"status"`                   // "active", "expired", "revoked"
+	LastUsedAt     string            `json:"lastUsedAt,omitempty"`     // Tracks when key was last used for validation
+	Ephemeral      bool              `json:"ephemeral"`                // Short-lived programmatic key
+	Labels         map[string]string `json:"labels,omitempty"`         // Structured key-value pairs for API key metadata
 }
 
 // ValidationResult holds the result of API key validation (for Authorino HTTP callback).
@@ -99,7 +101,7 @@ type SearchFilters struct {
 	IncludeEphemeral *bool `json:"includeEphemeral,omitempty"` // Include ephemeral keys in results (default: false)
 
 	// Labels filter
-	LabelsContain  map[string]string `json:"labelsContain,omitempty"` // Filter by structured key-value pairs for API key metadata
+	LabelsContain map[string]string `json:"labelsContain,omitempty"` // Filter by structured key-value pairs for API key metadata
 }
 
 // SortParams specifies sorting criteria.
@@ -167,8 +169,21 @@ type BulkRevokeResponse struct {
 
 // TenantRevokeResponse returns count of revoked keys for tenant-wide cleanup.
 type TenantRevokeResponse struct {
-	RevokedCount int    `json:"revokedCount"`
-	Message      string `json:"message"`
+	// RevokedCount is retained for compatibility with the original internal
+	// endpoint. It is equal to DeletedCount for lifecycle cleanup responses.
+	RevokedCount int       `json:"revokedCount"`
+	DeletedCount int       `json:"deletedCount"`
+	DeletedAt    time.Time `json:"deletedAt"`
+	Message      string    `json:"message"`
+}
+
+// SubscriptionRevokeResponse returns the result of subscription-scoped cleanup.
+type SubscriptionRevokeResponse struct {
+	// RevokedCount is retained for consistency with TenantRevokeResponse.
+	RevokedCount int       `json:"revokedCount"`
+	DeletedCount int       `json:"deletedCount"`
+	DeletedAt    time.Time `json:"deletedAt"`
+	Message      string    `json:"message"`
 }
 
 // ============================================================

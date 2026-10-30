@@ -7,5 +7,5 @@ resources:
 
 images:
   - name: maas-discovery
-    newName: quay.io/opendatahub/maas-discovery
+    newName: quay.io/opendatahub/odh-maas-discovery
     newTag: odh-stable

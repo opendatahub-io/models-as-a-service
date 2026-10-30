@@ -237,25 +237,47 @@ spec:
                     rule: '!(has(self.unlimited) && self.unlimited && has(self.tokenRateLimits))'
                 minItems: 1
                 type: array
+              organization:
+                description: |-
+                  Organization associates this subscription with exactly one organization.
+                  The identifier is stable for the subscription's lifetime and is not used
+                  as billing metadata or as an inference grant.
+                properties:
+                  id:
+                    description: |-
+                      ID is the organization identifier. It may be set once for a legacy subscription
+                      after its key and history association has been verified.
+                    maxLength: 253
+                    minLength: 1
+                    type: string
+                required:
+                - id
+                type: object
               owner:
-                description: Owner defines who owns this subscription
+                description: |-
+                  Owner defines the users and groups entitled to select this subscription.
+                  It does not represent Kubernetes ownership or grant RBAC permissions.
                 properties:
                   groups:
-                    description: Groups is a list of Kubernetes group names that own
-                      this subscription
+                    description: |-
+                      Groups is a list of identity group names entitled to select this
+                      subscription. Names are matched exactly and are not Kubernetes object names.
                     items:
-                      description: GroupReference references a Kubernetes group
+                      description: GroupReference references an identity group by
+                        its opaque name.
                       properties:
                         name:
-                          description: Name is the name of the group
+                          description: Name is the opaque group name used for exact-match
+                            authorization.
                           type: string
                       required:
                       - name
                       type: object
                     type: array
                   users:
-                    description: Users is a list of Kubernetes user names that own
-                      this subscription
+                    description: |-
+                      Users is a list of identity user names entitled to select this subscription.
+                      Names are matched exactly.
                     items:
                       type: string
                     type: array
@@ -267,6 +289,17 @@ spec:
                   Higher numbers have higher priority. Defaults to 0.
                 format: int32
                 type: integer
+              rateLimitIdentity:
+                description: |-
+                  RateLimitIdentity selects the TokenRateLimitPolicy identity scheme.
+                  Unset lets the controller choose (short for new CRs, legacy for upgrade
+                  survivors) and persist the result on status.rateLimitIdentity.
+                  Explicit short or legacy is an operator escape hatch; changing it resets
+                  that subscription's in-window Limitador quota.
+                enum:
+                - short
+                - legacy
+                type: string
               tokenMetadata:
                 description: TokenMetadata contains metadata for token attribution
                   and metering
@@ -288,6 +321,10 @@ spec:
             - modelRefs
             - owner
             type: object
+            x-kubernetes-validations:
+            - message: organization.id is immutable
+              rule: '!has(oldSelf.organization) || (has(self.organization) && oldSelf.organization.id
+                == self.organization.id)'
           status:
             description: MaaSSubscriptionStatus defines the observed state of MaaSSubscription
             properties:
@@ -347,6 +384,81 @@ spec:
                   - reason
                   - status
                   - type
+                  type: object
+                type: array
+              flowControlStatuses:
+                description: |-
+                  FlowControlStatuses reports, for each referenced model, the InferencePool and
+                  InferenceObjective used for request priority, and their reconciliation state
+                items:
+                  description: ModelFlowControlStatus maps a referenced model to its
+                    InferencePool and InferenceObjective.
+                  properties:
+                    inferencePool:
+                      description: InferencePool is the pool observed in the model's
+                        LLMInferenceService status
+                      properties:
+                        group:
+                          description: |-
+                            Group is the group of the referent. For example, "gateway.networking.k8s.io".
+                            When unspecified or empty string, core API group is inferred.
+                          maxLength: 253
+                          pattern: ^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                          type: string
+                        kind:
+                          description: Kind is kind of the referent. For example "HTTPRoute"
+                            or "Service".
+                          maxLength: 63
+                          minLength: 1
+                          pattern: ^[a-zA-Z]([-a-zA-Z0-9]*[a-zA-Z0-9])?$
+                          type: string
+                        name:
+                          description: Name is the name of the referent.
+                          maxLength: 253
+                          minLength: 1
+                          type: string
+                      required:
+                      - group
+                      - kind
+                      - name
+                      type: object
+                    message:
+                      description: Message is a human-readable description of the
+                        reason
+                      maxLength: 1024
+                      type: string
+                    name:
+                      description: Name of the MaaSModelRef
+                      maxLength: 253
+                      type: string
+                    namespace:
+                      description: |-
+                        Namespace of the MaaSModelRef. The InferencePool and InferenceObjective live in this
+                        namespace, alongside the model's LLMInferenceService.
+                      maxLength: 63
+                      type: string
+                    objectiveName:
+                      description: |-
+                        ObjectiveName is the InferenceObjective name for this subscription and pool, in the pool's
+                        namespace. It is set whenever the pool is known, including when spec.inferencePriority is unset
+                        and no InferenceObjective is created.
+                      maxLength: 63
+                      type: string
+                    ready:
+                      description: |-
+                        Ready is true when no request-priority reconciliation is left for this model: its
+                        InferenceObjective matches spec.inferencePriority, spec.inferencePriority is unset, request
+                        priority does not apply, or the InferenceObjective opted out of management. It does not
+                        report backend readiness; see ModelRefStatuses.
+                      type: boolean
+                    reason:
+                      description: Reason is a machine-readable reason for Ready
+                      maxLength: 64
+                      type: string
+                  required:
+                  - name
+                  - namespace
+                  - ready
                   type: object
                 type: array
               modelRefStatuses:
@@ -410,6 +522,15 @@ spec:
                 - Degraded
                 - Failed
                 - Invalid
+                type: string
+              rateLimitIdentity:
+                description: |-
+                  RateLimitIdentity is the sticky effective TRLP identity scheme (short or
+                  legacy). Owned by the controller so GitOps tools that ignore status do
+                  not flap OutOfSync when the value is first chosen.
+                enum:
+                - short
+                - legacy
                 type: string
               tokenRateLimitStatuses:
                 description: TokenRateLimitStatuses reports the status of each generated

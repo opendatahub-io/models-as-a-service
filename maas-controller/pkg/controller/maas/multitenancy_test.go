@@ -169,12 +169,30 @@ func TestMaaSAuthPolicyReconciler_ReconcilesTenantNamespace(t *testing.T) {
 			Labels: map[string]string{tenantreconcile.LabelManagedByAITenant: "true"},
 		},
 	}
-	tenant := &maasv1alpha1.Tenant{
-		ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.TenantInstanceName, Namespace: namespace},
-		Spec: maasv1alpha1.TenantSpec{GatewayRef: maasv1alpha1.TenantGatewayRef{
-			Name:      "team-a-gateway",
-			Namespace: "team-a-gateway-ns",
-		}},
+	aitenant := &maasv1alpha1.AITenant{
+		ObjectMeta: metav1.ObjectMeta{Name: "team-a", Namespace: "ai-tenants"},
+		Status: maasv1alpha1.AITenantStatus{
+			TenantNamespace: namespace,
+			GatewayRef: maasv1alpha1.TenantGatewayRef{
+				Name:      "team-a-gateway",
+				Namespace: "team-a-gateway-ns",
+			},
+		},
+	}
+	tenantConfig := &maasv1alpha1.MaasTenantConfig{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      maasv1alpha1.MaasTenantConfigInstanceName,
+			Namespace: namespace,
+			Labels: map[string]string{
+				tenantreconcile.LabelManagedByAITenant: "true",
+				tenantreconcile.LabelTenantName:        "team-a",
+				tenantreconcile.LabelTenantNamespace:   namespace,
+			},
+			Annotations: map[string]string{
+				tenantreconcile.AnnotationAITenantName:      "team-a",
+				tenantreconcile.AnnotationAITenantNamespace: "ai-tenants",
+			},
+		},
 	}
 	model := newMaaSModelRef(modelName, namespace, "ExternalModel", modelName)
 	route := newHTTPRouteWithGateway(modelName, namespace, "team-a-gateway", "team-a-gateway-ns")
@@ -197,7 +215,7 @@ func TestMaaSAuthPolicyReconciler_ReconcilesTenantNamespace(t *testing.T) {
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithRESTMapper(testRESTMapper()).
-		WithObjects(ns, tenant, model, route, policy, gateway).
+		WithObjects(ns, aitenant, tenantConfig, model, route, policy, gateway).
 		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
 		Build()
 
@@ -224,7 +242,7 @@ func TestMaaSAuthPolicyReconciler_ReconcilesTenantNamespace(t *testing.T) {
 	// Gateway AuthPolicy name is now dynamic: {gatewayName}-maas-auth
 	expectedAuthPolicyName := "team-a-gateway-maas-auth"
 	if err := c.Get(context.Background(), types.NamespacedName{Name: expectedAuthPolicyName, Namespace: gwNamespace}, gatewayAP); err != nil {
-		t.Errorf("Gateway AuthPolicy should be created for AITenant-labeled tenant namespace: %v", err)
+		t.Errorf("Gateway AuthPolicy should be created for AITenant-managed tenant namespace: %v", err)
 	}
 }
 
@@ -253,6 +271,7 @@ func TestMaaSSubscriptionReconciler_IgnoresNonTenantNamespace(t *testing.T) {
 
 	r := &MaaSSubscriptionReconciler{
 		Client:                          c,
+		APIReader:                       c,
 		Scheme:                          scheme,
 		DefaultTenantNamespace:          "models-as-a-service",
 		TenantNamespaceDiscoveryEnabled: true,
@@ -339,7 +358,9 @@ func TestMaaSSubscriptionReconciler_DeletionRunsAfterNamespaceDelabeled(t *testi
 
 	r := &MaaSSubscriptionReconciler{
 		Client:                          c,
+		APIReader:                       c,
 		Scheme:                          scheme,
+		AppNamespace:                    "odh-ai-gateway-infra",
 		DefaultTenantNamespace:          "models-as-a-service",
 		TenantNamespaceDiscoveryEnabled: true,
 	}
@@ -455,19 +476,19 @@ func TestFetchOIDCConfig_PerTenantNamespace(t *testing.T) {
 	cfgA := r.fetchOIDCConfig(context.Background(), ctrl.Log, "tenant-a")
 	if cfgA == nil {
 		t.Fatal("expected OIDC config from tenant-a")
-	}
-	if cfgA.IssuerURL != "https://idp-a.example.com" {
-		t.Errorf("tenant-a issuerURL = %q, want https://idp-a.example.com", cfgA.IssuerURL)
-	}
-	if cfgA.ClientID != "client-a" {
-		t.Errorf("tenant-a clientID = %q, want client-a", cfgA.ClientID)
+	} else {
+		if cfgA.IssuerURL != "https://idp-a.example.com" {
+			t.Errorf("tenant-a issuerURL = %q, want https://idp-a.example.com", cfgA.IssuerURL)
+		}
+		if cfgA.ClientID != "client-a" {
+			t.Errorf("tenant-a clientID = %q, want client-a", cfgA.ClientID)
+		}
 	}
 
 	cfgB := r.fetchOIDCConfig(context.Background(), ctrl.Log, "tenant-b")
 	if cfgB == nil {
 		t.Fatal("expected OIDC config from tenant-b")
-	}
-	if cfgB.IssuerURL != "https://idp-b.example.com" {
+	} else if cfgB.IssuerURL != "https://idp-b.example.com" {
 		t.Errorf("tenant-b issuerURL = %q, want https://idp-b.example.com", cfgB.IssuerURL)
 	}
 }
@@ -529,6 +550,7 @@ func TestMapNamespaceToMaaSSubscriptions_EnqueuesWhenDiscoveryEnabled(t *testing
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(labeledSub, unlabeledSub).Build()
 	r := &MaaSSubscriptionReconciler{
 		Client:                          c,
+		APIReader:                       c,
 		Scheme:                          scheme,
 		DefaultTenantNamespace:          "models-as-a-service",
 		TenantNamespaceDiscoveryEnabled: true,
@@ -583,6 +605,7 @@ func TestMapAITenantToMaaSSubscriptions(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(tenantNS, tenantSub, defaultSub).Build()
 	r := &MaaSSubscriptionReconciler{
 		Client:                          c,
+		APIReader:                       c,
 		Scheme:                          scheme,
 		DefaultTenantNamespace:          "models-as-a-service",
 		TenantNamespaceDiscoveryEnabled: true,
@@ -648,8 +671,7 @@ func TestFetchTenantForNamespace(t *testing.T) {
 	legacy := got.legacy
 	if legacy == nil {
 		t.Fatalf("fetchTenantForNamespace legacy fallback returned config=%T, want Tenant", got.config)
-	}
-	if legacy.Spec.GatewayRef.Name != "legacy-gateway" {
+	} else if legacy.Spec.GatewayRef.Name != "legacy-gateway" {
 		t.Errorf("legacy GatewayRef.Name = %q, want legacy-gateway", legacy.Spec.GatewayRef.Name)
 	}
 

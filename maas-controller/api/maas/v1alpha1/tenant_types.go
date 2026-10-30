@@ -83,6 +83,8 @@ type TenantSpec struct {
 }
 
 // TenantExternalOIDCConfig defines the external OIDC provider settings.
+// +kubebuilder:validation:XValidation:rule="has(self.accessTokenPurposeClaim) == has(self.accessTokenPurpose)",message="accessTokenPurposeClaim and accessTokenPurpose must be set together"
+// +kubebuilder:validation:XValidation:rule="(has(self.cookieExpire) ? duration(self.cookieExpire) : duration('6h')) > (has(self.refreshInterval) ? duration(self.refreshInterval) : duration('4m'))",message="cookieExpire must be longer than refreshInterval"
 type TenantExternalOIDCConfig struct {
 	// IssuerURL is the OIDC issuer URL (e.g. https://keycloak.example.com/realms/maas).
 	// +kubebuilder:validation:MinLength=9
@@ -96,11 +98,78 @@ type TenantExternalOIDCConfig struct {
 	// +kubebuilder:validation:Pattern=`^\S+$`
 	ClientID string `json:"clientId"`
 
+	// Audience is the exact OIDC audience required in the token `aud` claim.
+	// It must be set for delegated Grid administration.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=256
+	// +kubebuilder:validation:Pattern=`^\S+$`
+	Audience string `json:"audience,omitempty"`
+
+	// AccessTokenPurposeClaim is the simple token claim name that carries the
+	// access-token purpose, such as token_use. It and AccessTokenPurpose must be
+	// set together and are required for delegated Grid administration.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=128
+	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9_-]+$`
+	AccessTokenPurposeClaim string `json:"accessTokenPurposeClaim,omitempty"`
+
+	// AccessTokenPurpose is the exact value required in AccessTokenPurposeClaim.
+	// It and AccessTokenPurposeClaim must be set together and are required for
+	// delegated Grid administration.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=128
+	// +kubebuilder:validation:Pattern=`^\S+$`
+	AccessTokenPurpose string `json:"accessTokenPurpose,omitempty"`
+
 	// TTL is the JWKS cache duration in seconds.
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:default=300
 	// +kubebuilder:validation:Minimum=30
 	TTL int `json:"ttl,omitempty"`
+
+	// ClientSecretRef names the Secret in the tenant namespace that holds the
+	// OIDC client secret for the consumer portal auth proxy. The tenant creates
+	// the Secret; the platform copies it next to the proxy and keeps the copy
+	// in sync.
+	// +kubebuilder:validation:Optional
+	ClientSecretRef *OIDCClientSecretReference `json:"clientSecretRef,omitempty"`
+
+	// RefreshInterval is how often the consumer portal auth proxy refreshes the
+	// session's access token. It must be shorter than the identity provider's
+	// access token lifetime. Defaults to 4m when unset.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Type=string
+	// +kubebuilder:validation:Pattern=`^([0-9]+(\.[0-9]+)?(ns|us|ms|s|m|h))+$`
+	// +kubebuilder:validation:XValidation:rule="duration(self) > duration('0s')",message="refreshInterval must be a positive duration"
+	RefreshInterval *metav1.Duration `json:"refreshInterval,omitempty"`
+
+	// CookieExpire is how long a consumer portal session lasts before the auth
+	// proxy signs the user out. It must be longer than RefreshInterval.
+	// Defaults to 6h when unset.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Type=string
+	// +kubebuilder:validation:MaxLength=32
+	// +kubebuilder:validation:Pattern=`^([0-9]+(\.[0-9]+)?(ns|us|ms|s|m|h))+$`
+	// +kubebuilder:validation:XValidation:rule="duration(self) > duration('0s')",message="cookieExpire must be a positive duration"
+	CookieExpire *metav1.Duration `json:"cookieExpire,omitempty"`
+}
+
+// OIDCClientSecretReference selects a key of a Secret in the tenant namespace.
+type OIDCClientSecretReference struct {
+	// Name of the Secret.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`
+	Name string `json:"name"`
+
+	// Key in the Secret's data that holds the client secret.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:Pattern=`^[-._a-zA-Z0-9]+$`
+	Key string `json:"key"`
 }
 
 // TenantTelemetryConfig defines configuration for telemetry collection.
@@ -146,6 +215,13 @@ type TenantLogsConfig struct {
 	// +kubebuilder:default=false
 	// +kubebuilder:validation:Optional
 	CaptureUser *bool `json:"captureUser,omitempty"`
+
+	// CaptureOrganization includes the subscription organization ID as
+	// organization_id on usage logs. Defaults to true. Independent of
+	// metrics.captureOrganization.
+	// +kubebuilder:default=true
+	// +kubebuilder:validation:Optional
+	CaptureOrganization *bool `json:"captureOrganization,omitempty"`
 }
 
 // TenantAPIKeysConfig defines configuration options for API key management.
@@ -153,6 +229,13 @@ type TenantAPIKeysConfig struct {
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:Minimum=1
 	MaxExpirationDays *int32 `json:"maxExpirationDays,omitempty"`
+
+	// DeletionRetentionDays controls how long lifecycle-invalidated API keys
+	// remain soft-deleted before physical deletion. The default is 90 days.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=106751
+	DeletionRetentionDays *int32 `json:"deletionRetentionDays,omitempty"`
 }
 
 // TenantMaasAPIConfig defines scaling and resource configuration for maas-api pods.
@@ -267,5 +350,5 @@ type TenantList struct {
 }
 
 func init() {
-	SchemeBuilder.Register(&Tenant{}, &TenantList{})
+	register(&Tenant{}, &TenantList{})
 }

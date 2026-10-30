@@ -4,6 +4,8 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/authpolicy"
@@ -172,7 +174,10 @@ func TestAuthorizedModels(t *testing.T) {
 			lister := &fakeLister{policies: tt.policies}
 			checker := authpolicy.NewChecker(log, lister)
 
-			result := checker.AuthorizedModels(tt.groups, tt.username)
+			result, err := checker.AuthorizedModels(tt.groups, tt.username)
+			if err != nil {
+				t.Fatalf("AuthorizedModels() error = %v", err)
+			}
 
 			for _, key := range tt.expectedModels {
 				if !result[key] {
@@ -192,7 +197,10 @@ func TestAuthorizedModels_NilLister(t *testing.T) {
 	log := logger.New(false)
 	checker := authpolicy.NewChecker(log, nil)
 
-	result := checker.AuthorizedModels([]string{"team-a"}, "alice")
+	result, err := checker.AuthorizedModels([]string{"team-a"}, "alice")
+	if err == nil {
+		t.Fatal("expected error with nil lister")
+	}
 	if result != nil {
 		t.Errorf("expected nil result with nil lister, got %v", result)
 	}
@@ -203,7 +211,10 @@ func TestAuthorizedModels_ListerError(t *testing.T) {
 	lister := &fakeLister{err: errors.New("connection refused")}
 	checker := authpolicy.NewChecker(log, lister)
 
-	result := checker.AuthorizedModels([]string{"team-a"}, "alice")
+	result, err := checker.AuthorizedModels([]string{"team-a"}, "alice")
+	if err == nil {
+		t.Fatal("expected error on lister failure")
+	}
 	if result != nil {
 		t.Errorf("expected nil result on lister error, got %v", result)
 	}
@@ -276,4 +287,103 @@ func TestIsModelAccessible(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestModelAccessSubjects(t *testing.T) {
+	organizationID := "42c3e46f-2477-44d7-a85b-d3b43f6b31fa"
+	otherOrganizationID := "53d4f57e-3588-55e8-b96c-4ec54a7c42fa"
+	modelRef := authpolicy.ModelKey{Namespace: "llm", Name: "model-a"}
+	policies := []*unstructured.Unstructured{
+		createPolicy("exact-duplicates", []string{
+			organizationID + "/alice",
+			organizationID + "/bob",
+			organizationID + "/alice",
+		}, []string{
+			organizationID + "/users",
+			organizationID + "/admins",
+			organizationID + "/users",
+		}, []map[string]string{{"name": "model-a", "namespace": "llm"}}),
+		createPolicy("prefix-near-miss", []string{organizationID + "-near-user"}, []string{
+			organizationID + "-users",
+		}, []map[string]string{{"name": "model-a", "namespace": "llm"}}),
+		createPolicy("wrong-namespace", []string{organizationID + "/wrong-namespace-user"}, []string{
+			organizationID + "/users",
+		}, []map[string]string{{"name": "model-a", "namespace": "other"}}),
+		createPolicy("user-only", []string{organizationID + "/user-only"}, nil, []map[string]string{
+			{"name": "model-a", "namespace": "llm"},
+		}),
+		createPolicy("mixed-organization", []string{organizationID + "/mixed-user"}, []string{
+			organizationID + "/users",
+			otherOrganizationID + "/users",
+		}, []map[string]string{{"name": "model-a", "namespace": "llm"}}),
+	}
+	checker := authpolicy.NewChecker(logger.New(false), &fakeLister{policies: policies})
+
+	inventory, err := checker.ModelAccessSubjects([]authpolicy.ModelKey{modelRef}, organizationID)
+	require.NoError(t, err)
+	require.Contains(t, inventory, modelRef)
+
+	subjects := inventory[modelRef]
+	assert.Equal(t, []authpolicy.GroupReference{
+		{Name: organizationID + "/admins"},
+		{Name: organizationID + "/users"},
+	}, subjects.Groups)
+	assert.Equal(t, []string{
+		organizationID + "/alice",
+		organizationID + "/bob",
+		organizationID + "/mixed-user",
+		organizationID + "/user-only",
+	}, subjects.Users)
+}
+
+func TestModelAccessSubjectsEmptyRefs(t *testing.T) {
+	checker := authpolicy.NewChecker(logger.New(false), &fakeLister{})
+
+	inventory, err := checker.ModelAccessSubjects(nil, "42c3e46f-2477-44d7-a85b-d3b43f6b31fa")
+	require.NoError(t, err)
+	assert.Empty(t, inventory)
+}
+
+func TestModelAccessSubjectsFiltersUsersByOrganizationPrefix(t *testing.T) {
+	organizationID := "42c3e46f-2477-44d7-a85b-d3b43f6b31fa"
+	otherOrganizationID := "53d4f57e-3588-55e8-b96c-4ec54a7c42fa"
+	modelRef := authpolicy.ModelKey{Namespace: "llm", Name: "model-a"}
+	policies := []*unstructured.Unstructured{
+		createPolicy("same-organization", []string{organizationID + "/same-organization-user"}, []string{
+			organizationID + "/users",
+		}, []map[string]string{{"name": "model-a", "namespace": "llm"}}),
+		createPolicy("wrong-organization", []string{otherOrganizationID + "/wrong-organization-user"}, []string{
+			otherOrganizationID + "/users",
+		}, []map[string]string{{"name": "model-a", "namespace": "llm"}}),
+		createPolicy("unqualified-user-only", []string{"unqualified-user"}, nil, []map[string]string{
+			{"name": "model-a", "namespace": "llm"},
+		}),
+		createPolicy("qualified-user-in-mixed-policy", []string{organizationID + "/mixed-organization-user"}, []string{
+			organizationID + "/users",
+			otherOrganizationID + "/users",
+		}, []map[string]string{{"name": "model-a", "namespace": "llm"}}),
+	}
+	checker := authpolicy.NewChecker(logger.New(false), &fakeLister{policies: policies})
+
+	inventory, err := checker.ModelAccessSubjects([]authpolicy.ModelKey{modelRef}, organizationID)
+	require.NoError(t, err)
+	require.Contains(t, inventory, modelRef)
+
+	assert.Equal(t, []string{
+		organizationID + "/mixed-organization-user",
+		organizationID + "/same-organization-user",
+	}, inventory[modelRef].Users)
+	assert.Equal(t, []authpolicy.GroupReference{
+		{Name: organizationID + "/users"},
+	}, inventory[modelRef].Groups)
+}
+
+func TestModelAccessSubjectsListerError(t *testing.T) {
+	checker := authpolicy.NewChecker(logger.New(false), &fakeLister{err: errors.New("connection refused")})
+
+	_, err := checker.ModelAccessSubjects(
+		[]authpolicy.ModelKey{{Namespace: "llm", Name: "model-a"}},
+		"42c3e46f-2477-44d7-a85b-d3b43f6b31fa",
+	)
+	require.Error(t, err)
 }

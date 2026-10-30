@@ -9,6 +9,7 @@
 #   1. Checks if rhoai is behind stable
 #   2. Verifies there are no merge conflicts (strict — fails on any conflict)
 #   3. Creates/updates a PR from stable → rhoai only if merge is clean
+#   4. Labels the PR with tide/merge-method-merge so Tide uses a merge commit
 
 name: Promote Stable to RHOAI
 
@@ -16,10 +17,6 @@ on:
   # schedule:
   #   - cron: '0 0 * * 2'  # Every Tuesday at midnight UTC (disabled for now)
   workflow_dispatch:
-
-permissions:
-  contents: read
-  pull-requests: write
 
 env:
   GH_USER_NAME: github-actions[bot]
@@ -29,6 +26,9 @@ jobs:
   promote:
     name: Promote stable to rhoai
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
 
     steps:
       - name: Checkout repository
@@ -121,6 +121,9 @@ jobs:
             [[ "$PR_NUMBER" =~ ^[0-9]+$ ]] || { echo "::error::Failed to parse PR number from: $PR_URL"; exit 1; }
             echo "Created new promotion PR #${PR_NUMBER}"
           fi
+
+          # Ensure Tide merges this PR with a merge commit (not the default squash)
+          gh pr edit "$PR_NUMBER" --add-label "tide/merge-method-merge"
 
           {
             echo "## Promote Stable to RHOAI — PR Created"

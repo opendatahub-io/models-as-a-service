@@ -107,5 +107,5 @@ type ExternalModelList struct {
 }
 
 func init() {
-	SchemeBuilder.Register(&ExternalModel{}, &ExternalModelList{})
+	register(&ExternalModel{}, &ExternalModelList{})
 }

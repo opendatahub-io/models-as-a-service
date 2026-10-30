@@ -55,10 +55,14 @@ from test_helper import (
     _wait_for_maas_subscription_phase,
     _wait_for_cr_absent,
     _wait_for_model_ready,
+    assert_openai_sse_chat_stream,
     chat,
 )
 
-pytestmark = pytest.mark.xdist_group("readonly")
+pytestmark = [
+    pytest.mark.legacy_ipp,
+    pytest.mark.xdist_group("readonly"),
+]
 
 ENVOY_FILTER_NAME = "payload-processing"
 IPP_PRE = "envoy.filters.http.ext_proc.ipp-pre"
@@ -178,6 +182,24 @@ def _assert_chain(pod: str, listener: str, filters: list[dict]):
     assert epp.get("typed_config") == ISTIO_EPP_TYPED_CONFIG, (
         f"{pod} {listener}: {EPP} config differs from the copy of Istio's static InferencePool filter"
     )
+
+
+def _assert_praxis_chain(pod: str, listener: str, filters: list[dict]):
+    """Default MaaS path has no InferencePool; EPP is optional when present."""
+    names = [f.get("name") for f in filters]
+    for name in (IPP_PRE, IPP, ROUTER):
+        assert names.count(name) == 1, f"{pod} {listener}: {name} x{names.count(name)} in {names}"
+    order = [names.index(IPP_PRE), names.index(IPP), names.index(ROUTER)]
+    auth = _auth_index(names)
+    if auth >= 0:
+        order.insert(1, auth)
+    assert order == sorted(order), (
+        f"{pod} {listener}: expected ipp-pre -> auth -> ipp -> router, got {names}"
+    )
+    if names.count(EPP) == 1:
+        assert names.index(IPP) < names.index(EPP) < names.index(ROUTER), (
+            f"{pod} {listener}: {EPP} must sit after ipp and before router, got {names}"
+        )
 
 
 @dataclass(frozen=True)
@@ -364,13 +386,10 @@ class TestEndpointPickerTraffic:
             )
 
             with _chat(api_key, model, stream=True) as streamed:
-                assert streamed.status_code == 200, f"stream: {response_summary(streamed)}"
                 assert streamed.headers.get(EPP_RESPONSE_HEADER) == "true", (
                     f"stream skipped the endpoint picker: {dict(streamed.headers)}"
                 )
-                events = [line for line in streamed.iter_lines(decode_unicode=True) if line]
-            assert events and events[-1] == "data: [DONE]", f"stream did not finish: {events[-3:]}"
-            assert any(e.startswith("data: {") for e in events[:-1]), f"stream carried no chunks: {events}"
+                assert_openai_sse_chat_stream(streamed)
 
             authenticated = 2  # the plain and the streamed completion
 

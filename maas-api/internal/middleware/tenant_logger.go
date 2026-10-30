@@ -36,6 +36,9 @@ func TenantLogger(base *logger.Logger, cfg TenantLoggerConfig) gin.HandlerFunc {
 			"tenant_namespace", cfg.TenantNamespace,
 			"gateway_name", cfg.GatewayName,
 		}
+		if organizationID := token.OrganizationIDFromContext(c); organizationID != "" {
+			fields = append(fields, "organization_id", organizationID)
+		}
 
 		if requestID := GetRequestID(c); requestID != "" {
 			fields = append(fields, "request_id", requestID)

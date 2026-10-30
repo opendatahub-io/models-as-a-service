@@ -61,10 +61,32 @@ spec:
               apiKeys:
                 description: APIKeys contains configuration for API key management.
                 properties:
+                  deletionRetentionDays:
+                    description: |-
+                      DeletionRetentionDays controls how long lifecycle-invalidated API keys
+                      remain soft-deleted before physical deletion. The default is 90 days.
+                    format: int32
+                    maximum: 106751
+                    minimum: 1
+                    type: integer
                   maxExpirationDays:
                     format: int32
                     minimum: 1
                     type: integer
+                type: object
+              apiTranslation:
+                description: |-
+                  APITranslation authorizes the API translation capabilities supported by
+                  the selected Praxis dataplane. Omission is equivalent to disabled for
+                  new tenants; the pointer preserves an explicit operator choice during
+                  IPP migration.
+                properties:
+                  enabled:
+                    description: |-
+                      Enabled permits only translation directions supported by the installed
+                      Praxis controller and ExtProc image. Omitted and false both disable
+                      translation for new tenants.
+                    type: boolean
                 type: object
               guardrails:
                 description: |-
@@ -309,6 +331,13 @@ spec:
                     description: TenantLogsConfig defines optional usage-log identity
                       dimensions.
                     properties:
+                      captureOrganization:
+                        default: true
+                        description: |-
+                          CaptureOrganization includes the subscription organization ID as
+                          organization_id on usage logs. Defaults to true. Independent of
+                          metrics.captureOrganization.
+                        type: boolean
                       captureUser:
                         default: false
                         description: |-

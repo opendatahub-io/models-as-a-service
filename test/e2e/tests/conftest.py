@@ -1,3 +1,4 @@
+import logging
 import os
 import socket
 import subprocess
@@ -7,6 +8,8 @@ import requests
 
 from test_helper import MAAS_API_DEPLOYMENT_NAMESPACE
 
+
+log = logging.getLogger(__name__)
 
 _WORKER_ISOLATED_XDIST_GROUPS = frozenset({"api_keys", "models"})
 
@@ -44,6 +47,31 @@ def worker_tenant_context():
         teardown_worker_tenant(case)
 
 
+@pytest.fixture
+def single_subscription_tenant(monkeypatch):
+    """Provide an empty test-owned tenant for single-subscription auto-selection."""
+    import test_helper
+    from worker_tenant_fixtures import (
+        activate_worker_tenant,
+        bootstrap_worker_tenant,
+        build_worker_tenant_case,
+        teardown_worker_tenant,
+        xdist_worker_suffix,
+    )
+
+    # Keep maas-api-key-cleanup-<tenant> within the 52-character CronJob limit.
+    context = build_worker_tenant_case(f"single-{xdist_worker_suffix()}")
+    try:
+        context = bootstrap_worker_tenant(context, baseline=False)
+        monkeypatch.setattr(
+            test_helper, "GATEWAY_AUTH_POLICY_NAME", context.gateway_authpolicy_name,
+        )
+        with activate_worker_tenant(context):
+            yield context
+    finally:
+        teardown_worker_tenant(context)
+
+
 @pytest.fixture(autouse=True)
 def _activate_marked_worker_tenant(request):
     """Provision isolation only when the test explicitly opts in by marker."""
@@ -54,6 +82,7 @@ def _activate_marked_worker_tenant(request):
         request.getfixturevalue("worker_tenant_context")
 
 
+@pytest.hookimpl(trylast=True)
 def pytest_collection_modifyitems(config, items):
     """Tag serial tests and activate explicitly marked worker isolation.
 
@@ -89,6 +118,15 @@ def pytest_collection_modifyitems(config, items):
                 f"{item.nodeid}: mutable xdist group {groups} requires "
                 "@pytest.mark.worker_tenant or @pytest.mark.serial"
             )
+
+    _order_grid_oidc_tests_first(items)
+
+
+def _order_grid_oidc_tests_first(items):
+    """Surface Grid OIDC failures before the longer legacy external suite."""
+    items.sort(
+        key=lambda item: 0 if item.get_closest_marker("grid_oidc") else 1
+    )
 
 
 # TLS verification flag - set E2E_SKIP_TLS_VERIFY=true to disable cert verification
@@ -385,6 +423,64 @@ def api_key_headers(api_key: str):
 
 
 @pytest.fixture(scope="session")
+def tenant_external_model_tenants():
+    """
+    Shared AGC/Praxis tenants for multi-tenant external model tests.
+
+    Two AITenants with selector-admitting tenant gateways on the praxis
+    dataplane, enriched with gateway/maas-api URLs (see
+    tenant_external_model_helpers.bootstrap_external_model_tenant). Modules in the
+    tenant_external_model xdist group share these tenants; user namespaces, models and
+    tenant-scoped policies are created per module with unique names.
+
+    Skips session-wide when the installed cluster lacks the additive
+    ExternalModel schema (gatewayRefs + status.gateways), the
+    ai-gateway-controller deployment, the
+    AITenant CRD, or tenant namespace discovery.
+    """
+    from multitenancy_helpers import (
+        cleanup_discovery_case,
+        new_named_tenant_case,
+        require_aitenant_crd,
+        require_tenant_namespace_discovery,
+    )
+    from tenant_external_model_helpers import (
+        bootstrap_external_model_tenant,
+        record_tenant_external_model_evidence,
+        require_tenant_external_model_support,
+    )
+
+    require_tenant_external_model_support()
+    require_aitenant_crd()
+    require_tenant_namespace_discovery()
+    record_tenant_external_model_evidence()
+
+    # Tenant names must stay short: AGC renames per-tenant praxis resources
+    # to "<resource>-<tenant-name>" and the longest base name
+    # ("payload-processing-external-model-filters-") leaves only 20 characters
+    # for the tenant before hitting the Kubernetes 63-character name limit.
+    # bootstrap_external_model_tenant enforces this and fails fast.
+    case_a = new_named_tenant_case("e2e-extmod-a")
+    case_b = new_named_tenant_case("e2e-extmod-b")
+    try:
+        for case in (case_a, case_b):
+            bootstrap_external_model_tenant(case)
+        yield {"tenant_a": case_a, "tenant_b": case_b}
+    finally:
+        # Attempt both cleanups even if the first fails: one tenant's
+        # teardown error must not leak the other's cluster resources.
+        cleanup_errors: list[Exception] = []
+        for case in (case_a, case_b):
+            try:
+                cleanup_discovery_case(case)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("cleanup failed for tenant %s: %s", case["tenant_ns"], exc)
+                cleanup_errors.append(exc)
+        if cleanup_errors:
+            raise cleanup_errors[0]
+
+
+@pytest.fixture(scope="session")
 def shared_test_tenants(gateway_host: str, is_https: bool):
     """
     Shared tenant infrastructure for multi-tenant tests.
@@ -416,6 +512,7 @@ def shared_test_tenants(gateway_host: str, is_https: bool):
         cleanup_discovery_case,
         wait_for_route_admitted,
         wait_for_deployment_available,
+        tenant_b_external_oidc_from_env,
     )
 
     require_aitenant_crd()
@@ -426,8 +523,10 @@ def shared_test_tenants(gateway_host: str, is_https: bool):
 
     try:
         # Bootstrap both tenants (creates gateway + AITenant CR)
-        for case in (case_a, case_b):
-            bootstrap_aitenant_tenant(case)
+        bootstrap_aitenant_tenant(case_a)
+        bootstrap_aitenant_tenant(
+            case_b, external_oidc=tenant_b_external_oidc_from_env()
+        )
 
         scheme = "https"
         for case in (case_a, case_b):

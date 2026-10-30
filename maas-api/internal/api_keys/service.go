@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -16,12 +15,6 @@ import (
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/subscription"
 )
-
-// validGroupNamePattern matches Kubernetes/OpenShift group names.
-// Allows alphanumerics, colons (for system: prefixes), dots, underscores, hyphens, and spaces.
-// Rejects control characters, quotes, backslashes, and other unsafe characters
-// that could break JSON encoding in AuthPolicy CEL expressions (CWE-116/CWE-74 mitigation).
-var validGroupNamePattern = regexp.MustCompile(`^[a-zA-Z0-9:._ -]+$`)
 
 var (
 	ErrTenantRequired = errors.New("tenant is required")
@@ -111,13 +104,12 @@ func (s *Service) CreateAPIKey(
 	ctx context.Context, username string, userGroups []string, name, description string,
 	expiresIn *time.Duration, ephemeral bool, requestedSubscription string, tenant string, labels map[string]string,
 ) (*CreateAPIKeyResponse, error) {
-	// Validate group names against allowlist pattern (CWE-116/CWE-74 mitigation).
+	// Validate group names against the canonical allowlist (CWE-116/CWE-74 mitigation).
 	// AuthPolicy uses CEL to build JSON arrays from groups, and CEL lacks JSON escaping
 	// functions, so we reject any characters outside the safe allowlist on write.
-	for _, group := range userGroups {
-		if !validGroupNamePattern.MatchString(group) {
-			return nil, fmt.Errorf("group name %q contains invalid characters (only alphanumerics, colons, dots, underscores, hyphens, and spaces are allowed)", group)
-		}
+	// See groupname.go for the shared rule and its copies in maas-controller.
+	if err := validateGroupNames(userGroups); err != nil {
+		return nil, err
 	}
 
 	// Compute max expiration days once from config-or-default (CWE-613 mitigation).
@@ -367,6 +359,24 @@ func (s *Service) RevokeTenantAPIKeys(ctx context.Context, tenant string) (int, 
 	return s.store.InvalidateTenant(ctx, tenant)
 }
 
+// RevokeSubscriptionAPIKeys soft-deletes all keys bound to one subscription
+// within a tenant. The operation is intentionally separate from user-facing
+// bulk revoke so lifecycle cleanup receives retention semantics.
+func (s *Service) RevokeSubscriptionAPIKeys(ctx context.Context, tenant, subscription string) (int, error) {
+	tenant = strings.TrimSpace(tenant)
+	subscription = strings.TrimSpace(subscription)
+	if tenant == "" {
+		return 0, ErrTenantRequired
+	}
+	if subscription == "" {
+		return 0, errors.New("subscription is required")
+	}
+	if configuredTenant := s.GetTenantName(); configuredTenant != "" && tenant != configuredTenant {
+		return 0, fmt.Errorf("%w: requested tenant %q but service is scoped to %q", ErrTenantMismatch, tenant, configuredTenant)
+	}
+	return s.store.InvalidateSubscription(ctx, tenant, subscription)
+}
+
 // StartDebounceCleanup starts a background goroutine that periodically evicts
 // stale entries from the lastUsedDebounce map. Without this the map grows
 // indefinitely — one entry per unique key ID that has ever been validated.
@@ -451,5 +461,21 @@ func (s *Service) CleanupExpiredEphemeral(ctx context.Context) (int64, error) {
 		return 0, fmt.Errorf("cleanup failed: %w", err)
 	}
 	s.logger.WithContext(ctx).Info("Ephemeral key cleanup completed", "deletedCount", count)
+	return count, nil
+}
+
+// CleanupSoftDeleted physically removes lifecycle-invalidated keys after the
+// configured retention period. Called by the internal maintenance endpoint.
+func (s *Service) CleanupSoftDeleted(ctx context.Context) (int64, error) {
+	retentionDays := 90
+	if s.config != nil && s.config.APIKeyDeletionRetentionDays > 0 {
+		retentionDays = s.config.APIKeyDeletionRetentionDays
+	}
+	count, err := s.store.DeleteSoftDeleted(ctx, time.Duration(retentionDays)*24*time.Hour)
+	if err != nil {
+		return 0, fmt.Errorf("retained key cleanup failed: %w", err)
+	}
+	s.logger.WithContext(ctx).Info("Retained API-key cleanup completed",
+		"deletedCount", count, "retentionDays", retentionDays)
 	return count, nil
 }

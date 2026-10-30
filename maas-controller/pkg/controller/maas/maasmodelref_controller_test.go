@@ -34,7 +34,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	"k8s.io/client-go/util/workqueue"
 	"knative.dev/pkg/apis"
 	duckv1 "knative.dev/pkg/apis/duck/v1"
@@ -655,14 +655,15 @@ func TestMaaSModelRefReconciler_HTTPRouteRaceCondition(t *testing.T) {
 	r, c := newTestReconciler(model, llmisvc, sub, auth)
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: modelName, Namespace: ns}}
 
-	// --- Phase 1: Reconcile without HTTPRoute -> should enter Pending ---
+	// --- Phase 1: Reconcile without HTTPRoute -> should enter Pending, no timer ---
+	// The HTTPRoute watch re-enqueues this model when the route appears; no polling needed.
 
 	result, err := r.Reconcile(ctx, req)
 	if err != nil {
 		t.Fatalf("Reconcile (no HTTPRoute): %v", err)
 	}
 	if result.RequeueAfter != 0 {
-		t.Errorf("expected no requeue when HTTPRoute not found (watch handles it), got: %v", result)
+		t.Errorf("expected no timed re-check while HTTPRoute is missing (watch handles it), got: %v", result)
 	}
 
 	got := &maasv1alpha1.MaaSModelRef{}
@@ -694,6 +695,72 @@ func TestMaaSModelRefReconciler_HTTPRouteRaceCondition(t *testing.T) {
 		t.Errorf("Phase after HTTPRoute created = %q, want Ready", final.Status.Phase)
 	}
 	assertReadyCondition(t, final.Status.Conditions, metav1.ConditionTrue, "Reconciled")
+}
+
+// TestMaaSModelRefReconciler_RequeuesWhileBackendNotReady verifies that a model whose
+// backend is not yet ready is re-checked on a timer, and stops polling once ready.
+//
+// The LLMInferenceService watch normally delivers the Ready transition. The timer is a
+// backstop for the narrow window during dynamic (late-CRD) watch registration where an
+// event can be missed. The requeue fires only while runtimeReady is false, so models
+// that are intentionally not Ready (no governance, no HTTPRoute) do not get polled.
+func TestMaaSModelRefReconciler_RequeuesWhileBackendNotReady(t *testing.T) {
+	ctx := context.Background()
+	const (
+		modelName   = "test-model"
+		llmisvcName = "test-llmisvc"
+		ns          = "default"
+	)
+
+	llmisvc := newLLMISvc(llmisvcName, ns, corev1.ConditionFalse)
+	model := newMaaSModelRef(modelName, ns, "LLMInferenceService", llmisvcName)
+	sub := newMaaSSubscription("sub1", "admin-ns", "team-a", modelName, 100)
+	sub.Spec.ModelRefs[0].Namespace = ns
+	auth := newMaaSAuthPolicy("auth1", "admin-ns", "team-a",
+		maasv1alpha1.ModelRef{Name: modelName, Namespace: ns})
+	r, c := newTestReconciler(model, llmisvc, sub, auth, newLLMISvcRoute(llmisvcName, ns))
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: modelName, Namespace: ns}}
+
+	result, err := r.Reconcile(ctx, req)
+	if err != nil {
+		t.Fatalf("Reconcile (backend not ready): %v", err)
+	}
+	if result.RequeueAfter != backendNotReadyRequeueInterval {
+		t.Errorf("RequeueAfter = %v, want %v while the backend is not ready", result.RequeueAfter, backendNotReadyRequeueInterval)
+	}
+	notReady := &maasv1alpha1.MaaSModelRef{}
+	if err := c.Get(ctx, req.NamespacedName, notReady); err != nil {
+		t.Fatalf("Get after not-ready reconcile: %v", err)
+	}
+	if notReady.Status.Phase != "Unhealthy" {
+		t.Errorf("Phase = %q, want Unhealthy", notReady.Status.Phase)
+	}
+
+	// The backend becomes ready; the next reconcile must land on Ready and stop the timer.
+	backend := &kservev1alpha2.LLMInferenceService{}
+	if err := c.Get(ctx, client.ObjectKey{Name: llmisvcName, Namespace: ns}, backend); err != nil {
+		t.Fatalf("Get LLMInferenceService: %v", err)
+	}
+	backend.Status.Conditions = duckv1.Conditions{{Type: apis.ConditionReady, Status: corev1.ConditionTrue}}
+	if err := c.Update(ctx, backend); err != nil {
+		t.Fatalf("Update LLMInferenceService: %v", err)
+	}
+
+	result, err = r.Reconcile(ctx, req)
+	if err != nil {
+		t.Fatalf("Reconcile (backend ready): %v", err)
+	}
+	if result.RequeueAfter != 0 {
+		t.Errorf("RequeueAfter = %v, want 0 once the model is Ready", result.RequeueAfter)
+	}
+	ready := &maasv1alpha1.MaaSModelRef{}
+	if err := c.Get(ctx, req.NamespacedName, ready); err != nil {
+		t.Fatalf("Get after ready reconcile: %v", err)
+	}
+	if ready.Status.Phase != "Ready" {
+		t.Errorf("Phase = %q, want Ready", ready.Status.Phase)
+	}
+	assertReadyCondition(t, ready.Status.Conditions, metav1.ConditionTrue, "Reconciled")
 }
 
 // TestMaaSModelRefReconciler_DuplicateReconciliation verifies that reconciling the same
@@ -1619,8 +1686,7 @@ func TestExternalModel_Reconcile_RuntimeReadyFromGatewayStatus(t *testing.T) {
 			cond := findCondition(got.Status.Conditions, maasv1alpha1.ConditionRuntimeReady)
 			if cond == nil {
 				t.Fatal("RuntimeReady condition not found")
-			}
-			if cond.Status != tt.wantStatus || cond.Reason != string(tt.wantReason) || cond.Message != tt.wantMessage {
+			} else if cond.Status != tt.wantStatus || cond.Reason != string(tt.wantReason) || cond.Message != tt.wantMessage {
 				t.Errorf("RuntimeReady = %s/%s %q, want %s/%s %q",
 					cond.Status, cond.Reason, cond.Message, tt.wantStatus, tt.wantReason, tt.wantMessage)
 			}
@@ -2008,15 +2074,16 @@ func TestCheckModelIdentityConflict_AliasNotResolved(t *testing.T) {
 	cond := findCondition(model.Status.Conditions, ConditionModelIdentityUnique)
 	if cond == nil {
 		t.Fatal("ModelIdentityUnique condition not set")
-	}
-	if cond.Status != metav1.ConditionUnknown {
-		t.Errorf("expected Unknown, got %v", cond.Status)
-	}
-	if cond.Reason != "AliasNotResolved" {
-		t.Errorf("expected reason AliasNotResolved, got %q", cond.Reason)
-	}
-	if cond.ObservedGeneration != 1 {
-		t.Errorf("expected observedGeneration 1, got %d", cond.ObservedGeneration)
+	} else {
+		if cond.Status != metav1.ConditionUnknown {
+			t.Errorf("expected Unknown, got %v", cond.Status)
+		}
+		if cond.Reason != "AliasNotResolved" {
+			t.Errorf("expected reason AliasNotResolved, got %q", cond.Reason)
+		}
+		if cond.ObservedGeneration != 1 {
+			t.Errorf("expected observedGeneration 1, got %d", cond.ObservedGeneration)
+		}
 	}
 }
 
@@ -2040,12 +2107,13 @@ func TestCheckModelIdentityConflict_NoConflicts(t *testing.T) {
 	cond := findCondition(model.Status.Conditions, ConditionModelIdentityUnique)
 	if cond == nil {
 		t.Fatal("ModelIdentityUnique condition not set")
-	}
-	if cond.Status != metav1.ConditionTrue {
-		t.Errorf("expected True, got %v", cond.Status)
-	}
-	if cond.Reason != "UniqueIdentity" {
-		t.Errorf("expected reason UniqueIdentity, got %q", cond.Reason)
+	} else {
+		if cond.Status != metav1.ConditionTrue {
+			t.Errorf("expected True, got %v", cond.Status)
+		}
+		if cond.Reason != "UniqueIdentity" {
+			t.Errorf("expected reason UniqueIdentity, got %q", cond.Reason)
+		}
 	}
 }
 
@@ -2069,7 +2137,7 @@ func TestCheckModelIdentityConflict_ConflictDetected(t *testing.T) {
 		WithObjects(modelA, modelB).
 		WithStatusSubresource(&maasv1alpha1.MaaSModelRef{}).
 		Build()
-	recorder := record.NewFakeRecorder(1)
+	recorder := events.NewFakeRecorder(1)
 	r := &MaaSModelRefReconciler{Client: c, Scheme: scheme, Recorder: recorder}
 
 	r.checkModelIdentityConflict(context.Background(), ctrl.Log.WithName("test"), modelA)
@@ -2077,12 +2145,13 @@ func TestCheckModelIdentityConflict_ConflictDetected(t *testing.T) {
 	cond := findCondition(modelA.Status.Conditions, ConditionModelIdentityUnique)
 	if cond == nil {
 		t.Fatal("ModelIdentityUnique condition not set")
-	}
-	if cond.Status != metav1.ConditionFalse {
-		t.Errorf("expected False, got %v", cond.Status)
-	}
-	if cond.Reason != "ModelNameConflict" {
-		t.Errorf("expected reason ModelNameConflict, got %q", cond.Reason)
+	} else {
+		if cond.Status != metav1.ConditionFalse {
+			t.Errorf("expected False, got %v", cond.Status)
+		}
+		if cond.Reason != "ModelNameConflict" {
+			t.Errorf("expected reason ModelNameConflict, got %q", cond.Reason)
+		}
 	}
 
 	assertRecordedEvent(t, recorder, "Warning ModelNameConflict")
@@ -2096,7 +2165,7 @@ func TestCheckModelIdentityConflict_ConflictResolved(t *testing.T) {
 	setModelIdentityCondition(model, []string{"model-b"})
 
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(model).Build()
-	recorder := record.NewFakeRecorder(1)
+	recorder := events.NewFakeRecorder(1)
 	r := &MaaSModelRefReconciler{Client: c, Scheme: scheme, Recorder: recorder}
 
 	r.checkModelIdentityConflict(context.Background(), ctrl.Log.WithName("test"), model)
@@ -2104,18 +2173,19 @@ func TestCheckModelIdentityConflict_ConflictResolved(t *testing.T) {
 	cond := findCondition(model.Status.Conditions, ConditionModelIdentityUnique)
 	if cond == nil {
 		t.Fatal("ModelIdentityUnique condition not set")
-	}
-	if cond.Status != metav1.ConditionTrue {
-		t.Errorf("expected True, got %v", cond.Status)
-	}
-	if cond.Reason != "UniqueIdentity" {
-		t.Errorf("expected reason UniqueIdentity, got %q", cond.Reason)
+	} else {
+		if cond.Status != metav1.ConditionTrue {
+			t.Errorf("expected True, got %v", cond.Status)
+		}
+		if cond.Reason != "UniqueIdentity" {
+			t.Errorf("expected reason UniqueIdentity, got %q", cond.Reason)
+		}
 	}
 
 	assertRecordedEvent(t, recorder, "Normal ModelNameConflictResolved")
 }
 
-func assertRecordedEvent(t *testing.T, recorder *record.FakeRecorder, want string) {
+func assertRecordedEvent(t *testing.T, recorder *events.FakeRecorder, want string) {
 	t.Helper()
 	select {
 	case event := <-recorder.Events:
@@ -2261,13 +2331,14 @@ func TestMaaSModelRef_AliasChangeConvergesSiblingConditions(t *testing.T) {
 		condition := findCondition(sibling.Status.Conditions, ConditionModelIdentityUnique)
 		if condition == nil {
 			t.Fatalf("missing collision condition for %s", sibling.Name)
-		}
-		want := metav1.ConditionTrue
-		if sibling.Name == newSibling.Name {
-			want = metav1.ConditionFalse
-		}
-		if condition.Status != want {
-			t.Errorf("%s collision = %s, want %s", sibling.Name, condition.Status, want)
+		} else {
+			want := metav1.ConditionTrue
+			if sibling.Name == newSibling.Name {
+				want = metav1.ConditionFalse
+			}
+			if condition.Status != want {
+				t.Errorf("%s collision = %s, want %s", sibling.Name, condition.Status, want)
+			}
 		}
 	}
 }

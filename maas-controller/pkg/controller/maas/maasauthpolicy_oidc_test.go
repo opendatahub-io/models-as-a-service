@@ -117,8 +117,11 @@ func TestFetchOIDCConfig_WithExternalOIDC(t *testing.T) {
 		},
 		Spec: maasv1alpha1.TenantSpec{
 			ExternalOIDC: &maasv1alpha1.TenantExternalOIDCConfig{
-				IssuerURL: "https://keycloak.example.com/realms/test",
-				ClientID:  "test-client",
+				IssuerURL:               "https://keycloak.example.com/realms/test",
+				ClientID:                "test-client",
+				Audience:                "maas-api",
+				AccessTokenPurposeClaim: "token_use",
+				AccessTokenPurpose:      "access",
 			},
 		},
 	}
@@ -138,6 +141,9 @@ func TestFetchOIDCConfig_WithExternalOIDC(t *testing.T) {
 	assert.NotNil(t, config, "should return config when externalOIDC is configured")
 	assert.Equal(t, "https://keycloak.example.com/realms/test", config.IssuerURL)
 	assert.Equal(t, "test-client", config.ClientID)
+	assert.Equal(t, "maas-api", config.Audience)
+	assert.Equal(t, "token_use", config.AccessTokenPurposeClaim)
+	assert.Equal(t, "access", config.AccessTokenPurpose)
 }
 
 func TestFetchOIDCConfig_WithAITenantOIDC(t *testing.T) {
@@ -319,6 +325,36 @@ func TestFetchOIDCConfig_EmptyClientID(t *testing.T) {
 	assert.Nil(t, config, "should return nil when clientId is empty (audience validation required)")
 }
 
+func TestFetchOIDCConfig_AccessTokenPurposePair(t *testing.T) {
+	scheme := maasAuthPolicyOIDCTestScheme(t)
+	tenant := &maasv1alpha1.Tenant{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      maasv1alpha1.TenantInstanceName,
+			Namespace: "models-as-a-service",
+		},
+		Spec: maasv1alpha1.TenantSpec{
+			ExternalOIDC: &maasv1alpha1.TenantExternalOIDCConfig{
+				IssuerURL:               "https://keycloak.example.com/realms/test",
+				ClientID:                "test-client",
+				AccessTokenPurposeClaim: "token_use",
+			},
+		},
+	}
+
+	client := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(tenant).
+		Build()
+	reconciler := &MaaSAuthPolicyReconciler{
+		Client:          client,
+		Scheme:          scheme,
+		TenantNamespace: "models-as-a-service",
+	}
+
+	config := reconciler.fetchOIDCConfig(context.Background(), logr.Discard(), "models-as-a-service")
+	assert.Nil(t, config, "purpose claim and value must be configured together")
+}
+
 func TestCELExpressions_SupportOIDC(t *testing.T) {
 	// Test that CEL expressions include OIDC identity fields
 	assert.Contains(t, celUserID, "auth.identity.preferred_username",
@@ -351,6 +387,20 @@ func TestCELExpressions_SupportOIDC(t *testing.T) {
 		"X-MaaS-Group expression should validate OIDC groups before JSON string construction")
 	assert.Contains(t, celTokenGroupsHeaderJSON, safeGroupNamePattern,
 		"X-MaaS-Group expression should use the safe group-name pattern")
+
+	// Security: group sources are selected by identity type, never by claim
+	// presence, so a JWT carrying a crafted "user" claim cannot reach the
+	// TokenReview branch — and both sources are gated on the pattern.
+	assert.Contains(t, celTokenGroupsHeaderJSON, "has(auth.identity.iss)",
+		"X-MaaS-Group expression must select the group source by identity type (iss), not claim presence")
+	assert.Contains(t, celTokenGroupsHeaderJSON, "auth.identity.user.groups.all(g, g.matches(",
+		"X-MaaS-Group expression must validate TokenReview groups before JSON string construction")
+	assert.Contains(t, celGroups, "has(auth.identity.iss)",
+		"celGroups must select the group source by identity type (iss), not claim presence")
+	assert.Contains(t, celGroups, celOIDCGroupsSafe,
+		"celGroups must gate JWT groups on the safe group-name pattern")
+	assert.Contains(t, celGroups, "auth.identity.user.groups.all(g, g.matches(",
+		"celGroups must validate TokenReview groups before subscription selection")
 }
 
 func TestCELExpressions_UserIDVsUsername(t *testing.T) {
@@ -394,9 +444,12 @@ func TestCELExpressions_OrderMatters(t *testing.T) {
 
 func TestBuildGatewayAuthPolicySpec_OIDCClientBound(t *testing.T) {
 	oidc := &oidcConfig{
-		IssuerURL: "https://keycloak.example.com/realms/test",
-		ClientID:  "my-maas-client",
-		TTL:       300,
+		IssuerURL:               "https://keycloak.example.com/realms/test",
+		ClientID:                "my-maas-client",
+		Audience:                "maas-api",
+		AccessTokenPurposeClaim: "token_use",
+		AccessTokenPurpose:      "access",
+		TTL:                     300,
 	}
 	obj := gatewayAuthPolicySpecTestObject(t, oidc)
 
@@ -408,26 +461,56 @@ func TestBuildGatewayAuthPolicySpec_OIDCClientBound(t *testing.T) {
 	ruleMap, ok := rule.(map[string]any)
 	assert.True(t, ok, "oidc-client-bound should be a map")
 
-	// Verify patternMatching.patterns[0].value matches the configured clientId
+	// Issuer, client, audience, and token-purpose checks all have to pass.
 	patterns, _, _ := unstructured.NestedSlice(ruleMap, "patternMatching", "patterns")
-	assert.Len(t, patterns, 1, "should have exactly one pattern")
-	patternMap, ok := patterns[0].(map[string]any)
-	assert.True(t, ok, "pattern should be a map")
-	assert.Equal(t, "auth.identity.azp", patternMap["selector"], "selector should be auth.identity.azp")
-	assert.Equal(t, "eq", patternMap["operator"], "operator should be eq")
-	assert.Equal(t, "my-maas-client", patternMap["value"], "value should match clientId")
+	assert.Len(t, patterns, 4, "issuer, client, audience, and purpose patterns are required")
+	expectPattern(t, patterns[0], "auth.identity.iss", "eq", oidc.IssuerURL)
+	expectPattern(t, patterns[1], "auth.identity.azp", "eq", oidc.ClientID)
+	audiencePattern, ok := patterns[2].(map[string]any)
+	assert.True(t, ok)
+	assert.Equal(t,
+		`has(auth.identity.aud) && (auth.identity.aud == "maas-api" || "maas-api" in auth.identity.aud)`,
+		audiencePattern["predicate"],
+	)
+	expectPattern(t, patterns[3], "auth.identity.token_use", "eq", oidc.AccessTokenPurpose)
 
-	// Verify the when predicate guards on has(auth.identity.azp) so that
-	// OpenShift TokenReview identities (no azp claim) are not denied
+	// TokenReview identities have no top-level iss claim and remain on their path.
 	whenSlice, _, _ := unstructured.NestedSlice(ruleMap, "when")
 	assert.Len(t, whenSlice, 1, "should have exactly one when predicate")
 	whenMap, ok := whenSlice[0].(map[string]any)
 	assert.True(t, ok)
 	predicate, _ := whenMap["predicate"].(string)
-	assert.Contains(t, predicate, "has(auth.identity.azp)",
-		"when predicate must guard on has(auth.identity.azp) to protect OpenShift TokenReview identities")
+	assert.Contains(t, predicate, "has(auth.identity.iss)",
+		"when predicate must select external OIDC identities")
 	assert.Contains(t, predicate, `Bearer [^.]+\\.[^.]+\\.[^.]+`,
 		"when predicate should match only JWT-shaped Bearer tokens")
+}
+
+func TestBuildGatewayAuthPolicySpec_DeniesNewClientIdentityHeaders(t *testing.T) {
+	obj := gatewayAuthPolicySpecTestObject(t, nil)
+	rule := nestedMapRequired(t, obj, "spec", "defaults", "rules", "authorization", "deny-client-identity-headers")
+	patterns, found, err := unstructured.NestedSlice(rule, "patternMatching", "patterns")
+	assert.NoError(t, err)
+	assert.True(t, found)
+
+	predicates := make(map[string]bool)
+	for _, pattern := range patterns {
+		patternMap, ok := pattern.(map[string]any)
+		assert.True(t, ok)
+		predicate, _ := patternMap["predicate"].(string)
+		predicates[predicate] = true
+	}
+	assert.True(t, predicates[`!("x-maas-identity" in request.headers)`])
+	assert.True(t, predicates[`!("x-maas-admin-scope" in request.headers)`])
+}
+
+func expectPattern(t *testing.T, pattern any, selector, operator, value string) {
+	t.Helper()
+	patternMap, ok := pattern.(map[string]any)
+	assert.True(t, ok, "pattern should be a map")
+	assert.Equal(t, selector, patternMap["selector"])
+	assert.Equal(t, operator, patternMap["operator"])
+	assert.Equal(t, value, patternMap["value"])
 }
 
 func TestBuildGatewayAuthPolicySpec_OIDCClientBound_AbsentWithoutOIDC(t *testing.T) {

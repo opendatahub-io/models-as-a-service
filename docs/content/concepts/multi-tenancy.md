@@ -18,7 +18,7 @@ Multi-tenancy separates **platform context** from **MaaS runtime configuration**
 
 **MaasTenantConfig** (runtime configuration):
 - Lives in tenant namespace as singleton `default-tenant`
-- Defines API key policies, telemetry settings
+- Defines API key policies, telemetry settings, and an opt-in permission for supported API translation
 - Owned by tenant administrators
 - Configures MaaS-specific operational behavior
 

@@ -42,8 +42,9 @@ const (
 // network-admin-provisioned Gateway reference, the MaaS tenant config object,
 // and tenant-admin Roles.
 //
-// Praxis tenants (ai-gateway-controller owns payload processing) opt out of
-// maas-controller IPP via metadata.annotations["maas.opendatahub.io/payload-processing-type"]="praxis".
+// Payload processing defaults to praxis (ai-gateway-controller). Opt into
+// maas-controller legacy IPP via MaasTenantConfig annotation
+// maas.opendatahub.io/payload-processing-type=ipp.
 //
 // The AITenant name is used as a suffix for per-tenant maas-api resources
 // (e.g., "maas-api-{tenant-name}"). To fit within the Kubernetes 63-character
@@ -158,5 +159,5 @@ type AITenantList struct {
 }
 
 func init() {
-	SchemeBuilder.Register(&AITenant{}, &AITenantList{})
+	register(&AITenant{}, &AITenantList{})
 }

@@ -1,7 +1,7 @@
 ## Container image configuration and targets
 
 CONTAINER_ENGINE ?= podman
-REPO ?= quay.io/opendatahub/maas-discovery
+REPO ?= quay.io/opendatahub/odh-maas-discovery
 TAG ?= latest
 FULL_IMAGE ?= $(REPO):$(TAG)
 

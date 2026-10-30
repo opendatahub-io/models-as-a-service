@@ -28,14 +28,22 @@
 #   SKIP_VALIDATION - Skip deployment validation (default: false)
 #   MAAS_API_IMAGE - Custom MaaS API image (optional)
 #   MAAS_CONTROLLER_IMAGE - Custom MaaS controller image (optional)
-#   AI_GATEWAY_OPERATOR_IMAGE - Custom ai-gateway-operator image (optional, requires DEPLOY_MODE=operator)
-#   DEPLOY_MODE           - kustomize (default) or operator
+#   AI_GATEWAY_OPERATOR_IMAGE - Custom ai-gateway-operator image (optional)
+#   AI_GATEWAY_CONTROLLER_IMAGE - AIGC manager image; unset defaults to
+#                                quay.io/opendatahub/odh-ai-gateway-controller:latest (main after AIGC #91).
+#                                Set to empty to skip companion install.
+#   AIGC_GIT_URL / AIGC_GIT_REF - Optional overrides for deploy-aigc-companion.sh (defaults live in that script)
+#   DEPLOY_MODE - MaaS ownership mode (default: kustomize for presubmits)
 #   POLICY_ENGINE - Rate-limiting policy engine (default: rhcl)
 #   RHCL_STARTING_CSV - Optional RHCL operator startingCSV pin
 #   RHCL_NAMESPACE - RHCL/Kuadrant workload namespace (default: kuadrant-system)
+#   OLM_BUNDLE_UNPACK_RETRY - Retry failed OLM bundle unpacks during deploy (default: true)
 #   INSECURE_HTTP  - Deploy without TLS and use HTTP for tests (default: false)
 #   EXTERNAL_OIDC - Enable external OIDC e2e coverage (default: false)
 #   OIDC_ISSUER_URL, OIDC_TOKEN_URL, OIDC_CLIENT_ID, OIDC_USERNAME, OIDC_PASSWORD
+#   OIDC_AUDIENCE, OIDC_ACCESS_TOKEN_PURPOSE_CLAIM, OIDC_ACCESS_TOKEN_PURPOSE - Optional strict
+#                   OIDC contract applied to the default AITenant by deploy.sh
+#   E2E_RUN_ONLY_OIDC_TESTS - Skip passes 1–2 and run only the OIDC tests (requires EXTERNAL_OIDC=true)
 #   OIDC_READINESS_STRICT - Exit if OIDC gateway readiness fails (default: true)
 #   DEPLOYMENT_NAMESPACE - Namespace of maas-controller (default: opendatahub)
 #   MAAS_SUBSCRIPTION_NAMESPACE - Namespace of MaaS CRs (default: models-as-a-service)
@@ -43,7 +51,13 @@
 #   AITENANT_NAMESPACE - Namespace for AITenant CRs (default: ai-tenants)
 #   GATEWAY_NAMESPACE - Gateway namespace (default: openshift-ingress)
 #   MODEL_NAMESPACE - Namespace of models (default: llm)
-#   E2E_PARALLEL_WORKERS - pytest-xdist worker count (default: 7)
+#   E2E_PARALLEL_WORKERS - pytest-xdist worker count (default: 5)
+#   TENANT_EXTERNAL_MODEL_CROSSNS_E2E - Opt in to P1 cross-namespace external
+#                         provider E2E (needs AGC cross-namespace provider
+#                         support packaged, default: false)
+#   TENANT_EXTERNAL_MODEL_LEGACY_IPP_E2E - Opt in to the legacy IPP coexistence
+#                         E2E (scenario 5; needs the IPP image pin with the
+#                         legacy-controller exclusion guard, default: false)
 #
 # TIMEOUT CONFIGURATION (all in seconds, from deployment-helpers.sh):
 #   CUSTOM_RESOURCE_TIMEOUT, LLMIS_TIMEOUT, MAASMODELREF_TIMEOUT,
@@ -74,12 +88,21 @@ EXTERNAL_OIDC=${EXTERNAL_OIDC:-false}
 export MAAS_API_IMAGE=${MAAS_API_IMAGE:-}
 export MAAS_CONTROLLER_IMAGE=${MAAS_CONTROLLER_IMAGE:-}
 export AI_GATEWAY_OPERATOR_IMAGE=${AI_GATEWAY_OPERATOR_IMAGE:-}
+# Default to AIGC main (Konflux :latest after AIGC #91). odh-stable lags that merge.
+# Unset → install companion; explicit empty → skip.
+if [[ -z "${AI_GATEWAY_CONTROLLER_IMAGE+x}" ]]; then
+    export AI_GATEWAY_CONTROLLER_IMAGE="quay.io/opendatahub/odh-ai-gateway-controller:latest"
+else
+    export AI_GATEWAY_CONTROLLER_IMAGE
+fi
 export OPERATOR_CATALOG=${OPERATOR_CATALOG:-}
 export OPERATOR_IMAGE=${OPERATOR_IMAGE:-}
-DEPLOY_MODE=${DEPLOY_MODE:-kustomize}
+export DEPLOY_MODE=${DEPLOY_MODE:-kustomize}
+export DEPLOY_MODE=${DEPLOY_MODE:-kustomize}
 export POLICY_ENGINE="${POLICY_ENGINE:-rhcl}"
 export RHCL_NAMESPACE="${RHCL_NAMESPACE:-kuadrant-system}"
 export RHCL_STARTING_CSV="${RHCL_STARTING_CSV:-}"
+export OLM_BUNDLE_UNPACK_RETRY="${OLM_BUNDLE_UNPACK_RETRY:-true}"
 
 AUTHORINO_NAMESPACE="${AUTHORINO_NAMESPACE:-$(resolve_authorino_namespace "$POLICY_ENGINE")}"
 export AUTHORINO_NAMESPACE
@@ -175,7 +198,24 @@ setup_vars_for_tests() {
 
     export CLUSTER_DOMAIN="$(oc get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}')"
     [[ -z "$CLUSTER_DOMAIN" ]] && { echo "❌ ERROR: Failed to detect cluster domain"; exit 1; }
-    export HOST="maas.${CLUSTER_DOMAIN}"
+    # Route mode uses the MaaS GatewayClass and exposes an external load
+    # balancer address; clusterip mode uses the OpenShift ingress host.
+    gateway_class=$(oc get gateway maas-default-gateway -n openshift-ingress \
+        -o jsonpath='{.spec.gatewayClassName}' 2>/dev/null || echo "")
+    gateway_listener_host=$(oc get gateway maas-default-gateway -n openshift-ingress \
+        -o jsonpath='{.spec.listeners[?(@.protocol=="HTTPS")].hostname}' 2>/dev/null | awk '{print $1}')
+    HOST=""
+    if [[ -n "${MAAS_GATEWAY_HOST:-}" ]]; then
+        HOST="${MAAS_GATEWAY_HOST#*://}"
+    elif [[ -n "$gateway_listener_host" ]]; then
+        HOST="$gateway_listener_host"
+    elif [[ "$gateway_class" != "openshift-default" ]]; then
+        gateway_address=$(oc get gateway maas-default-gateway -n openshift-ingress \
+            -o jsonpath='{.status.addresses[0].value}' 2>/dev/null || echo "")
+        HOST="${gateway_address#*://}"
+    fi
+    [[ -z "$HOST" ]] && HOST="maas.${CLUSTER_DOMAIN}"
+    export HOST
     export EXTERNAL_OIDC
 
     if [[ "${EXTERNAL_OIDC}" == "true" ]]; then
@@ -221,6 +261,27 @@ validate_deployment() {
     else
         echo "⏭️  Skipping validation"
     fi
+}
+
+_request_oidc_token() {
+    local username="${1:-${OIDC_USERNAME}}"
+    local password="${2:-${OIDC_PASSWORD}}"
+    local attempt token_response access_token
+    for ((attempt = 1; attempt <= 12; attempt++)); do
+        if token_response=$(curl -sk -m 10 \
+            -d "grant_type=password&client_id=${OIDC_CLIENT_ID}&username=${username}&password=${password}&scope=openid" \
+            "${OIDC_TOKEN_URL}" 2>/dev/null); then
+            access_token=$(printf '%s' "$token_response" | python3 -c \
+                "import sys,json; print(json.load(sys.stdin).get('access_token',''))" 2>/dev/null || true)
+            if [[ -n "$access_token" ]]; then
+                printf '%s' "$access_token"
+                return 0
+            fi
+        fi
+        sleep 5
+    done
+    echo "Could not obtain an OIDC token for ${username} from ${OIDC_TOKEN_URL} after 12 attempts" >&2
+    return 1
 }
 
 run_e2e_tests() {
@@ -297,23 +358,95 @@ run_e2e_tests() {
         local oidc_timeout=180
         local oidc_deadline=$((SECONDS + oidc_timeout))
         echo "Verifying OIDC token authentication works (timeout: ${oidc_timeout}s)..."
+        local oidc_readiness_username="${OIDC_READINESS_USERNAME:-${OIDC_USERNAME}}"
+        local oidc_readiness_password="${OIDC_READINESS_PASSWORD:-${OIDC_PASSWORD}}"
         local oidc_token
-        oidc_token=$(curl -sk -m 10 \
-            -d "grant_type=password&client_id=${OIDC_CLIENT_ID}&username=${OIDC_USERNAME}&password=${OIDC_PASSWORD}&scope=openid" \
-            "${OIDC_TOKEN_URL}" 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('access_token',''))" 2>/dev/null || echo "")
+        local oidc_token_error_file="${ARTIFACTS_DIR}/oidc-readiness-token-error.log"
+        mkdir -p "$ARTIFACTS_DIR"
+        echo "Using OIDC readiness user: ${oidc_readiness_username}"
+        if ! oidc_token=$(_request_oidc_token "$oidc_readiness_username" "$oidc_readiness_password" 2>"$oidc_token_error_file"); then
+            echo "❌ ERROR: Could not obtain OIDC token from ${OIDC_TOKEN_URL}"
+            exit 1
+        fi
+        rm -f "$oidc_token_error_file"
         if [[ -n "$oidc_token" ]]; then
+            if [[ "${OIDC_READINESS_VALIDATE_ORGANIZATIONS:-false}" == "true" ]]; then
+                local oidc_claim_summary
+                if ! oidc_claim_summary=$(OIDC_TOKEN="$oidc_token" \
+                    OIDC_CLIENT_ID="$OIDC_CLIENT_ID" \
+                    OIDC_AUDIENCE="${OIDC_AUDIENCE:-}" \
+                    OIDC_ACCESS_TOKEN_PURPOSE_CLAIM="${OIDC_ACCESS_TOKEN_PURPOSE_CLAIM:-}" \
+                    OIDC_ACCESS_TOKEN_PURPOSE="${OIDC_ACCESS_TOKEN_PURPOSE:-}" \
+                    python3 -c '
+import base64
+import json
+import os
+
+parts = os.environ["OIDC_TOKEN"].split(".")
+if len(parts) != 3:
+    raise SystemExit("OIDC readiness token is not a three-part JWT")
+payload = parts[1]
+payload += "=" * (-len(payload) % 4)
+claims = json.loads(base64.urlsafe_b64decode(payload))
+
+client_id = os.environ.get("OIDC_CLIENT_ID", "")
+if client_id and claims.get("azp") != client_id:
+    actual_client_id = claims.get("azp")
+    raise SystemExit(f"OIDC azp mismatch: expected {client_id}, got {actual_client_id!r}")
+
+audience = os.environ.get("OIDC_AUDIENCE", "")
+token_audience = claims.get("aud")
+if audience and token_audience != audience and audience not in (token_audience if isinstance(token_audience, list) else []):
+    raise SystemExit(f"OIDC audience mismatch: expected {audience}, got {token_audience!r}")
+
+purpose_claim = os.environ.get("OIDC_ACCESS_TOKEN_PURPOSE_CLAIM", "")
+purpose = os.environ.get("OIDC_ACCESS_TOKEN_PURPOSE", "")
+if purpose_claim and claims.get(purpose_claim) != purpose:
+    raise SystemExit(f"OIDC purpose mismatch: {purpose_claim}={claims.get(purpose_claim)!r}, expected {purpose!r}")
+
+organizations = claims.get("https://redhat.com/maas/orgs")
+if not isinstance(organizations, list) or not organizations:
+    raise SystemExit(f"OIDC organization claim must be a non-empty array, got {organizations!r}")
+for organization in organizations:
+    if not isinstance(organization, dict) or not organization.get("organization_id") or not organization.get("roles"):
+        raise SystemExit(f"Invalid OIDC organization membership: {organization!r}")
+
+authorized_party = claims.get("azp")
+print(f"azp={authorized_party}, audience={token_audience!r}, organizations={len(organizations)}")
+                    ' 2>&1); then
+                    printf '%s\n' "$oidc_claim_summary" > "${ARTIFACTS_DIR}/oidc-readiness-claim-error.log"
+                    echo "❌ ERROR: OIDC readiness token contract validation failed"
+                    echo "$oidc_claim_summary"
+                    exit 1
+                fi
+                echo "✅ OIDC token contract valid (${oidc_claim_summary})"
+            fi
+            local oidc_response_file="${ARTIFACTS_DIR}/oidc-readiness-last-response.json"
+            local oidc_headers_file="${ARTIFACTS_DIR}/oidc-readiness-last-headers.txt"
             while [[ $SECONDS -lt $oidc_deadline ]]; do
                 local oidc_code
-                oidc_code=$(curl -sk -o /dev/null -w '%{http_code}' -m 5 \
+                oidc_code=$(curl -sk -D "$oidc_headers_file" -o "$oidc_response_file" -w '%{http_code}' -m 5 \
                     -H "Authorization: Bearer ${oidc_token}" \
                     -H "Content-Type: application/json" \
                     -d "{\"name\": \"e2e-oidc-readiness-$(date +%s)\"}" \
-                    "${api_base}/v1/api-keys" 2>/dev/null || echo "000")
+                    "${api_base}/v1/api-keys" 2>/dev/null || true)
+                oidc_code="${oidc_code:-000}"
                 if [[ "$oidc_code" =~ ^(200|201)$ ]]; then
                     echo "✅ OIDC token authentication working (HTTP $oidc_code)"
+                    rm -f "$oidc_response_file" "$oidc_headers_file"
                     break
                 fi
-                echo "  OIDC auth check returned HTTP $oidc_code, retrying..."
+                local oidc_reason
+                oidc_reason=$(tr -d '\r' < "$oidc_headers_file" 2>/dev/null | awk 'BEGIN{IGNORECASE=1} /^x-ext-auth-reason:/{sub(/^[^:]*: */, ""); print; exit}' || true)
+                local oidc_response
+                oidc_response=$(tr '\n' ' ' < "$oidc_response_file" 2>/dev/null | cut -c1-500 || true)
+                echo "  OIDC auth check returned HTTP $oidc_code${oidc_reason:+ (x-ext-auth-reason=${oidc_reason})}: ${oidc_response}"
+                if [[ "$oidc_code" == "401" ]]; then
+                    if ! oidc_token=$(_request_oidc_token "$oidc_readiness_username" "$oidc_readiness_password"); then
+                        echo "❌ ERROR: Could not refresh OIDC token from ${OIDC_TOKEN_URL}"
+                        exit 1
+                    fi
+                fi
                 sleep 5
             done
             if [[ $SECONDS -ge $oidc_deadline ]]; then
@@ -332,8 +465,12 @@ run_e2e_tests() {
 
     # Delegate pytest execution to run_e2e_tests.sh
     export ARTIFACTS_DIR
-    export E2E_PARALLEL_WORKERS="${E2E_PARALLEL_WORKERS:-7}"
+    export E2E_PARALLEL_WORKERS="${E2E_PARALLEL_WORKERS:-5}"
     export E2E_RECONCILE_WAIT="${E2E_RECONCILE_WAIT:-4}"
+    # Nightly tier (pass 3) only when EXTERNAL_OIDC is deployed; passes 1–2 always skip nightly.
+    if [[ "${EXTERNAL_OIDC}" == "true" ]]; then
+        export MAAS_PYTEST_INCLUDE_NIGHTLY="${MAAS_PYTEST_INCLUDE_NIGHTLY:-true}"
+    fi
     "${SCRIPT_DIR}/run_e2e_tests.sh"
 }
 
@@ -367,6 +504,13 @@ else
     phase_mark deploy_platform start
     source "${SCRIPT_DIR}/deploy-platform.sh"
     phase_mark deploy_platform end
+
+    if [[ -n "${AI_GATEWAY_CONTROLLER_IMAGE:-}" ]]; then
+        print_header "Installing AIGC companion (praxis dataplane)"
+        phase_mark deploy_aigc start
+        bash "${SCRIPT_DIR}/deploy-aigc-companion.sh"
+        phase_mark deploy_aigc end
+    fi
 
     print_header "Deploying Models"
     phase_mark deploy_models start

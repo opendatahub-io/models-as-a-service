@@ -87,7 +87,7 @@ func TestMaaSAuthPolicyReconciler_CrossNamespace(t *testing.T) {
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithRESTMapper(testRESTMapper()).
-		WithObjects(modelA, routeA, modelB, routeB, maasPolicy).
+		WithObjects(legacyNamespace(policyNamespace), modelA, routeA, modelB, routeB, maasPolicy).
 		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
 		Build()
 
@@ -180,7 +180,7 @@ func TestMaaSAuthPolicyReconciler_SelectiveModelManagement(t *testing.T) {
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithRESTMapper(testRESTMapper()).
-		WithObjects(modelA, routeA, modelB, routeB, maasPolicy).
+		WithObjects(legacyNamespace(policyNamespace), modelA, routeA, modelB, routeB, maasPolicy).
 		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
 		Build()
 
@@ -275,7 +275,7 @@ func TestMaaSAuthPolicyReconciler_SameNameDifferentNamespaces(t *testing.T) {
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithRESTMapper(testRESTMapper()).
-		WithObjects(modelA, routeA, modelB, routeB, policyA, policyB).
+		WithObjects(legacyNamespace(namespaceA), legacyNamespace(namespaceB), modelA, routeA, modelB, routeB, policyA, policyB).
 		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
 		Build()
 
@@ -399,7 +399,7 @@ func TestMaaSSubscriptionReconciler_CrossNamespace(t *testing.T) {
 		}).
 		Build()
 
-	r := &MaaSSubscriptionReconciler{Client: c, Scheme: scheme}
+	r := &MaaSSubscriptionReconciler{Client: c, APIReader: c, Scheme: scheme}
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: subName, Namespace: subNamespace}}
 	if _, err := r.Reconcile(context.Background(), req); err != nil {
 		t.Fatalf("Reconcile: unexpected error: %v", err)
@@ -506,7 +506,7 @@ func TestMaaSSubscriptionReconciler_DuplicateNameIsolation(t *testing.T) {
 		WithIndex(&maasv1alpha1.MaaSSubscription{}, "spec.modelRef", subscriptionModelRefIndexer).
 		Build()
 
-	r := &MaaSSubscriptionReconciler{Client: c, Scheme: scheme}
+	r := &MaaSSubscriptionReconciler{Client: c, APIReader: c, Scheme: scheme}
 
 	// Reconcile both subscriptions
 	reqA := ctrl.Request{NamespacedName: types.NamespacedName{Name: subscriptionName, Namespace: namespaceA}}
@@ -615,7 +615,7 @@ func TestMaaSAuthPolicyReconciler_DuplicateNameAnnotationIsolation(t *testing.T)
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithRESTMapper(testRESTMapper()).
-		WithObjects(model, route, policyA).
+		WithObjects(legacyNamespace(namespaceA), model, route, policyA).
 		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
 		Build()
 

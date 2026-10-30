@@ -136,6 +136,11 @@ func TestTenantIdentifierFor(t *testing.T) {
 	})
 }
 
+func TestMaaSAPIGatewayNetworkPolicyNameDefaultDoesNotCollide(t *testing.T) {
+	assert.NotEqual(t, MaaSAPIGatewayNetworkPolicyName(""), MaaSAPIGatewayNetworkPolicyName("default"))
+	assert.Equal(t, "maas-api-allow-gateway--default", MaaSAPIGatewayNetworkPolicyName(""))
+}
+
 func TestResourceNamingFunctions(t *testing.T) {
 	tests := []struct {
 		name             string

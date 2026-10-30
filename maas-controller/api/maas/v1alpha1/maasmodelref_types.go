@@ -177,5 +177,5 @@ type MaaSModelRefList struct {
 }
 
 func init() {
-	SchemeBuilder.Register(&MaaSModelRef{}, &MaaSModelRefList{})
+	register(&MaaSModelRef{}, &MaaSModelRefList{})
 }

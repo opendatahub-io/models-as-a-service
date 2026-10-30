@@ -178,11 +178,14 @@ curl -sS -X POST "${MAAS_API_URL}/maas-api/v1/api-keys/search" \
   }' | jq
 ```
 
+A verified SSO organization administrator can search other users' keys only by supplying an explicit `filters.subscription` for a subscription they administer. Omitting the subscription keeps the search limited to the caller's own keys.
+
 **Request options:**
 
 | Field | Description |
 |-------|-------------|
 | `filters.username` | Filter by username. Admin-only; non-admin users can search only their own keys. |
+| `filters.subscription` | Filter by MaaS Subscription name or `namespace/name` alias. Delegated subscription administrators must supply an explicit subscription they administer. |
 | `filters.status` | Filter by one or more statuses: `active`, `revoked`, `expired` |
 | `filters.includeEphemeral` | Include ephemeral keys (default: false) |
 | `filters.labelsContain` | Filter by one or more key/value pairs. Multiple labels are treated as an AND in the filter. |
@@ -306,7 +309,9 @@ curl -sS -X DELETE "${MAAS_API_URL}/maas-api/v1/api-keys/${KEY_ID}" \
   -H "Authorization: Bearer $(oc whoami -t)"
 ```
 
-Revocation takes effect immediately (Authorino may cache briefly).
+Revocation takes effect immediately on the writable database. If a cluster-local read
+replica is configured, validation observes it after PostgreSQL replication lag plus any
+brief Authorino cache delay.
 
 ### Revoke All Your Keys
 

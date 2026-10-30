@@ -17,14 +17,18 @@ const (
 	// AnnotationAITenantNamespace identifies the namespace of the owning AITenant.
 	AnnotationAITenantNamespace = "maas.opendatahub.io/aitenant-namespace"
 
-	// AnnotationPayloadProcessingType selects the tenant payload-processing dataplane.
-	// Value "praxis" skips legacy IPP reconciliation in maas-controller; absent or other values
-	// mean legacy IPP.
+	// AnnotationPayloadProcessingType selects the tenant payload-processing dataplane on
+	// MaasTenantConfig. Default (absent or "praxis") skips legacy IPP reconciliation so
+	// ai-gateway-controller owns payload processing. Set to "ipp" to opt back into
+	// maas-controller legacy IPP.
 	AnnotationPayloadProcessingType = "maas.opendatahub.io/payload-processing-type"
 
-	// PayloadProcessingTypePraxis is the annotation value that opts a tenant into the
-	// ai-gateway-controller praxis dataplane and skips maas-controller IPP resources.
+	// PayloadProcessingTypePraxis is the annotation value for the ai-gateway-controller
+	// praxis dataplane (also the product default when the annotation is absent).
 	PayloadProcessingTypePraxis = "praxis"
+
+	// PayloadProcessingTypeIPP opts a tenant into maas-controller legacy IPP.
+	PayloadProcessingTypeIPP = "ipp"
 
 	tenantNamespacePrefix = "ai-tenant-"
 )
@@ -113,7 +117,13 @@ func resolveAITenantPlatformContext(ctx context.Context, c client.Reader, tenant
 }
 
 func resolveSkipIPP(tenant client.Object) bool {
-	return annotationValue(tenant, AnnotationPayloadProcessingType) == PayloadProcessingTypePraxis
+	switch annotationValue(tenant, AnnotationPayloadProcessingType) {
+	case PayloadProcessingTypeIPP:
+		return false
+	default:
+		// Absent, "praxis", or any unrecognized value defaults to praxis.
+		return true
+	}
 }
 
 func isAITenantManagedTenantConfig(tenant client.Object) bool {

@@ -2,11 +2,14 @@ package subscription_test
 
 import (
 	"errors"
+	"slices"
+	"strings"
 	"testing"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/authpolicy"
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/constant"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/subscription"
 )
@@ -98,6 +101,59 @@ func createSubscription(name string, groups []string, users []string, priority i
 			"spec":       spec,
 			"status":     status,
 		},
+	}
+}
+
+func TestSelector_OrganizationIDPrecedence(t *testing.T) {
+	tests := []struct {
+		name               string
+		organizationID     any
+		tokenMetadataOrgID any
+		expectedOrgID      string
+	}{
+		{
+			name:               "stable organization overrides token metadata",
+			organizationID:     "stable-org",
+			tokenMetadataOrgID: "legacy-org",
+			expectedOrgID:      "stable-org",
+		},
+		{
+			name:               "stable organization defaults missing token metadata",
+			organizationID:     "stable-org",
+			tokenMetadataOrgID: nil,
+			expectedOrgID:      "stable-org",
+		},
+		{
+			name:               "legacy subscription retains token metadata",
+			organizationID:     nil,
+			tokenMetadataOrgID: "legacy-org",
+			expectedOrgID:      "legacy-org",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			subscriptionObject := createSubscription("test-sub", []string{"g1"}, nil, 10, defaultTestTokenRateLimit, "", "")
+			spec, ok := subscriptionObject.Object["spec"].(map[string]any)
+			if !ok {
+				t.Fatalf("test subscription spec is not a map: %T", subscriptionObject.Object["spec"])
+			}
+			if test.organizationID != nil {
+				spec["organization"] = map[string]any{"id": test.organizationID}
+			}
+			if test.tokenMetadataOrgID != nil {
+				spec["tokenMetadata"] = map[string]any{"organizationId": test.tokenMetadataOrgID}
+			}
+
+			selector := subscription.NewSelector(logger.New(false), &fakeLister{subscriptions: []*unstructured.Unstructured{subscriptionObject}}, nil, nil)
+			response, err := selector.Select([]string{"g1"}, "", "", "")
+			if err != nil {
+				t.Fatalf("Select() error = %v", err)
+			}
+			if response.OrganizationID != test.expectedOrgID {
+				t.Fatalf("OrganizationID = %q, want %q", response.OrganizationID, test.expectedOrgID)
+			}
+		})
 	}
 }
 
@@ -344,6 +400,18 @@ func TestGetAllAccessible_ErrorHandling(t *testing.T) {
 			t.Errorf("unexpected error message: %v", err)
 		}
 	})
+
+	t.Run("authorization lookup failure returns an error", func(t *testing.T) {
+		lister := &fakeLister{subscriptions: []*unstructured.Unstructured{
+			createSubscription("sub1", []string{"g1"}, nil, 1, defaultTestTokenRateLimit, "", ""),
+		}}
+		selector := subscription.NewSelector(log, lister, nil, &fakeAccessChecker{})
+
+		_, err := selector.GetAllAccessible([]string{"g1"}, "")
+		if err == nil {
+			t.Fatal("expected authorization lookup error")
+		}
+	})
 }
 
 func TestSelectHighestPriority(t *testing.T) {
@@ -406,6 +474,42 @@ func TestSelectHighestPriority(t *testing.T) {
 		var noSub *subscription.NoSubscriptionError
 		if !errors.As(err, &noSub) {
 			t.Fatalf("expected NoSubscriptionError, got %T %v", err, err)
+		}
+	})
+}
+
+func TestSelector_RejectsDeletingSubscriptions(t *testing.T) {
+	log := logger.New(false)
+	deleting := createSubscriptionWithHealth("deleting-sub", []string{"g1"}, nil, 100, defaultTestTokenRateLimit, phaseActive, true, true)
+	active := createSubscriptionWithHealth("active-sub", []string{"g1"}, nil, 10, defaultTestTokenRateLimit, phaseActive, true, false)
+
+	t.Run("explicit selection", func(t *testing.T) {
+		selector := subscription.NewSelector(log, &fakeLister{subscriptions: []*unstructured.Unstructured{deleting}}, nil, nil)
+
+		_, err := selector.Select([]string{"g1"}, "", "deleting-sub", "")
+		if err == nil {
+			t.Fatal("expected deleting subscription to be rejected")
+		}
+	})
+
+	t.Run("automatic selection", func(t *testing.T) {
+		selector := subscription.NewSelector(log, &fakeLister{subscriptions: []*unstructured.Unstructured{deleting}}, nil, nil)
+
+		_, err := selector.Select([]string{"g1"}, "", "", "")
+		if err == nil {
+			t.Fatal("expected deleting subscription to be excluded from automatic selection")
+		}
+	})
+
+	t.Run("highest priority selection skips deleting subscription", func(t *testing.T) {
+		selector := subscription.NewSelector(log, &fakeLister{subscriptions: []*unstructured.Unstructured{deleting, active}}, nil, nil)
+
+		selected, err := selector.SelectHighestPriority([]string{"g1"}, "")
+		if err != nil {
+			t.Fatalf("SelectHighestPriority: %v", err)
+		}
+		if selected.Name != "active-sub" {
+			t.Fatalf("selected subscription = %q, want active-sub", selected.Name)
 		}
 	})
 }
@@ -508,7 +612,7 @@ func TestSelector_HealthFieldParsing(t *testing.T) {
 			expectedPhase:    phaseActive,
 			expectedReady:    true,
 			expectedDeleting: true,
-			expectError:      false,
+			expectError:      true, // Deleting subscriptions cannot receive new API keys
 		},
 		{
 			name: "Subscription without status - rejected (unreconciled)",
@@ -971,10 +1075,17 @@ func TestEnrichModelRefsSource(t *testing.T) {
 // fakeAccessChecker implements subscription.ModelAccessChecker for testing.
 type fakeAccessChecker struct {
 	authorized map[authpolicy.ModelKey]bool
+	err        error
+	gotGroups  []string
+	gotUser    string
+	calls      int
 }
 
-func (f *fakeAccessChecker) AuthorizedModels(_ []string, _ string) map[authpolicy.ModelKey]bool {
-	return f.authorized
+func (f *fakeAccessChecker) AuthorizedModels(groups []string, username string) (map[authpolicy.ModelKey]bool, error) {
+	f.calls++
+	f.gotGroups = groups
+	f.gotUser = username
+	return f.authorized, f.err
 }
 
 // createSubscriptionWithModelRefs creates a subscription with custom model refs (each with name and namespace).
@@ -1019,20 +1130,37 @@ func createSubscriptionWithModelRefs(subName string, groups []string, modelRefs 
 	}
 }
 
+func createUserSubscriptionWithModelRefs(subName, username string, modelRefs []map[string]any) *unstructured.Unstructured {
+	sub := createSubscriptionWithModelRefs(subName, nil, modelRefs)
+	_ = unstructured.SetNestedStringSlice(sub.Object, []string{username}, "spec", "owner", "users")
+	return sub
+}
+
+type selectAccessAllowedTestCase struct {
+	name                  string
+	subscriptions         []*unstructured.Unstructured
+	groups                []string
+	username              string
+	requestedSubscription string
+	requestedModel        string
+	accessChecker         subscription.ModelAccessChecker
+	wantAccessAllowed     bool
+	wantError             bool
+	wantAccessDenied      bool
+	wantModelNotInSub     bool
+}
+
 func TestSelect_AccessAllowed(t *testing.T) {
 	log := logger.New(false)
+	for _, tt := range selectAccessAllowedTestCases() {
+		t.Run(tt.name, func(t *testing.T) {
+			runSelectAccessAllowedTest(t, log, tt)
+		})
+	}
+}
 
-	tests := []struct {
-		name                  string
-		subscriptions         []*unstructured.Unstructured
-		groups                []string
-		username              string
-		requestedSubscription string
-		requestedModel        string
-		accessChecker         subscription.ModelAccessChecker
-		wantAccessAllowed     bool
-		wantError             bool
-	}{
+func selectAccessAllowedTestCases() []selectAccessAllowedTestCase {
+	return []selectAccessAllowedTestCase{
 		{
 			name: "authorized model returns AccessAllowed true",
 			subscriptions: []*unstructured.Unstructured{
@@ -1050,7 +1178,7 @@ func TestSelect_AccessAllowed(t *testing.T) {
 			wantAccessAllowed: true,
 		},
 		{
-			name: "unauthorized model returns AccessAllowed false",
+			name: "unauthorized model returns AccessDeniedError",
 			subscriptions: []*unstructured.Unstructured{
 				createSubscriptionWithModelRefs("sub1", []string{"g1"}, []map[string]any{
 					{"name": "model-a", "namespace": "ns1"},
@@ -1063,7 +1191,8 @@ func TestSelect_AccessAllowed(t *testing.T) {
 					{Namespace: "ns2", Name: "model-b"}: true,
 				},
 			},
-			wantAccessAllowed: false,
+			wantError:        true,
+			wantAccessDenied: true,
 		},
 		{
 			name: "nil access checker with model denies (fail-closed)",
@@ -1153,7 +1282,81 @@ func TestSelect_AccessAllowed(t *testing.T) {
 			wantAccessAllowed: true,
 		},
 		{
-			name: "nil authorized set returns AccessAllowed false",
+			name: "explicit bare subscription with auth policy does not leak missing model",
+			subscriptions: []*unstructured.Unstructured{
+				createSubscriptionWithModelRefs("sub1", []string{"g1"}, []map[string]any{
+					{"name": "model-a", "namespace": "ns1"},
+				}),
+			},
+			groups:                []string{"g1"},
+			requestedSubscription: "sub1",
+			requestedModel:        "ns1/missing-model",
+			accessChecker: &fakeAccessChecker{
+				authorized: map[authpolicy.ModelKey]bool{
+					{Namespace: "ns1", Name: "model-a"}: true,
+				},
+			},
+			wantAccessAllowed: false,
+		},
+		{
+			name: "explicit bare subscription without auth policy returns model not in subscription",
+			subscriptions: []*unstructured.Unstructured{
+				createSubscriptionWithModelRefs("sub1", []string{"g1"}, []map[string]any{
+					{"name": "model-a", "namespace": "ns1"},
+				}),
+			},
+			groups:                []string{"g1"},
+			requestedSubscription: "sub1",
+			requestedModel:        "ns1/missing-model",
+			wantError:             true,
+			wantModelNotInSub:     true,
+		},
+		{
+			name: "explicit qualified subscription with auth policy does not leak missing model",
+			subscriptions: []*unstructured.Unstructured{
+				createSubscriptionWithModelRefs("sub1", []string{"g1"}, []map[string]any{
+					{"name": "model-a", "namespace": "ns1"},
+				}),
+			},
+			groups:                []string{"g1"},
+			requestedSubscription: "test-ns/sub1",
+			requestedModel:        "ns1/missing-model",
+			accessChecker: &fakeAccessChecker{
+				authorized: map[authpolicy.ModelKey]bool{
+					{Namespace: "ns1", Name: "model-a"}: true,
+				},
+			},
+			wantAccessAllowed: false,
+		},
+		{
+			name: "explicit qualified subscription without auth policy returns model not in subscription",
+			subscriptions: []*unstructured.Unstructured{
+				createSubscriptionWithModelRefs("sub1", []string{"g1"}, []map[string]any{
+					{"name": "model-a", "namespace": "ns1"},
+				}),
+			},
+			groups:                []string{"g1"},
+			requestedSubscription: "test-ns/sub1",
+			requestedModel:        "ns1/missing-model",
+			wantError:             true,
+			wantModelNotInSub:     true,
+		},
+		{
+			name: "explicit subscription without auth policy returns model not in subscription",
+			subscriptions: []*unstructured.Unstructured{
+				createSubscriptionWithModelRefs("sub1", []string{"g1"}, []map[string]any{
+					{"name": "model-a", "namespace": "ns1"},
+				}),
+			},
+			groups:                []string{"g1"},
+			requestedSubscription: "sub1",
+			requestedModel:        "ns1/missing-model",
+			accessChecker:         nil,
+			wantError:             true,
+			wantModelNotInSub:     true,
+		},
+		{
+			name: "nil authorized set returns checker error",
 			subscriptions: []*unstructured.Unstructured{
 				createSubscriptionWithModelRefs("sub1", []string{"g1"}, []map[string]any{
 					{"name": "model-a", "namespace": "ns1"},
@@ -1164,46 +1367,69 @@ func TestSelect_AccessAllowed(t *testing.T) {
 			accessChecker: &fakeAccessChecker{
 				authorized: nil,
 			},
-			wantAccessAllowed: false,
+			wantError: true,
 		},
 	}
+}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			lister := &fakeLister{subscriptions: tt.subscriptions}
-			selector := subscription.NewSelector(log, lister, nil, tt.accessChecker)
-
-			result, err := selector.Select(tt.groups, tt.username, tt.requestedSubscription, tt.requestedModel)
-			if tt.wantError {
-				if err == nil {
-					t.Fatal("expected error, got nil")
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if result.AccessAllowed != tt.wantAccessAllowed {
-				t.Errorf("AccessAllowed = %v, want %v", result.AccessAllowed, tt.wantAccessAllowed)
-			}
-		})
+func runSelectAccessAllowedTest(t *testing.T, log *logger.Logger, tt selectAccessAllowedTestCase) {
+	t.Helper()
+	selector := subscription.NewSelector(log, &fakeLister{subscriptions: tt.subscriptions}, nil, tt.accessChecker)
+	result, err := selector.Select(tt.groups, tt.username, tt.requestedSubscription, tt.requestedModel)
+	if tt.wantError {
+		assertSelectAccessAllowedError(t, err, tt)
+		return
 	}
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.AccessAllowed != tt.wantAccessAllowed {
+		t.Errorf("AccessAllowed = %v, want %v", result.AccessAllowed, tt.wantAccessAllowed)
+	}
+}
+
+func assertSelectAccessAllowedError(t *testing.T, err error, tt selectAccessAllowedTestCase) {
+	t.Helper()
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if tt.wantAccessDenied {
+		var denied *subscription.AccessDeniedError
+		if !errors.As(err, &denied) {
+			t.Fatalf("expected AccessDeniedError, got %T: %v", err, err)
+		}
+		if denied.Subscription != "" {
+			t.Errorf("AccessDeniedError leaks subscription identifier %q", denied.Subscription)
+		}
+		if tt.requestedModel != "" && strings.Contains(err.Error(), tt.requestedModel) {
+			t.Errorf("AccessDeniedError leaks requested model %q", tt.requestedModel)
+		}
+	}
+	if tt.wantModelNotInSub {
+		var notInSub *subscription.ModelNotInSubscriptionError
+		if !errors.As(err, &notInSub) {
+			t.Fatalf("expected ModelNotInSubscriptionError, got %T: %v", err, err)
+		}
+	}
+}
+
+type listAccessibleForModelTestCase struct {
+	name          string
+	subscriptions []*unstructured.Unstructured
+	accessChecker subscription.ModelAccessChecker
+	groups        []string
+	username      string
+	modelID       string
+	wantCount     int
+	wantSubNames  []string
+	wantModelRefs map[string][]string
+	wantError     bool
 }
 
 func TestListAccessibleForModel_MultiNamespace(t *testing.T) {
 	log := logger.New(false)
 
-	tests := []struct {
-		name          string
-		subscriptions []*unstructured.Unstructured
-		authorized    map[authpolicy.ModelKey]bool
-		withChecker   bool
-		groups        []string
-		username      string
-		modelID       string
-		wantCount     int
-		wantSubNames  []string
-	}{
+	tests := []listAccessibleForModelTestCase{
 		{
 			name: "single namespace match authorized",
 			subscriptions: []*unstructured.Unstructured{
@@ -1211,9 +1437,9 @@ func TestListAccessibleForModel_MultiNamespace(t *testing.T) {
 					{"name": "model-x", "namespace": "tenant-a"},
 				}),
 			},
-			authorized: map[authpolicy.ModelKey]bool{
+			accessChecker: &fakeAccessChecker{authorized: map[authpolicy.ModelKey]bool{
 				{Namespace: "tenant-a", Name: "model-x"}: true,
-			},
+			}},
 			groups:       []string{"g1"},
 			modelID:      "model-x",
 			wantCount:    1,
@@ -1226,9 +1452,9 @@ func TestListAccessibleForModel_MultiNamespace(t *testing.T) {
 					{"name": "model-x", "namespace": "tenant-a"},
 				}),
 			},
-			authorized: map[authpolicy.ModelKey]bool{
+			accessChecker: &fakeAccessChecker{authorized: map[authpolicy.ModelKey]bool{
 				{Namespace: "tenant-b", Name: "model-x"}: true,
-			},
+			}},
 			groups:    []string{"g1"},
 			modelID:   "model-x",
 			wantCount: 0,
@@ -1241,9 +1467,9 @@ func TestListAccessibleForModel_MultiNamespace(t *testing.T) {
 					{"name": "model-x", "namespace": "tenant-b"},
 				}),
 			},
-			authorized: map[authpolicy.ModelKey]bool{
+			accessChecker: &fakeAccessChecker{authorized: map[authpolicy.ModelKey]bool{
 				{Namespace: "tenant-b", Name: "model-x"}: true,
-			},
+			}},
 			groups:       []string{"g1"},
 			modelID:      "model-x",
 			wantCount:    1,
@@ -1257,9 +1483,9 @@ func TestListAccessibleForModel_MultiNamespace(t *testing.T) {
 					{"name": "model-x", "namespace": "tenant-b"},
 				}),
 			},
-			authorized: map[authpolicy.ModelKey]bool{
+			accessChecker: &fakeAccessChecker{authorized: map[authpolicy.ModelKey]bool{
 				{Namespace: "tenant-c", Name: "model-x"}: true,
-			},
+			}},
 			groups:    []string{"g1"},
 			modelID:   "model-x",
 			wantCount: 0,
@@ -1272,10 +1498,10 @@ func TestListAccessibleForModel_MultiNamespace(t *testing.T) {
 					{"name": "model-x", "namespace": "tenant-b"},
 				}),
 			},
-			authorized: map[authpolicy.ModelKey]bool{
+			accessChecker: &fakeAccessChecker{authorized: map[authpolicy.ModelKey]bool{
 				{Namespace: "tenant-a", Name: "model-x"}: true,
 				{Namespace: "tenant-b", Name: "model-x"}: true,
-			},
+			}},
 			groups:       []string{"g1"},
 			modelID:      "model-x",
 			wantCount:    1,
@@ -1289,7 +1515,6 @@ func TestListAccessibleForModel_MultiNamespace(t *testing.T) {
 					{"name": "model-x", "namespace": "tenant-b"},
 				}),
 			},
-			authorized:   nil, // signals: do not set accessChecker
 			groups:       []string{"g1"},
 			modelID:      "model-x",
 			wantCount:    1,
@@ -1302,24 +1527,23 @@ func TestListAccessibleForModel_MultiNamespace(t *testing.T) {
 					{"name": "model-x", "namespace": "tenant-a"},
 				}),
 			},
-			authorized:  nil,
-			withChecker: true,
-			groups:      []string{"g1"},
-			modelID:     "model-x",
-			wantCount:   0,
+			accessChecker: &fakeAccessChecker{authorized: nil},
+			groups:        []string{"g1"},
+			modelID:       "model-x",
+			wantCount:     0,
+			wantError:     true,
 		},
 		{
-			name: "access checker returns empty authorized set - deny",
+			name: "no matching AuthPolicy returns no subscriptions",
 			subscriptions: []*unstructured.Unstructured{
 				createSubscriptionWithModelRefs("sub1", []string{"g1"}, []map[string]any{
 					{"name": "model-x", "namespace": "tenant-a"},
 				}),
 			},
-			authorized:  map[authpolicy.ModelKey]bool{},
-			withChecker: true,
-			groups:      []string{"g1"},
-			modelID:     "model-x",
-			wantCount:   0,
+			accessChecker: &fakeAccessChecker{authorized: map[authpolicy.ModelKey]bool{}},
+			groups:        []string{"g1"},
+			modelID:       "model-x",
+			wantCount:     0,
 		},
 		{
 			name: "model not in subscription",
@@ -1328,9 +1552,9 @@ func TestListAccessibleForModel_MultiNamespace(t *testing.T) {
 					{"name": "other-model", "namespace": "tenant-a"},
 				}),
 			},
-			authorized: map[authpolicy.ModelKey]bool{
+			accessChecker: &fakeAccessChecker{authorized: map[authpolicy.ModelKey]bool{
 				{Namespace: "tenant-a", Name: "model-x"}: true,
-			},
+			}},
 			groups:    []string{"g1"},
 			modelID:   "model-x",
 			wantCount: 0,
@@ -1346,13 +1570,512 @@ func TestListAccessibleForModel_MultiNamespace(t *testing.T) {
 					{"name": "model-x", "namespace": "tenant-b"},
 				}),
 			},
-			authorized: map[authpolicy.ModelKey]bool{
+			accessChecker: &fakeAccessChecker{authorized: map[authpolicy.ModelKey]bool{
 				{Namespace: "tenant-b", Name: "model-x"}: true,
-			},
+			}},
 			groups:       []string{"g1"},
 			modelID:      "model-x",
 			wantCount:    1,
 			wantSubNames: []string{"sub2"},
+			wantModelRefs: map[string][]string{
+				"sub2": {"tenant-b/model-x"},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			runListAccessibleForModelTest(t, log, tt)
+		})
+	}
+}
+
+func runListAccessibleForModelTest(t *testing.T, log *logger.Logger, tt listAccessibleForModelTestCase) {
+	t.Helper()
+	selector := subscription.NewSelector(log, &fakeLister{subscriptions: tt.subscriptions}, nil, tt.accessChecker)
+	result, err := selector.ListAccessibleForModel(tt.username, tt.groups, tt.modelID)
+	if tt.wantError {
+		if err == nil {
+			t.Fatal("expected authorization lookup error")
+		}
+		return
+	}
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+
+	assertAccessibleSubscriptions(t, result, tt)
+}
+
+func assertAccessibleSubscriptions(t *testing.T, result []subscription.SubscriptionInfo, tt listAccessibleForModelTestCase) {
+	t.Helper()
+	if len(result) != tt.wantCount {
+		t.Errorf("Expected %d subscriptions, got %d", tt.wantCount, len(result))
+	}
+	assertSubscriptionNames(t, result, tt.wantSubNames)
+	assertModelRefsBySubscription(t, result, tt.wantModelRefs)
+}
+
+func assertSubscriptionNames(t *testing.T, result []subscription.SubscriptionInfo, wantNames []string) {
+	t.Helper()
+	for i, wantName := range wantNames {
+		if i >= len(result) {
+			t.Errorf("Missing expected subscription %q at index %d", wantName, i)
+			continue
+		}
+		if result[i].SubscriptionIDHeader != wantName {
+			t.Errorf("Expected subscription %q at index %d, got %q", wantName, i, result[i].SubscriptionIDHeader)
+		}
+	}
+}
+
+func assertModelRefsBySubscription(t *testing.T, result []subscription.SubscriptionInfo, wantRefsBySubscription map[string][]string) {
+	t.Helper()
+	for subName, wantRefs := range wantRefsBySubscription {
+		gotRefs := modelRefsForSubscription(result, subName)
+		if !slices.Equal(gotRefs, wantRefs) {
+			t.Errorf("model refs for %q = %v, want %v", subName, gotRefs, wantRefs)
+		}
+	}
+}
+
+func modelRefsForSubscription(result []subscription.SubscriptionInfo, subName string) []string {
+	var gotRefs []string
+	for _, info := range result {
+		if info.SubscriptionIDHeader != subName {
+			continue
+		}
+		for _, ref := range info.ModelRefs {
+			gotRefs = append(gotRefs, ref.Namespace+"/"+ref.Name)
+		}
+	}
+	return gotRefs
+}
+
+type selectFiltersModelRefsTestCase struct {
+	name               string
+	subscriptions      []*unstructured.Unstructured
+	accessChecker      *fakeAccessChecker
+	groups             []string
+	username           string
+	requestedSub       string
+	requestedModel     string
+	wantModelRefs      []string
+	wantAccessAllowed  bool
+	expectError        bool
+	expectAccessDenied bool
+}
+
+func TestSelect_FiltersModelRefsByAuthPolicy(t *testing.T) {
+	runSelectFiltersModelRefsCases(t, []selectFiltersModelRefsTestCase{
+		{
+			name: "Select auto filters modelRefs by AuthPolicy",
+			subscriptions: []*unstructured.Unstructured{
+				createSubscriptionWithModelRefs("sub1", []string{"g1"}, []map[string]any{
+					{"name": "model-a", "namespace": "ns"},
+					{"name": "model-b", "namespace": "ns"},
+					{"name": "model-c", "namespace": "ns"},
+				}),
+			},
+			accessChecker: &fakeAccessChecker{authorized: map[authpolicy.ModelKey]bool{
+				{Namespace: "ns", Name: "model-a"}: true,
+			}},
+			groups:            []string{"g1"},
+			wantModelRefs:     []string{"ns/model-a"},
+			wantAccessAllowed: true,
+		},
+		{
+			name: "Select returns no modelRefs when authorization grants none",
+			subscriptions: []*unstructured.Unstructured{
+				createSubscriptionWithModelRefs("sub1", []string{"g1"}, []map[string]any{
+					{"name": "model-a", "namespace": "ns"},
+					{"name": "model-b", "namespace": "ns"},
+				}),
+			},
+			accessChecker:     &fakeAccessChecker{authorized: map[authpolicy.ModelKey]bool{}},
+			groups:            []string{"g1"},
+			wantModelRefs:     []string{},
+			wantAccessAllowed: true,
+		},
+		{
+			name: "Select filters same model name by namespace",
+			subscriptions: []*unstructured.Unstructured{
+				createSubscriptionWithModelRefs("sub1", []string{"g1"}, []map[string]any{
+					{"name": "model-a", "namespace": "tenant-a"},
+					{"name": "model-a", "namespace": "tenant-b"},
+				}),
+			},
+			accessChecker: &fakeAccessChecker{authorized: map[authpolicy.ModelKey]bool{
+				{Namespace: "tenant-b", Name: "model-a"}: true,
+			}},
+			groups:            []string{"g1"},
+			wantModelRefs:     []string{"tenant-b/model-a"},
+			wantAccessAllowed: true,
+		},
+		{
+			name: "Select passes username identity to access checker",
+			subscriptions: []*unstructured.Unstructured{
+				createUserSubscriptionWithModelRefs("sub1", "alice", []map[string]any{
+					{"name": "model-a", "namespace": "ns"},
+				}),
+			},
+			accessChecker: &fakeAccessChecker{authorized: map[authpolicy.ModelKey]bool{
+				{Namespace: "ns", Name: "model-a"}: true,
+			}},
+			username:          "alice",
+			wantModelRefs:     []string{"ns/model-a"},
+			wantAccessAllowed: true,
+		},
+		{
+			name: "Select without access checker returns all models",
+			subscriptions: []*unstructured.Unstructured{
+				createSubscriptionWithModelRefs("sub1", []string{"g1"}, []map[string]any{
+					{"name": "model-a", "namespace": "ns"},
+					{"name": "model-b", "namespace": "ns"},
+				}),
+			},
+			groups:            []string{"g1"},
+			wantModelRefs:     []string{"ns/model-a", "ns/model-b"},
+			wantAccessAllowed: true,
+		},
+		{
+			name: "Select auto rejects unauthorized requestedModel",
+			subscriptions: []*unstructured.Unstructured{
+				createSubscriptionWithModelRefs("sub1", []string{"g1"}, []map[string]any{
+					{"name": "model-a", "namespace": "ns"},
+					{"name": "model-b", "namespace": "ns"},
+				}),
+			},
+			accessChecker: &fakeAccessChecker{authorized: map[authpolicy.ModelKey]bool{
+				{Namespace: "ns", Name: "model-a"}: true,
+			}},
+			groups:             []string{"g1"},
+			requestedModel:     "ns/model-b",
+			expectError:        true,
+			expectAccessDenied: true,
+		},
+		{
+			name: "Select auto allows authorized requestedModel",
+			subscriptions: []*unstructured.Unstructured{
+				createSubscriptionWithModelRefs("sub1", []string{"g1"}, []map[string]any{
+					{"name": "model-a", "namespace": "ns"},
+					{"name": "model-b", "namespace": "ns"},
+				}),
+			},
+			accessChecker: &fakeAccessChecker{authorized: map[authpolicy.ModelKey]bool{
+				{Namespace: "ns", Name: "model-a"}: true,
+			}},
+			groups:            []string{"g1"},
+			requestedModel:    "ns/model-a",
+			wantModelRefs:     []string{"ns/model-a"},
+			wantAccessAllowed: true,
+		},
+		{
+			name: "Select with nil authorizedSet (checker error) fails closed",
+			subscriptions: []*unstructured.Unstructured{
+				createSubscriptionWithModelRefs("sub1", []string{"g1"}, []map[string]any{
+					{"name": "model-a", "namespace": "ns"},
+					{"name": "model-b", "namespace": "ns"},
+				}),
+			},
+			accessChecker: &fakeAccessChecker{},
+			groups:        []string{"g1"},
+			expectError:   true,
+		},
+		{
+			name: "Select auto with nil authorizedSet rejects requestedModel",
+			subscriptions: []*unstructured.Unstructured{
+				createSubscriptionWithModelRefs("sub1", []string{"g1"}, []map[string]any{
+					{"name": "model-a", "namespace": "ns"},
+				}),
+			},
+			accessChecker:  &fakeAccessChecker{},
+			groups:         []string{"g1"},
+			requestedModel: "ns/model-a",
+			expectError:    true,
+		},
+		{
+			name: "Select auto two subscriptions unauthorized model returns AccessDeniedError",
+			subscriptions: []*unstructured.Unstructured{
+				createSubscriptionWithModelRefs("sub1", []string{"g1"}, []map[string]any{
+					{"name": "model-a", "namespace": "ns"},
+				}),
+				createSubscriptionWithModelRefs("sub2", []string{"g1"}, []map[string]any{
+					{"name": "model-a", "namespace": "ns"},
+				}),
+			},
+			accessChecker: &fakeAccessChecker{authorized: map[authpolicy.ModelKey]bool{
+				{Namespace: "ns", Name: "model-b"}: true,
+			}},
+			groups:             []string{"g1"},
+			requestedModel:     "ns/model-a",
+			expectError:        true,
+			expectAccessDenied: true,
+		},
+	})
+}
+
+func TestSelectExplicit_FiltersModelRefsByAuthPolicy(t *testing.T) {
+	runSelectFiltersModelRefsCases(t, []selectFiltersModelRefsTestCase{
+		{
+			name: "Select explicit subscription filters modelRefs by AuthPolicy",
+			subscriptions: []*unstructured.Unstructured{
+				createSubscriptionWithModelRefs("sub1", []string{"g1"}, []map[string]any{
+					{"name": "model-a", "namespace": "ns"},
+					{"name": "model-b", "namespace": "ns"},
+				}),
+			},
+			accessChecker: &fakeAccessChecker{authorized: map[authpolicy.ModelKey]bool{
+				{Namespace: "ns", Name: "model-b"}: true,
+			}},
+			groups:            []string{"g1"},
+			requestedSub:      "sub1",
+			wantModelRefs:     []string{"ns/model-b"},
+			wantAccessAllowed: true,
+		},
+		{
+			name: "Select explicit qualified subscription filters modelRefs",
+			subscriptions: []*unstructured.Unstructured{
+				createSubscriptionWithModelRefs("sub1", []string{"g1"}, []map[string]any{
+					{"name": "model-a", "namespace": "ns"},
+					{"name": "model-b", "namespace": "ns"},
+				}),
+			},
+			accessChecker: &fakeAccessChecker{authorized: map[authpolicy.ModelKey]bool{
+				{Namespace: "ns", Name: "model-a"}: true,
+			}},
+			groups:            []string{"g1"},
+			requestedSub:      "test-ns/sub1",
+			wantModelRefs:     []string{"ns/model-a"},
+			wantAccessAllowed: true,
+		},
+		{
+			name: "Select explicit bare subscription hides missing model membership",
+			subscriptions: []*unstructured.Unstructured{
+				createSubscriptionWithModelRefs("sub1", []string{"g1"}, []map[string]any{
+					{"name": "model-a", "namespace": "ns1"},
+					{"name": "model-b", "namespace": "ns2"},
+				}),
+			},
+			accessChecker: &fakeAccessChecker{authorized: map[authpolicy.ModelKey]bool{
+				{Namespace: "ns1", Name: "model-a"}: true,
+			}},
+			groups:            []string{"g1"},
+			requestedSub:      "sub1",
+			requestedModel:    "ns2/missing-model",
+			wantModelRefs:     []string{"ns1/model-a"},
+			wantAccessAllowed: false,
+		},
+		{
+			name: "Select explicit qualified subscription hides missing model membership",
+			subscriptions: []*unstructured.Unstructured{
+				createSubscriptionWithModelRefs("sub1", []string{"g1"}, []map[string]any{
+					{"name": "model-a", "namespace": "ns1"},
+					{"name": "model-b", "namespace": "ns2"},
+				}),
+			},
+			accessChecker: &fakeAccessChecker{authorized: map[authpolicy.ModelKey]bool{
+				{Namespace: "ns1", Name: "model-a"}: true,
+			}},
+			groups:            []string{"g1"},
+			requestedSub:      "test-ns/sub1",
+			requestedModel:    "ns2/missing-model",
+			wantModelRefs:     []string{"ns1/model-a"},
+			wantAccessAllowed: false,
+		},
+		{
+			name: "Select explicit subscription with unauthorized model returns AccessAllowed false",
+			subscriptions: []*unstructured.Unstructured{
+				createSubscriptionWithModelRefs("sub1", []string{"g1"}, []map[string]any{
+					{"name": "model-a", "namespace": "ns"},
+					{"name": "model-b", "namespace": "ns"},
+				}),
+			},
+			accessChecker: &fakeAccessChecker{authorized: map[authpolicy.ModelKey]bool{
+				{Namespace: "ns", Name: "model-a"}: true,
+			}},
+			groups:            []string{"g1"},
+			requestedSub:      "sub1",
+			requestedModel:    "ns/model-b",
+			wantModelRefs:     []string{"ns/model-a"},
+			wantAccessAllowed: false,
+		},
+		{
+			name: "Select skips health checks for unauthorized degraded model",
+			subscriptions: []*unstructured.Unstructured{
+				func() *unstructured.Unstructured {
+					sub := createSubscriptionWithModelRefs("sub1", []string{"g1"}, []map[string]any{
+						{
+							"name":      "model-a",
+							"namespace": "ns",
+							"tokenRateLimits": []any{
+								map[string]any{"limit": int64(1000), "window": "1m"},
+							},
+						},
+						{"name": "model-b", "namespace": "ns"},
+					})
+					sub.Object["status"] = map[string]any{"phase": phaseDegraded}
+					return sub
+				}(),
+			},
+			accessChecker: &fakeAccessChecker{authorized: map[authpolicy.ModelKey]bool{
+				{Namespace: "ns", Name: "model-b"}: true,
+			}},
+			groups:            []string{"g1"},
+			requestedSub:      "sub1",
+			requestedModel:    "ns/model-a",
+			wantModelRefs:     []string{"ns/model-b"},
+			wantAccessAllowed: false,
+		},
+		{
+			name: "Select qualified subscription with unauthorized model returns AccessAllowed false",
+			subscriptions: []*unstructured.Unstructured{
+				createSubscriptionWithModelRefs("sub1", []string{"g1"}, []map[string]any{
+					{"name": "model-a", "namespace": "ns"},
+					{"name": "model-b", "namespace": "ns"},
+				}),
+			},
+			accessChecker: &fakeAccessChecker{authorized: map[authpolicy.ModelKey]bool{
+				{Namespace: "ns", Name: "model-a"}: true,
+			}},
+			groups:            []string{"g1"},
+			requestedSub:      "test-ns/sub1",
+			requestedModel:    "ns/model-b",
+			wantModelRefs:     []string{"ns/model-a"},
+			wantAccessAllowed: false,
+		},
+	})
+}
+
+func runSelectFiltersModelRefsCases(t *testing.T, tests []selectFiltersModelRefsTestCase) {
+	t.Helper()
+	log := logger.New(false)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			runSelectFiltersModelRefsTest(t, log, tt)
+		})
+	}
+}
+
+func runSelectFiltersModelRefsTest(t *testing.T, log *logger.Logger, tt selectFiltersModelRefsTestCase) {
+	t.Helper()
+	var accessChecker subscription.ModelAccessChecker
+	if tt.accessChecker != nil {
+		accessChecker = tt.accessChecker
+	}
+	selector := subscription.NewSelector(log, &fakeLister{subscriptions: tt.subscriptions}, nil, accessChecker)
+
+	//nolint:unqueryvet,nolintlint // False positive - not a SQL query
+	result, err := selector.Select(tt.groups, tt.username, tt.requestedSub, tt.requestedModel)
+	assertAccessCheckerCall(t, tt)
+	if tt.expectError {
+		requireAccessDeniedError(t, err, tt.expectAccessDenied)
+		return
+	}
+	if err != nil {
+		t.Fatalf("Select() error = %v", err)
+	}
+
+	assertModelRefs(t, result.ModelRefs, tt.wantModelRefs)
+	if result.AccessAllowed != tt.wantAccessAllowed {
+		t.Errorf("AccessAllowed = %v, want %v", result.AccessAllowed, tt.wantAccessAllowed)
+	}
+}
+
+func assertAccessCheckerCall(t *testing.T, tt selectFiltersModelRefsTestCase) {
+	t.Helper()
+	if tt.accessChecker == nil {
+		return
+	}
+	if tt.accessChecker.calls != 1 {
+		t.Errorf("AuthorizedModels calls = %d, want 1", tt.accessChecker.calls)
+	}
+	if !slices.Equal(tt.accessChecker.gotGroups, tt.groups) {
+		t.Errorf("AuthorizedModels groups = %v, want %v", tt.accessChecker.gotGroups, tt.groups)
+	}
+	if tt.accessChecker.gotUser != tt.username {
+		t.Errorf("AuthorizedModels username = %q, want %q", tt.accessChecker.gotUser, tt.username)
+	}
+}
+
+func requireAccessDeniedError(t *testing.T, err error, expectAccessDenied bool) {
+	t.Helper()
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if expectAccessDenied {
+		var accessDenied *subscription.AccessDeniedError
+		if !errors.As(err, &accessDenied) {
+			t.Fatalf("expected AccessDeniedError, got %T: %v", err, err)
+		}
+	}
+}
+
+func assertModelRefs(t *testing.T, refs []subscription.ModelRefInfo, wantRefs []string) {
+	t.Helper()
+	gotRefs := make([]string, len(refs))
+	for i, ref := range refs {
+		gotRefs[i] = ref.Namespace + "/" + ref.Name
+	}
+	if len(gotRefs) != len(wantRefs) {
+		t.Fatalf("expected %d model refs %v, got %d: %v", len(wantRefs), wantRefs, len(gotRefs), gotRefs)
+	}
+	for i, want := range wantRefs {
+		if gotRefs[i] != want {
+			t.Errorf("model ref[%d] = %q, want %q", i, gotRefs[i], want)
+		}
+	}
+}
+
+func TestSelectHighestPriority_FiltersModelRefsByAuthPolicy(t *testing.T) {
+	log := logger.New(false)
+
+	tests := []struct {
+		name          string
+		subscriptions []*unstructured.Unstructured
+		accessChecker *fakeAccessChecker
+		groups        []string
+		wantModelRefs []string
+		wantError     bool
+	}{
+		{
+			name: "filters modelRefs by AuthPolicy",
+			subscriptions: []*unstructured.Unstructured{
+				createSubscriptionWithModelRefs("sub1", []string{"g1"}, []map[string]any{
+					{"name": "model-a", "namespace": "ns"},
+					{"name": "model-b", "namespace": "ns"},
+					{"name": "model-c", "namespace": "ns"},
+				}),
+			},
+			accessChecker: &fakeAccessChecker{authorized: map[authpolicy.ModelKey]bool{
+				{Namespace: "ns", Name: "model-a"}: true,
+				{Namespace: "ns", Name: "model-c"}: true,
+			}},
+			groups:        []string{"g1"},
+			wantModelRefs: []string{"ns/model-a", "ns/model-c"},
+		},
+		{
+			name: "without access checker returns all models",
+			subscriptions: []*unstructured.Unstructured{
+				createSubscriptionWithModelRefs("sub1", []string{"g1"}, []map[string]any{
+					{"name": "model-a", "namespace": "ns"},
+					{"name": "model-b", "namespace": "ns"},
+				}),
+			},
+			groups:        []string{"g1"},
+			wantModelRefs: []string{"ns/model-a", "ns/model-b"},
+		},
+		{
+			name: "nil authorizedSet (checker error) fails closed",
+			subscriptions: []*unstructured.Unstructured{
+				createSubscriptionWithModelRefs("sub1", []string{"g1"}, []map[string]any{
+					{"name": "model-a", "namespace": "ns"},
+					{"name": "model-b", "namespace": "ns"},
+				}),
+			},
+			accessChecker: &fakeAccessChecker{},
+			groups:        []string{"g1"},
+			wantError:     true,
 		},
 	}
 
@@ -1361,31 +2084,22 @@ func TestListAccessibleForModel_MultiNamespace(t *testing.T) {
 			lister := &fakeLister{subscriptions: tt.subscriptions}
 
 			var accessChecker subscription.ModelAccessChecker
-			if tt.withChecker || tt.authorized != nil {
-				accessChecker = &fakeAccessChecker{authorized: tt.authorized}
+			if tt.accessChecker != nil {
+				accessChecker = tt.accessChecker
 			}
-
 			selector := subscription.NewSelector(log, lister, nil, accessChecker)
-			result, err := selector.ListAccessibleForModel(tt.username, tt.groups, tt.modelID)
-			if err != nil {
-				t.Fatalf("Unexpected error: %v", err)
-			}
-
-			if len(result) != tt.wantCount {
-				t.Errorf("Expected %d subscriptions, got %d", tt.wantCount, len(result))
-			}
-
-			if tt.wantSubNames != nil {
-				for i, wantName := range tt.wantSubNames {
-					if i >= len(result) {
-						t.Errorf("Missing expected subscription %q at index %d", wantName, i)
-						continue
-					}
-					if result[i].SubscriptionIDHeader != wantName {
-						t.Errorf("Expected subscription %q at index %d, got %q", wantName, i, result[i].SubscriptionIDHeader)
-					}
+			result, err := selector.SelectHighestPriority(tt.groups, "")
+			if tt.wantError {
+				if err == nil {
+					t.Fatal("expected error, got nil")
 				}
+				return
 			}
+			if err != nil {
+				t.Fatalf("SelectHighestPriority() error = %v", err)
+			}
+
+			assertModelRefs(t, result.ModelRefs, tt.wantModelRefs)
 		})
 	}
 }
@@ -1461,6 +2175,135 @@ func TestSelector_ResolvedModelFromAlias(t *testing.T) {
 					t.Errorf("ResolvedModel = %q, want %q", result.ResolvedModel, tc.canonicalRef)
 				}
 			})
+		})
+	}
+}
+
+func TestSelect_RateLimitIDOnlyForShortIdentity(t *testing.T) {
+	log := logger.New(false)
+	requestedModel := "ns1/model-a"
+
+	legacy := createSubscriptionWithModelRefs("legacy-sub", []string{"g1"}, []map[string]any{
+		{"name": "model-a", "namespace": "ns1"},
+	})
+	fresh := createSubscriptionWithModelRefs("fresh-sub", []string{"g1"}, []map[string]any{
+		{"name": "model-a", "namespace": "ns1"},
+	})
+	if status, ok := fresh.Object["status"].(map[string]any); ok {
+		status["rateLimitIdentity"] = constant.RateLimitIdentityShort
+	} else {
+		fresh.Object["status"] = map[string]any{
+			"rateLimitIdentity": constant.RateLimitIdentityShort,
+		}
+	}
+
+	t.Run("legacy omits rateLimitId", func(t *testing.T) {
+		selector := subscription.NewSelector(log, &fakeLister{subscriptions: []*unstructured.Unstructured{legacy}}, nil, nil)
+		result, err := selector.Select([]string{"g1"}, "", "", requestedModel)
+		if err != nil {
+			t.Fatalf("Select: %v", err)
+		}
+		if result.RateLimitID != "" {
+			t.Errorf("RateLimitID = %q, want empty for legacy subscription", result.RateLimitID)
+		}
+	})
+
+	t.Run("short status returns rateLimitId", func(t *testing.T) {
+		selector := subscription.NewSelector(log, &fakeLister{subscriptions: []*unstructured.Unstructured{fresh}}, nil, nil)
+		result, err := selector.Select([]string{"g1"}, "", "", requestedModel)
+		if err != nil {
+			t.Fatalf("Select: %v", err)
+		}
+		want := subscription.RateLimitIDFor("test-ns", "fresh-sub", requestedModel)
+		if result.RateLimitID != want {
+			t.Errorf("RateLimitID = %q, want %q", result.RateLimitID, want)
+		}
+	})
+}
+
+// createSubscriptionWithFlowControl returns a subscription for models ns1/model-a and
+// ns1/model-b with the given status.flowControlStatuses.
+func createSubscriptionWithFlowControl(t *testing.T, statuses ...map[string]any) *unstructured.Unstructured {
+	t.Helper()
+	sub := createSubscriptionWithModelRefs("sub1", []string{"g1"}, []map[string]any{
+		{"name": "model-a", "namespace": "ns1"},
+		{"name": "model-b", "namespace": "ns1"},
+	})
+	rows := make([]any, len(statuses))
+	for i, s := range statuses {
+		rows[i] = s
+	}
+	if err := unstructured.SetNestedSlice(sub.Object, rows, "status", "flowControlStatuses"); err != nil {
+		t.Fatalf("SetNestedSlice: %v", err)
+	}
+	return sub
+}
+
+func flowControlRow(model, objective, reason string) map[string]any {
+	return map[string]any{"name": model, "namespace": "ns1", "objectiveName": objective, "reason": reason, "ready": true}
+}
+
+func TestSelect_FlowControlObjectiveAndFairnessID(t *testing.T) {
+	log := logger.New(false)
+	sub := createSubscriptionWithFlowControl(t,
+		flowControlRow("model-a", "maas-tenant-sub1-pool-a-0123456789", "ObjectiveReconciled"),
+		flowControlRow("model-b", "maas-tenant-sub1-pool-b-0123456789", "ObjectiveConflict"),
+	)
+	aliased := createMaaSModelRef("model-a", "ns1", "LLMInferenceService")
+	if err := unstructured.SetNestedField(aliased.Object, "publishers/ns1/models/a", "status", "resolvedModelAlias"); err != nil {
+		t.Fatalf("SetNestedField: %v", err)
+	}
+	selector := subscription.NewSelector(log, &fakeLister{subscriptions: []*unstructured.Unstructured{sub}},
+		&fakeModelLister{items: []*unstructured.Unstructured{aliased}}, nil, subscription.WithTenantName("acme"))
+
+	tests := []struct {
+		name          string
+		model         string
+		wantObjective string
+	}{
+		{name: "namespace/name", model: "ns1/model-a", wantObjective: "maas-tenant-sub1-pool-a-0123456789"},
+		{name: "bare name", model: "model-a", wantObjective: "maas-tenant-sub1-pool-a-0123456789"},
+		{name: "body-routed alias", model: "publishers/ns1/models/a", wantObjective: "maas-tenant-sub1-pool-a-0123456789"},
+		{name: "objective held by a foreign object is not returned", model: "ns1/model-b"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			//nolint:unqueryvet,nolintlint // False positive - not a SQL query
+			resp, err := selector.Select([]string{"g1"}, "", "", tc.model)
+			if err != nil {
+				t.Fatalf("Select: %v", err)
+			}
+			if resp.Objective != tc.wantObjective {
+				t.Errorf("Objective = %q, want %q", resp.Objective, tc.wantObjective)
+			}
+			if resp.FairnessID != "acme" {
+				t.Errorf("FairnessID = %q, want acme", resp.FairnessID)
+			}
+		})
+	}
+}
+
+func TestSelect_FlowControlObjectiveMissing(t *testing.T) {
+	log := logger.New(false)
+	tests := []struct {
+		name string
+		sub  *unstructured.Unstructured
+	}{
+		{name: "no flowControlStatuses", sub: createSubscriptionWithFlowControl(t)},
+		{name: "no row for the model", sub: createSubscriptionWithFlowControl(t, flowControlRow("model-b", "maas-b", "PriorityUnset"))},
+		{name: "row without an objective name", sub: createSubscriptionWithFlowControl(t, flowControlRow("model-a", "", "NotApplicable"))},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			selector := subscription.NewSelector(log, &fakeLister{subscriptions: []*unstructured.Unstructured{tc.sub}}, nil, nil)
+			//nolint:unqueryvet,nolintlint // False positive - not a SQL query
+			resp, err := selector.Select([]string{"g1"}, "", "", "ns1/model-a")
+			if err != nil {
+				t.Fatalf("Select: %v", err)
+			}
+			if resp.Objective != "" || resp.FairnessID != "" {
+				t.Errorf("Objective = %q, FairnessID = %q; want both empty", resp.Objective, resp.FairnessID)
+			}
 		})
 	}
 }

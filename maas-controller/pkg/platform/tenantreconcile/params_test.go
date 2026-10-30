@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -54,6 +55,7 @@ func TestBuildPlatformParams(t *testing.T) {
 		assert.Equal(t, DefaultPayloadProcessingImage, got.PayloadProcessingImage)
 		assert.Equal(t, DefaultMaaSAPIKeyCleanupImage, got.MaaSAPIKeyCleanupImage)
 		assert.Equal(t, DefaultAPIKeyMaxExpirationDays, got.APIKeyMaxExpirationDays)
+		assert.Equal(t, DefaultAPIKeyDeletionRetentionDays, got.APIKeyDeletionRetentionDays)
 	})
 
 	t.Run("if values are set for optional fields, they should prevail", func(t *testing.T) {
@@ -62,6 +64,7 @@ func TestBuildPlatformParams(t *testing.T) {
 		t.Setenv("RELATED_IMAGE_UBI_MINIMAL_IMAGE", "quay.io/example/cleanup:test")
 
 		maxExpirationDays := int32(45)
+		deletionRetentionDays := int32(30)
 		tenant := &maasv1alpha1.Tenant{
 			ObjectMeta: metav1.ObjectMeta{Namespace: "model-ns"},
 			Spec: maasv1alpha1.TenantSpec{
@@ -70,7 +73,8 @@ func TestBuildPlatformParams(t *testing.T) {
 					Name:      "gateway-name",
 				},
 				APIKeys: &maasv1alpha1.TenantAPIKeysConfig{
-					MaxExpirationDays: &maxExpirationDays,
+					MaxExpirationDays:     &maxExpirationDays,
+					DeletionRetentionDays: &deletionRetentionDays,
 				},
 			},
 		}
@@ -91,6 +95,7 @@ func TestBuildPlatformParams(t *testing.T) {
 		assert.Equal(t, "quay.io/example/payload:test", got.PayloadProcessingImage)
 		assert.Equal(t, "quay.io/example/cleanup:test", got.MaaSAPIKeyCleanupImage)
 		assert.Equal(t, "45", got.APIKeyMaxExpirationDays)
+		assert.Equal(t, "30", got.APIKeyDeletionRetentionDays)
 	})
 }
 
@@ -246,6 +251,7 @@ func TestApplyPlatformParamsWithRenderedOverlay(t *testing.T) {
 		PayloadProcessingImage:                 "quay.io/example/payload:test",
 		MaaSAPIKeyCleanupImage:                 "quay.io/example/cleanup:test",
 		APIKeyMaxExpirationDays:                "45",
+		APIKeyDeletionRetentionDays:            "30",
 	}
 
 	err := applyPlatformParams(logr.Discard(), resources, params)
@@ -257,6 +263,7 @@ func TestApplyPlatformParamsWithRenderedOverlay(t *testing.T) {
 	assert.Equal(t, params.GatewayNamespace, requireEnvVarValue(t, maasAPIDeployment, "maas-api", "GATEWAY_NAMESPACE"))
 	assert.Equal(t, params.GatewayName, requireEnvVarValue(t, maasAPIDeployment, "maas-api", "GATEWAY_NAME"))
 	assert.Equal(t, params.APIKeyMaxExpirationDays, requireEnvVarValue(t, maasAPIDeployment, "maas-api", "API_KEY_MAX_EXPIRATION_DAYS"))
+	assert.Equal(t, params.APIKeyDeletionRetentionDays, requireEnvVarValue(t, maasAPIDeployment, "maas-api", "API_KEY_DELETION_RETENTION_DAYS"))
 	// TENANT_NAME is "models-as-a-service" for default tenant (empty tenantID), otherwise tenantID
 	expectedTenantName := tenantID
 	if expectedTenantName == "" {
@@ -345,12 +352,12 @@ func TestApplyPlatformParamsWithRenderedOverlay(t *testing.T) {
 	assert.False(t, targetRefsFound, "targetRefs must be cleared; mutually exclusive with workloadSelector")
 
 	// Verify dual-stage filter chain with dual WASM anchors (router fallback omitted when Kuadrant WASM present):
-	//   [0..3] WasmPlugin + RHCL wasm, [4..8] per-route disable MERGE on maas-api-route rules 0–4,
-	//   [9..10] EPP reorder.
+	//   [0..3] WasmPlugin + RHCL wasm, [4..9] per-route disable MERGE on maas-api-route rules 0–5,
+	//   [10..11] EPP reorder.
 	configPatches, found, err := unstructured.NestedSlice(payloadEnvoyFilter.Object, "spec", "configPatches")
 	require.NoError(t, err)
 	require.True(t, found)
-	require.Len(t, configPatches, 11, "expected eleven configPatches (4x filter insert + 5x MERGE + 2x EPP reorder)")
+	require.Len(t, configPatches, 12, "expected twelve configPatches (4x filter insert + 6x MERGE + 2x EPP reorder)")
 
 	wantWasmPluginAnchor := wasmpluginAnchorName(params.GatewayNamespace, params.GatewayName)
 	wantBeforeCluster := grpcClusterName(PayloadPreProcessingDeploymentName(tenantID), params.GatewayNamespace, 9004)
@@ -373,8 +380,8 @@ func TestApplyPlatformParamsWithRenderedOverlay(t *testing.T) {
 		assert.Equal(t, wantWasmClusters[i], cluster, "configPatches[%d] grpc cluster_name", i)
 	}
 
-	// Verify per-route ext_proc disable on maas-api-route rules 0–4.
-	for i := 4; i < 9; i++ {
+	// Verify per-route ext_proc disable on maas-api-route rules 0–5.
+	for i := 4; i < 10; i++ {
 		cp, ok := configPatches[i].(map[string]any)
 		require.True(t, ok, "configPatches[%d] should be a map", i)
 
@@ -464,22 +471,54 @@ func TestApplyPlatformParamsWithRenderedOverlay(t *testing.T) {
 	assert.Equal(t, DefaultOTLPCollectorComponentLabelValue, otlpPodMatchLabels[DefaultOTLPCollectorComponentLabelKey])
 
 	deploymentNSPolicy := requireResource(t, resources, GVKNetworkPolicy, baseMaaSAPIDeploymentNSNetworkPolicyName)
-	ingress, found, err := unstructured.NestedSlice(deploymentNSPolicy.Object, "spec", "ingress")
+	assert.Equal(t, params.AppNamespace, deploymentNSPolicy.GetNamespace())
+	deploymentIngress, ingressFound, err := unstructured.NestedSlice(deploymentNSPolicy.Object, "spec", "ingress")
+	require.NoError(t, err)
+	require.True(t, ingressFound)
+	require.Len(t, deploymentIngress, 1)
+	deploymentRule, ok := deploymentIngress[0].(map[string]any)
+	require.True(t, ok)
+	deploymentPeers, ok := deploymentRule["from"].([]any)
+	require.True(t, ok)
+	require.Len(t, deploymentPeers, 3)
+
+	assertDeploymentNSPeerMatchLabels(t, deploymentPeers[0], params.ControllerNamespace, map[string]any{
+		"control-plane": "maas-controller",
+	})
+	assertDeploymentNSPeerMatchExpressionsIn(t, deploymentPeers[1], params.ControllerNamespace, "deployment", maasAPIDashboardDeploymentLabelValues)
+	assertDeploymentNSPeerMatchLabels(t, deploymentPeers[2], params.ControllerNamespace, map[string]any{
+		"maas-api-e2e-probe": "true",
+	})
+
+	gatewayPolicy := requireResource(t, resources, GVKNetworkPolicy, MaaSAPIGatewayNetworkPolicyName(tenantID))
+	assert.Equal(t, params.AppNamespace, gatewayPolicy.GetNamespace())
+	gatewayIngress, found, err := unstructured.NestedSlice(gatewayPolicy.Object, "spec", "ingress")
 	require.NoError(t, err)
 	require.True(t, found)
-	require.NotEmpty(t, ingress)
-	rule, ok := ingress[0].(map[string]any)
+	require.Len(t, gatewayIngress, 1)
+	gatewayRule, ok := gatewayIngress[0].(map[string]any)
 	require.True(t, ok)
-	from, ok := rule["from"].([]any)
+	from, ok := gatewayRule["from"].([]any)
 	require.True(t, ok)
-	require.NotEmpty(t, from)
+	require.Len(t, from, 1)
 	peer, ok := from[0].(map[string]any)
 	require.True(t, ok)
 	nsSelector, ok := peer["namespaceSelector"].(map[string]any)
 	require.True(t, ok)
-	matchLabels, ok := nsSelector["matchLabels"].(map[string]any)
+	nsMatchLabels, ok := nsSelector["matchLabels"].(map[string]any)
 	require.True(t, ok)
-	assert.Equal(t, params.ControllerNamespace, matchLabels["kubernetes.io/metadata.name"])
+	assert.Equal(t, params.GatewayNamespace, nsMatchLabels["kubernetes.io/metadata.name"])
+	gatewayPodSelector, ok := peer["podSelector"].(map[string]any)
+	require.True(t, ok)
+	gatewayPodMatchLabels, ok := gatewayPodSelector["matchLabels"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, params.GatewayName, gatewayPodMatchLabels["gateway.networking.k8s.io/gateway-name"])
+	gatewayTargetSelector, found, err := unstructured.NestedMap(gatewayPolicy.Object, "spec", "podSelector")
+	require.NoError(t, err)
+	require.True(t, found)
+	gatewayTargetLabels, ok := gatewayTargetSelector["matchLabels"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, MaaSAPIDeploymentName(tenantID), gatewayTargetLabels[LabelTenantInstance])
 
 	authorinoPolicy := requireResource(t, resources, GVKNetworkPolicy, "maas-authorino-allow")
 	assert.Equal(t, params.AppNamespace, authorinoPolicy.GetNamespace())
@@ -504,6 +543,76 @@ func TestApplyPlatformParamsWithRenderedOverlay(t *testing.T) {
 	assert.Equal(t, "kubernetes.io/metadata.name", namespaceExpression["key"])
 	assert.Equal(t, "In", namespaceExpression["operator"])
 	assert.ElementsMatch(t, []any{"kuadrant-system", "openshift-operators", "rh-connectivity-link"}, namespaceExpression["values"])
+}
+
+// The cleanup image runs as root. OpenShift's restricted SCC assigns a non-root UID
+// (and rejects an explicit UID outside the namespace range), while xKS has no SCC, so
+// only the xKS overlay may pin runAsUser — without it the kubelet refuses the container.
+func TestAPIKeyCleanupCronJobUserPerPlatform(t *testing.T) {
+	for _, tc := range []struct {
+		overlay  string
+		wantUser any
+	}{
+		{overlay: "odh", wantUser: nil},
+		{overlay: "xks", wantUser: int64(1001)},
+	} {
+		t.Run(tc.overlay, func(t *testing.T) {
+			resources := renderPlatformOverlayResources(t, tc.overlay, "tenant-ns")
+			cronJob := requireResource(t, resources, GVKCronJob, MaaSAPIKeyCleanupCronJobName(""))
+			podSecurity, found, err := unstructured.NestedMap(cronJob.Object,
+				"spec", "jobTemplate", "spec", "template", "spec", "securityContext")
+			require.NoError(t, err)
+			require.True(t, found)
+
+			assert.Equal(t, true, podSecurity["runAsNonRoot"])
+			assert.EqualValues(t, tc.wantUser, podSecurity["runAsUser"])
+		})
+	}
+}
+
+// The maas-api ClusterRoles carry an OpenShift-only rule (config.openshift.io/apiservers)
+// for honoring the cluster-wide TLS security profile. That API group does not exist on
+// xKS, so the maas-controller SA can never hold the permission and the RBAC escalation
+// guard denies the server-side apply of the ClusterRole, failing every tenant platform
+// reconcile. Only the OpenShift overlay may carry the rule.
+func TestMaasAPIClusterRoleOpenshiftRulesPerPlatform(t *testing.T) {
+	clusterRoleGVK := schema.GroupVersionKind{
+		Group: "rbac.authorization.k8s.io", Version: "v1", Kind: "ClusterRole",
+	}
+	for _, tc := range []struct {
+		overlay  string
+		wantRule bool
+	}{
+		{overlay: "odh", wantRule: true},
+		{overlay: "xks", wantRule: false},
+	} {
+		t.Run(tc.overlay, func(t *testing.T) {
+			resources := renderPlatformOverlayResources(t, tc.overlay, "tenant-ns")
+			for _, name := range []string{"maas-api", "maas-api-supplemental"} {
+				role := requireResource(t, resources, clusterRoleGVK, name)
+				assert.Equal(t, tc.wantRule, clusterRoleHasAPIGroup(t, role, "config.openshift.io"),
+					"ClusterRole %s must %s the config.openshift.io rule on the %s overlay",
+					name, map[bool]string{true: "keep", false: "drop"}[tc.wantRule], tc.overlay)
+			}
+		})
+	}
+}
+
+func clusterRoleHasAPIGroup(t *testing.T, role *unstructured.Unstructured, group string) bool {
+	t.Helper()
+	rules, found, err := unstructured.NestedSlice(role.Object, "rules")
+	require.NoError(t, err)
+	require.True(t, found)
+	for _, rule := range rules {
+		ruleMap, ok := rule.(map[string]any)
+		require.True(t, ok)
+		groups, found, err := unstructured.NestedStringSlice(ruleMap, "apiGroups")
+		require.NoError(t, err)
+		if found && slices.Contains(groups, group) {
+			return true
+		}
+	}
+	return false
 }
 
 func TestApplyPlatformParamsWithReplicaOverrides(t *testing.T) {
@@ -697,6 +806,32 @@ func TestApplyPlatformParamsWithRenderedOverlay_AITenant(t *testing.T) {
 
 	payloadBeforeDeployment := requireResource(t, resources, GVKDeployment, "payload-pre-processing-redteam")
 	assert.Equal(t, "payload-pre-processing-redteam", requireDeploymentSelectorLabel(t, payloadBeforeDeployment, LabelTenantInstance))
+
+	gatewayPolicy := requireResource(t, resources, GVKNetworkPolicy, MaaSAPIGatewayNetworkPolicyName("redteam"))
+	gatewayTargetSelector, found, err := unstructured.NestedMap(gatewayPolicy.Object, "spec", "podSelector")
+	require.NoError(t, err)
+	require.True(t, found)
+	gatewayTargetLabels, ok := gatewayTargetSelector["matchLabels"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "maas-api-redteam", gatewayTargetLabels[LabelTenantInstance])
+}
+
+func TestPatchMaaSAPIGatewayNetworkPolicyMissingIngressFailsClosed(t *testing.T) {
+	policy := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "networking.k8s.io/v1",
+		"kind":       "NetworkPolicy",
+		"metadata": map[string]any{
+			"name": baseMaaSAPIGatewayNetworkPolicyName,
+		},
+		"spec": map[string]any{},
+	}}
+
+	err := patchMaaSAPIGatewayNetworkPolicy(policy, PlatformParams{
+		GatewayNamespace: "gateway-ns",
+		GatewayName:      "gateway-name",
+	})
+
+	require.ErrorContains(t, err, "ingress is missing")
 }
 
 func TestBuildPlatformParams_SkipIPPForPraxis(t *testing.T) {
@@ -792,13 +927,19 @@ func TestRenderKustomizeRemapsServiceMonitorServerName(t *testing.T) {
 func renderOverlayResources(t *testing.T, appNamespace string) []unstructured.Unstructured {
 	t.Helper()
 
+	return renderPlatformOverlayResources(t, "odh", appNamespace)
+}
+
+func renderPlatformOverlayResources(t *testing.T, overlay, appNamespace string) []unstructured.Unstructured {
+	t.Helper()
+
 	_, currentFile, _, ok := runtime.Caller(0)
 	require.True(t, ok)
 
 	overlayDir := filepath.Clean(filepath.Join(
 		filepath.Dir(currentFile),
 		"..", "..", "..", "..",
-		"maas-api", "deploy", "overlays", "odh",
+		"maas-api", "deploy", "overlays", overlay,
 	))
 
 	resources, err := RenderKustomize(overlayDir, appNamespace)
@@ -961,6 +1102,52 @@ func requirePodTemplateLabel(t *testing.T, r *unstructured.Unstructured, key str
 	value, ok := labels[key]
 	require.True(t, ok, "label %q not found on pod template", key)
 	return value
+}
+
+func assertDeploymentNSPeerMatchLabels(t *testing.T, peer any, controllerNamespace string, expectedPodLabels map[string]any) {
+	t.Helper()
+
+	peerMap, ok := peer.(map[string]any)
+	require.True(t, ok)
+	nsSelector, ok := peerMap["namespaceSelector"].(map[string]any)
+	require.True(t, ok)
+	nsMatchLabels, ok := nsSelector["matchLabels"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, controllerNamespace, nsMatchLabels["kubernetes.io/metadata.name"])
+	podSelector, ok := peerMap["podSelector"].(map[string]any)
+	require.True(t, ok)
+	podMatchLabels, ok := podSelector["matchLabels"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, expectedPodLabels, podMatchLabels)
+}
+
+func assertDeploymentNSPeerMatchExpressionsIn(t *testing.T, peer any, controllerNamespace, labelKey string, expectedValues []string) {
+	t.Helper()
+
+	peerMap, ok := peer.(map[string]any)
+	require.True(t, ok)
+	nsSelector, ok := peerMap["namespaceSelector"].(map[string]any)
+	require.True(t, ok)
+	nsMatchLabels, ok := nsSelector["matchLabels"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, controllerNamespace, nsMatchLabels["kubernetes.io/metadata.name"])
+	podSelector, ok := peerMap["podSelector"].(map[string]any)
+	require.True(t, ok)
+	expressions, ok := podSelector["matchExpressions"].([]any)
+	require.True(t, ok)
+	require.Len(t, expressions, 1)
+	expr, ok := expressions[0].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, labelKey, expr["key"])
+	assert.Equal(t, "In", expr["operator"])
+	values, ok := expr["values"].([]any)
+	require.True(t, ok)
+	got := make([]string, len(values))
+	for i, v := range values {
+		got[i], ok = v.(string)
+		require.True(t, ok)
+	}
+	assert.Equal(t, expectedValues, got)
 }
 
 func requireDeploymentSelectorLabel(t *testing.T, r *unstructured.Unstructured, key string) string {

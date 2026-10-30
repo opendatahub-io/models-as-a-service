@@ -227,11 +227,23 @@ class TestTenantAuthIsolation:
 
         tenant_a, tenant_b = tenant_env
         response_a = search_api_keys_at(tenant_a["base_url"], token_a)
-        assert response_a.status_code != 401, f"Tenant A rejected its OIDC token: {response_summary(response_a)}"
+        assert response_a.status_code != 401, (
+            f"Tenant A rejected its OIDC token: {response_summary(response_a)}"
+        )
+
+        response_b = search_api_keys_at(tenant_b["base_url"], token_b)
+        assert response_b.status_code != 401, (
+            f"Tenant B rejected its OIDC token: {response_summary(response_b)}"
+        )
 
         cross_response = search_api_keys_at(tenant_b["base_url"], token_a)
         assert cross_response.status_code in (401, 403), (
             f"Tenant B should reject Tenant A OIDC token: {response_summary(cross_response)}"
+        )
+
+        reverse_cross_response = search_api_keys_at(tenant_a["base_url"], token_b)
+        assert reverse_cross_response.status_code in (401, 403), (
+            f"Tenant A should reject Tenant B OIDC token: {response_summary(reverse_cross_response)}"
         )
 
     def test_api_key_list_scoped_to_tenant(self, tenant_auth_setup, tenant_api_keys):

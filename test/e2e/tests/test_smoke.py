@@ -1,9 +1,15 @@
-import logging
 import json
+import logging
 import pytest
 import requests
-from test_helper import chat, completions
+
 from conftest import TLS_VERIFY
+from test_helper import (
+    MODEL_NAME as SERVED_MODEL_NAME,
+    assert_openai_sse_chat_stream,
+    chat,
+    completions,
+)
 
 log = logging.getLogger(__name__)
 
@@ -77,17 +83,60 @@ def test_models_catalog(model_catalog: dict):
     if "ready" in first:
         print(f"[models] first model ready={first['ready']}")
 
-def test_chat_completions_gateway_alive(model_v1: str, api_key_headers: dict, model_name: str):
+def test_chat_completions_gateway_alive(model_v1: str, api_key_headers: dict):
     """
-    Gateway: /chat/completions reachable for the deployed model URL.
-    Uses API key for authentication (required for inference after JWT removal).
-    Allowed: 200 (backend answers) or 404 (path present but not wired here).
+    Given a governed model and valid API key, a non-streaming request returns
+    HTTP 200 with non-whitespace assistant content.
     """
-    r = chat("Say 'hello' in one word.", model_v1, api_key_headers, model_name=model_name)
+    r = requests.post(
+        f"{model_v1}/chat/completions",
+        headers=api_key_headers,
+        json={
+            # MODEL_NAME selects the MaaS route; the body must use the ID the
+            # simulator serves (E2E_MODEL_NAME), which may be different.
+            "model": SERVED_MODEL_NAME,
+            "messages": [{"role": "user", "content": "Say 'hello' in one word."}],
+            "max_tokens": 16,
+            "stream": False,
+        },
+        timeout=30,
+        verify=TLS_VERIFY,
+    )
     msg = f"[chat] POST /chat/completions -> {r.status_code}"
     log.info(msg)
     print(msg)
-    assert r.status_code in (200, 404), f"unexpected {r.status_code}: {r.text[:500]}"
+    assert r.status_code == 200, f"expected 200, got {r.status_code}: {r.text[:500]}"
+    assert r.content.strip(), "HTTP 200 chat completion returned an empty response body"
+
+    response = r.json()
+    choices = response.get("choices") or []
+    assert choices, f"HTTP 200 chat completion returned no choices: {r.text[:500]}"
+    message = choices[0].get("message") or {}
+    content = message.get("content")
+    assert isinstance(content, str) and content.strip(), (
+        f"HTTP 200 chat completion returned empty assistant content: {r.text[:500]}"
+    )
+
+
+def test_chat_completions_streaming_sse(model_v1: str, api_key_headers: dict):
+    """
+    Given a governed model and valid API key with stream=true,
+    the client receives multiple SSE data chunks, each JSON-parseable,
+    and the stream ends with data: [DONE].
+    """
+    with chat(
+        "Say 'hello' in one word.",
+        model_v1,
+        api_key_headers,
+        SERVED_MODEL_NAME,
+        stream=True,
+        max_tokens=16,
+    ) as streamed:
+        events = assert_openai_sse_chat_stream(streamed)
+    msg = f"[chat-stream] POST /chat/completions stream=true -> 200, {len(events)} SSE lines"
+    log.info(msg)
+    print(msg)
+
 
 def test_legacy_completions_optionally(model_v1: str, api_key_headers: dict, model_name: str):
     """

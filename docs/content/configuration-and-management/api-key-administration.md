@@ -2,9 +2,29 @@
 
 This guide covers administrative operations for managing API keys across the MaaS platform.
 
+## Lifecycle Cleanup
+
+Deleting an `AITenant` invalidates all of its API keys. Deleting a `MaaSSubscription` invalidates only keys bound to that subscription. These operations are performed through internal maas-api endpoints and are gated by Kubernetes finalizers, so a transient maas-api outage causes deletion to retry instead of leaving credentials usable.
+
+Lifecycle-invalidated rows, including regular and ephemeral keys, are soft-deleted with a 90-day retention period by default, matching the tenancy architecture decision record. Set `spec.apiKeys.deletionRetentionDays` on `MaasTenantConfig` for an operator-managed tenant, or set `API_KEY_DELETION_RETENTION_DAYS` on a standalone maas-api deployment. The regular internal cleanup CronJob still removes expired ephemeral keys after its 30-minute grace period, but never removes lifecycle-invalidated rows; those rows are physically removed only after the configured retention period. Active regular keys remain until manually revoked. Each lifecycle cleanup emits a structured audit log containing the tenant, scope, deleted-key count, timestamp, and controller initiator.
+
 ## Bulk Key Revocation
 
-Platform administrators can bulk revoke API keys by **user**, by **subscription**, or both. A **dry-run** mode is available to preview how many keys would be revoked before committing.
+Platform administrators can bulk revoke API keys by **user**, by **subscription**, or both. A verified SSO organization administrator can revoke keys only for an explicit MaaS Subscription that is associated with an organization they administer. A **dry-run** mode is available to preview how many keys would be revoked before committing.
+
+## Organization Association and Subscription Names
+
+API keys remain bound to the user who created them and to the `(MaaS Tenant, subscription name)` pair. MaaS does not add a runtime registry that distinguishes multiple incarnations of the same subscription name.
+
+`MaaSSubscription.spec.organization.id` is an optional, non-empty string and a stable association for delegated administration. A legacy subscription can gain the field once, only after an administrator or provisioning process has verified that the existing keys and history really belong to that organization. After the field is set, it cannot be changed or removed. Omitting it preserves legacy behavior and grants no organization-administration permission. Organization administration does not grant inference access, API-key creation, or model access; owners and MaaSAuthPolicy subjects continue to control those paths independently. When set, the stable organization ID is the authoritative source for subscription-scoped `organization_id` telemetry; `tokenMetadata.organizationId` remains the legacy fallback.
+
+Subscription names must be unique and must not be reused or reassigned within a MaaS Tenant, especially when subscriptions from multiple organizations share that Tenant. Reusing a name can expose the previous subscription's remaining key metadata and revocation scope to the new organization administrators, and historical usage may remain associated with that name. MaaS documents this limitation but does not automatically detect or prevent name reuse. Before assigning an organization to a legacy subscription, verify its key and history association, revoke or migrate any unrelated keys, and retain an audit record of the adoption decision.
+
+### Upgrade and rollback
+
+Install the updated `MaaSSubscription` CRD before deploying a controller or API version that reads `spec.organization.id`. The optional field leaves existing unmarked subscriptions valid and does not change owner checks, model access, inference grants, or key bindings.
+
+For a supported rollback, roll back the controller or API workload while retaining the updated CRD. Older workloads ignore the organization field, and the association remains available if the deployment is rolled forward again. Do not replace the CRD with an older schema while association data must be preserved: an older schema can prune the field on later writes.
 
 ### Revoking All Keys for a User
 
@@ -17,7 +37,7 @@ curl -sS -X POST "${MAAS_API_URL}/maas-api/v1/api-keys/bulk-revoke" \
   -d '{"username": "alice"}'
 ```
 
-This updates the status of all API keys belonging to the specified user to `revoked` in the database. The next validation request for any of those keys will reject them. Authorino may cache validation results briefly; revocation is effective as soon as the cache expires.
+This updates the status of all API keys belonging to the specified user to `revoked` in the writable database. Validation rejects them after PostgreSQL replication lag when a read replica is configured, plus any brief Authorino cache delay. Without a read replica, the next validation request rejects them directly from the primary.
 
 ### Revoking All Keys for a Subscription
 
@@ -87,13 +107,13 @@ curl -sS -X POST "${MAAS_API_URL}/maas-api/v1/api-keys/bulk-revoke" \
 | Field | Required | Description |
 |-------|----------|-------------|
 | `username` | Optional (at least one of `username` or `subscription` must be provided) | Target user whose keys should be revoked. Regular users can only specify their own username; specifying another user requires admin privileges. |
-| `subscription` | Optional (at least one of `username` or `subscription` must be provided) | MaaSSubscription name whose bound keys should be revoked. Admin-only. |
+| `subscription` | Optional (at least one of `username` or `subscription` must be provided) | MaaSSubscription name or `namespace/name` alias whose bound keys should be revoked. Requires platform-admin authorization, or delegated authorization for that subscription. |
 | `dryRun` | Optional | When `true`, returns the count of keys that would be revoked without performing any mutation. Default: `false`. |
 
 ### Authorization
 
 !!! warning "Administrative privilege required"
-    Subscription-scoped and cross-user revocation require admin privileges. Regular users can only revoke their own keys via `DELETE /v1/api-keys/{id}` or bulk revoke with their own username.
+    Subscription-scoped revocation requires platform-admin authorization or delegated subscription-admin authorization. Cross-user revocation requires platform-admin authorization, or delegated subscription-admin authorization when an explicit subscription is supplied. Regular users can only revoke their own keys via `DELETE /v1/api-keys/{id}` or bulk revoke with their own username. A delegated administrator cannot use a username-only request to revoke keys across subscriptions.
 
 ### Use Cases
 
@@ -128,7 +148,7 @@ Expired ephemeral keys are automatically deleted from the database by a **CronJo
 
 ### How It Works
 
-1. The CronJob sends `POST /internal/v1/api-keys/cleanup` to the maas-api Service
+1. The CronJob reads its projected `maas-api-cleanup` ServiceAccount token and sends an authenticated `POST /internal/v1/api-keys/cleanup` request to the maas-api Service
 2. The endpoint deletes ephemeral keys that expired **more than 30 minutes ago** (grace period)
 3. Regular (non-ephemeral) keys are **never** deleted by cleanup — they remain until manually revoked
 
@@ -141,8 +161,8 @@ A 30-minute grace period after expiration ensures that recently-expired keys are
 The cleanup endpoint is cluster-internal only:
 
 - It is registered under `/internal/v1/` and is **not exposed** on the external Service or Route
-- A `NetworkPolicy` (`maas-api-cleanup-restrict`) restricts cleanup pods to communicate only with `maas-api:8080` and DNS
-- No authentication is required on the endpoint itself — access control is enforced at the network layer
+- Requests must present a bearer token for the `maas-api-cleanup` ServiceAccount; maas-api validates it with a Kubernetes `TokenReview` and rejects any other caller, so authentication is required at the endpoint itself
+- A `NetworkPolicy` (`maas-api-cleanup-restrict`) further restricts cleanup pods to communicate only with `maas-api` and DNS, as defense in depth — it is not the sole access control
 
 ### Troubleshooting Cleanup
 

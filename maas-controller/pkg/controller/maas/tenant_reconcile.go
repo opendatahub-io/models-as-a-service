@@ -32,6 +32,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -158,8 +159,8 @@ func (r *TenantReconciler) reconcile(ctx context.Context, req ctrl.Request) (ctr
 	// Surface the infrastructure namespace so operators know where maas-db-config lives.
 	tenant.Status.InfraNamespace = r.appNamespaceForTenant()
 
-	if err := r.deleteUsageLogsEnvoyFilterIfDisabled(ctx, log, &tenant); err != nil {
-		log.Error(err, "failed to delete usage-logs EnvoyFilter after usageLogging disabled")
+	if err := r.deleteUsageLogsEnvoyFilterIfTelemetryDisabled(ctx, log, &tenant); err != nil {
+		log.Error(err, "failed to delete usage-logs EnvoyFilter after telemetry disabled")
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 
@@ -178,7 +179,7 @@ func (r *TenantReconciler) reconcile(ctx context.Context, req ctrl.Request) (ctr
 	}
 
 	// Check dependencies and prerequisites
-	prereqReport, result, err := r.checkDependenciesAndPrerequisites(ctx, &tenant)
+	prereqReport, result, err := r.checkDependenciesAndPrerequisites(ctx, &tenant, mcfg)
 	if result != nil {
 		return *result, err
 	}
@@ -224,6 +225,17 @@ func (r *TenantReconciler) handleDeletion(ctx context.Context, log logr.Logger, 
 			return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 		}
 
+		// When an AITenant owns this config, its deletion sequence runs API-key
+		// revocation against maas-api before triggering MaasTenantConfig deletion.
+		// If something external (e.g. a CI pipeline) deletes the tenant namespace
+		// directly, MaasTenantConfig starts deleting independently. In that case
+		// cleanupTenantResources would tear down maas-api while the AITenant
+		// controller still needs it for revocation — deadlocking both controllers.
+		// Defer maas-api cleanup until the owning AITenant has finished revocation.
+		if waiting, res := r.waitForAITenantRevocation(ctx, log, tenant); waiting {
+			return res, nil
+		}
+
 		if err := r.cleanupTenantResources(ctx, log, tenant); err != nil {
 			log.Error(err, "failed to cleanup tenant resources")
 			return ctrl.Result{}, err
@@ -231,10 +243,52 @@ func (r *TenantReconciler) handleDeletion(ctx context.Context, log logr.Logger, 
 
 		controllerutil.RemoveFinalizer(tenant, tenantFinalizer)
 		if err := r.Update(ctx, tenant); err != nil {
+			if apierrors.IsNotFound(err) {
+				log.Info("MaasTenantConfig or its namespace is already gone; finalizer removal is moot")
+				return ctrl.Result{}, nil
+			}
 			return ctrl.Result{}, err
 		}
 	}
 	return ctrl.Result{}, nil
+}
+
+// waitForAITenantRevocation checks whether the owning AITenant still needs
+// maas-api alive for API-key revocation. Returns (true, requeue) if
+// MaasTenantConfig should defer its maas-api cleanup; (false, _) to proceed.
+func (r *TenantReconciler) waitForAITenantRevocation(ctx context.Context, log logr.Logger, tenant *maasv1alpha1.MaasTenantConfig) (bool, ctrl.Result) {
+	ann := tenant.GetAnnotations()
+	if ann == nil {
+		return false, ctrl.Result{}
+	}
+	name := ann[tenantreconcile.AnnotationAITenantName]
+	ns := ann[tenantreconcile.AnnotationAITenantNamespace]
+	if name == "" || ns == "" {
+		return false, ctrl.Result{}
+	}
+
+	var aitenant maasv1alpha1.AITenant
+	if err := r.Get(ctx, types.NamespacedName{Name: name, Namespace: ns}, &aitenant); err != nil {
+		if apierrors.IsNotFound(err) {
+			return false, ctrl.Result{}
+		}
+		log.Error(err, "failed to look up owning AITenant, deferring cleanup")
+		return true, ctrl.Result{RequeueAfter: 10 * time.Second}
+	}
+
+	if aitenant.DeletionTimestamp.IsZero() {
+		return false, ctrl.Result{}
+	}
+	if !controllerutil.ContainsFinalizer(&aitenant, aitenantFinalizer) {
+		return false, ctrl.Result{}
+	}
+	if tenantAPIKeysRevoked(&aitenant) {
+		return false, ctrl.Result{}
+	}
+
+	log.Info("Deferring maas-api cleanup: owning AITenant has not completed API-key revocation",
+		"aitenant", ns+"/"+name)
+	return true, ctrl.Result{RequeueAfter: 10 * time.Second}
 }
 
 func (r *TenantReconciler) handleManagementState(ctx context.Context, log logr.Logger, tenant *maasv1alpha1.MaasTenantConfig) (*ctrl.Result, error) {
@@ -306,7 +360,7 @@ func (r *TenantReconciler) validateConfigAndGateway(ctx context.Context, log log
 	return mcfg, platformContext, nil, nil
 }
 
-func (r *TenantReconciler) checkDependenciesAndPrerequisites(ctx context.Context, tenant *maasv1alpha1.MaasTenantConfig) (tenantreconcile.PrerequisiteReport, *ctrl.Result, error) {
+func (r *TenantReconciler) checkDependenciesAndPrerequisites(ctx context.Context, tenant *maasv1alpha1.MaasTenantConfig, mcfg *maasv1alpha1.Config) (tenantreconcile.PrerequisiteReport, *ctrl.Result, error) {
 	if err := tenantreconcile.CheckDependencies(ctx, r.Client); err != nil {
 		setDependenciesCondition(tenant, false, err.Error())
 		setDeploymentsAvailableCondition(tenant, false, "DependenciesNotMet", err.Error())
@@ -320,7 +374,13 @@ func (r *TenantReconciler) checkDependenciesAndPrerequisites(ctx context.Context
 	setDependenciesCondition(tenant, true, "")
 
 	appNs := r.appNamespaceForTenant()
-	rep := tenantreconcile.CollectPrerequisiteReport(ctx, r.Client, appNs)
+	usageMetricsDashboard := false
+	usageLogging := false
+	if mcfg != nil {
+		usageMetricsDashboard = ptr.Deref(mcfg.Spec.UsageMetricsDashboard, false)
+		usageLogging = ptr.Deref(mcfg.Spec.UsageLogging, false)
+	}
+	rep := tenantreconcile.CollectPrerequisiteReport(ctx, r.Client, appNs, usageMetricsDashboard, usageLogging, tenantreconcile.IsTelemetryEnabled(tenant.Spec.Telemetry))
 	setPrerequisiteConditionsFromReport(tenant, rep)
 	if len(rep.Blocking) > 0 {
 		tenant.Status.Phase = "Failed"
@@ -352,7 +412,7 @@ func (r *TenantReconciler) reconcilePlatform(
 	mcfg *maasv1alpha1.Config,
 ) (*tenantreconcile.RunResult, *ctrl.Result, error) {
 	appNs := r.appNamespaceForTenant()
-	runRes, err := tenantreconcile.RunPlatform(ctx, log, r.Client, r.Scheme, tenant, platformContext, r.ManifestPath, appNs, r.ControllerNamespace, r.ClusterAudience, r.MonitoringNamespace, mcfg)
+	runRes, err := tenantreconcile.RunPlatformWithReader(ctx, log, r.Client, r.APIReader, r.Scheme, tenant, platformContext, r.ManifestPath, appNs, r.ControllerNamespace, r.ClusterAudience, r.MonitoringNamespace, mcfg)
 	if err != nil {
 		log.Error(err, "Tenant platform reconcile failed")
 		setDeploymentsAvailableCondition(tenant, false, "PlatformReconcileFailed", err.Error())

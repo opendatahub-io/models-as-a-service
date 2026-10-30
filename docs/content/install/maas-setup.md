@@ -23,11 +23,13 @@ Complete [Operator Setup](platform-setup.md) before proceeding.
     [Infrastructure Namespace Separation](../configuration-and-management/infra-namespace-migration.md)
     for details.
 
-Create the `maas-db-config` Secret in your ODH/RHOAI namespace (typically `opendatahub` for ODH or `redhat-ods-applications` for RHOAI):
+Create the `maas-db-config` Secret in your infrastructure namespace. The default is
+`odh-ai-gateway-infra` for ODH or `redhat-ai-gateway-infra` for RHOAI:
 
 ```bash
+INFRA_NAMESPACE=odh-ai-gateway-infra
 kubectl create secret generic maas-db-config \
-  -n opendatahub \
+  -n "$INFRA_NAMESPACE" \
   --from-literal=DB_CONNECTION_URL='postgresql://username:password@hostname:5432/database?sslmode=require'
 ```
 
@@ -35,6 +37,50 @@ kubectl create secret generic maas-db-config \
 ```
 postgresql://USERNAME:PASSWORD@HOSTNAME:PORT/DATABASE?sslmode=require
 ```
+
+### Optional PostgreSQL read replica
+
+`DB_CONNECTION_URL` always identifies the writable primary. To use a cluster-local
+read replica for API-key validation and administrative reads, add
+`DB_READ_CONNECTION_URL` to the same Secret:
+
+```bash
+INFRA_NAMESPACE=odh-ai-gateway-infra
+kubectl patch secret maas-db-config \
+  -n "$INFRA_NAMESPACE" \
+  --type merge \
+  -p '{"stringData":{"DB_READ_CONNECTION_URL":"postgresql://username:password@maas-read-ro.maas-db.svc.cluster.local:5432/database?sslmode=require"}}'
+```
+
+Use `redhat-ai-gateway-infra` for the default RHOAI infrastructure namespace, or set
+`INFRA_NAMESPACE` to your configured custom infrastructure namespace. If namespace
+separation is disabled, use the controller namespace where `maas-api` runs instead.
+
+`DB_READ_CONNECTION_URL` is optional. When it is absent or empty, `maas-api` uses only
+the writable pool and existing behavior is unchanged. When it is present, the URL must
+use `postgresql://` or `postgres://` and the replica must be reachable when `maas-api`
+starts; an invalid or unreachable read URL is a startup error rather than a silent
+fallback.
+
+Migrations and writes always use the writable primary. API-key hash validation and key
+search, get, and list queries use the read replica and fall back to the primary once if
+the replica fails. A not-found result is a completed read and is not retried on the
+primary. Secret changes continue to require a `maas-api` pod restart. The
+`DB_READ_REPLICA_LAG_WARNING_SECONDS` and `DB_READ_REPLICA_LAG_CRITICAL_SECONDS`
+environment variables configure the lag thresholds exposed as metrics.
+
+When the read URL is configured, primary commits—including newly created keys and
+revocations—become visible to API-key validation after PostgreSQL replication lag plus
+any brief Authorino cache delay. A new key may therefore be rejected until its local
+replica catches up. Omit `DB_READ_CONNECTION_URL` if strict read-your-writes behavior is
+required. The asynchronous, debounced `last_used_at` write continues to use the writable
+primary and does not block validation.
+
+During rollout, monitor `maas_api_database_queries_total` to confirm local reads select the
+`read` pool, `maas_api_database_read_fallbacks_total` for unexpected primary traffic, and
+`maas_api_database_replication_lag_seconds` for replica lag. The `/health` endpoint
+reports whether the optional read pool is degraded, but it remains healthy because the
+writable primary can continue serving writes and API-key validation.
 
 !!! note "Development"
     For development, you can deploy a PostgreSQL instance and Secret using the setup script:
@@ -188,12 +234,14 @@ After creating the database Secret and Gateways, create or update your DataScien
     | Field | What to set |
     | ----- | ----------- |
     | `spec.apiKeys.maxExpirationDays` | Maximum allowed API key lifetime in **days**. When set, users cannot mint keys with a longer lifetime than this value (via `expiresIn`). Optional; if unset, the controller does not apply a cap through this field (see also `maas-api` / `API_KEY_MAX_EXPIRATION_DAYS` in your deployment). |
+    | `spec.apiKeys.deletionRetentionDays` | Retention in **days** for lifecycle-invalidated API keys before physical deletion. Defaults to 90 and must be at least 1. |
     | `spec.telemetry.enabled` | Enable TelemetryPolicy and Istio Telemetry (default `true`). |
     | `spec.telemetry.metrics.captureOrganization` | Include `organization_id` on metrics (default `true`). |
     | `spec.telemetry.metrics.captureUser` | Include user labels on metrics (default `false`; privacy-sensitive). |
     | `spec.telemetry.metrics.captureGroup` | Include group labels on metrics (default `false`; higher cardinality). |
     | `spec.telemetry.metrics.captureModelUsage` | Include model labels on usage metrics (default `true`). |
     | `spec.telemetry.logs.captureUser` | Include `user_id` on usage logs (default `false`; privacy-sensitive). Independent of `metrics.captureUser`. |
+    | `spec.telemetry.logs.captureOrganization` | Include `organization_id` on usage logs (default `true`). Independent of `metrics.captureOrganization`. |
 
     Example (patch common values):
 
@@ -206,6 +254,7 @@ After creating the database Secret and Gateways, create or update your DataScien
     spec:
       apiKeys:
         maxExpirationDays: 90
+        deletionRetentionDays: 90
       telemetry:
         enabled: true
         metrics:
@@ -213,6 +262,7 @@ After creating the database Secret and Gateways, create or update your DataScien
           captureGroup: false
         logs:
           captureUser: false
+          captureOrganization: true
     ```
 
     ```bash
@@ -369,7 +419,7 @@ Delete the `AITenant` resource to start tenant cleanup:
 kubectl delete aitenant team-red -n ai-tenants
 ```
 
-Deletion revokes active API keys and removes per-tenant maas-api resources, MaaS CRs (`MaaSSubscription`, `MaaSAuthPolicy`), and AITenant-owned RBAC. The tenant namespace is kept so non-MaaS user objects and workloads there survive; AITenant ownership metadata (labels and annotations) is cleared from the namespace. The `AITenant` can remain in `Terminating` phase while cleanup is in progress, or report `Ready=False` with reason `DeletionBlocked` if a cleanup step fails. The shared Gateway object and user model workloads outside the tenant namespace are also preserved.
+Deletion invalidates all API keys and removes per-tenant maas-api resources, MaaS CRs (`MaaSSubscription`, `MaaSAuthPolicy`), and AITenant-owned RBAC. Lifecycle-invalidated keys are soft-deleted for the configured retention period before physical deletion. The tenant namespace is kept so non-MaaS user objects and workloads there survive; AITenant ownership metadata (labels and annotations) is cleared from the namespace. The `AITenant` can remain in `Terminating` phase while cleanup is in progress, or report `Ready=False` with reason `DeletionBlocked` if a cleanup step fails. The shared Gateway object and user model workloads outside the tenant namespace are also preserved.
 
 ## Operand NetworkPolicies
 
@@ -380,41 +430,110 @@ MaaS operand NetworkPolicies follow [ODH-ADR-Operator-0016](https://github.com/o
 | `maas-api-allow-gateway` | `maas-api` | Ingress | Gateway pods in `openshift-ingress` → `:8443` |
 | `maas-authorino-allow` | `maas-api` | Ingress | Authorino pods in Kuadrant/RHCL namespaces → `:8443` |
 | `maas-api-allow-monitoring` | `maas-api` | Ingress | `redhat-ods-monitoring` → `:9090` |
-| `maas-api-egress-restrict` | `maas-api` | Egress | OpenShift CoreDNS; Kubernetes API; bundled Postgres (`app=postgres`) when `maas-db-config` targets in-cluster Postgres |
-| `usage-logs-collector-egress-restrict` | usage-logs collector | Egress | CoreDNS; LokiStack gateway pods (`app.kubernetes.io/name=lokistack`, `app.kubernetes.io/instance=usage`, `app.kubernetes.io/component=lokistack-gateway`) → `:8080` (when `usageLogging=true`) |
-| `usage-tenancy-proxy-allow-perses` | tenancy proxy | Ingress | Perses pods and kubelet probes (`host-network`) → `:8443` (when `usageLogging=true`) |
-| `usage-tenancy-proxy-egress-restrict` | tenancy proxy | Egress | CoreDNS; Kubernetes API; LokiStack gateway pods (`app.kubernetes.io/name=lokistack`, `app.kubernetes.io/instance=usage`, `app.kubernetes.io/component=lokistack-gateway`) → `:8080` (when `usageLogging=true`) |
+| `maas-api-egress-restrict` | `maas-api` | Egress | OpenShift CoreDNS; Kubernetes API; allow-all by default (overridable or opt-out via `maasconfig/default`; see [PostgreSQL egress](#postgresql-egress)) |
+| `usage-logs-collector-egress-restrict` | usage-logs collector | Egress | CoreDNS; LokiStack gateway pods (`app.kubernetes.io/name=lokistack`, `app.kubernetes.io/instance=usage`, `app.kubernetes.io/component=lokistack-gateway`) → `:8080` |
+| `usage-tenancy-proxy-allow-perses` | tenancy proxy | Ingress | Perses pods and kubelet probes (`host-network`) → `:8443` |
+| `usage-tenancy-proxy-egress-restrict` | tenancy proxy | Egress | CoreDNS; Kubernetes API; LokiStack gateway pods (`app.kubernetes.io/name=lokistack`, `app.kubernetes.io/component=lokistack-gateway`, `app.kubernetes.io/instance=data-science-lokistack`; `usage` when `usageLogging` is true) → `:8080` |
 
-### External PostgreSQL
+### PostgreSQL egress
 
-When `maas-db-config` points at an external database (for example `--postgres-connection` or RDS), `maas-api-egress-restrict` does **not** include the `app=postgres` peer. Apply a companion egress policy in the infrastructure namespace with `ipBlock` CIDRs for your database endpoint:
+`maas-api` connects using `maas-db-config` only. PostgreSQL is **customer-provided**: bundled POC Postgres from
+`scripts/setup-database.sh`, shared in-cluster instances (any namespace or labels), and external databases (for example
+RDS) are all valid. MaaS does **not** require `app=postgres` on database pods and does **not** infer database topology
+from `maas-db-config`.
+
+#### Default egress (no `maasconfig` overrides)
+
+`maas-controller` reconciles `maas-api-egress-restrict` with explicit egress per
+[ODH-ADR-Operator-0016](https://github.com/opendatahub-io/architecture-decision-records/blob/main/architecture-decision-records/operator/ODH-ADR-Operator-0016-networkpolicy-platform-contract.md#explicit-egress-behavior):
+
+1. DNS to OpenShift CoreDNS (ports `53` and `5353`)
+2. Kubernetes API (TCP `443` and `6443`, port-only rule — see below)
+3. **Allow-all** remaining egress (`egress: - {}`)
+
+This works for any database topology without extra configuration. A separate companion `NetworkPolicy` **cannot**
+narrow egress while allow-all is present (NetworkPolicies are unioned).
+
+#### Restricting egress (recommended for production)
+
+For least-privilege egress, configure `maasconfig/default` (same pattern as the
+[MLflow operator](https://github.com/opendatahub-io/mlflow-operator)). MaaS does not guess your database labels or
+namespaces — you declare the peers explicitly.
+
+**Replace the default egress block** with `spec.networkPolicyEgressRules`. You are responsible for including DNS,
+Kubernetes API, and database destinations:
 
 ```yaml
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: Config
 metadata:
-  name: maas-api-egress-external-postgres
-  labels:
-    app.opendatahub.io/modelsasservice: "true"
-    app.kubernetes.io/part-of: maas
+  name: default
 spec:
-  podSelector:
-    matchLabels:
-      app.kubernetes.io/name: maas-api
-      app.kubernetes.io/component: api
-      app.kubernetes.io/part-of: models-as-a-service
-  policyTypes:
-    - Egress
-  egress:
+  networkPolicyEgressRules:
     - to:
-        - ipBlock:
-            cidr: 10.0.0.0/16   # replace with your database subnet/CIDR
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: openshift-dns
+          podSelector:
+            matchLabels:
+              dns.operator.openshift.io/daemonset-dns: default
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+        - protocol: UDP
+          port: 5353
+        - protocol: TCP
+          port: 5353
+    - ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 6443
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: <postgres-namespace>
+          podSelector:
+            matchLabels:
+              app: <postgres-app-label>
       ports:
         - protocol: TCP
           port: 5432
 ```
 
-Per [ODH-ADR-Operator-0016](https://github.com/opendatahub-io/architecture-decision-records/blob/main/architecture-decision-records/operator/ODH-ADR-Operator-0016-networkpolicy-platform-contract.md), external destinations with stable address ranges use the narrowest applicable CIDR; DNS-named endpoints cannot be selected by standard NetworkPolicy.
+Replace `<postgres-namespace>` and `<postgres-app-label>` with your Postgres workload labels. For external databases
+with stable CIDRs, use `ipBlock` instead of `namespaceSelector`/`podSelector`.
+
+**Append rules** while keeping the default allow-all block with `spec.networkPolicyAdditionalEgressRules` (for example
+a non-standard database port). This does not remove allow-all; use `networkPolicyEgressRules` when you need a
+restrictive policy.
+
+After changing `maasconfig/default`, `maas-controller` updates `maas-api-egress-restrict` on the next reconcile (or
+delete the NetworkPolicy to force immediate recreation).
+
+#### Customer-owned egress (opt-out)
+
+When your platform team manages `maas-api` egress NetworkPolicies separately (for example namespace-level lock-down
+or bespoke database peers), set `spec.maasApiEgressNetworkPolicy: Disabled` on `maasconfig/default`. MaaS stops
+reconciling `maas-api-egress-restrict` and deletes any Config-owned instance on the next reconcile. You must not set
+`networkPolicyEgressRules` or `networkPolicyAdditionalEgressRules` when opting out.
+
+If no other egress `NetworkPolicy` selects the `maas-api` pods, Kubernetes allows all outbound
+traffic from them.
+
+```yaml
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: Config
+metadata:
+  name: default
+spec:
+  maasApiEgressNetworkPolicy: Disabled
+```
+
+Apply your own egress `NetworkPolicy`(ies) targeting the `maas-api` pods. Other MaaS operand policies (ingress,
+usage logging, and so on) continue to be reconciled by `maas-controller`.
 
 ### Kubernetes API egress (port-only rule)
 

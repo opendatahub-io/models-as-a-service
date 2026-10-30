@@ -24,23 +24,25 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/go-logr/logr"
 	kservev1alpha2 "github.com/kserve/kserve/pkg/apis/serving/v1alpha2"
+	llmdv1alpha2 "github.com/llm-d/llm-d-router/apix/v1alpha2"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"knative.dev/pkg/kmeta"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/oteljson"
@@ -48,8 +50,8 @@ import (
 )
 
 const (
-	// inferenceObjectiveNameMaxLength keeps generated InferenceObjective names valid as
-	// DNS labels and as header values.
+	// inferenceObjectiveNameMaxLength is the longest generated InferenceObjective name, the
+	// limit kmeta.ChildName enforces.
 	inferenceObjectiveNameMaxLength = 63
 	inferenceObjectiveNamePrefix    = "maas"
 	// inferenceObjectiveNameHashLength is the number of hex characters of the identity
@@ -81,11 +83,6 @@ const (
 	eventReasonInferencePoolNotOnGateway  = "InferencePoolNotOnTenantGateway"
 )
 
-var (
-	inferenceObjectiveGVK     = schema.GroupVersionKind{Group: "llm-d.ai", Version: "v1alpha2", Kind: "InferenceObjective"}
-	inferenceObjectiveListGVK = schema.GroupVersionKind{Group: "llm-d.ai", Version: "v1alpha2", Kind: "InferenceObjectiveList"}
-)
-
 // inferenceObjectiveOwnerLabels are the labels every generated InferenceObjective carries.
 func inferenceObjectiveOwnerLabels() map[string]string {
 	return map[string]string{
@@ -107,11 +104,12 @@ func hasInferenceObjectiveOwnerLabels(labels map[string]string) bool {
 }
 
 // inferenceObjectiveName returns the deterministic InferenceObjective name for a
-// subscription and InferencePool. The readable tenant, subscription, and pool parts are
-// truncated as needed; the hash of their full identities keeps names unique. The name
-// does not depend on spec.inferencePriority, so it is stable across priority changes.
-// It also excludes the pool's API group and kind: KServe keeps the pool name stable but
-// reports the group of whichever pool API version the gateway currently accepts.
+// subscription and InferencePool: "maas-<tenant>-<subscription>-<pool>-<hash>". The hash
+// of the full identities keeps names unique; kmeta.ChildName keeps it as the suffix and,
+// when the name is too long, truncates the readable part. The name does not depend on
+// spec.inferencePriority, so it is stable across priority changes. It also excludes the
+// pool's API group and kind: KServe keeps the pool name stable but reports the group of
+// whichever pool API version the gateway currently accepts.
 func inferenceObjectiveName(tenantName string, subscription, pool types.NamespacedName) string {
 	identity := strings.Join([]string{
 		tenantName,
@@ -121,43 +119,13 @@ func inferenceObjectiveName(tenantName string, subscription, pool types.Namespac
 	sum := sha256.Sum256([]byte(identity))
 	hash := hex.EncodeToString(sum[:])[:inferenceObjectiveNameHashLength]
 
-	parts := []string{
-		dnsLabelPart(tenantName),
-		dnsLabelPart(subscription.Name),
-		dnsLabelPart(pool.Name),
-	}
-	// Budget for the readable parts and the separators between them.
-	budget := inferenceObjectiveNameMaxLength - len(inferenceObjectiveNamePrefix) - len(hash) - 2
-	if len(strings.Join(parts, "-")) > budget {
-		perPart := (budget - (len(parts) - 1)) / len(parts)
-		for i := range parts {
-			if len(parts[i]) > perPart {
-				parts[i] = strings.TrimRight(parts[i][:perPart], "-")
-			}
-		}
-	}
-
-	nameParts := []string{inferenceObjectiveNamePrefix}
-	for _, p := range parts {
-		if p != "" {
-			nameParts = append(nameParts, p)
-		}
-	}
-	nameParts = append(nameParts, hash)
-	return strings.Join(nameParts, "-")
-}
-
-// dnsLabelPart lowercases s and replaces characters not allowed in a DNS label with '-'.
-func dnsLabelPart(s string) string {
-	var b strings.Builder
-	for _, r := range strings.ToLower(s) {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
-			b.WriteRune(r)
-		} else {
-			b.WriteRune('-')
-		}
-	}
-	return strings.Trim(b.String(), "-")
+	// The tenant, subscription, and pool names are Kubernetes object names, so the joined
+	// string is already a valid name. ChildName alone hashes only names that are too long,
+	// so short names would collide (tenant "a-b" + subscription "c" vs tenant "a" +
+	// subscription "b-c"), and the subscription namespace is not in the readable part. The
+	// identity hash covers both.
+	parent := strings.Join([]string{inferenceObjectiveNamePrefix, tenantName, subscription.Name, pool.Name}, "-")
+	return kmeta.ChildName(parent, "-"+hash)
 }
 
 // flowControlTenantName returns the AITenant name for a subscription namespace. It falls
@@ -297,21 +265,63 @@ func activeRoutingGroupMembers(group *kservev1alpha2.GroupStatus) int {
 type desiredObjective struct {
 	Pool       inferencePoolRef
 	TenantName string
-	Priority   int64
+	Priority   int32
 	// Models are the "namespace/name" model refs served from Pool, for logs and events.
 	Models []string
 }
 
-// desiredInferenceObjectives returns the InferenceObjectives the subscription needs, keyed
-// by name and namespace. complete is false when a lookup failed, so the set may be missing
-// objectives that should exist; the caller must then not delete anything. A failure for
-// one model does not stop the others.
-func (r *MaaSSubscriptionReconciler) desiredInferenceObjectives(ctx context.Context, sub *maasv1alpha1.MaaSSubscription) (map[types.NamespacedName]*desiredObjective, bool, error) {
-	desired := make(map[types.NamespacedName]*desiredObjective)
-	if sub.Spec.InferencePriority == nil {
-		return desired, true, nil
+// modelFlowControl is the request-priority state of one referenced model. Objective is the
+// key of the model's InferenceObjective; it is zero when no objective name could be derived.
+type modelFlowControl struct {
+	Status    maasv1alpha1.ModelFlowControlStatus
+	Objective types.NamespacedName
+}
+
+// flowControlMessageMaxLen is the schema maxLength of ModelFlowControlStatus.Message.
+const flowControlMessageMaxLen = 1024
+
+// setReason sets the model's reason and message, and derives Ready from the reason.
+func (m *modelFlowControl) setReason(reason maasv1alpha1.FlowControlReason, message string) {
+	m.Status.Reason = reason
+	m.Status.Message = truncateMessage(message, flowControlMessageMaxLen)
+	m.Status.Ready = flowControlReasonReady(reason)
+}
+
+// flowControlReasonReady reports whether a reason leaves nothing to reconcile for the model.
+func flowControlReasonReady(reason maasv1alpha1.FlowControlReason) bool {
+	switch reason {
+	case maasv1alpha1.FlowControlReasonObjectiveReconciled,
+		maasv1alpha1.FlowControlReasonPriorityUnset,
+		maasv1alpha1.FlowControlReasonNotApplicable,
+		maasv1alpha1.FlowControlReasonUnmanaged:
+		return true
+	default:
+		return false
 	}
-	priority := int64(*sub.Spec.InferencePriority)
+}
+
+// flowControlResolution is the result of resolveFlowControl.
+type flowControlResolution struct {
+	// Models has one entry per distinct model ref, sorted by namespace and name.
+	Models []*modelFlowControl
+	// Desired are the needed InferenceObjectives; empty when spec.inferencePriority is unset.
+	Desired map[types.NamespacedName]*desiredObjective
+	// Complete is false when a lookup failed; nothing is deleted then.
+	Complete bool
+}
+
+// resolveFlowControl resolves each model's InferencePool and InferenceObjective name, and
+// the objectives the subscription needs. Names are resolved even when
+// spec.inferencePriority is unset. Failures are returned for retry.
+func (r *MaaSSubscriptionReconciler) resolveFlowControl(ctx context.Context, sub *maasv1alpha1.MaaSSubscription) (flowControlResolution, error) {
+	res := flowControlResolution{Desired: make(map[types.NamespacedName]*desiredObjective), Complete: true}
+	prioritySet := sub.Spec.InferencePriority != nil
+	// warnf records events only when request priority is set.
+	warnf := func(reason, messageFmt string, args ...any) {
+		if prioritySet {
+			r.warnf(sub, reason, messageFmt, args...)
+		}
+	}
 
 	refs := make([]string, 0, len(sub.Spec.ModelRefs))
 	for _, ref := range sub.Spec.ModelRefs {
@@ -322,41 +332,66 @@ func (r *MaaSSubscriptionReconciler) desiredInferenceObjectives(ctx context.Cont
 	}
 	slices.Sort(refs)
 
-	complete := true
 	var errs []error
+	// fail marks a model as failed for a transient error that is returned for retry.
+	fail := func(m *modelFlowControl, err error) {
+		res.Complete = false
+		errs = append(errs, err)
+		m.setReason(maasv1alpha1.FlowControlReasonReconcileFailed, err.Error())
+	}
 
-	// Resolved lazily, once: only models with an observed pool need them.
+	// Resolved once, on first use. A failure is set on every model that needs it.
 	var (
 		gatewayRef      maasv1alpha1.TenantGatewayRef
+		gatewayErr      error
 		gatewayResolved bool
 		tenantName      string
+		tenantErr       error
 		tenantResolved  bool
 	)
 
 	for _, key := range refs {
 		modelNamespace, modelName, _ := strings.Cut(key, "/")
+		m := &modelFlowControl{Status: maasv1alpha1.ModelFlowControlStatus{Name: modelName, Namespace: modelNamespace}}
+		res.Models = append(res.Models, m)
 
-		res, err := r.resolveModelInferencePool(ctx, modelNamespace, modelName)
+		pool, err := r.resolveModelInferencePool(ctx, modelNamespace, modelName)
 		if err != nil {
-			complete = false
-			errs = append(errs, fmt.Errorf("model %s: %w", key, err))
+			fail(m, fmt.Errorf("model %s: %w", key, err))
 			continue
 		}
-		if res.Pool == nil {
-			if res.Reason == poolResolutionUnsupported {
-				r.warnf(sub, eventReasonInferencePoolUnsupported, "Request priority is not applied to model %s: %s", key, res.Message)
+		if pool.Pool == nil {
+			switch pool.Reason {
+			case poolResolutionPending:
+				m.setReason(maasv1alpha1.FlowControlReasonPoolPending, pool.Message)
+			case poolResolutionNotApplicable:
+				m.setReason(maasv1alpha1.FlowControlReasonNotApplicable, pool.Message)
+			case poolResolutionUnsupported:
+				m.setReason(maasv1alpha1.FlowControlReasonUnsupported, pool.Message)
+				warnf(eventReasonInferencePoolUnsupported, "Request priority is not applied to model %s: %s", key, pool.Message)
 			}
 			continue
+		}
+		m.Status.InferencePool = &gatewayapiv1.LocalObjectReference{
+			Group: gatewayapiv1.Group(pool.Pool.Group),
+			Kind:  gatewayapiv1.Kind(pool.Pool.Kind),
+			Name:  gatewayapiv1.ObjectName(pool.Pool.Name),
 		}
 
 		if !gatewayResolved {
-			gatewayRef, err = tenantGatewayRefForNamespace(ctx, r.Client, sub.Namespace,
+			gatewayRef, gatewayErr = tenantGatewayRefForNamespace(ctx, r.Client, sub.Namespace,
 				r.DefaultTenantNamespace, r.GatewayName, r.GatewayNamespace, r.TenantNamespaceDiscoveryEnabled)
-			if err != nil {
-				r.warnf(sub, eventReasonInferenceObjectiveFailed, "Failed to resolve tenant gateway for namespace %s: %v", sub.Namespace, err)
-				return desired, false, errors.Join(append(errs, fmt.Errorf("failed to resolve tenant gateway for namespace %s: %w", sub.Namespace, err))...)
+			if gatewayErr != nil {
+				gatewayErr = fmt.Errorf("failed to resolve tenant gateway for namespace %s: %w", sub.Namespace, gatewayErr)
+				warnf(eventReasonInferenceObjectiveFailed, "%v", gatewayErr)
+				errs = append(errs, gatewayErr)
 			}
 			gatewayResolved = true
+		}
+		if gatewayErr != nil {
+			res.Complete = false
+			m.setReason(maasv1alpha1.FlowControlReasonReconcileFailed, gatewayErr.Error())
+			continue
 		}
 		routeName, routeNamespace, err := findHTTPRouteForModel(ctx, r.Client, modelNamespace, modelName)
 		if err == nil {
@@ -365,37 +400,56 @@ func (r *MaaSSubscriptionReconciler) desiredInferenceObjectives(ctx context.Cont
 		switch {
 		case err == nil:
 		case errors.Is(err, ErrModelNotFound), errors.Is(err, ErrHTTPRouteNotFound):
+			m.setReason(maasv1alpha1.FlowControlReasonPoolPending, fmt.Sprintf("waiting for the HTTPRoute of model %s", key))
 			continue
 		case errors.Is(err, ErrHTTPRouteNotOnTenantGateway):
-			r.warnf(sub, eventReasonInferencePoolNotOnGateway, "Request priority is not applied to model %s: %v", key, err)
+			m.setReason(maasv1alpha1.FlowControlReasonNotOnTenantGateway, err.Error())
+			warnf(eventReasonInferencePoolNotOnGateway, "Request priority is not applied to model %s: %v", key, err)
 			continue
 		default:
-			complete = false
-			errs = append(errs, fmt.Errorf("model %s: gateway check: %w", key, err))
+			fail(m, fmt.Errorf("model %s: gateway check: %w", key, err))
 			continue
 		}
 
 		if !tenantResolved {
-			tenantName, err = flowControlTenantName(ctx, r.Client, sub.Namespace)
-			if err != nil {
-				r.warnf(sub, eventReasonInferenceObjectiveFailed, "Failed to resolve tenant for namespace %s: %v", sub.Namespace, err)
-				return desired, false, errors.Join(append(errs, fmt.Errorf("failed to resolve tenant for namespace %s: %w", sub.Namespace, err))...)
+			tenantName, tenantErr = flowControlTenantName(ctx, r.Client, sub.Namespace)
+			if tenantErr != nil {
+				tenantErr = fmt.Errorf("failed to resolve tenant for namespace %s: %w", sub.Namespace, tenantErr)
+				warnf(eventReasonInferenceObjectiveFailed, "%v", tenantErr)
+				errs = append(errs, tenantErr)
 			}
 			tenantResolved = true
 		}
+		if tenantErr != nil {
+			res.Complete = false
+			m.setReason(maasv1alpha1.FlowControlReasonReconcileFailed, tenantErr.Error())
+			continue
+		}
 
-		objKey := types.NamespacedName{
+		m.Objective = types.NamespacedName{
 			Namespace: modelNamespace,
 			Name: inferenceObjectiveName(tenantName, client.ObjectKeyFromObject(sub),
-				types.NamespacedName{Namespace: modelNamespace, Name: res.Pool.Name}),
+				types.NamespacedName{Namespace: modelNamespace, Name: pool.Pool.Name}),
 		}
-		if d, ok := desired[objKey]; ok {
+		m.Status.ObjectiveName = m.Objective.Name
+		if !prioritySet {
+			m.setReason(maasv1alpha1.FlowControlReasonPriorityUnset,
+				"inferencePriority is unset; no InferenceObjective is created and the scheduler applies priority 0")
+			continue
+		}
+		// Pending until reconcileInferenceObjectives applies and observes the objective.
+		m.setReason(maasv1alpha1.FlowControlReasonObjectivePending, "InferenceObjective is not reconciled yet")
+		if d, ok := res.Desired[m.Objective]; ok {
 			d.Models = append(d.Models, key)
 			continue
 		}
-		desired[objKey] = &desiredObjective{Pool: *res.Pool, TenantName: tenantName, Priority: priority, Models: []string{key}}
+		res.Desired[m.Objective] = &desiredObjective{Pool: *pool.Pool, TenantName: tenantName, Priority: *sub.Spec.InferencePriority, Models: []string{key}}
 	}
-	return desired, complete, errors.Join(errs...)
+	if !prioritySet {
+		// Nothing is desired, so cleanup is safe despite lookup errors.
+		res.Complete = true
+	}
+	return res, errors.Join(errs...)
 }
 
 // inferenceObjectiveApplyOutcome is the result of applyInferenceObjective.
@@ -415,36 +469,34 @@ func isAPIUnavailable(err error) bool {
 }
 
 // buildInferenceObjective returns the InferenceObjective for a desired entry.
-func buildInferenceObjective(sub *maasv1alpha1.MaaSSubscription, key types.NamespacedName, d *desiredObjective) *unstructured.Unstructured {
-	obj := &unstructured.Unstructured{}
-	obj.SetGroupVersionKind(inferenceObjectiveGVK)
-	obj.SetName(key.Name)
-	obj.SetNamespace(key.Namespace)
+func buildInferenceObjective(sub *maasv1alpha1.MaaSSubscription, key types.NamespacedName, d *desiredObjective) *llmdv1alpha2.InferenceObjective {
 	labels := inferenceObjectiveOwnerLabels()
 	labels[labelSubscriptionNamespace] = sub.Namespace
 	labels[labelSubscriptionUID] = string(sub.UID)
-	obj.SetLabels(labels)
-	obj.SetAnnotations(map[string]string{
-		annotationSubscriptionName:       sub.Name,
-		annotationInferenceObjTenantName: d.TenantName,
-	})
-	setInferenceObjectiveSpec(obj, d)
-	return obj
+	return &llmdv1alpha2.InferenceObjective{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      key.Name,
+			Namespace: key.Namespace,
+			Labels:    labels,
+			Annotations: map[string]string{
+				annotationSubscriptionName:       sub.Name,
+				annotationInferenceObjTenantName: d.TenantName,
+			},
+		},
+		Spec: inferenceObjectiveSpec(d),
+	}
 }
 
-// setInferenceObjectiveSpec sets the fields this controller owns in spec, leaving others
-// alone. Priority is int64: unstructured deep copies panic on int32.
-func setInferenceObjectiveSpec(obj *unstructured.Unstructured, d *desiredObjective) {
-	spec, ok := obj.Object["spec"].(map[string]any)
-	if !ok {
-		spec = map[string]any{}
-		obj.Object["spec"] = spec
-	}
-	spec["priority"] = d.Priority
-	spec["poolRef"] = map[string]any{
-		"group": d.Pool.Group,
-		"kind":  d.Pool.Kind,
-		"name":  d.Pool.Name,
+// inferenceObjectiveSpec returns the spec for a desired entry.
+func inferenceObjectiveSpec(d *desiredObjective) llmdv1alpha2.InferenceObjectiveSpec {
+	priority := d.Priority
+	return llmdv1alpha2.InferenceObjectiveSpec{
+		Priority: &priority,
+		PoolRef: llmdv1alpha2.PoolObjectReference{
+			Group: llmdv1alpha2.Group(d.Pool.Group),
+			Kind:  llmdv1alpha2.Kind(d.Pool.Kind),
+			Name:  llmdv1alpha2.ObjectName(d.Pool.Name),
+		},
 	}
 }
 
@@ -460,11 +512,7 @@ func (r *MaaSSubscriptionReconciler) applyInferenceObjective(
 	log = log.WithValues("inferenceObjective", key.String(), "models", d.Models)
 	desired := buildInferenceObjective(sub, key, d)
 
-	// Unstructured reads bypass the manager cache (client.CacheOptions.Unstructured is off),
-	// so this is a live read. The watch is metadata-only and keeps its own cache; reading
-	// through it could see an edit or deletion later than the event that reported it.
-	existing := &unstructured.Unstructured{}
-	existing.SetGroupVersionKind(inferenceObjectiveGVK)
+	existing := &llmdv1alpha2.InferenceObjective{}
 	err := r.Get(ctx, key, existing)
 	switch {
 	case apimeta.IsNoMatchError(err):
@@ -506,18 +554,14 @@ func (r *MaaSSubscriptionReconciler) applyInferenceObjective(
 	// Merge our metadata over the existing object. This also adopts an objective left by
 	// an earlier subscription with the same name by rewriting the UID label.
 	snapshot := existing.DeepCopy()
-	mergedLabels := existing.GetLabels()
-	maps.Copy(mergedLabels, desired.GetLabels())
-	existing.SetLabels(mergedLabels)
-	mergedAnnotations := existing.GetAnnotations()
-	if mergedAnnotations == nil {
-		mergedAnnotations = make(map[string]string)
+	maps.Copy(existing.Labels, desired.Labels)
+	if existing.Annotations == nil {
+		existing.Annotations = make(map[string]string)
 	}
-	maps.Copy(mergedAnnotations, desired.GetAnnotations())
-	existing.SetAnnotations(mergedAnnotations)
-	setInferenceObjectiveSpec(existing, d)
+	maps.Copy(existing.Annotations, desired.Annotations)
+	existing.Spec = desired.Spec
 
-	if equality.Semantic.DeepEqual(snapshot.Object, existing.Object) {
+	if equality.Semantic.DeepEqual(snapshot.ObjectMeta, existing.ObjectMeta) && equality.Semantic.DeepEqual(snapshot.Spec, existing.Spec) {
 		return inferenceObjectiveApplied, nil
 	}
 	if err := r.Update(ctx, existing); err != nil {
@@ -528,74 +572,235 @@ func (r *MaaSSubscriptionReconciler) applyInferenceObjective(
 	return inferenceObjectiveApplied, nil
 }
 
+// inferenceObjectivesResult is the result of reconcileInferenceObjectives.
+type inferenceObjectivesResult struct {
+	// Statuses has one entry per distinct model ref, sorted by namespace and name.
+	Statuses []maasv1alpha1.ModelFlowControlStatus
+	// Conflict is true when a foreign object holds a needed name.
+	Conflict bool
+	// APIUnavailable is true when the InferenceObjective API is not served.
+	APIUnavailable bool
+}
+
 // reconcileInferenceObjectives creates, updates, and deletes the subscription's
-// InferenceObjectives. conflict is true when a foreign object holds a name we need, so the
-// caller can recheck later. Obsolete objectives are deleted only when the desired set is
-// complete, so a transient lookup failure never removes a working objective. Errors are
-// returned for retry; they never change the subscription phase.
-func (r *MaaSSubscriptionReconciler) reconcileInferenceObjectives(ctx context.Context, log logr.Logger, sub *maasv1alpha1.MaaSSubscription) (bool, error) {
-	if r.inferenceObjectivesUnavailable.Load() {
-		return false, nil
-	}
-	desired, complete, err := r.desiredInferenceObjectives(ctx, sub)
+// InferenceObjectives and returns each model's status. A model is reconciled once its
+// objective is observed with the desired spec. Obsolete objectives are deleted only when
+// the desired set is complete. Errors are returned for retry.
+func (r *MaaSSubscriptionReconciler) reconcileInferenceObjectives(ctx context.Context, log logr.Logger, sub *maasv1alpha1.MaaSSubscription) (result inferenceObjectivesResult, _ error) {
+	res, err := r.resolveFlowControl(ctx, sub)
 	var errs []error
 	if err != nil {
 		errs = append(errs, err)
 	}
+	// Statuses are copied out on every return, after the reasons are final.
+	defer func() {
+		result.Statuses = make([]maasv1alpha1.ModelFlowControlStatus, len(res.Models))
+		for i, m := range res.Models {
+			result.Statuses[i] = m.Status
+		}
+	}()
 
-	keys := slices.SortedFunc(maps.Keys(desired), func(a, b types.NamespacedName) int {
+	// byObjective lists the models that need each desired objective.
+	byObjective := make(map[types.NamespacedName][]*modelFlowControl, len(res.Desired))
+	for _, m := range res.Models {
+		if _, ok := res.Desired[m.Objective]; ok {
+			byObjective[m.Objective] = append(byObjective[m.Objective], m)
+		}
+	}
+	setObjectiveReason := func(key types.NamespacedName, reason maasv1alpha1.FlowControlReason, message string) {
+		for _, m := range byObjective[key] {
+			m.setReason(reason, message)
+		}
+	}
+	apiUnavailable := func() (inferenceObjectivesResult, error) {
+		log.V(1).Info("InferenceObjective API is not served; skipping request priority")
+		result.APIUnavailable = true
+		for key := range res.Desired {
+			setObjectiveReason(key, maasv1alpha1.FlowControlReasonAPIUnavailable, "the InferenceObjective API (llm-d.ai) is not installed")
+		}
+		return result, errors.Join(errs...)
+	}
+	if r.inferenceObjectivesUnavailable.Load() {
+		return apiUnavailable()
+	}
+
+	keys := slices.SortedFunc(maps.Keys(res.Desired), func(a, b types.NamespacedName) int {
 		return strings.Compare(a.String(), b.String())
 	})
-	keep := make(map[types.NamespacedName]struct{}, len(desired))
-	conflict := false
+	keep := make(map[types.NamespacedName]struct{}, len(res.Desired))
+	// applied are the objectives to verify against the API server.
+	applied := make([]types.NamespacedName, 0, len(keys))
 	for _, key := range keys {
 		keep[key] = struct{}{}
-		outcome, applyErr := r.applyInferenceObjective(ctx, log, sub, key, desired[key])
-		switch outcome {
-		case inferenceObjectiveAPIUnavailable:
-			log.V(1).Info("InferenceObjective API is not served; skipping request priority")
-			return conflict, errors.Join(errs...)
-		case inferenceObjectiveConflict:
-			conflict = true
-		case inferenceObjectiveApplied:
-		}
-		if applyErr != nil {
-			r.warnf(sub, eventReasonInferenceObjectiveFailed, "%v", applyErr)
+		outcome, applyErr := r.applyInferenceObjective(ctx, log, sub, key, res.Desired[key])
+		switch {
+		case outcome == inferenceObjectiveAPIUnavailable:
+			return apiUnavailable()
+		case outcome == inferenceObjectiveConflict:
+			result.Conflict = true
+			setObjectiveReason(key, maasv1alpha1.FlowControlReasonObjectiveConflict,
+				fmt.Sprintf("InferenceObjective %s is held by an object not managed for this subscription", key))
+		case applyErr != nil:
 			errs = append(errs, applyErr)
+			// AlreadyExists and Conflict mean a stale cache: pending, retried without a Warning.
+			if apierrors.IsAlreadyExists(applyErr) || apierrors.IsConflict(applyErr) {
+				setObjectiveReason(key, maasv1alpha1.FlowControlReasonObjectivePending, "InferenceObjective is not reconciled yet")
+				continue
+			}
+			r.warnf(sub, eventReasonInferenceObjectiveFailed, "%v", applyErr)
+			setObjectiveReason(key, maasv1alpha1.FlowControlReasonReconcileFailed, applyErr.Error())
+		default:
+			applied = append(applied, key)
 		}
 	}
 
-	if complete {
-		if err := r.deleteOwnedInferenceObjectives(ctx, log, sub, keep); err != nil {
+	owned, err := r.listOwnedInferenceObjectives(ctx, sub)
+	if err != nil {
+		errs = append(errs, err)
+		for _, key := range applied {
+			setObjectiveReason(key, maasv1alpha1.FlowControlReasonReconcileFailed, err.Error())
+		}
+		return result, errors.Join(errs...)
+	}
+	observed := make(map[types.NamespacedName]*llmdv1alpha2.InferenceObjective, len(owned))
+	for _, obj := range owned {
+		observed[client.ObjectKeyFromObject(obj)] = obj
+	}
+	for _, key := range applied {
+		reason, message := observedObjectiveReason(observed[key], res.Desired[key])
+		setObjectiveReason(key, reason, message)
+	}
+
+	if res.Complete {
+		if err := r.deleteInferenceObjectives(ctx, log, owned, keep); err != nil {
 			errs = append(errs, err)
 		}
 	}
-	return conflict, errors.Join(errs...)
+	return result, errors.Join(errs...)
 }
 
-// deleteOwnedInferenceObjectives deletes the subscription's InferenceObjectives that are not
-// in keep. A nil keep deletes all of them, for finalizer cleanup. It only uses labels and
-// annotations, so it works without tenant or gateway lookups. Objectives that opted out of
-// management are left in place.
-func (r *MaaSSubscriptionReconciler) deleteOwnedInferenceObjectives(ctx context.Context, log logr.Logger, sub *maasv1alpha1.MaaSSubscription, keep map[types.NamespacedName]struct{}) error {
-	// A live list, like the Get in applyInferenceObjective.
-	list := &unstructured.UnstructuredList{}
-	list.SetGroupVersionKind(inferenceObjectiveListGVK)
-	selector := client.MatchingLabels(inferenceObjectiveOwnerLabels())
-	selector[labelSubscriptionNamespace] = sub.Namespace
-	if err := r.List(ctx, list, selector); err != nil {
-		if isAPIUnavailable(err) {
-			return nil
-		}
-		return fmt.Errorf("failed to list InferenceObjectives for subscription %s/%s: %w", sub.Namespace, sub.Name, err)
-	}
+// flowControlConditionReasons orders the reasons a model is not ready, most severe first.
+// The InferenceObjectivesReady condition reports the most severe one.
+var flowControlConditionReasons = []maasv1alpha1.FlowControlReason{
+	maasv1alpha1.FlowControlReasonReconcileFailed,
+	maasv1alpha1.FlowControlReasonObjectiveConflict,
+	maasv1alpha1.FlowControlReasonNotOnTenantGateway,
+	maasv1alpha1.FlowControlReasonUnsupported,
+	maasv1alpha1.FlowControlReasonAPIUnavailable,
+	maasv1alpha1.FlowControlReasonObjectivePending,
+	maasv1alpha1.FlowControlReasonPoolPending,
+}
 
-	var errs []error
-	for i := range list.Items {
-		obj := &list.Items[i]
-		if obj.GetAnnotations()[annotationSubscriptionName] != sub.Name {
+// flowControlDegrades reports whether a reason caps the subscription phase at Degraded.
+// Pending states and a missing InferenceObjective API do not.
+func flowControlDegrades(reason maasv1alpha1.FlowControlReason) bool {
+	switch reason {
+	case maasv1alpha1.FlowControlReasonReconcileFailed,
+		maasv1alpha1.FlowControlReasonObjectiveConflict,
+		maasv1alpha1.FlowControlReasonNotOnTenantGateway,
+		maasv1alpha1.FlowControlReasonUnsupported:
+		return true
+	default:
+		return false
+	}
+}
+
+// inferenceObjectivesCondition builds the InferenceObjectivesReady condition from the model
+// statuses and reports whether they cap the phase at Degraded. ok is false when
+// spec.inferencePriority is unset.
+func inferenceObjectivesCondition(sub *maasv1alpha1.MaaSSubscription, statuses []maasv1alpha1.ModelFlowControlStatus) (cond metav1.Condition, degraded, ok bool) {
+	if sub.Spec.InferencePriority == nil {
+		return metav1.Condition{}, false, false
+	}
+	cond = metav1.Condition{
+		Type:               maasv1alpha1.ConditionInferenceObjectivesReady,
+		ObservedGeneration: sub.GetGeneration(),
+	}
+	var notReady []string
+	worst := len(flowControlConditionReasons)
+	for _, s := range statuses {
+		if s.Ready {
 			continue
 		}
+		notReady = append(notReady, fmt.Sprintf("%s/%s (%s)", s.Namespace, s.Name, s.Reason))
+		if i := slices.Index(flowControlConditionReasons, s.Reason); i >= 0 && i < worst {
+			worst = i
+		}
+		degraded = degraded || flowControlDegrades(s.Reason)
+	}
+	if len(notReady) == 0 {
+		cond.Status = metav1.ConditionTrue
+		cond.Reason = string(maasv1alpha1.ReasonReconciled)
+		cond.Message = fmt.Sprintf("request priority is reconciled for all %d models", len(statuses))
+		return cond, false, true
+	}
+	cond.Status = metav1.ConditionFalse
+	cond.Reason = string(maasv1alpha1.FlowControlReasonReconcileFailed)
+	if worst < len(flowControlConditionReasons) {
+		cond.Reason = string(flowControlConditionReasons[worst])
+	}
+	cond.Message = truncateConditionMessage(fmt.Sprintf("request priority is not reconciled for %d of %d models: %s",
+		len(notReady), len(statuses), strings.Join(notReady, ", ")))
+	return cond, degraded, true
+}
+
+// observedObjectiveReason compares an objective read from the API server with the desired
+// one. obj is nil when the objective was not observed.
+func observedObjectiveReason(obj *llmdv1alpha2.InferenceObjective, d *desiredObjective) (maasv1alpha1.FlowControlReason, string) {
+	switch {
+	case obj == nil:
+		return maasv1alpha1.FlowControlReasonObjectivePending, "InferenceObjective is not observed yet"
+	case !isManaged(obj):
+		priority := "unset"
+		if obj.Spec.Priority != nil {
+			priority = strconv.FormatInt(int64(*obj.Spec.Priority), 10)
+		}
+		return maasv1alpha1.FlowControlReasonUnmanaged,
+			fmt.Sprintf("InferenceObjective opted out of management; its priority (%s) is owned by the user", priority)
+	case !equality.Semantic.DeepEqual(obj.Spec, inferenceObjectiveSpec(d)):
+		return maasv1alpha1.FlowControlReasonObjectivePending, "InferenceObjective does not match inferencePriority yet"
+	default:
+		return maasv1alpha1.FlowControlReasonObjectiveReconciled, fmt.Sprintf("InferenceObjective sets priority %d", d.Priority)
+	}
+}
+
+// listOwnedInferenceObjectives lists the subscription's InferenceObjectives by ownership
+// labels and annotation. It reads from the API server, since the cache can miss objectives
+// created moments ago. It returns none when the API is not served.
+func (r *MaaSSubscriptionReconciler) listOwnedInferenceObjectives(ctx context.Context, sub *maasv1alpha1.MaaSSubscription) ([]*llmdv1alpha2.InferenceObjective, error) {
+	list := &llmdv1alpha2.InferenceObjectiveList{}
+	selector := client.MatchingLabels(inferenceObjectiveOwnerLabels())
+	selector[labelSubscriptionNamespace] = sub.Namespace
+	if err := r.APIReader.List(ctx, list, selector); err != nil {
+		if isAPIUnavailable(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to list InferenceObjectives for subscription %s/%s: %w", sub.Namespace, sub.Name, err)
+	}
+	var owned []*llmdv1alpha2.InferenceObjective
+	for i := range list.Items {
+		if list.Items[i].GetAnnotations()[annotationSubscriptionName] == sub.Name {
+			owned = append(owned, &list.Items[i])
+		}
+	}
+	return owned, nil
+}
+
+// deleteOwnedInferenceObjectives deletes all of the subscription's InferenceObjectives, for
+// finalizer cleanup. Objectives that opted out of management are left in place.
+func (r *MaaSSubscriptionReconciler) deleteOwnedInferenceObjectives(ctx context.Context, log logr.Logger, sub *maasv1alpha1.MaaSSubscription) error {
+	owned, err := r.listOwnedInferenceObjectives(ctx, sub)
+	if err != nil {
+		return err
+	}
+	return r.deleteInferenceObjectives(ctx, log, owned, nil)
+}
+
+// deleteInferenceObjectives deletes the owned objectives that are not in keep. Objectives that
+// opted out of management are left in place.
+func (r *MaaSSubscriptionReconciler) deleteInferenceObjectives(ctx context.Context, log logr.Logger, owned []*llmdv1alpha2.InferenceObjective, keep map[types.NamespacedName]struct{}) error {
+	var errs []error
+	for _, obj := range owned {
 		key := client.ObjectKeyFromObject(obj)
 		if _, ok := keep[key]; ok {
 			continue
@@ -614,11 +819,9 @@ func (r *MaaSSubscriptionReconciler) deleteOwnedInferenceObjectives(ctx context.
 	return errors.Join(errs...)
 }
 
-// warnf records a Warning event on the subscription when a recorder is configured.
+// warnf records a Warning event on the subscription. SetupWithManager always sets Recorder.
 func (r *MaaSSubscriptionReconciler) warnf(sub *maasv1alpha1.MaaSSubscription, reason, messageFmt string, args ...any) {
-	if r.Recorder != nil {
-		r.Recorder.Eventf(sub, corev1.EventTypeWarning, reason, messageFmt, args...)
-	}
+	r.Recorder.Eventf(sub, nil, corev1.EventTypeWarning, reason, "ReconcileInferenceObjectives", messageFmt, args...)
 }
 
 // mapLLMISvcToMaaSSubscriptions returns reconcile requests for the MaaSSubscriptions that
@@ -657,35 +860,16 @@ func (llmisvcRouterStatusChangedPredicate) Update(e event.UpdateEvent) bool {
 	if e.ObjectOld == nil || e.ObjectNew == nil {
 		return true
 	}
-	if oldObj, ok := e.ObjectOld.(*kservev1alpha2.LLMInferenceService); ok {
-		newObj, ok := e.ObjectNew.(*kservev1alpha2.LLMInferenceService)
-		if !ok {
-			return true
-		}
-		return !equality.Semantic.DeepEqual(oldObj.Status.Router, newObj.Status.Router) ||
-			llmisvcReadyStatus(oldObj) != llmisvcReadyStatus(newObj)
-	}
-	// Dynamic watches registered after the CRD appears deliver unstructured objects.
-	oldU, ok := e.ObjectOld.(*unstructured.Unstructured)
+	oldObj, ok := e.ObjectOld.(*kservev1alpha2.LLMInferenceService)
 	if !ok {
 		return true
 	}
-	newU, ok := e.ObjectNew.(*unstructured.Unstructured)
+	newObj, ok := e.ObjectNew.(*kservev1alpha2.LLMInferenceService)
 	if !ok {
 		return true
 	}
-	oldRouter, _, _ := unstructured.NestedFieldNoCopy(oldU.Object, "status", "router")
-	newRouter, _, _ := unstructured.NestedFieldNoCopy(newU.Object, "status", "router")
-	return !equality.Semantic.DeepEqual(oldRouter, newRouter) ||
-		unstructuredLLMIsvcReadyStatus(oldU) != unstructuredLLMIsvcReadyStatus(newU)
-}
-
-// inferenceObjectiveMetadata returns the metadata-only object for InferenceObjective watches.
-// The controller reads only ownership labels and annotations from watch events.
-func inferenceObjectiveMetadata() *metav1.PartialObjectMetadata {
-	obj := &metav1.PartialObjectMetadata{}
-	obj.SetGroupVersionKind(inferenceObjectiveGVK)
-	return obj
+	return !equality.Semantic.DeepEqual(oldObj.Status.Router, newObj.Status.Router) ||
+		llmisvcReadyStatus(oldObj) != llmisvcReadyStatus(newObj)
 }
 
 // mapInferenceObjectiveToSubscription maps a generated InferenceObjective to the

@@ -74,8 +74,16 @@ setup-envtest: $(SETUP_ENVTEST) ##	download the envtest binaries for ENVTEST_K8S
 # setup-envtest stops the build when the binaries cannot be downloaded; the lookup
 # below only reads what it installed (-i), so it cannot fail on the network.
 TEST_FLAGS ?= -race -coverprofile=coverage.out
+# The group-name pattern sync test reads files outside this module (the
+# maas-api copy, the deploy-time kustomize patch, and the docs). Go's test
+# result cache cannot see those files, so the check runs with -count=1: a
+# cached result must never mask drift from a docs- or scripts-only change.
+.PHONY: test-groupname-sync
+test-groupname-sync:
+	go test -race -count=1 -run TestPatternCopiesInSync ./pkg/groupname/
+
 .PHONY: test
-test: tidy setup-envtest ##	run tests with coverage, including envtest-backed tests
+test: tidy setup-envtest test-groupname-sync ##	run tests with coverage, including envtest-backed tests
 	KUBEBUILDER_ASSETS="$$("$(SETUP_ENVTEST)" use "$(ENVTEST_K8S_VERSION)" --bin-dir "$(LOCALBIN)" -i -p path)" go test $(TEST_FLAGS) ./...
 	@go tool cover -html=coverage.out -o coverage.html
 	@echo "Test coverage report generated: $(abspath coverage.html)"

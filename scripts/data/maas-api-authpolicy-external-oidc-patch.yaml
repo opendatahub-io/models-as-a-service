@@ -85,14 +85,28 @@ spec:
                 (has(auth.identity.sub) ? auth.identity.sub : auth.identity.user.username))
           X-MaaS-Group:
             plain:
+              # The group source is selected by identity type (auth.identity.iss
+              # set = JWT identity; otherwise OpenShift TokenReview), never by
+              # claim presence: Authorino overlays the decoded JWT payload into
+              # auth.identity, so a JWT could otherwise craft a "user" claim and
+              # reach the TokenReview branch. Both sources are gated on the
+              # canonical group-name pattern — the same rule enforced at API-key
+              # mint time by maas-api (internal/api_keys/groupname.go) and in
+              # the controller-generated AuthPolicies (pkg/groupname/groupname.go).
+              # Keep the copies identical.
               expression: >-
                 (has(auth.metadata) && has(auth.metadata.apiKeyValidation)) ?
                 (size(auth.metadata.apiKeyValidation.groups) > 0 ?
                 '["' + auth.metadata.apiKeyValidation.groups.join('","') + '"]' :
                 '["system:authenticated"]') :
-                (has(auth.identity.groups) && size(auth.identity.groups) > 0 ?
+                (has(auth.identity.iss) ?
+                (has(auth.identity.groups) && size(auth.identity.groups) > 0 &&
+                auth.identity.groups.all(g, g.matches('^[A-Za-z0-9:#._/ -]+$')) ?
                 '["system:authenticated","' + auth.identity.groups.join('","') + '"]' :
-                (has(auth.identity.user) && has(auth.identity.user.groups) && size(auth.identity.user.groups) > 0 ?
+                '["system:authenticated"]') :
+                (has(auth.identity.user) && has(auth.identity.user.groups) &&
+                size(auth.identity.user.groups) > 0 &&
+                auth.identity.user.groups.all(g, g.matches('^[A-Za-z0-9:#._/ -]+$')) ?
                 '["system:authenticated","' + auth.identity.user.groups.join('","') + '"]' :
                 '["system:authenticated"]'))
           X-MaaS-Subscription:

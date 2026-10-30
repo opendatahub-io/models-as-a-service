@@ -5,11 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
+	netwv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -36,7 +38,8 @@ type PlatformParams struct {
 	PayloadProcessingImage string
 	MaaSAPIKeyCleanupImage string
 
-	APIKeyMaxExpirationDays string
+	APIKeyMaxExpirationDays     string
+	APIKeyDeletionRetentionDays string
 
 	// MaaSAPIReplicas overrides the maas-api Deployment replica count when non-nil.
 	MaaSAPIReplicas *int32
@@ -95,13 +98,19 @@ type PlatformParams struct {
 	// and the Kuadrant anchors were kept.
 	KuadrantDetectionWarning string
 
-	// BundledPostgres is true when maas-db-config points at in-cluster Postgres. When false
-	// (external database), maas-api-egress-restrict omits the app=postgres egress peer.
-	BundledPostgres bool
-	// BundledPostgresNamespace is the Kubernetes namespace of in-cluster Postgres, derived
-	// from maas-db-config (e.g. postgres.postgres.svc.cluster.local → "postgres"). Empty when
-	// BundledPostgres is false; defaults to AppNamespace for short hostnames like "postgres".
-	BundledPostgresNamespace string
+	// MaaSAPIEgressRules replaces the default maas-api egress block when non-empty.
+	MaaSAPIEgressRules []netwv1.NetworkPolicyEgressRule
+	// MaaSAPIAdditionalEgressRules are appended after the base egress block.
+	MaaSAPIAdditionalEgressRules []netwv1.NetworkPolicyEgressRule
+	// MaaSAPIEgressNetworkPolicyDisabled omits maas-api-egress-restrict from the
+	// rendered set and deletes any Config-owned instance on reconcile.
+	MaaSAPIEgressNetworkPolicyDisabled bool
+	// MaaSAPIPreserveEgressOnUpgrade keeps the live restrictive egress block when
+	// networkPolicyEgressRules is unset and the operand policy has no allow-all rule.
+	MaaSAPIPreserveEgressOnUpgrade bool
+	// MaaSAPIPreservedEgressRules is the live egress slice (allow-all stripped) used
+	// when MaaSAPIPreserveEgressOnUpgrade is true.
+	MaaSAPIPreservedEgressRules []any
 }
 
 // BuildPlatformParams resolves all runtime parameters from the tenant config object,
@@ -113,21 +122,22 @@ func BuildPlatformParams(tenant client.Object, platformContext PlatformContext, 
 	}
 
 	params := PlatformParams{
-		AppNamespace:            appNamespace,
-		ControllerNamespace:     controllerNamespace,
-		GatewayNamespace:        platformContext.GatewayRef.Namespace,
-		GatewayName:             platformContext.GatewayRef.Name,
-		ClusterAudience:         clusterAudience,
-		MonitoringNamespace:     monitoringNamespace,
-		SubscriptionNamespace:   tenant.GetNamespace(),
-		ModelNamespace:          tenant.GetNamespace(),
-		ExternalOIDC:            platformContext.ExternalOIDC.DeepCopy(),
-		TenantIdentifier:        tenantID,
-		MaaSAPIImage:            firstNonEmpty(os.Getenv("RELATED_IMAGE_ODH_MAAS_API_IMAGE"), DefaultMaaSAPIImage),
-		PayloadProcessingImage:  firstNonEmpty(os.Getenv("RELATED_IMAGE_ODH_AI_GATEWAY_PAYLOAD_PROCESSING_IMAGE"), DefaultPayloadProcessingImage),
-		MaaSAPIKeyCleanupImage:  firstNonEmpty(os.Getenv("RELATED_IMAGE_UBI_MINIMAL_IMAGE"), DefaultMaaSAPIKeyCleanupImage),
-		APIKeyMaxExpirationDays: resolveAPIKeyMaxExpirationDays(tenant),
-		SkipIPP:                 platformContext.SkipIPP,
+		AppNamespace:                appNamespace,
+		ControllerNamespace:         controllerNamespace,
+		GatewayNamespace:            platformContext.GatewayRef.Namespace,
+		GatewayName:                 platformContext.GatewayRef.Name,
+		ClusterAudience:             clusterAudience,
+		MonitoringNamespace:         monitoringNamespace,
+		SubscriptionNamespace:       tenant.GetNamespace(),
+		ModelNamespace:              tenant.GetNamespace(),
+		ExternalOIDC:                platformContext.ExternalOIDC.DeepCopy(),
+		TenantIdentifier:            tenantID,
+		MaaSAPIImage:                firstNonEmpty(os.Getenv("RELATED_IMAGE_ODH_MAAS_API_IMAGE"), DefaultMaaSAPIImage),
+		PayloadProcessingImage:      firstNonEmpty(os.Getenv("RELATED_IMAGE_ODH_AI_GATEWAY_PAYLOAD_PROCESSING_IMAGE"), DefaultPayloadProcessingImage),
+		MaaSAPIKeyCleanupImage:      firstNonEmpty(os.Getenv("RELATED_IMAGE_UBI_MINIMAL_IMAGE"), DefaultMaaSAPIKeyCleanupImage),
+		APIKeyMaxExpirationDays:     resolveAPIKeyMaxExpirationDays(tenant),
+		APIKeyDeletionRetentionDays: resolveAPIKeyDeletionRetentionDays(tenant),
+		SkipIPP:                     platformContext.SkipIPP,
 	}
 
 	params.MaaSAPIReplicas, params.PayloadProcessingReplicas, params.PayloadPreProcessingReplicas, params.Warnings = resolveReplicaAnnotations(tenant, log)
@@ -455,6 +465,14 @@ func resolveAPIKeyMaxExpirationDays(tenant client.Object) string {
 	return DefaultAPIKeyMaxExpirationDays
 }
 
+func resolveAPIKeyDeletionRetentionDays(tenant client.Object) string {
+	cfg := apiKeysConfigFor(tenant)
+	if cfg != nil && cfg.DeletionRetentionDays != nil {
+		return strconv.FormatInt(int64(*cfg.DeletionRetentionDays), 10)
+	}
+	return DefaultAPIKeyDeletionRetentionDays
+}
+
 func apiKeysConfigFor(tenant client.Object) *maasv1alpha1.TenantAPIKeysConfig {
 	switch t := tenant.(type) {
 	case *maasv1alpha1.MaasTenantConfig:
@@ -543,13 +561,8 @@ func patchResource(log logr.Logger, r *unstructured.Unstructured, params Platfor
 	case gvk == GVKConfigMap && name == PayloadProcessingPluginsConfigMapName:
 		r.SetName(PayloadProcessingPluginsConfigMapForTenant(tenantID))
 		r.SetNamespace(params.GatewayNamespace)
-	case gvk == GVKNetworkPolicy && name == baseMaaSAPIDeploymentNSNetworkPolicyName:
-		return patchDeploymentNSNetworkPolicy(r, params.ControllerNamespace)
-	case gvk == GVKNetworkPolicy && name == baseMaaSAPIEgressRestrictNetworkPolicyName:
-		return patchMaaSAPIEgressRestrictNetworkPolicy(r, params)
-	case gvk == GVKNetworkPolicy && name == PayloadProcessingName:
-		r.SetName(PayloadProcessingNetworkPolicyName(tenantID))
-		return patchPayloadProcessingNetworkPolicy(log, r, params)
+	case gvk == GVKNetworkPolicy:
+		return patchNetworkPolicyResource(log, r, name, params)
 	case gvk == GVKClusterRoleBinding && name == PayloadProcessingReaderClusterRoleBindingName:
 		r.SetName(PayloadProcessingReaderClusterRoleBindingNameForTenant(tenantID))
 		return patchPayloadProcessingClusterRoleBinding(r, params)
@@ -559,43 +572,157 @@ func patchResource(log logr.Logger, r *unstructured.Unstructured, params Platfor
 	return nil
 }
 
-// patchDeploymentNSNetworkPolicy rewrites the namespaceSelector in the
-// deployment-ns NetworkPolicy to use the actual controller namespace.
-func patchDeploymentNSNetworkPolicy(r *unstructured.Unstructured, controllerNamespace string) error {
-	if controllerNamespace == "" {
+func patchNetworkPolicyResource(
+	log logr.Logger,
+	r *unstructured.Unstructured,
+	name string,
+	params PlatformParams,
+) error {
+	switch name {
+	case baseMaaSAPIGatewayNetworkPolicyName:
+		r.SetName(MaaSAPIGatewayNetworkPolicyName(params.TenantIdentifier))
+		return patchMaaSAPIGatewayNetworkPolicy(r, params)
+	case baseMaaSAPIDeploymentNSNetworkPolicyName:
+		return patchMaaSAPIDeploymentNSNetworkPolicy(r, params)
+	case baseMaaSAPIEgressRestrictNetworkPolicyName:
+		return patchMaaSAPIEgressRestrictNetworkPolicy(r, params)
+	case PayloadProcessingName:
+		r.SetName(PayloadProcessingNetworkPolicyName(params.TenantIdentifier))
+		return patchPayloadProcessingNetworkPolicy(log, r, params)
+	default:
 		return nil
 	}
+}
+
+// patchMaaSAPIGatewayNetworkPolicy restricts maas-api ingress to the exact
+// Gateway workload selected by the rendered HTTPRoute.
+func patchMaaSAPIGatewayNetworkPolicy(r *unstructured.Unstructured, params PlatformParams) error {
 	ingress, found, err := unstructured.NestedSlice(r.Object, "spec", "ingress")
-	if err != nil || !found || len(ingress) == 0 {
-		return err
+	if err != nil {
+		return fmt.Errorf("read maas-api gateway NetworkPolicy ingress: %w", err)
+	}
+	if !found {
+		return errors.New("maas-api gateway NetworkPolicy ingress is missing")
+	}
+	if len(ingress) == 0 {
+		return errors.New("maas-api gateway NetworkPolicy ingress is empty")
+	}
+	if params.GatewayNamespace == "" || params.GatewayName == "" {
+		return errors.New("gateway namespace and name are required for maas-api ingress policy")
 	}
 	rule, ok := ingress[0].(map[string]any)
 	if !ok {
-		return nil
+		return errors.New("maas-api gateway NetworkPolicy ingress[0] is not an object")
 	}
 	from, ok := rule["from"].([]any)
 	if !ok || len(from) == 0 {
-		return nil
+		return errors.New("maas-api gateway NetworkPolicy peer not found")
 	}
 	peer, ok := from[0].(map[string]any)
 	if !ok {
-		return nil
+		return errors.New("maas-api gateway NetworkPolicy from[0] is not an object")
 	}
 	nsSelector, ok := peer["namespaceSelector"].(map[string]any)
 	if !ok {
-		return nil
+		return errors.New("maas-api gateway NetworkPolicy namespaceSelector not found")
 	}
 	nsSelector["matchLabels"] = map[string]any{
-		"kubernetes.io/metadata.name": controllerNamespace,
+		"kubernetes.io/metadata.name": params.GatewayNamespace,
 	}
+	peer["namespaceSelector"] = nsSelector
+	peer["podSelector"] = map[string]any{
+		"matchLabels": map[string]any{
+			"gateway.networking.k8s.io/gateway-name": params.GatewayName,
+		},
+	}
+	podSelector, found, err := unstructured.NestedMap(r.Object, "spec", "podSelector")
+	if err != nil {
+		return fmt.Errorf("read maas-api gateway NetworkPolicy podSelector: %w", err)
+	}
+	if !found {
+		return errors.New("maas-api gateway NetworkPolicy podSelector is missing")
+	}
+	matchLabels, ok := podSelector["matchLabels"].(map[string]any)
+	if !ok {
+		matchLabels = map[string]any{}
+	}
+	matchLabels[LabelTenantInstance] = MaaSAPIDeploymentName(params.TenantIdentifier)
+	podSelector["matchLabels"] = matchLabels
+	if err := unstructured.SetNestedMap(r.Object, podSelector, "spec", "podSelector"); err != nil {
+		return fmt.Errorf("set maas-api gateway NetworkPolicy podSelector: %w", err)
+	}
+	from[0] = peer
+	rule["from"] = from
+	ingress[0] = rule
 	return unstructured.SetNestedSlice(r.Object, ingress, "spec", "ingress")
 }
 
-// patchMaaSAPIEgressRestrictNetworkPolicy adds bundled-postgres egress peers when
-// maas-db-config targets in-cluster Postgres. External databases are omitted so
-// administrators can apply a companion egress policy with ipBlock CIDRs. When infra
-// and controller namespaces differ (upgrade path), postgres in the controller namespace
-// is also allowed.
+func patchMaaSAPIDeploymentNSNetworkPolicy(r *unstructured.Unstructured, params PlatformParams) error {
+	ingress, found, err := unstructured.NestedSlice(r.Object, "spec", "ingress")
+	if err != nil {
+		return fmt.Errorf("read maas-api deployment-namespace NetworkPolicy ingress: %w", err)
+	}
+	if !found || len(ingress) == 0 {
+		return errors.New("maas-api deployment-namespace NetworkPolicy ingress is empty")
+	}
+	if params.ControllerNamespace == "" {
+		return errors.New("controller namespace is required for maas-api deployment-namespace ingress policy")
+	}
+	ingress = []any{map[string]any{
+		"from": []any{
+			maasAPIDeploymentNamespacePeer(params.ControllerNamespace, "control-plane", "maas-controller"),
+			maasAPIDeploymentNamespacePeerIn(params.ControllerNamespace, "deployment", maasAPIDashboardDeploymentLabelValues),
+			maasAPIDeploymentNamespacePeer(params.ControllerNamespace, "maas-api-e2e-probe", "true"),
+		},
+		"ports": []any{map[string]any{
+			"protocol": "TCP",
+			"port":     int64(8443),
+		}},
+	}}
+	return unstructured.SetNestedSlice(r.Object, ingress, "spec", "ingress")
+}
+
+func maasAPIDeploymentNamespacePeer(controllerNamespace, labelKey, labelValue string) map[string]any {
+	return map[string]any{
+		"namespaceSelector": map[string]any{
+			"matchLabels": map[string]any{
+				"kubernetes.io/metadata.name": controllerNamespace,
+			},
+		},
+		"podSelector": map[string]any{
+			"matchLabels": map[string]any{
+				labelKey: labelValue,
+			},
+		},
+	}
+}
+
+func maasAPIDeploymentNamespacePeerIn(controllerNamespace, labelKey string, labelValues []string) map[string]any {
+	values := make([]any, len(labelValues))
+	for i, v := range labelValues {
+		values[i] = v
+	}
+	return map[string]any{
+		"namespaceSelector": map[string]any{
+			"matchLabels": map[string]any{
+				"kubernetes.io/metadata.name": controllerNamespace,
+			},
+		},
+		"podSelector": map[string]any{
+			"matchExpressions": []any{
+				map[string]any{
+					"key":      labelKey,
+					"operator": "In",
+					"values":   values,
+				},
+			},
+		},
+	}
+}
+
+// patchMaaSAPIEgressRestrictNetworkPolicy applies maasconfig egress overrides to
+// maas-api-egress-restrict. Default: DNS + API + allow-all. networkPolicyEgressRules
+// on Config replaces the default block; networkPolicyAdditionalEgressRules appends.
 func patchMaaSAPIEgressRestrictNetworkPolicy(r *unstructured.Unstructured, params PlatformParams) error {
 	egress, found, err := unstructured.NestedSlice(r.Object, "spec", "egress")
 	if err != nil {
@@ -605,22 +732,99 @@ func patchMaaSAPIEgressRestrictNetworkPolicy(r *unstructured.Unstructured, param
 		return errors.New("maas-api egress NP missing egress rules")
 	}
 
-	egress = removePostgresEgressRules(egress)
-	if params.BundledPostgres {
-		egress = append(egress, bundledPostgresEgressRule(params))
+	restrictiveBase := len(params.MaaSAPIEgressRules) > 0
+
+	switch {
+	case restrictiveBase:
+		if err := validateRestrictedEgressRules(params.MaaSAPIEgressRules); err != nil {
+			return fmt.Errorf("validate custom maas-api egress rules: %w", err)
+		}
+		egress, err = networkPolicyEgressRulesToUnstructured(params.MaaSAPIEgressRules)
+		if err != nil {
+			return fmt.Errorf("convert custom maas-api egress rules: %w", err)
+		}
+	case params.MaaSAPIPreserveEgressOnUpgrade:
+		egress = params.MaaSAPIPreservedEgressRules
+	default:
+		egress = removeAllowAllEgressRules(egress)
+		egress = append(egress, map[string]any{})
 	}
+
+	if len(params.MaaSAPIAdditionalEgressRules) > 0 {
+		if restrictiveBase || params.MaaSAPIPreserveEgressOnUpgrade {
+			if err := validateRestrictedEgressRules(params.MaaSAPIAdditionalEgressRules); err != nil {
+				return fmt.Errorf("validate additional maas-api egress rules: %w", err)
+			}
+		}
+		additional, err := networkPolicyEgressRulesToUnstructured(params.MaaSAPIAdditionalEgressRules)
+		if err != nil {
+			return fmt.Errorf("convert additional maas-api egress rules: %w", err)
+		}
+		egress = append(egress, additional...)
+	}
+
 	return unstructured.SetNestedSlice(r.Object, egress, "spec", "egress")
 }
 
-func removePostgresEgressRules(egress []any) []any {
-	filtered := make([]any, 0, len(egress))
-	for _, ruleRaw := range egress {
-		rule, ok := ruleRaw.(map[string]any)
-		if !ok {
-			filtered = append(filtered, ruleRaw)
+func networkPolicyDeclaresEgress(np *unstructured.Unstructured) bool {
+	policyTypes, found, err := unstructured.NestedStringSlice(np.Object, "spec", "policyTypes")
+	if err != nil || !found {
+		return false
+	}
+	return slices.Contains(policyTypes, "Egress")
+}
+
+func renderedMaaSAPIEgressBaseline(rendered []unstructured.Unstructured) ([]any, error) {
+	for i := range rendered {
+		if rendered[i].GroupVersionKind() != GVKNetworkPolicy || rendered[i].GetName() != baseMaaSAPIEgressRestrictNetworkPolicyName {
 			continue
 		}
-		if networkPolicyRuleHasPort(rule, 5432) {
+		egress, found, err := unstructured.NestedSlice(rendered[i].Object, "spec", "egress")
+		if err != nil {
+			return nil, err
+		}
+		if !found {
+			return []any{}, nil
+		}
+		return removeAllowAllEgressRules(egress), nil
+	}
+	return []any{}, nil
+}
+
+// composePreservedMaaSAPIEgressRules builds a stable pre-configuration baseline from
+// the live operand policy. Rules matching networkPolicyAdditionalEgressRules are
+// excluded here and re-applied during patch to avoid duplicates on reconcile.
+func composePreservedMaaSAPIEgressRules(liveEgress []any, baseline []any, additional []netwv1.NetworkPolicyEgressRule) []any {
+	additionalUnstructured, err := networkPolicyEgressRulesToUnstructured(additional)
+	if err != nil {
+		return liveEgress
+	}
+
+	liveWithoutAdditional := removeMatchingEgressRules(liveEgress, additionalUnstructured)
+	preserved := make([]any, 0, len(baseline)+len(liveWithoutAdditional))
+	for _, rule := range baseline {
+		if !egressRuleInList(rule, preserved) {
+			preserved = append(preserved, rule)
+		}
+	}
+	for _, rule := range liveWithoutAdditional {
+		if egressRuleInList(rule, baseline) || egressRuleInList(rule, additionalUnstructured) {
+			continue
+		}
+		if !egressRuleInList(rule, preserved) {
+			preserved = append(preserved, rule)
+		}
+	}
+	return preserved
+}
+
+func removeMatchingEgressRules(egress []any, rulesToRemove []any) []any {
+	if len(rulesToRemove) == 0 {
+		return egress
+	}
+	filtered := make([]any, 0, len(egress))
+	for _, ruleRaw := range egress {
+		if egressRuleInList(ruleRaw, rulesToRemove) {
 			continue
 		}
 		filtered = append(filtered, ruleRaw)
@@ -628,75 +832,112 @@ func removePostgresEgressRules(egress []any) []any {
 	return filtered
 }
 
-func bundledPostgresEgressRule(params PlatformParams) map[string]any {
-	// Same-namespace peer covers short hostname "postgres" and co-located DBs.
-	to := []any{
-		map[string]any{
-			"podSelector": map[string]any{
-				"matchLabels": map[string]any{
-					"app": "postgres",
-				},
-			},
-		},
-	}
-	addNamespacedPeer := func(ns string) {
-		if ns == "" || ns == params.AppNamespace {
-			return
-		}
-		to = append(to, map[string]any{
-			"namespaceSelector": map[string]any{
-				"matchLabels": map[string]any{
-					"kubernetes.io/metadata.name": ns,
-				},
-			},
-			"podSelector": map[string]any{
-				"matchLabels": map[string]any{
-					"app": "postgres",
-				},
-			},
-		})
-	}
-	// DSN-derived namespace (e.g. postgres.postgres.svc.cluster.local).
-	addNamespacedPeer(params.BundledPostgresNamespace)
-	// Upgrade path: also allow postgres in the controller namespace when separated.
-	addNamespacedPeer(params.ControllerNamespace)
-	return map[string]any{
-		"to": to,
-		"ports": []any{
-			map[string]any{
-				"protocol": "TCP",
-				"port":     int64(5432),
-			},
-		},
-	}
-}
-
-func networkPolicyRuleHasPort(rule map[string]any, port int64) bool {
-	ports, ok := rule["ports"].([]any)
-	if !ok {
-		return false
-	}
-	for _, portRaw := range ports {
-		portObj, ok := portRaw.(map[string]any)
-		if !ok {
-			continue
-		}
-		switch v := portObj["port"].(type) {
-		case int64:
-			if v == port {
-				return true
-			}
-		case int:
-			if int64(v) == port {
-				return true
-			}
-		case float64:
-			if int64(v) == port {
-				return true
-			}
+func egressRuleInList(rule any, rules []any) bool {
+	for _, candidate := range rules {
+		if egressRulesEqual(rule, candidate) {
+			return true
 		}
 	}
 	return false
+}
+
+func egressRulesEqual(a, b any) bool {
+	aJSON, err := json.Marshal(a)
+	if err != nil {
+		return false
+	}
+	bJSON, err := json.Marshal(b)
+	if err != nil {
+		return false
+	}
+	return string(aJSON) == string(bJSON)
+}
+
+func hasAllowAllEgressRule(egress []any) bool {
+	for _, ruleRaw := range egress {
+		rule, ok := ruleRaw.(map[string]any)
+		if ok && len(rule) == 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func removeAllowAllEgressRules(egress []any) []any {
+	filtered := make([]any, 0, len(egress))
+	for _, ruleRaw := range egress {
+		rule, ok := ruleRaw.(map[string]any)
+		if !ok {
+			filtered = append(filtered, ruleRaw)
+			continue
+		}
+		if len(rule) == 0 {
+			continue
+		}
+		filtered = append(filtered, ruleRaw)
+	}
+	return filtered
+}
+
+// validateRestrictedEgressRules enforces ODH-ADR-Operator-0016 restricted egress:
+// each rule must specify both destinations and ports, except the documented
+// Kubernetes API port-only rule (TCP 443 and 6443 with no to peers).
+func validateRestrictedEgressRules(rules []netwv1.NetworkPolicyEgressRule) error {
+	for i, rule := range rules {
+		if isKubernetesAPIPortOnlyEgressRule(rule) {
+			continue
+		}
+		if len(rule.To) == 0 {
+			return fmt.Errorf("egress rule %d: restricted rules require at least one destination (to)", i)
+		}
+		if len(rule.Ports) == 0 {
+			return fmt.Errorf("egress rule %d: restricted rules require at least one port", i)
+		}
+	}
+	return nil
+}
+
+func isKubernetesAPIPortOnlyEgressRule(rule netwv1.NetworkPolicyEgressRule) bool {
+	if len(rule.To) > 0 {
+		return false
+	}
+	if len(rule.Ports) != 2 {
+		return false
+	}
+	has443, has6443 := false, false
+	for _, p := range rule.Ports {
+		if p.Protocol == nil || *p.Protocol != corev1.ProtocolTCP {
+			return false
+		}
+		if p.Port == nil {
+			return false
+		}
+		switch p.Port.IntValue() {
+		case 443:
+			has443 = true
+		case 6443:
+			has6443 = true
+		default:
+			return false
+		}
+	}
+	return has443 && has6443
+}
+
+func networkPolicyEgressRulesToUnstructured(rules []netwv1.NetworkPolicyEgressRule) ([]any, error) {
+	out := make([]any, 0, len(rules))
+	for _, rule := range rules {
+		data, err := json.Marshal(rule)
+		if err != nil {
+			return nil, err
+		}
+		var converted map[string]any
+		if err := json.Unmarshal(data, &converted); err != nil {
+			return nil, err
+		}
+		out = append(out, converted)
+	}
+	return out, nil
 }
 
 // patchMaaSAPIServingCert remaps the Certificate's secretName and dnsNames to use
@@ -751,6 +992,10 @@ func patchMaaSAPIDeployment(log logr.Logger, r *unstructured.Unstructured, param
 	}
 	if err := setOrAddEnvVar(r, "maas-api", "API_KEY_MAX_EXPIRATION_DAYS", params.APIKeyMaxExpirationDays); err != nil {
 		return fmt.Errorf("patch API_KEY_MAX_EXPIRATION_DAYS: %w", err)
+	}
+	deletionRetentionDays := firstNonEmpty(params.APIKeyDeletionRetentionDays, DefaultAPIKeyDeletionRetentionDays)
+	if err := setOrAddEnvVar(r, "maas-api", "API_KEY_DELETION_RETENTION_DAYS", deletionRetentionDays); err != nil {
+		return fmt.Errorf("patch API_KEY_DELETION_RETENTION_DAYS: %w", err)
 	}
 	if params.MaaSAPIResources != nil {
 		if err := setContainerResources(r, "maas-api", params.MaaSAPIResources); err != nil {
@@ -1263,7 +1508,7 @@ func patchPayloadProcessingEnvoyFilter(log logr.Logger, r *unstructured.Unstruct
 	const (
 		wasmFilterPatchCount     = 4 // WasmPlugin pair + RHCL 1.4 wasm pair
 		routerFallbackPatchCount = 2 // router anchor when Kuadrant WASM is absent
-		routeDisablePatchCount   = 5
+		routeDisablePatchCount   = 6
 		// Trailing REMOVE + INSERT_BEFORE that move Istio's InferencePool filter in front of
 		// the router. Their anchors (Istio's fixed filter name and the router) are the same on
 		// every gateway, so no mode rewrites them.
@@ -1348,7 +1593,8 @@ func patchPayloadProcessingEnvoyFilter(log logr.Logger, r *unstructured.Unstruct
 	// Route patches disable ext_proc on all non-inference maas-api routes; the EPP reorder
 	// patches after them need no rewrite.
 	// Route name uses Istio's Gateway API convention: <namespace>.<httproute-name>.<rule-index>.
-	// Rule indices: 0=/v1/models, 1=/v1/subscriptions, 2=/v1/api-keys, 3=/maas-api/v1/*, 4=/maas-api/health
+	// Rule indices: 0=/v1/models, 1=/v1/subscriptions, 2=/v1/api-keys, 3=/maas-api/v1/*,
+	// 4=/maas-api/health, 5=/v1/me
 	for i := routeDisablePatchBase; i < routeDisablePatchEnd; i++ {
 		patch, ok := configPatches[i].(map[string]any)
 		if !ok {

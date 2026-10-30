@@ -1,0 +1,94 @@
+apiVersion: serving.kserve.io/v1alpha1
+kind: LLMInferenceService
+metadata:
+  name: echo-simulator
+spec:
+  model:
+    # uri is required by the LLMIS schema but not used by llm-d-inference-sim.
+    uri: hf://placeholder/no-model
+    name: test/e2e-echo-model
+  # Skip storage-initializer; simulator generates responses without model weights.
+  storageInitializer:
+    enabled: false
+  replicas: 1
+  router:
+    route: {}
+    # Connect to MaaS-enabled gateway
+    gateway:
+      refs:
+        - name: maas-default-gateway
+          namespace: openshift-ingress
+  template:
+    containers:
+      - name: main
+        # v0.9.0 while every other simulator stays on v0.8.2: the
+        # echo-sim-log-http overlay needs --log-http, which v0.8.2 rejects at
+        # startup with "unknown flag". The rest cannot follow -- in v0.9.0 a
+        # model id that resolves on HuggingFace takes the real-tokenizer path,
+        # and --mode random then fails to initialize its dataset without a
+        # render sidecar on localhost:8082. Echo mode never builds that dataset,
+        # so this pin is safe here and nowhere else. See the README.
+        image: "ghcr.io/llm-d/llm-d-inference-sim:v0.9.0"
+        imagePullPolicy: Always
+        command: ["/app/llm-d-inference-sim"]
+        args:
+        - --port
+        - "8000"
+        - --model
+        - test/e2e-echo-model
+        # echo mirrors the last user message back as the completion, unlike the
+        # other simulators which use --mode random. That makes the response a
+        # deterministic function of the request, so tests can size responses by
+        # sizing prompts (large I/O) and trace a canary string from request to
+        # response, logs and metrics (leak tests).
+        - --mode
+        - echo
+        # The simulator's context window defaults to 1024 tokens and it rejects
+        # anything larger with a 400, which would cap this fixture well below the
+        # payload sizes it exists to exercise. 131072 allows roughly 430KB of
+        # prose per request; measured peak RSS at that size is ~130Mi, so it stays
+        # comfortably inside the 512Mi limit below.
+        - --max-model-len
+        - "131072"
+        - --no-mm-encoder-only
+        - --ssl-certfile
+        - /var/run/kserve/tls/tls.crt
+        - --ssl-keyfile
+        - /var/run/kserve/tls/tls.key
+        env:
+          - name: POD_NAME
+            valueFrom:
+              fieldRef:
+                apiVersion: v1
+                fieldPath: metadata.name
+          - name: POD_NAMESPACE
+            valueFrom:
+              fieldRef:
+                apiVersion: v1
+                fieldPath: metadata.namespace
+          - name: POD_IP
+            valueFrom:
+              fieldRef:
+                apiVersion: v1
+                fieldPath: status.podIP
+        ports:
+          - name: https
+            containerPort: 8000
+            protocol: TCP
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: https
+            scheme: HTTPS
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: https
+            scheme: HTTPS

@@ -8,21 +8,12 @@ collide on models-as-a-service.
 from __future__ import annotations
 
 import os
+import time
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from typing import Iterator, Optional
 
-from test_helper import (
-    PREMIUM_SIMULATOR_SUBSCRIPTION,
-    SIMULATOR_ACCESS_POLICY,
-    SIMULATOR_SUBSCRIPTION,
-    _apply_cr,
-    _create_llmis,
-    _create_maas_model_ref,
-    _wait_for_model_ready,
-    _wait_for_maas_auth_policy_phase,
-    _wait_for_maas_subscription_phase,
-)
+import requests
 from multitenancy_helpers import (
     INFRA_NAMESPACE,
     MODEL_BACKEND_READY_TIMEOUT,
@@ -37,6 +28,21 @@ from multitenancy_helpers import (
     wait_for_gateway_authpolicy_ready,
     wait_for_llmisvc_backend_ready,
     wait_for_route_admitted,
+)
+from test_helper import (
+    PREMIUM_SIMULATOR_SUBSCRIPTION,
+    SIMULATOR_ACCESS_POLICY,
+    SIMULATOR_SUBSCRIPTION,
+    TIMEOUT,
+    TLS_VERIFY,
+    _apply_cr,
+    _create_llmis,
+    _create_maas_model_ref,
+    _is_transient_gateway_response,
+    _maas_api_url,
+    _wait_for_maas_auth_policy_phase,
+    _wait_for_maas_subscription_phase,
+    _wait_for_model_ready,
 )
 
 
@@ -238,8 +244,10 @@ def _apply_baseline_stack(context: WorkerTenantContext) -> None:
     )
 
 
-def bootstrap_worker_tenant(context: WorkerTenantContext) -> WorkerTenantContext:
-    """Create AITenant + baseline CRs; return enriched case dict for tests."""
+def bootstrap_worker_tenant(
+    context: WorkerTenantContext, *, baseline: bool = True,
+) -> WorkerTenantContext:
+    """Create a tenant; optionally attach the worker baseline governance stack."""
     require_aitenant_crd()
     case = context.tenant_case()
     bootstrap_aitenant_tenant(case)
@@ -255,10 +263,9 @@ def bootstrap_worker_tenant(context: WorkerTenantContext) -> WorkerTenantContext
     wait_for_deployment_available(deployment_name, namespace=INFRA_NAMESPACE, timeout=180)
 
     apply_gateway_access_label(context.model_namespace, context.gateway_name)
-    for model_ref, model_alias in (
-        (context.model_ref, f"e2e/{context.model_ref}"),
-        (context.premium_model_ref, f"e2e/{context.premium_model_ref}"),
-    ):
+    model_refs = (context.model_ref, context.premium_model_ref) if baseline else (context.model_ref,)
+    for model_ref in model_refs:
+        model_alias = f"e2e/{model_ref}"
         _create_llmis(model_ref, context.model_namespace, context.gateway_name, model_name=model_alias)
         wait_for_llmisvc_backend_ready(model_ref, context.model_namespace, context.gateway_name)
         _create_maas_model_ref(
@@ -275,18 +282,20 @@ def bootstrap_worker_tenant(context: WorkerTenantContext) -> WorkerTenantContext
         api_deployment_name=deployment_name,
         gateway_authpolicy_name=gateway_authpolicy_name,
     )
-    _apply_baseline_stack(context)
+    if baseline:
+        _apply_baseline_stack(context)
 
     wait_for_gateway_authpolicy_ready(
         case["gateway_name"],
         timeout=int(os.environ.get("E2E_GATEWAY_ENFORCED_TIMEOUT", "240")),
     )
-    for model_ref in (context.model_ref, context.premium_model_ref):
-        _wait_for_model_ready(
-            model_ref,
-            namespace=context.model_namespace,
-            timeout=int(os.environ.get("E2E_MODELREF_READY_TIMEOUT", "180")),
-        )
+    if baseline:
+        for model_ref in model_refs:
+            _wait_for_model_ready(
+                model_ref,
+                namespace=context.model_namespace,
+                timeout=int(os.environ.get("E2E_MODELREF_READY_TIMEOUT", "180")),
+            )
     return context
 
 
@@ -359,3 +368,25 @@ def teardown_worker_tenant(case: WorkerTenantContext) -> None:
         )
     finally:
         cleanup_discovery_case(case.tenant_case())
+
+
+def wait_for_only_accessible_subscription(token: str, name: str, timeout: int = 90) -> None:
+    """Check the auto-selection precondition after the tenant API cache updates."""
+    deadline = time.monotonic() + timeout
+    subscriptions = []
+    while time.monotonic() < deadline:
+        response = requests.get(
+            f"{_maas_api_url()}/v1/subscriptions",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=TIMEOUT,
+            verify=TLS_VERIFY,
+        )
+        if _is_transient_gateway_response(response):
+            time.sleep(2)
+            continue
+        response.raise_for_status()
+        subscriptions = [sub["subscription_id_header"] for sub in response.json()]
+        if subscriptions == [name]:
+            return
+        time.sleep(2)
+    raise AssertionError(f"Expected only subscription {name!r}, got {subscriptions!r}")

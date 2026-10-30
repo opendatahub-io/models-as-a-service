@@ -2,6 +2,7 @@ package tenantreconcile
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -41,7 +42,13 @@ type PrerequisiteReport struct {
 }
 
 // CollectPrerequisiteReport runs prerequisite checks and returns blocking vs warning messages.
-func CollectPrerequisiteReport(ctx context.Context, c client.Client, appNamespace string) PrerequisiteReport {
+// DSCI monitoring and usage-log checks run only when telemetryEnabled is true.
+// usageMetricsDashboard gates the monitoring-stack check: a missing monitoring stack is a
+// warning (and therefore Degraded) only when the legacy metrics dashboard is enabled.
+// usageLogging selects which DSCInitialization usage-log conditions warn.
+// When it is false, LokiStackAvailable, UsageLogsCollectorAvailable, or PersesAvailable
+// not True is a warning. When it is true, only PersesAvailable not True is a warning.
+func CollectPrerequisiteReport(ctx context.Context, c client.Client, appNamespace string, usageMetricsDashboard, usageLogging, telemetryEnabled bool) PrerequisiteReport {
 	log := oteljson.FromContext(ctx)
 	var rep PrerequisiteReport
 
@@ -53,9 +60,23 @@ func CollectPrerequisiteReport(ctx context.Context, c client.Client, appNamespac
 		rep.Blocking = append(rep.Blocking, msg)
 		log.Error(nil, "MaaS prerequisite error", "check", "database-secret", "message", msg)
 	}
-	if msg := checkDSCIMonitoring(ctx, c); msg != "" {
-		rep.Warnings = append(rep.Warnings, msg)
-		log.V(1).Info("MaaS prerequisite warning", "check", "dsci-monitoring", "message", msg)
+	if telemetryEnabled {
+		dsci, fetchErr := fetchDefaultDSCI(ctx, c)
+		var conds map[string]dsciConditionStatus
+		var condErr error
+		if fetchErr == nil {
+			conds, condErr = readDSCIConditionStatuses(ctx, dsci)
+		}
+		if usageMetricsDashboard {
+			if msg := dsciMonitoringWarning(fetchErr, condErr, conds); msg != "" {
+				rep.Warnings = append(rep.Warnings, msg)
+				log.V(1).Info("MaaS prerequisite warning", "check", "dsci-monitoring", "message", msg)
+			}
+		}
+		if msg := dsciUsageLoggingWarning(fetchErr, condErr, conds, usageLogging); msg != "" {
+			rep.Warnings = append(rep.Warnings, msg)
+			log.V(1).Info("MaaS prerequisite warning", "check", "dsci-usage-logging", "message", msg)
+		}
 	}
 
 	return rep
@@ -63,8 +84,9 @@ func CollectPrerequisiteReport(ctx context.Context, c client.Client, appNamespac
 
 // ValidatePrerequisites checks Tenant platform prerequisites (blocking + warnings).
 // Warnings do not return an error; callers may surface them on status separately.
-func ValidatePrerequisites(ctx context.Context, c client.Client, appNamespace string) error {
-	rep := CollectPrerequisiteReport(ctx, c, appNamespace)
+// usageMetricsDashboard, usageLogging, and telemetryEnabled gate DSCI warnings; see CollectPrerequisiteReport.
+func ValidatePrerequisites(ctx context.Context, c client.Client, appNamespace string, usageMetricsDashboard, usageLogging, telemetryEnabled bool) error {
+	rep := CollectPrerequisiteReport(ctx, c, appNamespace, usageMetricsDashboard, usageLogging, telemetryEnabled)
 	if len(rep.Blocking) > 0 {
 		all := append(append([]string{}, rep.Blocking...), rep.Warnings...)
 		return fmt.Errorf("blocking prerequisites missing: %s", strings.Join(all, "; "))
@@ -145,10 +167,31 @@ func checkDatabaseSecret(ctx context.Context, c client.Client, appNamespace stri
 	return ""
 }
 
-func checkDSCIMonitoring(ctx context.Context, c client.Client) string {
+const (
+	dsciConditionMonitoringReady             = "MonitoringReady"
+	dsciConditionMonitoringStackAvailable    = "MonitoringStackAvailable"
+	dsciConditionPersesAvailable             = "PersesAvailable"
+	dsciConditionLokiStackAvailable          = "LokiStackAvailable"
+	dsciConditionUsageLogsCollectorAvailable = "UsageLogsCollectorAvailable"
+)
+
+var (
+	errDSCICRDMissing   = errors.New("DSCInitialization CRD not found")
+	errDSCIListFailed   = errors.New("DSCInitialization list failed")
+	errDSCINotFound     = errors.New("DSCInitialization not found")
+	errDSCIStatusRead   = errors.New("DSCInitialization status read failed")
+	errDSCINoConditions = errors.New("DSCInitialization has no conditions")
+)
+
+type dsciConditionStatus struct {
+	status  string
+	reason  string
+	message string
+}
+
+func fetchDefaultDSCI(ctx context.Context, c client.Client) (*unstructured.Unstructured, error) {
 	log := oteljson.FromContext(ctx)
 
-	// Look for DSCInitialization resources
 	dsciList := &unstructured.UnstructuredList{}
 	dsciList.SetGroupVersionKind(schema.GroupVersionKind{
 		Group:   "dscinitialization.opendatahub.io",
@@ -158,17 +201,13 @@ func checkDSCIMonitoring(ctx context.Context, c client.Client) string {
 
 	if err := c.List(ctx, dsciList); err != nil {
 		if meta.IsNoMatchError(err) {
-			return "DSCI monitoring not configured: DSCInitialization CRD not found. " +
-				"Showback/FinOps usage views will not work without monitoring stack enabled"
+			return nil, errDSCICRDMissing
 		}
-		log.Error(err, "unable to verify DSCI monitoring status")
-		return "unable to verify DSCI monitoring status due to a cluster API error. " +
-			"Ensure monitoring is enabled in DSCInitialization for showback functionality"
+		log.Error(err, "unable to verify DSCI status")
+		return nil, errDSCIListFailed
 	}
-
 	if len(dsciList.Items) == 0 {
-		return "DSCI monitoring not configured: no DSCInitialization found. " +
-			"Showback/FinOps usage views will not work without monitoring stack enabled"
+		return nil, errDSCINotFound
 	}
 
 	// DSCInitialization is a singleton resource; prefer the well-known
@@ -180,103 +219,161 @@ func checkDSCIMonitoring(ctx context.Context, c client.Client) string {
 			break
 		}
 	}
+	return dsci, nil
+}
 
-	// Check MonitoringStackAvailable, MonitoringReady, and PersesAvailable conditions
+func readDSCIConditionStatuses(ctx context.Context, dsci *unstructured.Unstructured) (map[string]dsciConditionStatus, error) {
 	conditionsSlice, found, err := unstructured.NestedSlice(dsci.Object, "status", "conditions")
 	if err != nil {
-		log.Error(err, "unable to read DSCI conditions")
-		return "unable to verify DSCI monitoring conditions due to a status read error. " +
-			"Ensure monitoring stack is deployed in DSCInitialization"
+		oteljson.FromContext(ctx).Error(err, "unable to read DSCI conditions")
+		return nil, errDSCIStatusRead
 	}
 	if !found || len(conditionsSlice) == 0 {
-		return "DSCI monitoring status not available: no conditions found. " +
-			"Monitoring stack may still be deploying. " +
-			"Showback/FinOps usage views will not work until monitoring is ready"
+		return nil, errDSCINoConditions
 	}
 
-	type conditionStatus struct {
-		status  string
-		reason  string
-		message string
-	}
-
-	conditions := map[string]conditionStatus{
-		"MonitoringStackAvailable": {},
-		"MonitoringReady":          {},
-		"PersesAvailable":          {},
-	}
-
+	conditions := make(map[string]dsciConditionStatus, len(conditionsSlice))
 	for _, cond := range conditionsSlice {
 		condMap, ok := cond.(map[string]any)
 		if !ok {
 			continue
 		}
 		condType, _ := condMap["type"].(string)
-		if _, tracked := conditions[condType]; !tracked {
+		if condType == "" {
 			continue
 		}
-
 		status, _ := condMap["status"].(string)
 		reason, _ := condMap["reason"].(string)
 		message, _ := condMap["message"].(string)
-
-		conditions[condType] = conditionStatus{
+		conditions[condType] = dsciConditionStatus{
 			status:  status,
 			reason:  reason,
 			message: message,
 		}
 	}
+	if len(conditions) == 0 {
+		return nil, errDSCINoConditions
+	}
+	return conditions, nil
+}
 
-	if conditions["MonitoringReady"].status != "True" {
-		cond := conditions["MonitoringReady"]
-		if cond.status == "" {
-			return "DSCI monitoring is not ready: MonitoringReady condition not found in DSCInitialization status. " +
-				"Showback/FinOps usage views will not work until monitoring is ready"
+func dsciMonitoringWarning(fetchErr, condErr error, conditions map[string]dsciConditionStatus) string {
+	switch {
+	case errors.Is(fetchErr, errDSCICRDMissing):
+		return "DSCI monitoring not configured: DSCInitialization CRD not found. " +
+			"Showback/FinOps usage views will not work without monitoring stack enabled"
+	case errors.Is(fetchErr, errDSCIListFailed):
+		return "unable to verify DSCI monitoring status due to a cluster API error. " +
+			"Ensure monitoring is enabled in DSCInitialization for showback functionality"
+	case errors.Is(fetchErr, errDSCINotFound):
+		return "DSCI monitoring not configured: no DSCInitialization found. " +
+			"Showback/FinOps usage views will not work without monitoring stack enabled"
+	case fetchErr != nil:
+		return "unable to verify DSCI monitoring status due to a cluster API error. " +
+			"Ensure monitoring is enabled in DSCInitialization for showback functionality"
+	case errors.Is(condErr, errDSCIStatusRead):
+		return "unable to verify DSCI monitoring conditions due to a status read error. " +
+			"Ensure monitoring stack is deployed in DSCInitialization"
+	case errors.Is(condErr, errDSCINoConditions):
+		return "DSCI monitoring status not available: no conditions found. " +
+			"Monitoring stack may still be deploying. " +
+			"Showback/FinOps usage views will not work until monitoring is ready"
+	case condErr != nil:
+		return "unable to verify DSCI monitoring conditions due to a status read error. " +
+			"Ensure monitoring stack is deployed in DSCInitialization"
+	}
+
+	if msg := monitoringConditionWarning(conditions, dsciConditionMonitoringReady,
+		"DSCI monitoring is not ready: MonitoringReady condition not found in DSCInitialization status. "+
+			"Showback/FinOps usage views will not work until monitoring is ready",
+		"DSCI monitoring is not ready (MonitoringReady=%s",
+		"Showback/FinOps usage views will not work until monitoring is ready"); msg != "" {
+		return msg
+	}
+	if msg := monitoringConditionWarning(conditions, dsciConditionMonitoringStackAvailable,
+		"DSCI monitoring stack is not available: MonitoringStackAvailable condition not found in DSCInitialization status. "+
+			"Showback/FinOps usage views will not work until monitoring stack is available",
+		"DSCI monitoring stack is not available (MonitoringStackAvailable=%s",
+		"Showback/FinOps usage views will not work until monitoring stack is available"); msg != "" {
+		return msg
+	}
+	return monitoringConditionWarning(conditions, dsciConditionPersesAvailable,
+		"DSCI Perses is not available: PersesAvailable condition not found in DSCInitialization status. "+
+			"Showback/FinOps usage views will not work until Perses is available",
+		"DSCI Perses is not available (PersesAvailable=%s",
+		"Showback/FinOps usage views will not work until Perses is available")
+}
+
+func monitoringConditionWarning(conditions map[string]dsciConditionStatus, name, missing, format, impact string) string {
+	cond := conditions[name]
+	if cond.status == "True" {
+		return ""
+	}
+	if cond.status == "" {
+		return missing
+	}
+	msg := fmt.Sprintf(format, cond.status)
+	if cond.reason != "" {
+		msg += fmt.Sprintf(": %s", cond.reason)
+	}
+	if cond.message != "" {
+		msg += fmt.Sprintf(": %s", cond.message)
+	}
+	msg += "). " + impact
+	return msg
+}
+
+// dsciUsageLoggingWarning reports platform usage-log dependencies.
+// usageLogging true checks only PersesAvailable. false also checks LokiStackAvailable
+// and UsageLogsCollectorAvailable.
+func dsciUsageLoggingWarning(fetchErr, condErr error, conditions map[string]dsciConditionStatus, usageLogging bool) string {
+	impact := "Logs-based usage views will not work until LokiStackAvailable, UsageLogsCollectorAvailable, and PersesAvailable are True"
+	if usageLogging {
+		impact = "Logs-based usage views will not work until PersesAvailable is True"
+	}
+	switch {
+	case errors.Is(fetchErr, errDSCICRDMissing):
+		return "DSCI usage logging not configured: DSCInitialization CRD not found. " + impact
+	case errors.Is(fetchErr, errDSCINotFound):
+		return "DSCI usage logging not configured: no DSCInitialization found. " + impact
+	case fetchErr != nil:
+		return "unable to verify DSCI usage logging status due to a cluster API error. " + impact
+	case errors.Is(condErr, errDSCINoConditions):
+		return "DSCI usage logging status not available: no conditions found. " + impact
+	case condErr != nil:
+		return "unable to verify DSCI usage logging conditions due to a status read error. " + impact
+	}
+
+	required := []string{
+		dsciConditionLokiStackAvailable,
+		dsciConditionUsageLogsCollectorAvailable,
+		dsciConditionPersesAvailable,
+	}
+	if usageLogging {
+		required = []string{dsciConditionPersesAvailable}
+	}
+
+	var failures []string
+	for _, name := range required {
+		cond := conditions[name]
+		if cond.status == "True" {
+			continue
 		}
-		msg := fmt.Sprintf("DSCI monitoring is not ready (MonitoringReady=%s", cond.status)
+		if cond.status == "" {
+			failures = append(failures, fmt.Sprintf(
+				"DSCI %s is not available: %s condition not found in DSCInitialization status. %s",
+				name, name, impact))
+			continue
+		}
+		msg := fmt.Sprintf("DSCI %s is not available (%s=%s", name, name, cond.status)
 		if cond.reason != "" {
 			msg += fmt.Sprintf(": %s", cond.reason)
 		}
 		if cond.message != "" {
 			msg += fmt.Sprintf(": %s", cond.message)
 		}
-		msg += "). Showback/FinOps usage views will not work until monitoring is ready"
-		return msg
+		msg += "). " + impact
+		failures = append(failures, msg)
 	}
-
-	if conditions["MonitoringStackAvailable"].status != "True" {
-		cond := conditions["MonitoringStackAvailable"]
-		if cond.status == "" {
-			return "DSCI monitoring stack is not available: MonitoringStackAvailable condition not found in DSCInitialization status. " +
-				"Showback/FinOps usage views will not work until monitoring stack is available"
-		}
-		msg := fmt.Sprintf("DSCI monitoring stack is not available (MonitoringStackAvailable=%s", cond.status)
-		if cond.reason != "" {
-			msg += fmt.Sprintf(": %s", cond.reason)
-		}
-		if cond.message != "" {
-			msg += fmt.Sprintf(": %s", cond.message)
-		}
-		msg += "). Showback/FinOps usage views will not work until monitoring stack is available"
-		return msg
-	}
-
-	if conditions["PersesAvailable"].status != "True" {
-		cond := conditions["PersesAvailable"]
-		if cond.status == "" {
-			return "DSCI Perses is not available: PersesAvailable condition not found in DSCInitialization status. " +
-				"Showback/FinOps usage views will not work until Perses is available"
-		}
-		msg := fmt.Sprintf("DSCI Perses is not available (PersesAvailable=%s", cond.status)
-		if cond.reason != "" {
-			msg += fmt.Sprintf(": %s", cond.reason)
-		}
-		if cond.message != "" {
-			msg += fmt.Sprintf(": %s", cond.message)
-		}
-		msg += "). Showback/FinOps usage views will not work until Perses is available"
-		return msg
-	}
-
-	return ""
+	return strings.Join(failures, "; ")
 }

@@ -230,8 +230,10 @@ def model_completions_url(model_v1: str) -> str:
 
 
 @pytest.fixture
-def inference_model_name() -> str:
-    """Model name for inference requests. Override with INFERENCE_MODEL_NAME env var."""
+def inference_model_name(_worker_api_keys_context) -> str:
+    """Use the worker model name or the shared tenant environment override."""
+    if _worker_api_keys_context is not None:
+        return f"e2e/{_worker_api_keys_context.model_ref}"
     return os.environ.get("INFERENCE_MODEL_NAME", MODEL_NAME)
 
 
@@ -1577,6 +1579,9 @@ class TestAPIKeySubscriptionPhases:
             sa_user = _sa_to_user(sa_name, namespace=MODEL_NAMESPACE)
 
             _create_test_auth_policy(auth_name, MODEL_REF, users=[sa_user])
+            # The subscription is intentionally invalid, but API-key creation
+            # still traverses the gateway and must not race AuthPolicy reload.
+            _wait_for_gateway_auth_enforced()
             # Reference only a nonexistent model so the controller naturally
             # computes Failed (all model refs invalid in deriveFinalPhase).
             _create_test_subscription(subscription_name, nonexistent_model, users=[sa_user])
@@ -1663,13 +1668,15 @@ class TestAPIKeySubscriptionPhases:
             log.info("✅ API key created successfully for Pending subscription")
 
         finally:
-            _delete_cr("maassubscription", subscription_name, namespace=ns)
-            _delete_cr("maasauthpolicy", auth_name, namespace=ns)
-            _delete_sa(sa_name, namespace=MODEL_NAMESPACE)
+            # Subscription deletion now waits for the API-key cleanup Job,
+            # which requires maas-controller to be running.
             try:
                 _scale_controller_up()
             except Exception:
-                log.exception("Best-effort controller scale-up failed")
+                log.exception("Best-effort maas-controller scale-up failed")
+            _delete_cr("maassubscription", subscription_name, namespace=ns)
+            _delete_cr("maasauthpolicy", auth_name, namespace=ns)
+            _delete_sa(sa_name, namespace=MODEL_NAMESPACE)
             _wait_for_cr_absent("maassubscription", subscription_name, namespace=ns)
             _wait_for_cr_absent("maasauthpolicy", auth_name, namespace=ns)
 
@@ -1832,6 +1839,9 @@ class TestAPIKeySubscriptionFilter:
             _create_test_auth_policy(f"{sub_b}-auth", MODEL_REF, users=[sa_user])
             _create_test_subscription(sub_b, MODEL_REF, users=[sa_user])
             _wait_for_subscription_discovery_ready(sub_b, namespace=ns)
+            # Both test policies contribute to the shared gateway AuthPolicy;
+            # wait for its propagated configuration before minting keys.
+            _wait_for_gateway_auth_enforced()
 
             # Create 2 keys bound to sub_a
             for i in range(2):
@@ -1859,7 +1869,8 @@ class TestAPIKeySubscriptionFilter:
             key_ids_b.append(r_b.json()["id"])
 
             # Search with subscription filter for sub_b — same principal
-            r_search = requests.post(
+            r_search = _request_with_gateway_retry(
+                requests.post,
                 f"{api_keys_base_url}/search",
                 headers=sa_headers,
                 json={
@@ -1966,7 +1977,8 @@ class TestAPIKeyLabels:
             "project_code": "PROJ-ML-2024",
         }
 
-        r = requests.post(
+        r = _request_with_gateway_retry(
+            requests.post,
             api_keys_base_url,
             headers=headers,
             json={
@@ -1982,7 +1994,8 @@ class TestAPIKeyLabels:
         assert "key" in data and "id" in data
         assert data.get("labels") == labels, "Labels in create response don't match request"
 
-        r_get = requests.get(
+        r_get = _request_with_gateway_retry(
+            requests.get,
             f"{api_keys_base_url}/{data['id']}",
             headers=headers,
             timeout=30,
@@ -1997,25 +2010,41 @@ class TestAPIKeyLabels:
         labels2 = {"cmdb_id": "AST222", "env": "dev"}
         labels3 = {"cost_center": "CC-999"}
 
-        r1 = requests.post(api_keys_base_url, headers=headers,
-                           json={"name": "e2e-label-search-1", "labels": labels1},
-                           timeout=30, verify=TLS_VERIFY)
+        r1 = _request_with_gateway_retry(
+            requests.post,
+            api_keys_base_url,
+            headers=headers,
+            json={"name": "e2e-label-search-1", "labels": labels1},
+            timeout=30,
+            verify=TLS_VERIFY,
+        )
         assert r1.status_code in (200, 201)
         key1_id = r1.json()["id"]
 
-        r2 = requests.post(api_keys_base_url, headers=headers,
-                           json={"name": "e2e-label-search-2", "labels": labels2},
-                           timeout=30, verify=TLS_VERIFY)
+        r2 = _request_with_gateway_retry(
+            requests.post,
+            api_keys_base_url,
+            headers=headers,
+            json={"name": "e2e-label-search-2", "labels": labels2},
+            timeout=30,
+            verify=TLS_VERIFY,
+        )
         assert r2.status_code in (200, 201)
         key2_id = r2.json()["id"]
 
-        r3 = requests.post(api_keys_base_url, headers=headers,
-                           json={"name": "e2e-label-search-3", "labels": labels3},
-                           timeout=30, verify=TLS_VERIFY)
+        r3 = _request_with_gateway_retry(
+            requests.post,
+            api_keys_base_url,
+            headers=headers,
+            json={"name": "e2e-label-search-3", "labels": labels3},
+            timeout=30,
+            verify=TLS_VERIFY,
+        )
         assert r3.status_code in (200, 201)
 
         # Search by CMDB ID — should find key1 only
-        r_search = requests.post(
+        r_search = _request_with_gateway_retry(
+            requests.post,
             f"{api_keys_base_url}/search",
             headers=headers,
             json={"filters": {"labelsContain": {"cmdb_id": "AST111"}}},
@@ -2031,7 +2060,8 @@ class TestAPIKeyLabels:
         assert found_key["labels"]["cmdb_id"] == "AST111"
 
         # Search by env=prod — should find key1, not key2
-        r_search = requests.post(
+        r_search = _request_with_gateway_retry(
+            requests.post,
             f"{api_keys_base_url}/search",
             headers=headers,
             json={"filters": {"labelsContain": {"env": "prod"}}},

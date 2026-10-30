@@ -1,0 +1,314 @@
+{
+  "externalmodels": {
+    "properties": {
+      "apiVersion": {
+        "type": "string"
+      },
+      "kind": {
+        "type": "string"
+      },
+      "metadata": {
+        "type": "object"
+      },
+      "spec": {
+        "properties": {
+          "externalProviderRefs": {
+            "items": {
+              "properties": {
+                "apiFormat": {
+                  "maxLength": 63,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "auth": {
+                  "properties": {
+                    "secretRef": {
+                      "properties": {
+                        "name": {
+                          "maxLength": 253,
+                          "minLength": 1,
+                          "pattern": "^[a-z0-9]([a-z0-9.\\-]*[a-z0-9])?$",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "name"
+                      ],
+                      "type": "object"
+                    },
+                    "type": {
+                      "enum": [
+                        "apikey",
+                        "simple",
+                        "sigv4",
+                        "oauth2"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "secretRef",
+                    "type"
+                  ],
+                  "type": "object"
+                },
+                "config": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                },
+                "path": {
+                  "maxLength": 512,
+                  "minLength": 1,
+                  "pattern": "^/.*",
+                  "type": "string"
+                },
+                "ref": {
+                  "properties": {
+                    "name": {
+                      "maxLength": 253,
+                      "minLength": 1,
+                      "pattern": "^[a-z0-9]([a-z0-9\\-]*[a-z0-9])?$",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "name"
+                  ],
+                  "type": "object"
+                },
+                "targetModel": {
+                  "maxLength": 253,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "weight": {
+                  "default": 1,
+                  "maximum": 100,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "apiFormat",
+                "path",
+                "ref",
+                "targetModel"
+              ],
+              "type": "object"
+            },
+            "maxItems": 64,
+            "minItems": 1,
+            "type": "array"
+          },
+          "modelName": {
+            "maxLength": 253,
+            "type": "string"
+          }
+        },
+        "required": [
+          "externalProviderRefs"
+        ],
+        "type": "object"
+      },
+      "status": {
+        "properties": {
+          "conditions": {
+            "items": {
+              "properties": {
+                "lastTransitionTime": {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                "message": {
+                  "maxLength": 32768,
+                  "type": "string"
+                },
+                "observedGeneration": {
+                  "format": "int64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "reason": {
+                  "maxLength": 1024,
+                  "minLength": 1,
+                  "pattern": "^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$",
+                  "type": "string"
+                },
+                "status": {
+                  "enum": [
+                    "True",
+                    "False",
+                    "Unknown"
+                  ],
+                  "type": "string"
+                },
+                "type": {
+                  "maxLength": 316,
+                  "pattern": "^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "lastTransitionTime",
+                "message",
+                "reason",
+                "status",
+                "type"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "httpRouteName": {
+            "type": "string"
+          },
+          "phase": {
+            "enum": [
+              "Pending",
+              "Ready",
+              "Failed"
+            ],
+            "type": "string"
+          }
+        },
+        "type": "object"
+      }
+    },
+    "type": "object"
+  },
+  "externalproviders": {
+    "properties": {
+      "apiVersion": {
+        "type": "string"
+      },
+      "kind": {
+        "type": "string"
+      },
+      "metadata": {
+        "type": "object"
+      },
+      "spec": {
+        "properties": {
+          "auth": {
+            "properties": {
+              "secretRef": {
+                "properties": {
+                  "name": {
+                    "maxLength": 253,
+                    "minLength": 1,
+                    "pattern": "^[a-z0-9]([a-z0-9.\\-]*[a-z0-9])?$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "name"
+                ],
+                "type": "object"
+              },
+              "type": {
+                "enum": [
+                  "apikey",
+                  "simple",
+                  "sigv4",
+                  "oauth2"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "secretRef",
+              "type"
+            ],
+            "type": "object"
+          },
+          "config": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "endpoint": {
+            "maxLength": 253,
+            "minLength": 1,
+            "pattern": "^[a-zA-Z0-9]([a-zA-Z0-9\\-]*[a-zA-Z0-9])?(\\.[a-zA-Z0-9]([a-zA-Z0-9\\-]*[a-zA-Z0-9])?)+$",
+            "type": "string"
+          },
+          "provider": {
+            "maxLength": 63,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "auth",
+          "endpoint",
+          "provider"
+        ],
+        "type": "object"
+      },
+      "status": {
+        "properties": {
+          "conditions": {
+            "items": {
+              "properties": {
+                "lastTransitionTime": {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                "message": {
+                  "maxLength": 32768,
+                  "type": "string"
+                },
+                "observedGeneration": {
+                  "format": "int64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "reason": {
+                  "maxLength": 1024,
+                  "minLength": 1,
+                  "pattern": "^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$",
+                  "type": "string"
+                },
+                "status": {
+                  "enum": [
+                    "True",
+                    "False",
+                    "Unknown"
+                  ],
+                  "type": "string"
+                },
+                "type": {
+                  "maxLength": 316,
+                  "pattern": "^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "lastTransitionTime",
+                "message",
+                "reason",
+                "status",
+                "type"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "phase": {
+            "enum": [
+              "Pending",
+              "Ready",
+              "Failed"
+            ],
+            "type": "string"
+          }
+        },
+        "type": "object"
+      }
+    },
+    "type": "object"
+  }
+}

@@ -41,11 +41,13 @@ const (
 	// swap handshake between maas-controller (legacy IPP) and ai-gateway-controller
 	// (praxis). It lives only on MaasTenantConfig — never mirrored to/from AITenant.
 	//
-	// From maas-controller's perspective only two values matter:
+	// From maas-controller's perspective these values matter:
 	//   - PayloadProcessingStatusCleanupComplete ("cleanup-complete"): clear to claim.
 	//     When legacy is selected, CAS-claim by deleting the annotation (back to absent)
-	//     then deploy. When praxis is selected (SkipIPP), this means we already finished
-	//     IPP cleanup and must not re-run it.
+	//     then deploy. When praxis is selected (SkipIPP), IPP cleanup is complete and
+	//     accepted API-translation migration risk warnings must remain visible.
+	//   - PayloadProcessingStatusSteady ("steady"): Praxis owns the pipeline; keep any
+	//     accepted API-translation migration risk warning visible without re-running cleanup.
 	//   - absent: legacy owns / may deploy when legacy is selected (existing tenants are
 	//     assumed to run legacy IPP). When praxis is selected, absent means we still need
 	//     to clean up legacy IPP and then write cleanup-complete.
@@ -65,6 +67,32 @@ const (
 	// PayloadProcessingStatusCleanupComplete means peer cleanup finished; the
 	// selected party may claim.
 	PayloadProcessingStatusCleanupComplete = "cleanup-complete"
+
+	// PayloadProcessingStatusSteady means Praxis owns and serves the tenant pipeline.
+	PayloadProcessingStatusSteady = "steady"
+
+	// AnnotationForcePayloadProcessingMigration is the operator opt-in that allows
+	// IPP→Praxis migration when the live payload-processing-plugins ConfigMap is
+	// non-standard (RHOAIENG-98846). Value must be "true".
+	AnnotationForcePayloadProcessingMigration = "maas.opendatahub.io/force-payload-processing-migration"
+
+	// AnnotationPayloadProcessingMigration surfaces migration-gate state on
+	// MaasTenantConfig. Value PayloadProcessingMigrationBlocked means automatic
+	// migration is paused until the force annotation is applied (or the
+	// ConfigMap is restored to a known-good baseline).
+	AnnotationPayloadProcessingMigration = "maas.opendatahub.io/payload-processing-migration"
+
+	// PayloadProcessingMigrationBlocked is the AnnotationPayloadProcessingMigration
+	// value when the plugins ConfigMap gate refuses automatic migration.
+	PayloadProcessingMigrationBlocked = "blocked"
+
+	// AnnotationAPITranslationMigrationRisk records an operator-accepted loss of
+	// legacy IPP behavior. It remains on MaasTenantConfig after one-shot cleanup
+	// so status can continue to describe an active compatibility risk.
+	AnnotationAPITranslationMigrationRisk = "maas.opendatahub.io/api-translation-migration-risk"
+
+	APITranslationMigrationRiskExplicitFalse = "explicit-false"
+	APITranslationMigrationRiskForced        = "forced"
 
 	// ComponentName is the ODH component label key suffix (app.opendatahub.io/<name>).
 	// This is the DSC component identifier, not a standalone CR kind.
@@ -100,10 +128,11 @@ const (
 	// Production deployments use this default. ROSA deployments must override to "" (empty) to disable separation.
 	DefaultInfraNamespace = "AUTO"
 
-	DefaultMaaSAPIImage            = "quay.io/opendatahub/maas-api:latest"
-	DefaultPayloadProcessingImage  = "quay.io/opendatahub/odh-ai-gateway-payload-processing:odh-stable"
-	DefaultMaaSAPIKeyCleanupImage  = "registry.redhat.io/ubi9/ubi-minimal:9.7"
-	DefaultAPIKeyMaxExpirationDays = "90"
+	DefaultMaaSAPIImage                = "quay.io/opendatahub/maas-api:latest"
+	DefaultPayloadProcessingImage      = "quay.io/opendatahub/odh-ai-gateway-payload-processing:odh-stable"
+	DefaultMaaSAPIKeyCleanupImage      = "registry.redhat.io/ubi9/ubi-minimal:9.7"
+	DefaultAPIKeyMaxExpirationDays     = "90"
+	DefaultAPIKeyDeletionRetentionDays = "90"
 
 	// DefaultOTLPCollectorService is the platform DSCI OpenTelemetry collector Service name.
 	DefaultOTLPCollectorService = "data-science-collector-collector"
@@ -134,6 +163,7 @@ const (
 	baseMaaSAPIServiceName                         = "maas-api"
 	baseMaaSAPIKeyCleanupScriptConfigMapName       = "maas-api-key-cleanup-script" //nolint:gosec // Kubernetes resource name, not a credential
 	baseMaaSAPIDeploymentNSNetworkPolicyName       = "maas-api-allow-deployment-ns"
+	baseMaaSAPIGatewayNetworkPolicyName            = "maas-api-allow-gateway"
 	baseMaaSAPIEgressRestrictNetworkPolicyName     = "maas-api-egress-restrict"
 	baseMaaSAPIServingCertName                     = "maas-api-serving-cert"
 	baseUsageLogsEnvoyFilterName                   = "maas-model-access-logs"
@@ -162,6 +192,10 @@ const (
 	ConditionTypeDegraded               = "Degraded"
 	ReadyConditionType                  = "Ready"
 )
+
+// maasAPIDashboardDeploymentLabelValues lists deployment labels for pods that call maas-api
+// from the controller namespace (ODH/RHOAI dashboard + maas-ui BFF).
+var maasAPIDashboardDeploymentLabelValues = []string{"odh-dashboard", "rhods-dashboard", "maas-ui"}
 
 // GVKs used for post-render and readiness (mirrors opendatahub-operator/pkg/cluster/gvk selections).
 var (
@@ -231,6 +265,13 @@ func MaaSAPIKeyCleanupCronJobName(tenantID string) string {
 
 func GatewayDestinationRuleName(tenantID string) string {
 	return resourceNameForTenant(baseGatewayDestinationRuleName, tenantID)
+}
+
+func MaaSAPIGatewayNetworkPolicyName(tenantID string) string {
+	if tenantID == "" {
+		return baseMaaSAPIGatewayNetworkPolicyName + "--default"
+	}
+	return resourceNameForTenant(baseMaaSAPIGatewayNetworkPolicyName, tenantID)
 }
 
 func TelemetryPolicyName(tenantID string) string {

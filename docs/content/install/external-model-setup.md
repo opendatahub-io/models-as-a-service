@@ -35,7 +35,7 @@ An external model deployment involves the following resources:
 | **Kuadrant AuthPolicy** | MaaSAuthPolicy controller | Per-route auth enforcement via Authorino |
 | **TokenRateLimitPolicy** | MaaSSubscription controller | Per-route rate limiting via Limitador |
 
-The Inference Payload Processor (IPP) component (ext-proc) handles API key injection, request translation (OpenAI ↔ provider-native format), and model routing.
+The RHOAI 3.5 Inference Payload Processor (IPP) component handled provider API key injection, model routing, and the formats registered by its `api-translation` plugin. Its default profile enabled request processing but left response processing empty. That legacy behavior is not proof that the 3.6 Praxis ExternalModel runtime preserves every provider direction or stream mode; see the [3.6 upgrade guide](../migration/upgrade-to-3.6.md#ipp--praxis-api-translation-migration).
 
 ## Step 1: Deploy Inference Payload Processor (IPP)
 
@@ -45,9 +45,11 @@ MaaS deploys the payload-processing component from the [`ai-gateway-payload-proc
 
 ### IPP response translation (opt-in)
 
-By default, the `api-translation` plugin runs on the **request** path only. Response-side `api-translation` is off so SSE streaming for internal and OpenAI-compatible models is not held by a response processor.
+The exact 3.5 product-default profile ran `api-translation` on the **request** path; response-side `api-translation` was off. Thus pure-default already had request-side translation. Baseline #2 (default plus response `api-translation`) additionally enabled response processing.
 
-Providers that rewrite responses (notably Anthropic Messages ↔ OpenAI) need response translation enabled manually on the plugins ConfigMap. After MaaS creates `payload-processing-plugins`, the controller stamps `opendatahub.io/managed: "false"` and then leaves the ConfigMap alone so your edits stick.
+The legacy IPP `api-translation` plugin was a multi-provider catch-all documented for OpenAI, Anthropic, Azure OpenAI, Vertex AI, and Bedrock Mantle. Current Praxis qualification is narrower. `spec.apiTranslation.enabled` is one tenant permission for the shared Anthropic Messages client → OpenAI-compatible backend flow and the ExternalModel OpenAI Chat Completions client → selected Anthropic Messages provider flow. For ExternalModels, `intelligent_route` selects the provider first; its trusted profile controls request and response translation. OpenAI `openai-chat` candidates remain pass-through. The currently qualified ExternalModel profiles are OpenAI `openai-chat` and Anthropic `messages`; Azure OpenAI, Vertex AI, Bedrock, custom provider types, and other formats are not claimed as supported. Do not infer their support from the legacy IPP ConfigMap.
+
+The current ExternalModel ExtProc configuration buffers each selected-provider request body up to 1 MiB for validation and target-model rewriting. Larger requests are rejected before reaching the provider, including for OpenAI-compatible candidates.
 
 ```bash
 GATEWAY_NAMESPACE="${GATEWAY_NAMESPACE:-openshift-ingress}"
@@ -310,7 +312,13 @@ The model `gpt-4o` should appear in the list.
 
 ## Supported Providers
 
-The `spec.provider` field determines how IPP translates requests and injects credentials. Each provider has different authentication headers and API formats — IPP handles the translation automatically.
+The table below records the **RHOAI 3.5 IPP** guide's documented provider
+behavior. It is historical coverage, not a support matrix for the 3.6 Praxis
+ExternalModel dataplane. The Phase 1 Kind qualification proves the separate
+shared Anthropic Messages client → OpenAI-compatible backend path. It does not
+prove OpenAI-client → Anthropic-provider parity or Praxis support for Azure
+OpenAI, Vertex AI, or Bedrock. See the [3.6 upgrade guide](../migration/upgrade-to-3.6.md#ipp--praxis-api-translation-migration)
+for the migration gate and currently supported ExternalModel formats.
 
 | Provider | `spec.provider` | Translation | Auth Header |
 |----------|----------------|-------------|-------------|

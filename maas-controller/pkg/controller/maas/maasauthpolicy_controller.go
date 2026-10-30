@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
+	aigatewayv1alpha1 "github.com/opendatahub-io/ai-gateway-controller/api/aigateway/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
 	discv1 "k8s.io/api/discovery/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
@@ -36,7 +37,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	"k8s.io/client-go/util/retry"
 	"k8s.io/client-go/util/workqueue"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -53,6 +54,8 @@ import (
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
+	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/authpolicy"
+	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/groupname"
 	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/platform/tenantreconcile"
 )
 
@@ -89,7 +92,7 @@ type MaaSAuthPolicyReconciler struct {
 	AuthzCacheTTL int64
 
 	// Recorder emits Kubernetes events for conflict detection warnings.
-	Recorder record.EventRecorder
+	Recorder events.EventRecorder
 	// MaxConcurrentReconciles is the maximum number of concurrent Reconciles which can be run.
 	// Defaults to 1 if not set.
 	MaxConcurrentReconciles int
@@ -97,13 +100,19 @@ type MaaSAuthPolicyReconciler struct {
 	// ippGatewaySyncQueue retries default-gateway x-api-key sync when an IPP ExternalModel
 	// event cannot be applied inline (transient API errors or empty MaaSAuthPolicy list).
 	ippGatewaySyncQueue workqueue.TypedRateLimitingInterface[struct{}]
+
+	// enqueueGuardrailPolicy is connected before controller workers start.
+	enqueueGuardrailPolicy func(reconcile.Request)
 }
 
 // oidcConfig holds resolved OIDC configuration from AITenant or a legacy Tenant CR.
 type oidcConfig struct {
-	IssuerURL string
-	ClientID  string
-	TTL       int
+	IssuerURL               string
+	ClientID                string
+	Audience                string
+	AccessTokenPurposeClaim string
+	AccessTokenPurpose      string
+	TTL                     int
 }
 
 // authzCacheTTL returns the safe TTL for authorization caches that depend on metadata.
@@ -243,6 +252,11 @@ func (r *MaaSAuthPolicyReconciler) fetchOIDCConfig(ctx context.Context, log logr
 		return nil
 	}
 
+	if (oidc.AccessTokenPurposeClaim == "") != (oidc.AccessTokenPurpose == "") {
+		log.Error(nil, "Tenant external OIDC access-token purpose claim and value must be configured together")
+		return nil
+	}
+
 	const (
 		defaultOIDCJWKSTTL = 300
 		minOIDCJWKSTTL     = 30
@@ -263,13 +277,18 @@ func (r *MaaSAuthPolicyReconciler) fetchOIDCConfig(ctx context.Context, log logr
 	log.Info("OIDC configuration loaded from tenant platform context",
 		"issuerUrl", oidc.IssuerURL,
 		"clientId", oidc.ClientID,
+		"audience", oidc.Audience,
+		"accessTokenPurposeClaim", oidc.AccessTokenPurposeClaim,
 		"ttl", ttl,
 		"source", platformContext.Source)
 
 	return &oidcConfig{
-		IssuerURL: oidc.IssuerURL,
-		ClientID:  oidc.ClientID,
-		TTL:       ttl,
+		IssuerURL:               oidc.IssuerURL,
+		ClientID:                oidc.ClientID,
+		Audience:                oidc.Audience,
+		AccessTokenPurposeClaim: oidc.AccessTokenPurposeClaim,
+		AccessTokenPurpose:      oidc.AccessTokenPurpose,
+		TTL:                     ttl,
 	}
 }
 
@@ -383,26 +402,46 @@ const (
 		`: (has(auth.identity.preferred_username) ? auth.identity.preferred_username ` +
 		`: (has(auth.identity.sub) ? auth.identity.sub : auth.identity.user.username))`
 
-	// celGroups extracts groups from API key, OIDC, or K8s token
-	// API key: uses apiKeyValidation.groups (snapshot at key creation)
-	// OIDC: uses groups claim (no .user. prefix)
-	// K8s: uses user.groups (from TokenReview)
+	// celGroups extracts the group list used for subscription selection,
+	// cache keys, and metrics labels.
+	// API key: uses apiKeyValidation.groups (snapshot at key creation).
+	// The source for token identities is selected by identity type, never by
+	// claim presence: JWT identities (auth.identity.iss set) use only the
+	// groups claim, TokenReview identities use only user.groups. Authorino
+	// overlays the decoded JWT payload into auth.identity, so a JWT could
+	// otherwise craft a "user" claim and impersonate TokenReview groups.
+	// Both sources are gated on the canonical pattern and yield an empty
+	// list on failure, keeping subscription selection, the cache key, and
+	// the X-MaaS-Group header consistent with the oidc-groups-safe denial:
+	// a TokenReview group that fails the pattern must never authorize a
+	// subscription the forwarded identity header omits.
 	celGroups = `(has(auth.metadata) && has(auth.metadata.apiKeyValidation)) ` +
 		`? auth.metadata.apiKeyValidation.groups ` +
-		`: (has(auth.identity.groups) ? auth.identity.groups : auth.identity.user.groups)`
+		`: (has(auth.identity.iss) ? ` +
+		`(has(auth.identity.groups) && ` + celOIDCGroupsSafe + ` ? auth.identity.groups : []) : ` +
+		`(has(auth.identity.user.groups) && ` +
+		`auth.identity.user.groups.all(g, g.matches('` + safeGroupNamePattern + `')) ? ` +
+		`auth.identity.user.groups : []))`
 
-	safeGroupNamePattern = `^[A-Za-z0-9:._/ -]+$`
+	safeGroupNamePattern = groupname.Pattern
 	celOIDCGroupsSafe    = `auth.identity.groups.all(g, g.matches('` + safeGroupNamePattern + `'))`
 
 	// celTokenGroupsHeaderJSON renders the X-MaaS-Group header for non-API-key
-	// identities. OIDC tokens may omit or provide an empty groups claim, but API
-	// key minting still requires at least system:authenticated to match the
-	// default subscription.
-	celTokenGroupsHeaderJSON = `has(auth.identity.groups) ? ` +
-		`(size(auth.identity.groups) > 0 && ` + celOIDCGroupsSafe + ` ? ` +
+	// identities. The group source is selected by identity type, never by
+	// claim presence: JWT identities (auth.identity.iss set) use only the
+	// groups claim, TokenReview identities use only user.groups — Authorino
+	// overlays the decoded JWT payload into auth.identity, so a JWT could
+	// otherwise craft a "user" claim and reach the TokenReview branch. Both
+	// sources are gated on the canonical group-name pattern because CEL builds
+	// the JSON by concatenation without escaping. Identities with no usable
+	// groups still get system:authenticated, which API-key minting requires
+	// to match the default subscription.
+	celTokenGroupsHeaderJSON = `has(auth.identity.iss) ? ` +
+		`(has(auth.identity.groups) && size(auth.identity.groups) > 0 && ` + celOIDCGroupsSafe + ` ? ` +
 		`'["system:authenticated","' + auth.identity.groups.join('","') + '"]' : ` +
 		`'["system:authenticated"]') : ` +
-		`(has(auth.identity.user.groups) && size(auth.identity.user.groups) > 0 ? ` +
+		`(has(auth.identity.user.groups) && size(auth.identity.user.groups) > 0 && ` +
+		`auth.identity.user.groups.all(g, g.matches('` + safeGroupNamePattern + `')) ? ` +
 		`'["system:authenticated","' + auth.identity.user.groups.join('","') + '"]' : ` +
 		`'["system:authenticated"]')`
 
@@ -468,6 +507,7 @@ func subscriptionGatewayCacheKeySelector() string {
 //+kubebuilder:rbac:groups=discovery.k8s.io,resources=endpointslices,verbs=list;watch
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=maastenantconfigs,verbs=get;list;watch
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=tenants,verbs=get;list;watch
+//+kubebuilder:rbac:groups=aigateway.opendatahub.io,resources=aiguardrails,verbs=get;list;watch
 //+kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 //+kubebuilder:rbac:groups=inference.opendatahub.io,resources=externalmodels,verbs=list;watch
 
@@ -475,6 +515,9 @@ func subscriptionGatewayCacheKeySelector() string {
 const maasAuthPolicyFinalizer = "maas.opendatahub.io/authpolicy-cleanup"
 
 func (r *MaaSAuthPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	if req == guardrailPropagationRequest {
+		return ctrl.Result{}, r.propagateGuardrailChange(ctx)
+	}
 	log := logr.FromContextOrDiscard(ctx).WithValues("MaaSAuthPolicy", req.NamespacedName)
 
 	policy := &maasv1alpha1.MaaSAuthPolicy{}
@@ -577,7 +620,7 @@ func (r *MaaSAuthPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		}
 	}
 
-	gwChanged, reconcileErr := r.reconcileGatewayAuthPolicy(ctx, log, oidc, xAPIKeyEnabled, tenantID, gatewayNs, gatewayName)
+	gwChanged, reconcileErr := r.reconcileGatewayAuthPolicy(ctx, log, oidc, xAPIKeyEnabled, req.Namespace, tenantID, gatewayNs, gatewayName)
 	if reconcileErr != nil {
 		log.Error(reconcileErr, "failed to reconcile gateway AuthPolicy")
 		return r.reconcileFailed(ctx, log, policy, fmt.Sprintf("Failed to reconcile gateway AuthPolicy: %v", reconcileErr), statusSnapshot, reconcileErr)
@@ -635,7 +678,7 @@ func (r *MaaSAuthPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		for _, c := range conflicts {
 			names = append(names, c.String())
 		}
-		r.Recorder.Eventf(policy, "Warning", "ConflictingAuthPolicy",
+		r.Recorder.Eventf(policy, nil, "Warning", "ConflictingAuthPolicy", "DetectConflictingAuthPolicies",
 			"Detected %d non-MaaS AuthPolic%s on MaaS auth surfaces: %s",
 			len(conflicts), pluralY(len(conflicts)), strings.Join(names, "; "))
 	}
@@ -644,7 +687,7 @@ func (r *MaaSAuthPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		prevConflict != nil &&
 		prevConflict.Status == metav1.ConditionTrue
 	if shouldEmitResolvedEvent && r.Recorder != nil {
-		r.Recorder.Event(policy, "Normal", "ConflictingAuthPolicyResolved",
+		r.Recorder.Eventf(policy, nil, "Normal", "ConflictingAuthPolicyResolved", "DetectConflictingAuthPolicies",
 			"All conflicting AuthPolicies on MaaS auth surfaces have been resolved")
 	}
 
@@ -715,10 +758,28 @@ type authPolicyRef struct {
 	ModelNamespace string
 }
 
-// buildGatewayAuthPolicySpec returns the Authorino AuthPolicy spec for the singleton
-// Gateway-level policy. Model identity is resolved dynamically via CEL on every request
-// rather than being baked in per-model, so this spec is the same for all MaaSAuthPolicy CRs.
-func (r *MaaSAuthPolicyReconciler) buildGatewayAuthPolicySpec(oidc *oidcConfig, xAPIKeyEnabled bool, tenantID, tenantName, gatewayNamespace, gatewayName string) map[string]any {
+// subscriptionInfoStringHeader injects a non-empty field from the resolved
+// MaaSSubscription (Authorino subscription-info metadata) as an X-MaaS-* header.
+func subscriptionInfoStringHeader(jsonField string) map[string]any {
+	path := fmt.Sprintf(`auth.metadata["subscription-info"].%s`, jsonField)
+	return map[string]any{
+		"when": []any{
+			map[string]any{
+				"predicate": fmt.Sprintf(`has(%s) && %s != ""`, path, path),
+			},
+		},
+		"plain": map[string]any{
+			"expression": path,
+		},
+		"metrics":  false,
+		"priority": int64(0),
+	}
+}
+
+// buildGatewayAuthPolicySpec returns the Authorino AuthPolicy spec for a singleton
+// Gateway-level policy. Model identity is resolved dynamically via CEL on every request.
+// Guardrail response headers are the tenant catalog's selectable checks.
+func (r *MaaSAuthPolicyReconciler) buildGatewayAuthPolicySpec(oidc *oidcConfig, xAPIKeyEnabled bool, tenantID, tenantName, gatewayNamespace, gatewayName string, guardrailHeaders []guardrailHeader) map[string]any {
 	// Construct tenant-specific maas-api service name using TenantIdentifier
 	// Default tenant (tenantID="") uses "maas-api", others use "maas-api-{tenantID}"
 	maasAPIServiceName := "maas-api"
@@ -810,7 +871,6 @@ func (r *MaaSAuthPolicyReconciler) buildGatewayAuthPolicySpec(oidc *oidcConfig, 
 			"priority": int64(1),
 		}
 	}
-
 	authValidCacheKey := `"api-key|" + (` + celExtractKey + `) + "|" + ` + celModelIdentity
 
 	requireGroupMembershipRego := `allow {
@@ -854,6 +914,22 @@ func (r *MaaSAuthPolicyReconciler) buildGatewayAuthPolicySpec(oidc *oidcConfig, 
 					},
 					map[string]any{
 						"predicate": `!("x-maas-subscription-rate-limit-id" in request.headers)`,
+					},
+					map[string]any{
+						"predicate": `!("x-maas-organization-id" in request.headers)`,
+					},
+					map[string]any{
+						"predicate": `!("x-maas-cost-center" in request.headers)`,
+					},
+					map[string]any{
+						"predicate": `!("x-maas-identity" in request.headers)`,
+					},
+					map[string]any{
+						"predicate": `!("x-maas-admin-scope" in request.headers)`,
+					},
+					map[string]any{
+						// Envoy normalizes HTTP header names to lowercase before Authorino evaluates CEL.
+						"predicate": `request.headers.all(name, !name.startsWith("x-aigateway-guardrail-"))`,
 					},
 				},
 			},
@@ -920,6 +996,21 @@ allow {
 			},
 		},
 	}
+	// A non-nil catalog is validated even when it has no checks. An empty
+	// catalog permits only an empty selectedGuardrailChecks map. Nil is used by
+	// the base default-deny policy, which does not consume subscription selection.
+	if guardrailHeaders != nil {
+		authorizationRules["guardrail-checks-known"] = map[string]any{
+			"when": []any{
+				map[string]any{"predicate": celModelIdentityAvailable},
+			},
+			"metrics":  false,
+			"priority": int64(0),
+			"opa": map[string]any{
+				"rego": selectedGuardrailChecksRego(guardrailHeaders),
+			},
+		}
+	}
 	if oidc != nil {
 		authorizationRules["oidc-groups-safe"] = map[string]any{
 			"when": []any{
@@ -940,28 +1031,21 @@ allow {
 }`,
 			},
 		}
-		// oidc-client-bound enforces that OIDC JWTs were issued to the configured
-		// OAuth client (azp claim). The has(auth.identity.azp) guard is required so
-		// that OpenShift TokenReview identities (which carry no azp claim) are not
-		// matched by this rule and denied with 403.
+		// oidc-client-bound enforces the external-JWT issuer and OAuth client.
+		// TokenReview identities have a user object rather than a top-level iss
+		// claim and therefore remain on their existing authorization path.
 		authorizationRules["oidc-client-bound"] = map[string]any{
-			"when": []any{
-				map[string]any{
-					"predicate": celIsNotAPIKey +
-						` && request.headers.authorization.matches("^Bearer [^.]+\\.[^.]+\\.[^.]+$")` +
-						` && has(auth.identity.azp)`,
-				},
-			},
+			"when":     authpolicy.OIDCTokenBoundWhen(celIsNotAPIKey),
 			"metrics":  false,
 			"priority": int64(1),
 			"patternMatching": map[string]any{
-				"patterns": []any{
-					map[string]any{
-						"selector": "auth.identity.azp",
-						"operator": "eq",
-						"value":    oidc.ClientID,
-					},
-				},
+				"patterns": authpolicy.OIDCTokenBoundPatterns(
+					oidc.IssuerURL,
+					oidc.ClientID,
+					oidc.Audience,
+					oidc.AccessTokenPurposeClaim,
+					oidc.AccessTokenPurpose,
+				),
 			},
 		}
 	}
@@ -1080,15 +1164,13 @@ allow {
 						"metrics":  false,
 						"priority": int64(1),
 					},
-					// Only inject X-MaaS-Subscription when there is a real value to inject.
-					// An empty string injected for K8s tokens without a subscription header
-					// causes maas-api to filter by an empty subscription name and return 0 models.
-					// The old maas-api-auth-policy never injected this header for K8s tokens —
-					// only for API keys with a non-empty subscription field.
+					// Inject only for API keys with a subscription. Token requests keep the
+					// client header, which subscription-info uses to select a subscription.
+					// Re-injecting that header produces duplicate values in usage logs.
 					"X-MaaS-Subscription": map[string]any{
 						"when": []any{
 							map[string]any{
-								"predicate": `(has(auth.metadata) && has(auth.metadata.apiKeyValidation) && auth.metadata.apiKeyValidation.subscription != "") || "x-maas-subscription" in request.headers`,
+								"predicate": `has(auth.metadata) && has(auth.metadata.apiKeyValidation) && auth.metadata.apiKeyValidation.subscription != ""`,
 							},
 						},
 						"plain": map[string]any{
@@ -1124,6 +1206,20 @@ allow {
 						"metrics":  false,
 						"priority": int64(0),
 					},
+					// llm-d flow-control headers, canonical and legacy, from the subscription selected
+					// by maas-api. They are always set, empty when unknown, so client-supplied values
+					// never reach the scheduler. Keys are lowercase so they replace every client copy.
+					"x-llm-d-inference-objective":     subscriptionInfoHeader("objective"),
+					"x-gateway-inference-objective":   subscriptionInfoHeader("objective"),
+					"x-llm-d-inference-fairness-id":   subscriptionInfoHeader("fairnessId"),
+					"x-gateway-inference-fairness-id": subscriptionInfoHeader("fairnessId"),
+					// Organization and cost center come from the resolved MaaSSubscription
+					// (subscription-info), not the client. Organization is always set, empty
+					// when unresolved, so a client-supplied value can never survive as
+					// telemetry attribution. The lowercase key replaces every client copy.
+					"x-maas-organization-id": subscriptionInfoHeader("organizationId"),
+					"X-MaaS-Cost-Center":     subscriptionInfoStringHeader("costCenter"),
+					"X-MaaS-Identity":        verifiedIdentityHeader(oidc, celIsNotAPIKey),
 				},
 				"filters": map[string]any{
 					"identity": map[string]any{
@@ -1153,8 +1249,9 @@ allow {
 								},
 								// Model-scoped subscription key: namespace/name@modelIdentity
 								// Prefer resolvedModel from subscription-info (MaaSModelRef
-								// namespace/name after BBR alias resolution). Kept for telemetry
-								// and debugging; TRLP when-predicates match selected_subscription_id.
+								// namespace/name after BBR alias resolution). Always set for
+								// telemetry/debugging. Legacy (pre-upgrade) TRLP limits also
+								// match this field when maas-api omits rateLimitId.
 								"selected_subscription_key": map[string]any{
 									"expression": fmt.Sprintf(
 										`(has(auth.metadata["subscription-info"].namespace) && `+
@@ -1164,9 +1261,10 @@ allow {
 										celResolvedModelIdentity,
 									),
 								},
-								// Short hash of selected_subscription_key from maas-api
-								// (subscription-info.rateLimitId). TokenRateLimitPolicy when
-								// predicates match this field to keep the WASM shim compact.
+								// Short hash from maas-api (subscription-info.rateLimitId) for
+								// new subscriptions. Empty when rateLimitId is omitted (legacy
+								// identity). New TRLP limits match this field; legacy limits
+								// match selected_subscription_key instead.
 								"selected_subscription_id": map[string]any{
 									"expression": `has(auth.metadata["subscription-info"].rateLimitId) ? auth.metadata["subscription-info"].rateLimitId : ""`,
 								},
@@ -1190,22 +1288,39 @@ allow {
 				"message": map[string]any{
 					"value": "Authentication required",
 				},
+				"body": map[string]any{
+					"value": `{"error":{"message":"Authentication required","type":"authentication_error","code":401}}`,
+				},
+				"headers": map[string]any{
+					"content-type": map[string]any{
+						"value": "application/json",
+					},
+				},
 			},
 			"unauthorized": map[string]any{
 				"code": int64(403),
 				"body": map[string]any{
-					"expression": `has(auth.metadata["subscription-info"].message) ? auth.metadata["subscription-info"].message : "Access denied"`,
+					"expression": `'{"error":{"message":"' + (has(auth.metadata["subscription-info"].message)` +
+						` ? auth.metadata["subscription-info"].message` +
+						`.replace('\\', '\\\\').replace('"', '\\"')` +
+						`.replace('\n', '\\n').replace('\r', '\\r').replace('\t', '\\t')` +
+						` : "Access denied") + '","type":"authorization_error","code":403}}'`,
 				},
 				"headers": map[string]any{
 					"x-ext-auth-reason": map[string]any{
 						"expression": `has(auth.metadata["subscription-info"].error) ? auth.metadata["subscription-info"].error : "unauthorized"`,
 					},
 					"content-type": map[string]any{
-						"value": "text/plain",
+						"value": "application/json",
 					},
 				},
 			},
 		},
+	}
+
+	successHeaders := requiredMap(defaultsRules, "response", "success", "headers")
+	for _, header := range guardrailHeaders {
+		successHeaders[header.Name] = selectedGuardrailHeader(header.ID)
 	}
 
 	return map[string]any{
@@ -1228,6 +1343,71 @@ allow {
 			"rules": defaultsRules,
 		},
 	}
+}
+
+func requiredMap(value map[string]any, fields ...string) map[string]any {
+	current := value
+	for _, field := range fields {
+		next, ok := current[field].(map[string]any)
+		if !ok {
+			panic(fmt.Sprintf("AuthPolicy template field %q is not a map", field))
+		}
+		current = next
+	}
+	return current
+}
+
+// subscriptionInfoHeader is a success response header set from a subscription-info field, or
+// to an empty value when the field is absent. The expression never fails: subscription-info is
+// not fetched for every request, and a failing header drops the others in its priority group.
+func subscriptionInfoHeader(field string) map[string]any {
+	return map[string]any{
+		"plain":    map[string]any{"expression": subscriptionInfoFieldExpr(field)},
+		"metrics":  false,
+		"priority": int64(0),
+	}
+}
+
+func selectedGuardrailHeader(checkID string) map[string]any {
+	selected := `auth.metadata["subscription-info"].selectedGuardrailChecks`
+	return map[string]any{
+		"when": []any{
+			map[string]any{"predicate": celModelIdentityAvailable},
+		},
+		"plain": map[string]any{
+			"expression": fmt.Sprintf(`(has(%s) && %q in %s && %s[%q] == true) ? "true" : "false"`, selected, checkID, selected, selected, checkID),
+		},
+		"metrics":  false,
+		"priority": int64(0),
+	}
+}
+
+// selectedGuardrailChecksRego rejects selection results with unknown checks.
+func selectedGuardrailChecksRego(headers []guardrailHeader) string {
+	ids := make([]string, 0, len(headers))
+	for _, header := range headers {
+		ids = append(ids, header.ID)
+	}
+	encodedIDs, err := json.Marshal(ids)
+	if err != nil {
+		panic(fmt.Sprintf("marshal guardrail check IDs: %v", err))
+	}
+	return fmt.Sprintf(`import future.keywords.every
+
+allow {
+  selected := object.get(input.auth.metadata["subscription-info"], "selectedGuardrailChecks", null)
+  selected != null
+  every id, value in selected {
+    id in %s
+    value == true
+  }
+}`+"\n", encodedIDs)
+}
+
+// subscriptionInfoFieldExpr is a CEL expression for a subscription-info field, or "" when absent.
+func subscriptionInfoFieldExpr(field string) string {
+	return fmt.Sprintf(`has(auth.metadata) && "subscription-info" in auth.metadata && `+
+		`has(auth.metadata["subscription-info"].%[1]s) ? auth.metadata["subscription-info"].%[1]s : ""`, field)
 }
 
 func (r *MaaSAuthPolicyReconciler) gatewayAuthPolicyName(gatewayNamespace, gatewayName string) string {
@@ -1309,6 +1489,30 @@ func specMatchesDesired(desired, current map[string]any) bool {
 	return reflect.DeepEqual(desiredNorm, currentNorm)
 }
 
+// basePolicyHasStaleGuardrailFields reports whether a base policy would leave
+// controller-owned guardrail fields behind. specMatchesDesired intentionally
+// ignores current-only fields so Kuadrant defaults do not cause update loops,
+// but that behaviour must not retain a removed guardrail catalog.
+func basePolicyHasStaleGuardrailFields(current map[string]any) bool {
+	authorization, found, err := unstructured.NestedMap(current, "defaults", "rules", "authorization")
+	if err == nil && found {
+		if _, exists := authorization["guardrail-checks-known"]; exists {
+			return true
+		}
+	}
+
+	headers, found, err := unstructured.NestedMap(current, "defaults", "rules", "response", "success", "headers")
+	if err != nil || !found {
+		return false
+	}
+	for name := range headers {
+		if strings.HasPrefix(strings.ToLower(name), "x-aigateway-guardrail-") {
+			return true
+		}
+	}
+	return false
+}
+
 // stripExtraFields recursively removes keys from current that do not exist
 // in desired, so that server-added defaults do not cause false mismatches.
 func stripExtraFields(current, desired map[string]any) {
@@ -1377,18 +1581,31 @@ func isEmptyCollection(v any) bool {
 // the gateway namespace. All MaaSAuthPolicy reconciliations converge on this one resource.
 func (r *MaaSAuthPolicyReconciler) reconcileGatewayAuthPolicy(
 	ctx context.Context, log logr.Logger,
-	oidc *oidcConfig, xAPIKeyEnabled bool, tenantID, gatewayNamespace, gatewayName string,
+	oidc *oidcConfig, xAPIKeyEnabled bool, tenantNamespace, tenantID, gatewayNamespace, gatewayName string,
+) (bool, error) {
+	headers, err := r.guardrailHeaders(ctx, tenantNamespace)
+	if err != nil {
+		return false, err
+	}
+	return r.reconcileGatewayAuthPolicyWithHeaders(ctx, log, oidc, xAPIKeyEnabled, tenantID, gatewayNamespace, gatewayName, headers)
+}
+
+// reconcileGatewayAuthPolicyWithHeaders creates or updates the singleton Gateway-level
+// AuthPolicy using an already resolved guardrail catalog. Callers that establish the base
+// default-deny policy pass no headers and do not depend on guardrail resolution.
+func (r *MaaSAuthPolicyReconciler) reconcileGatewayAuthPolicyWithHeaders(
+	ctx context.Context, log logr.Logger,
+	oidc *oidcConfig, xAPIKeyEnabled bool, tenantID, gatewayNamespace, gatewayName string, guardrailHeaders []guardrailHeader,
 ) (bool, error) {
 	log.Info("reconcileGatewayAuthPolicy entered", "gatewayNamespace", gatewayNamespace, "gatewayName", gatewayName, "tenantID", tenantID, "xAPIKeyEnabled", xAPIKeyEnabled)
 
-	// Calculate tenantName from tenantID
-	// Default tenant (tenantID="") uses "models-as-a-service", others use tenantID
+	// Default tenant (tenantID="") uses "models-as-a-service", others use tenantID.
 	tenantName := "models-as-a-service"
 	if tenantID != "" {
 		tenantName = tenantID
 	}
 
-	spec := r.buildGatewayAuthPolicySpec(oidc, xAPIKeyEnabled, tenantID, tenantName, gatewayNamespace, gatewayName)
+	spec := r.buildGatewayAuthPolicySpec(oidc, xAPIKeyEnabled, tenantID, tenantName, gatewayNamespace, gatewayName, guardrailHeaders)
 	authPolicyName := r.gatewayAuthPolicyName(gatewayNamespace, gatewayName)
 	isTenantGateway := gatewayNamespace != r.GatewayNamespace || gatewayName != r.GatewayName
 
@@ -1475,7 +1692,7 @@ func (r *MaaSAuthPolicyReconciler) reconcileGatewayAuthPolicy(
 	if gateway != nil {
 		setGatewayOwnerReference(gateway, existing)
 	}
-	if specMatchesDesired(spec, currentSpec) {
+	if specMatchesDesired(spec, currentSpec) && (guardrailHeaders != nil || !basePolicyHasStaleGuardrailFields(currentSpec)) {
 		log.Info("gateway AuthPolicy unchanged, skipping update", "name", authPolicyName)
 		return false, nil
 	}
@@ -1653,7 +1870,8 @@ func (r *MaaSAuthPolicyReconciler) handleDeletion(ctx context.Context, log logr.
 			return ctrl.Result{}, err
 		}
 
-		// If this is the last MaaSAuthPolicy, also delete the singleton gateway-level AuthPolicy.
+		// If this is the last MaaSAuthPolicy, reset the singleton gateway-level AuthPolicy
+		// to its default-deny base version.
 		remaining := &maasv1alpha1.MaaSAuthPolicyList{}
 		if err := r.List(ctx, remaining, client.InNamespace(policy.Namespace)); err != nil {
 			log.Error(err, "failed to list remaining MaaSAuthPolicies for gateway cleanup check")
@@ -1703,7 +1921,7 @@ func (r *MaaSAuthPolicyReconciler) handleDeletion(ctx context.Context, log logr.
 			} else {
 				oidc := r.fetchOIDCConfig(ctx, log, policy.Namespace)
 				xAPIKeyEnabled := r.discoverXAPIKeyNeeded(ctx, log)
-				if _, err := r.reconcileGatewayAuthPolicy(ctx, log, oidc, xAPIKeyEnabled, tenantID, gatewayNs, gatewayName); err != nil {
+				if _, err := r.reconcileGatewayAuthPolicyWithHeaders(ctx, log, oidc, xAPIKeyEnabled, tenantID, gatewayNs, gatewayName, nil); err != nil {
 					log.Error(err, "failed to reset gateway auth to base version")
 					return ctrl.Result{}, err
 				}
@@ -1740,7 +1958,7 @@ func (r *MaaSAuthPolicyReconciler) ensureBaseGatewayAuthPolicy(
 		return fmt.Errorf("failed to check gateway AuthPolicy %s/%s: %w", gatewayNamespace, authPolicyName, err)
 	}
 
-	_, err := r.reconcileGatewayAuthPolicy(ctx, log, oidc, xAPIKeyEnabled, tenantID, gatewayNamespace, gatewayName)
+	_, err := r.reconcileGatewayAuthPolicyWithHeaders(ctx, log, oidc, xAPIKeyEnabled, tenantID, gatewayNamespace, gatewayName, nil)
 	return err
 }
 
@@ -1998,7 +2216,7 @@ func (r *MaaSAuthPolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	log := ctrl.Log.WithName("maas-authpolicy-controller")
 
 	if r.Recorder == nil {
-		r.Recorder = mgr.GetEventRecorderFor("maas-authpolicy-controller")
+		r.Recorder = mgr.GetEventRecorder("maas-authpolicy-controller")
 	}
 
 	// Reject negative TTL values
@@ -2046,7 +2264,36 @@ func (r *MaaSAuthPolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		// reconciles for policies in the affected tenant namespace.
 		Watches(&maasv1alpha1.AITenant{}, handler.EnqueueRequestsFromMapFunc(
 			r.mapAITenantToMaaSAuthPolicies,
-		))
+		)).
+		// Guardrail attachments can be configured on AITenant, MaasTenantConfig,
+		// MaaSSubscription, its model entry, and MaaSModelRef. Re-render the
+		// gateway policy when any catalog input changes.
+		Watches(&maasv1alpha1.MaasTenantConfig{}, handler.EnqueueRequestsFromMapFunc(
+			r.mapObjectNamespaceToMaaSAuthPolicies,
+		), builder.WithPredicates(predicate.Or(
+			predicate.GenerationChangedPredicate{},
+			predicate.AnnotationChangedPredicate{},
+			predicate.Funcs{UpdateFunc: deletionTimestampSet},
+		))).
+		Watches(&maasv1alpha1.MaaSSubscription{}, handler.EnqueueRequestsFromMapFunc(
+			r.mapObjectNamespaceToMaaSAuthPolicies,
+		), builder.WithPredicates(predicate.Or(
+			predicate.GenerationChangedPredicate{},
+			predicate.Funcs{UpdateFunc: deletionTimestampSet},
+		)))
+
+	// AIGuardrail is provided by the AI Gateway component. Keep standalone MaaS
+	// deployments working when that optional CRD is not installed.
+	const aiguardrailCRD = "aiguardrails.aigateway.opendatahub.io"
+	if crdExists(context.Background(), mgr.GetAPIReader(), aiguardrailCRD) {
+		b = b.WatchesRawSource(&guardrailPropagationSource{
+			SyncingSource: source.Kind[client.Object](mgr.GetCache(), &aigatewayv1alpha1.AIGuardrail{},
+				handler.EnqueueRequestsFromMapFunc(mapAIGuardrailToPropagation), aiGatewayResolutionChangedPredicate{}),
+			reconciler: r,
+		})
+	} else {
+		log.Info("AIGuardrail CRD not registered; skipping static watch")
+	}
 
 	// Watch generated AuthPolicies — Kuadrant CRD must be present for this watch to succeed.
 	// If not yet registered at startup, the watch is added dynamically when the CRD appears.
@@ -2199,7 +2446,16 @@ func (r *MaaSAuthPolicyReconciler) mapTenantToMaaSAuthPolicies(ctx context.Conte
 // mapNamespaceToMaaSAuthPolicies enqueues all MaaSAuthPolicy resources in a
 // namespace when that namespace's labels change (e.g. AITenant label added or removed).
 func (r *MaaSAuthPolicyReconciler) mapNamespaceToMaaSAuthPolicies(ctx context.Context, obj client.Object) []reconcile.Request {
-	ns := obj.GetName()
+	return r.mapMaaSAuthPoliciesInNamespace(ctx, obj.GetName())
+}
+
+// mapObjectNamespaceToMaaSAuthPolicies enqueues policies in the namespace of a
+// catalog object such as MaasTenantConfig or MaaSSubscription.
+func (r *MaaSAuthPolicyReconciler) mapObjectNamespaceToMaaSAuthPolicies(ctx context.Context, obj client.Object) []reconcile.Request {
+	return r.mapMaaSAuthPoliciesInNamespace(ctx, obj.GetNamespace())
+}
+
+func (r *MaaSAuthPolicyReconciler) mapMaaSAuthPoliciesInNamespace(ctx context.Context, ns string) []reconcile.Request {
 	if ns != r.TenantNamespace && !r.TenantNamespaceDiscoveryEnabled {
 		return nil
 	}
@@ -2277,7 +2533,11 @@ func (r *MaaSAuthPolicyReconciler) syncDefaultGatewayAuthPolicyForXAPIKeyDiscove
 	}
 	oidc := r.fetchOIDCConfig(ctx, log, oidcNS)
 	xAPIKeyEnabled := r.discoverXAPIKeyNeeded(ctx, log)
-	_, err := r.reconcileGatewayAuthPolicy(ctx, log, oidc, xAPIKeyEnabled, "", r.GatewayNamespace, r.GatewayName)
+	// This fallback runs when no MaaSAuthPolicy exists, so there is no tenant
+	// catalog to resolve. Update only the base Gateway AuthPolicy.
+	_, err := r.reconcileGatewayAuthPolicyWithHeaders(
+		ctx, log, oidc, xAPIKeyEnabled, "", r.GatewayNamespace, r.GatewayName, nil,
+	)
 	return err
 }
 
@@ -2353,8 +2613,8 @@ func (r *MaaSAuthPolicyReconciler) mapGeneratedAuthPolicyToParent(ctx context.Co
 	}}
 }
 
-// mapMaaSModelRefToMaaSAuthPolicies returns reconcile requests for all MaaSAuthPolicies
-// that reference the given MaaSModelRef.
+// mapMaaSModelRefToMaaSAuthPolicies returns reconcile requests for policies that
+// reference the model directly or belong to a tenant whose subscription selects it.
 func (r *MaaSAuthPolicyReconciler) mapMaaSModelRefToMaaSAuthPolicies(ctx context.Context, obj client.Object) []reconcile.Request {
 	model, ok := obj.(*maasv1alpha1.MaaSModelRef)
 	if !ok {
@@ -2362,18 +2622,46 @@ func (r *MaaSAuthPolicyReconciler) mapMaaSModelRefToMaaSAuthPolicies(ctx context
 	}
 	var policies maasv1alpha1.MaaSAuthPolicyList
 	if err := r.List(ctx, &policies); err != nil {
+		ctrl.LoggerFrom(ctx).Error(err, "failed to list MaaSAuthPolicy resources for MaaSModelRef change")
 		return nil
 	}
 	policies.Items = filterAuthPoliciesByTenantNamespace(ctx, r.Client, policies.Items, r.TenantNamespace, r.TenantNamespaceDiscoveryEnabled)
-	var requests []reconcile.Request
+	requests := make([]reconcile.Request, 0, len(policies.Items))
+	seen := make(map[reconcile.Request]struct{}, len(policies.Items))
+	add := func(policy maasv1alpha1.MaaSAuthPolicy) {
+		req := reconcile.Request{NamespacedName: types.NamespacedName{Name: policy.Name, Namespace: policy.Namespace}}
+		if _, found := seen[req]; found {
+			return
+		}
+		seen[req] = struct{}{}
+		requests = append(requests, req)
+	}
 	for _, p := range policies.Items {
 		for _, ref := range p.Spec.ModelRefs {
 			if ref.Namespace == model.Namespace && ref.Name == model.Name {
-				requests = append(requests, reconcile.Request{
-					NamespacedName: types.NamespacedName{Name: p.Name, Namespace: p.Namespace},
-				})
+				add(p)
 				break
 			}
+		}
+	}
+
+	var subscriptions maasv1alpha1.MaaSSubscriptionList
+	if err := r.List(ctx, &subscriptions); err != nil {
+		ctrl.LoggerFrom(ctx).Error(err, "failed to list MaaSSubscription resources for MaaSModelRef change")
+		return requests
+	}
+	subscriptionNamespaces := make(map[string]struct{})
+	for _, subscription := range subscriptions.Items {
+		for _, ref := range subscription.Spec.ModelRefs {
+			if ref.Namespace == model.Namespace && ref.Name == model.Name {
+				subscriptionNamespaces[subscription.Namespace] = struct{}{}
+				break
+			}
+		}
+	}
+	for _, policy := range policies.Items {
+		if _, found := subscriptionNamespaces[policy.Namespace]; found {
+			add(policy)
 		}
 	}
 	return requests

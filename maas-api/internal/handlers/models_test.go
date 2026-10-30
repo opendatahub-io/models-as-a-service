@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -460,7 +461,7 @@ func TestListingModels(t *testing.T) { //nolint:maintidx // table-driven test wi
 
 			assert.Equal(t, expectedModelID, actualModel.ID)
 			assert.Equal(t, "model", string(actualModel.Object))
-			assert.Equal(t, mustParseURL(scenario.URL.String()), actualModel.URL)
+			assert.Equal(t, mustParseURL(normalizedCatalogURL(scenario.URL.String())), actualModel.URL)
 			assert.Equal(t, scenario.Ready, actualModel.Ready)
 
 			// Run scenario-specific assertions if defined
@@ -480,6 +481,26 @@ func mustParseURL(rawURL string) *apis.URL {
 		panic("test setup failed: invalid URL: " + err.Error())
 	}
 	return u
+}
+
+func normalizedCatalogURL(rawURL string) string {
+	if rawURL == "" {
+		return ""
+	}
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return rawURL
+	}
+	if strings.EqualFold(parsed.Scheme, "http") {
+		parsed.Scheme = "https"
+	}
+	parsed.Path = ""
+	parsed.RawPath = ""
+	parsed.RawQuery = ""
+	parsed.ForceQuery = false
+	parsed.Fragment = ""
+	parsed.RawFragment = ""
+	return parsed.String()
 }
 
 func TestListingModelsWithSubscriptionHeader(t *testing.T) {
@@ -1206,7 +1227,7 @@ func TestListModels_DifferentModelRefsWithSameURLAndModelID(t *testing.T) {
 		// The two refs have different names, so they produce different IDs.
 		for _, model := range response.Data {
 			assert.Contains(t, []string{"gpt-4-ref", "gpt-4-another-ref"}, model.ID)
-			assert.Equal(t, sharedModelServer.URL, model.URL.String())
+			assert.Equal(t, normalizedCatalogURL(sharedModelServer.URL), model.URL.String())
 			require.Len(t, model.Subscriptions, 1, "Each model should have 1 subscription")
 			assert.Equal(t, "sub-a", model.Subscriptions[0].Name)
 			// OwnedBy should be either namespace-a/gpt-4-ref or namespace-b/gpt-4-another-ref

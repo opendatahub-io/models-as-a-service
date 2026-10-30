@@ -24,7 +24,6 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	netwv1 "k8s.io/api/networking/v1"
-	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -49,7 +48,10 @@ import (
 // The MaasTenantConfig CR is the runtime object; DSC.modelsAsService controls only enablement.
 type TenantReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	// APIReader bypasses the informer cache for migration safety decisions that
+	// must observe current ExternalModel and IPP ConfigMap state.
+	APIReader client.Reader
+	Scheme    *runtime.Scheme
 	// OperatorNamespace overrides POD_NAMESPACE / WATCH_NAMESPACE when discovering namespaced platform workloads (tests).
 	OperatorNamespace string
 	// ManifestPath is the directory containing kustomization.yaml for the ODH maas-api overlay (e.g. maas-api/deploy/overlays/odh).
@@ -135,6 +137,8 @@ type TenantReconciler struct {
 // +kubebuilder:rbac:groups=authorization.k8s.io,resources=subjectaccessreviews,verbs=create
 // +kubebuilder:rbac:groups=maas.opendatahub.io,resources=maasmodelrefs,verbs=get;list;watch
 // +kubebuilder:rbac:groups=maas.opendatahub.io,resources=maassubscriptions,verbs=get;list;watch
+// aiguardrails: read by the maas-api guardrail resolver (aitenants/maastenantconfigs are covered by full-verb rules).
+// +kubebuilder:rbac:groups=aigateway.opendatahub.io,resources=aiguardrails,verbs=get;list;watch
 
 // Escalation-check mirror for payload-processing-reader ClusterRole — maas-controller must hold every verb it grants.
 // +kubebuilder:rbac:groups=inference.opendatahub.io,resources=externalmodels;externalproviders,verbs=get;list;watch;create;update
@@ -192,7 +196,7 @@ func (r *TenantReconciler) enqueueTenantForAITenant(_ context.Context, obj clien
 }
 
 // mapConfigToMaasTenantConfigs maps a Config change to reconcile requests for MaasTenantConfig
-// resources so usageLogging toggle changes propagate to every tenant's usage-logs EnvoyFilter.
+// resources so platform operands stay aligned with the cluster Config.
 func (r *TenantReconciler) mapConfigToMaasTenantConfigs(ctx context.Context, _ client.Object) []reconcile.Request {
 	if !r.TenantNamespaceDiscoveryEnabled {
 		return []reconcile.Request{{NamespacedName: types.NamespacedName{
@@ -308,9 +312,19 @@ func configResourceDefault() predicate.Predicate {
 // SetupWithManager registers the MaasTenantConfig controller.
 func (r *TenantReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	ctx := context.Background()
+	if r.APIReader == nil {
+		r.APIReader = mgr.GetAPIReader()
+	}
 
 	b := ctrl.NewControllerManagedBy(mgr).
-		For(&maasv1alpha1.MaasTenantConfig{}).
+		For(&maasv1alpha1.MaasTenantConfig{}, builder.WithPredicates(
+			predicate.Or(
+				predicate.GenerationChangedPredicate{},
+				// E2E / ai-gateway-controller praxis handoff sets payload-processing
+				// annotations without spec changes; reconcile must refresh Ready status.
+				predicate.AnnotationChangedPredicate{},
+			),
+		)).
 		Watches(
 			&maasv1alpha1.Config{},
 			handler.EnqueueRequestsFromMapFunc(r.mapConfigToMaasTenantConfigs),
@@ -320,8 +334,8 @@ func (r *TenantReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			&maasv1alpha1.AITenant{},
 			handler.EnqueueRequestsFromMapFunc(r.enqueueTenantForAITenant),
 		).
-		Watches(
-			&extv1.CustomResourceDefinition{},
+		WatchesMetadata(
+			crdPartialMetadata(),
 			handler.EnqueueRequestsFromMapFunc(r.enqueueDefaultTenant),
 			builder.WithPredicates(crdLabeledForMaaSComponent()),
 		).

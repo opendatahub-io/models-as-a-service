@@ -336,7 +336,7 @@ func tenantGatewayRefForNamespace(
 		if !allowed {
 			return fallbackTenantGatewayRef(fallbackGatewayName, fallbackGatewayNamespace), nil
 		}
-		return maasv1alpha1.TenantGatewayRef{}, fmt.Errorf("MaasTenantConfig %s/%s not found for discovered tenant namespace", tenantNamespace, maasv1alpha1.MaasTenantConfigInstanceName)
+		return maasv1alpha1.TenantGatewayRef{}, fmt.Errorf("%w: MaasTenantConfig %s/%s not found for discovered tenant namespace", ErrDiscoveredTenantConfigNotFound, tenantNamespace, maasv1alpha1.MaasTenantConfigInstanceName)
 	}
 	return maasv1alpha1.TenantGatewayRef{}, err
 }
@@ -382,6 +382,10 @@ func validateHTTPRouteReferencesGateway(ctx context.Context, c client.Reader, ro
 // ErrHTTPRouteNotOnTenantGateway is wrapped by validateHTTPRouteReferencesGateway when the
 // route has no parentRef to the tenant Gateway. Other validation failures do not wrap it.
 var ErrHTTPRouteNotOnTenantGateway = errors.New("does not reference tenant Gateway")
+
+// ErrDiscoveredTenantConfigNotFound indicates tenant namespace discovery matched a tenant
+// namespace, but MaasTenantConfig is absent so tenant gateway resolution cannot complete.
+var ErrDiscoveredTenantConfigNotFound = errors.New("discovered tenant namespace missing MaasTenantConfig")
 
 const (
 	maxHTTPRouteParentRefs         = 32

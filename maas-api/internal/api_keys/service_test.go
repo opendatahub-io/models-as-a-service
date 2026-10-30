@@ -1276,6 +1276,8 @@ func TestCreateAPIKey_GroupNameValidation(t *testing.T) {
 	cfg := &config.Config{}
 	svc := api_keys.NewServiceWithLogger(store, cfg, serviceTestSubSelector{}, logger.Development())
 
+	// Canonical MaaS group-name examples — keep in sync with
+	// maas-controller/pkg/groupname/groupname_test.go.
 	validGroups := [][]string{
 		{"system:authenticated"},
 		{"my-group"},
@@ -1285,6 +1287,11 @@ func TestCreateAPIKey_GroupNameValidation(t *testing.T) {
 		{"GROUP123"},
 		{"a:b:c"},
 		{"mix-of_all.types:123"},
+		{"IAM#AccessGroupId-123"},
+		{"a#b"},
+		{"/Engineering"},      // Keycloak full-path style
+		{"dev/team-a"},        // path-style group (Entra ID, Okta, GitHub org/team)
+		{"a/b/c:d.e_f-g h i"}, // every allowed character class together
 	}
 
 	for _, groups := range validGroups {
@@ -1310,6 +1317,7 @@ func TestCreateAPIKey_GroupNameValidation(t *testing.T) {
 		{"group=with=equals", "equals"},
 		{"group$with$dollar", "dollar signs"},
 		{"group@with@at", "at signs"},
+		{"group%with%percent", "percent signs"},
 	}
 
 	for _, tc := range invalidGroups {
@@ -1317,6 +1325,9 @@ func TestCreateAPIKey_GroupNameValidation(t *testing.T) {
 			_, err := svc.CreateAPIKey(ctx, "user", []string{tc.group}, "test-key", "", nil, false, "", "tenant", nil)
 			require.Error(t, err, "group with %s should be rejected", tc.reason)
 			assert.Contains(t, err.Error(), "invalid characters", "error should mention invalid characters")
+			// ErrInvalidGroupName must wrap the error so the HTTP handler
+			// maps it to 400 instead of a generic 500.
+			assert.ErrorIs(t, err, api_keys.ErrInvalidGroupName, "validation errors must wrap ErrInvalidGroupName")
 		})
 	}
 }

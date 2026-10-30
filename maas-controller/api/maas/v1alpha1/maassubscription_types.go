@@ -18,12 +18,21 @@ package v1alpha1
 
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 )
 
 // MaaSSubscriptionSpec defines the desired state of MaaSSubscription
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.organization) || (has(self.organization) && oldSelf.organization.id == self.organization.id)",message="organization.id is immutable"
 type MaaSSubscriptionSpec struct {
-	// Owner defines who owns this subscription
+	// Owner defines the users and groups entitled to select this subscription.
+	// It does not represent Kubernetes ownership or grant RBAC permissions.
 	Owner OwnerSpec `json:"owner"`
+
+	// Organization associates this subscription with exactly one organization.
+	// The identifier is stable for the subscription's lifetime and is not used
+	// as billing metadata or as an inference grant.
+	// +optional
+	Organization *SubscriptionOrganization `json:"organization,omitempty"`
 
 	// ModelRefs defines which models are included with per-model token rate limits
 	// +kubebuilder:validation:MinItems=1
@@ -60,15 +69,45 @@ type MaaSSubscriptionSpec struct {
 	// +listType=atomic
 	// +kubebuilder:validation:MaxItems=64
 	Guardrails []GuardrailAttachment `json:"guardrails,omitempty"`
+
+	// RateLimitIdentity selects the TokenRateLimitPolicy identity scheme.
+	// Unset lets the controller choose (short for new CRs, legacy for upgrade
+	// survivors) and persist the result on status.rateLimitIdentity.
+	// Explicit short or legacy is an operator escape hatch; changing it resets
+	// that subscription's in-window Limitador quota.
+	// +optional
+	// +kubebuilder:validation:Enum=short;legacy
+	RateLimitIdentity string `json:"rateLimitIdentity,omitempty"`
 }
 
-// OwnerSpec defines the owner of the subscription
+// SubscriptionOrganization identifies the single organization that administers
+// a MaaSSubscription.
+type SubscriptionOrganization struct {
+	// ID is the organization identifier. It may be set once for a legacy subscription
+	// after its key and history association has been verified.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	ID string `json:"id"`
+}
+
+// OrganizationID returns the stable organization identifier, or an empty
+// string for a legacy subscription without an organization association.
+func (s *MaaSSubscriptionSpec) OrganizationID() string {
+	if s == nil || s.Organization == nil {
+		return ""
+	}
+	return s.Organization.ID
+}
+
+// OwnerSpec defines the users and groups entitled to select a subscription.
 type OwnerSpec struct {
-	// Groups is a list of Kubernetes group names that own this subscription
+	// Groups is a list of identity group names entitled to select this
+	// subscription. Names are matched exactly and are not Kubernetes object names.
 	// +optional
 	Groups []GroupReference `json:"groups,omitempty"`
 
-	// Users is a list of Kubernetes user names that own this subscription
+	// Users is a list of identity user names entitled to select this subscription.
+	// Names are matched exactly.
 	// +optional
 	Users []string `json:"users,omitempty"`
 }
@@ -166,6 +205,79 @@ type TokenRateLimitStatus struct {
 	Model string `json:"model"`
 }
 
+// ConditionInferenceObjectivesReady reports whether the InferenceObjectives for
+// spec.inferencePriority are reconciled. It is only set when spec.inferencePriority is set.
+const ConditionInferenceObjectivesReady = "InferenceObjectivesReady"
+
+// FlowControlReason is a machine-readable reason for a model's request-priority status.
+// It is intentionally not an enum in the CRD so reasons can be added without a CRD update.
+// +kubebuilder:validation:MaxLength=64
+type FlowControlReason string
+
+const (
+	// FlowControlReasonObjectiveReconciled indicates the model's InferenceObjective matches
+	// spec.inferencePriority. Ready is true.
+	FlowControlReasonObjectiveReconciled FlowControlReason = "ObjectiveReconciled"
+	// FlowControlReasonPriorityUnset indicates spec.inferencePriority is unset, so no
+	// InferenceObjective is required and the scheduler applies priority 0. Ready is true.
+	FlowControlReasonPriorityUnset FlowControlReason = "PriorityUnset"
+	// FlowControlReasonNotApplicable indicates the model is not served through an inference
+	// scheduler (for example, an ExternalModel), so request priority does not apply. Ready is true.
+	FlowControlReasonNotApplicable FlowControlReason = "NotApplicable"
+	// FlowControlReasonUnmanaged indicates the InferenceObjective opted out of management
+	// (opendatahub.io/managed: "false"); its priority is owned by the user. Ready is true.
+	FlowControlReasonUnmanaged FlowControlReason = "Unmanaged"
+	// FlowControlReasonPoolPending indicates the model's InferencePool or HTTPRoute has not
+	// been observed yet.
+	FlowControlReasonPoolPending FlowControlReason = "PoolPending"
+	// FlowControlReasonObjectivePending indicates the InferenceObjective is not reconciled yet.
+	FlowControlReasonObjectivePending FlowControlReason = "ObjectivePending"
+	// FlowControlReasonUnsupported indicates request priority cannot be applied to the model, for
+	// example because its traffic is split across multiple InferencePools.
+	FlowControlReasonUnsupported FlowControlReason = "Unsupported"
+	// FlowControlReasonNotOnTenantGateway indicates the model's HTTPRoute is not attached to the
+	// subscription's tenant Gateway.
+	FlowControlReasonNotOnTenantGateway FlowControlReason = "NotOnTenantGateway"
+	// FlowControlReasonObjectiveConflict indicates another object holds the InferenceObjective name.
+	FlowControlReasonObjectiveConflict FlowControlReason = "ObjectiveConflict"
+	// FlowControlReasonAPIUnavailable indicates the InferenceObjective API is not installed.
+	FlowControlReasonAPIUnavailable FlowControlReason = "InferenceObjectiveAPIUnavailable"
+	// FlowControlReasonReconcileFailed indicates reconciling the model's request priority failed.
+	FlowControlReasonReconcileFailed FlowControlReason = "ReconcileFailed"
+)
+
+// ModelFlowControlStatus maps a referenced model to its InferencePool and InferenceObjective.
+type ModelFlowControlStatus struct {
+	// Name of the MaaSModelRef
+	// +kubebuilder:validation:MaxLength=253
+	Name string `json:"name"`
+	// Namespace of the MaaSModelRef. The InferencePool and InferenceObjective live in this
+	// namespace, alongside the model's LLMInferenceService.
+	// +kubebuilder:validation:MaxLength=63
+	Namespace string `json:"namespace"`
+	// InferencePool is the pool observed in the model's LLMInferenceService status
+	// +optional
+	InferencePool *gwapiv1.LocalObjectReference `json:"inferencePool,omitempty"`
+	// ObjectiveName is the InferenceObjective name for this subscription and pool, in the pool's
+	// namespace. It is set whenever the pool is known, including when spec.inferencePriority is unset
+	// and no InferenceObjective is created.
+	// +kubebuilder:validation:MaxLength=63
+	// +optional
+	ObjectiveName string `json:"objectiveName,omitempty"`
+	// Ready is true when no request-priority reconciliation is left for this model: its
+	// InferenceObjective matches spec.inferencePriority, spec.inferencePriority is unset, request
+	// priority does not apply, or the InferenceObjective opted out of management. It does not
+	// report backend readiness; see ModelRefStatuses.
+	Ready bool `json:"ready"`
+	// Reason is a machine-readable reason for Ready
+	// +optional
+	Reason FlowControlReason `json:"reason,omitempty"`
+	// Message is a human-readable description of the reason
+	// +kubebuilder:validation:MaxLength=1024
+	// +optional
+	Message string `json:"message,omitempty"`
+}
+
 // MaaSSubscriptionStatus defines the observed state of MaaSSubscription
 type MaaSSubscriptionStatus struct {
 	// Phase represents the current phase of the subscription
@@ -175,6 +287,13 @@ type MaaSSubscriptionStatus struct {
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 
+	// RateLimitIdentity is the sticky effective TRLP identity scheme (short or
+	// legacy). Owned by the controller so GitOps tools that ignore status do
+	// not flap OutOfSync when the value is first chosen.
+	// +optional
+	// +kubebuilder:validation:Enum=short;legacy
+	RateLimitIdentity string `json:"rateLimitIdentity,omitempty"`
+
 	// ModelRefStatuses reports the status of each referenced MaaSModelRef
 	// +optional
 	ModelRefStatuses []ModelRefStatus `json:"modelRefStatuses,omitempty"`
@@ -182,6 +301,11 @@ type MaaSSubscriptionStatus struct {
 	// TokenRateLimitStatuses reports the status of each generated TokenRateLimitPolicy
 	// +optional
 	TokenRateLimitStatuses []TokenRateLimitStatus `json:"tokenRateLimitStatuses,omitempty"`
+
+	// FlowControlStatuses reports, for each referenced model, the InferencePool and
+	// InferenceObjective used for request priority, and their reconciliation state
+	// +optional
+	FlowControlStatuses []ModelFlowControlStatus `json:"flowControlStatuses,omitempty"`
 }
 
 //+kubebuilder:object:root=true
@@ -209,5 +333,5 @@ type MaaSSubscriptionList struct {
 }
 
 func init() {
-	SchemeBuilder.Register(&MaaSSubscription{}, &MaaSSubscriptionList{})
+	register(&MaaSSubscription{}, &MaaSSubscriptionList{})
 }

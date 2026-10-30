@@ -18,6 +18,7 @@ package maas
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -26,31 +27,43 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/serializer/yaml"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/platform/tenantreconcile"
 )
 
-const usageLogsEnvoyFilterManifestPath = "/deployment/components/observability/usage-logs/envoy-otel-access-log.yaml"
+const (
+	usageLogsEnvoyFilterManifestPath = "/deployment/components/observability/usage-logs/dsci-managed/envoy-otel-access-log.yaml"
 
-// deleteUsageLogsEnvoyFilterIfDisabled removes the per-tenant filter when Config has usageLogging
-// off. Called before reconcile gates so a blocked tenant still stops exporting usage logs.
-func (r *TenantReconciler) deleteUsageLogsEnvoyFilterIfDisabled(
+	// usageLogsCollectorService is the collector used when Config.spec.usageLogging is true.
+	usageLogsCollectorService = "usage-logs-collector"
+	// dataScienceUsageLogsCollectorService is the collector used when usageLogging is false or omitted.
+	dataScienceUsageLogsCollectorService = "data-science-usage-logs-collector"
+)
+
+// usageLogsCollectorServiceName returns the collector Service name for the EnvoyFilter endpoint.
+// usageLogging true keeps the historical collector. false and omitted use the data-science collector.
+func usageLogsCollectorServiceName(mcfg *maasv1alpha1.Config) string {
+	if mcfg != nil && ptr.Deref(mcfg.Spec.UsageLogging, false) {
+		return usageLogsCollectorService
+	}
+	return dataScienceUsageLogsCollectorService
+}
+
+// deleteUsageLogsEnvoyFilterIfTelemetryDisabled removes the per-tenant filter when
+// MaasTenantConfig.spec.telemetry is not enabled. Called before reconcile gates so a
+// blocked tenant still stops exporting usage logs.
+func (r *TenantReconciler) deleteUsageLogsEnvoyFilterIfTelemetryDisabled(
 	ctx context.Context,
 	log logr.Logger,
 	tenant *maasv1alpha1.MaasTenantConfig,
 ) error {
-	var cfg maasv1alpha1.Config
-	if err := r.Get(ctx, client.ObjectKey{Name: maasv1alpha1.ConfigInstanceName}, &cfg); err != nil {
-		if apierrors.IsNotFound(err) {
-			return nil
-		}
-		return err
-	}
-	if cfg.UID == "" || !cfg.DeletionTimestamp.IsZero() || ptr.Deref(cfg.Spec.UsageLogging, false) {
+	if tenantreconcile.IsTelemetryEnabled(tenant.Spec.Telemetry) {
 		return nil
 	}
 	tenantID, err := tenantreconcile.TenantIdentifierFor(tenant)
@@ -60,11 +73,12 @@ func (r *TenantReconciler) deleteUsageLogsEnvoyFilterIfDisabled(
 	return r.deleteUsageLogsEnvoyFilterIfExists(ctx, log, tenantreconcile.UsageLogsEnvoyFilterName(tenantID))
 }
 
-// ensureUsageLogsEnvoyFilter deploys or removes a per-tenant usage-logs EnvoyFilter in the gateway
-// namespace based on the Config usageLogging feature gate.
+// ensureUsageLogsEnvoyFilter deploys a per-tenant usage-logs EnvoyFilter in the gateway
+// namespace when MaasTenantConfig.spec.telemetry is enabled, and deletes it otherwise.
+// usageLogging selects the collector address and does not skip deployment.
 //
-// When usage logging is enabled but the manifest or EnvoyFilter CRD is unavailable, a
-// non-empty warning is returned so reconcile can surface Degraded on MaasTenantConfig.
+// When the manifest or EnvoyFilter CRD is unavailable, a non-empty warning is returned
+// so reconcile can surface Degraded on MaasTenantConfig.
 // All other failures are returned as errors for the normal reconcile error path.
 func (r *TenantReconciler) ensureUsageLogsEnvoyFilter(
 	ctx context.Context,
@@ -80,7 +94,7 @@ func (r *TenantReconciler) ensureUsageLogsEnvoyFilter(
 	efName := tenantreconcile.UsageLogsEnvoyFilterName(tenantID)
 	gatewayName := platformContext.GatewayRef.Name
 
-	if !ptr.Deref(mcfg.Spec.UsageLogging, false) {
+	if !tenantreconcile.IsTelemetryEnabled(tenant.Spec.Telemetry) {
 		return "", r.deleteUsageLogsEnvoyFilterIfExists(ctx, log, efName)
 	}
 
@@ -89,7 +103,7 @@ func (r *TenantReconciler) ensureUsageLogsEnvoyFilter(
 		return "", nil
 	}
 
-	applied, err := r.applyUsageLogsEnvoyFilter(ctx, log, tenant, efName, gatewayName)
+	applied, err := r.applyUsageLogsEnvoyFilter(ctx, log, tenant, mcfg, efName, gatewayName)
 	if err != nil {
 		return "", err
 	}
@@ -119,11 +133,12 @@ func (r *TenantReconciler) applyUsageLogsEnvoyFilter(
 	ctx context.Context,
 	log logr.Logger,
 	tenant *maasv1alpha1.MaasTenantConfig,
+	mcfg *maasv1alpha1.Config,
 	efName, gatewayName string,
 ) (bool, error) {
 	manifestPath := usageLogsEnvoyFilterManifestPath
 	if r.UsageLogsManifestPath != "" {
-		manifestPath = filepath.Join(r.UsageLogsManifestPath, "envoy-otel-access-log.yaml")
+		manifestPath = filepath.Join(r.UsageLogsManifestPath, usageLogsDsciManagedKustomizeDir, "envoy-otel-access-log.yaml")
 	}
 	raw, err := os.ReadFile(manifestPath)
 	if err != nil {
@@ -150,7 +165,19 @@ func (r *TenantReconciler) applyUsageLogsEnvoyFilter(
 		}
 	}
 
-	collectorAddress := fmt.Sprintf("usage-logs-collector.%s.svc", r.MonitoringNamespace)
+	captureOrganization := true
+	if tenant.Spec.Telemetry != nil &&
+		tenant.Spec.Telemetry.Logs != nil &&
+		tenant.Spec.Telemetry.Logs.CaptureOrganization != nil {
+		captureOrganization = *tenant.Spec.Telemetry.Logs.CaptureOrganization
+	}
+	if captureOrganization {
+		if err := tenantreconcile.PatchUsageLogsOrganizationID(ef); err != nil {
+			return false, fmt.Errorf("patch organization_id into EnvoyFilter: %w", err)
+		}
+	}
+
+	collectorAddress := fmt.Sprintf("%s.%s.svc", usageLogsCollectorServiceName(mcfg), r.MonitoringNamespace)
 	if err := tenantreconcile.PatchUsageLogsClusterAddress(ef, collectorAddress); err != nil {
 		return false, fmt.Errorf("patch collector address in EnvoyFilter: %w", err)
 	}
@@ -168,8 +195,18 @@ func (r *TenantReconciler) applyUsageLogsEnvoyFilter(
 	ef.SetName(efName)
 	ef.SetNamespace(r.GatewayNamespace)
 	applyUsageLogsEnvoyFilterMetadata(ef, tenant)
+	// Config is the controller owner, same as gateway TelemetryPolicy via ApplyRendered,
+	// so deleting Config garbage-collects the per-tenant usage-logs filter.
+	if err := setUsageLogsEnvoyFilterConfigOwner(mcfg, ef, r.Scheme); err != nil {
+		var already *controllerutil.AlreadyOwnedError
+		if !errors.As(err, &already) {
+			return false, fmt.Errorf("set controller reference (Config) on EnvoyFilter %s/%s: %w", r.GatewayNamespace, efName, err)
+		}
+		log.Info("skipping Config controller reference: EnvoyFilter already owned by another controller",
+			"name", efName, "namespace", r.GatewayNamespace, "existingOwner", already)
+	}
 
-	if err := r.Patch(ctx, ef, client.Apply, client.ForceOwnership, client.FieldOwner("maas-controller")); err != nil {
+	if err := r.Apply(ctx, client.ApplyConfigurationFromUnstructured(ef), client.ForceOwnership, client.FieldOwner("maas-controller")); err != nil {
 		if apimeta.IsNoMatchError(err) {
 			log.Info("EnvoyFilter CRD not available, skipping usage-logs EnvoyFilter")
 			return false, nil
@@ -182,6 +219,15 @@ func (r *TenantReconciler) applyUsageLogsEnvoyFilter(
 		"gateway", gatewayName, "collector", collectorAddress,
 		"serviceNamespace", tenant.GetNamespace())
 	return true, nil
+}
+
+// setUsageLogsEnvoyFilterConfigOwner sets Config as the controller owner of the EnvoyFilter.
+// Cluster-scoped Config may own namespaced objects in the gateway namespace.
+func setUsageLogsEnvoyFilterConfigOwner(mcfg *maasv1alpha1.Config, ef client.Object, scheme *runtime.Scheme) error {
+	if mcfg == nil || mcfg.UID == "" {
+		return errors.New("config with UID is required to own the usage-logs EnvoyFilter")
+	}
+	return controllerutil.SetControllerReference(mcfg, ef, scheme)
 }
 
 func applyUsageLogsEnvoyFilterMetadata(obj client.Object, tenant *maasv1alpha1.MaasTenantConfig) {

@@ -55,6 +55,7 @@ log = logging.getLogger(__name__)
 
 
 pytestmark = [
+    pytest.mark.nightly,
     pytest.mark.skipif(
         os.environ.get("EXTERNAL_OIDC", "").lower() != "true",
         reason="EXTERNAL_OIDC is not true",
@@ -1008,7 +1009,7 @@ class TestOIDCGroupSafety:
     """Verify that oidc-groups-safe rejects tokens containing unsafe group names.
 
     evil_user belongs to 'unsafe;group'. The semicolon is outside
-    safeGroupNamePattern (^[A-Za-z0-9:._/-]+$), so the OPA rule denies
+    safeGroupNamePattern (^[A-Za-z0-9:#._/ -]+$), so the OPA rule denies
     the request with 403 even though the token is otherwise fully valid
     (correct issuer, correct azp, valid signature).
 
@@ -1021,7 +1022,7 @@ class TestOIDCGroupSafety:
 
         The oidc-groups-safe OPA rule fires because count(unsafe_group) != 0,
         where unsafe_group is any group whose name does not match
-        ^[A-Za-z0-9:._/-]+$.
+        ^[A-Za-z0-9:#._/ -]+$.
         """
         token = _request_oidc_token(username="evil_user", password="letmein")
 

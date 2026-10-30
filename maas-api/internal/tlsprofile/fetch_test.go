@@ -3,6 +3,8 @@ package tlsprofile_test
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	confv1 "github.com/openshift/api/config/v1"
@@ -12,6 +14,7 @@ import (
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/rest"
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/tlsprofile"
 )
@@ -221,4 +224,37 @@ func TestNewWatcher_NilRestConfig(t *testing.T) {
 	_, err := tlsprofile.NewWatcher(nil, tlsprofile.DefaultSettings(), nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "must not be nil")
+}
+
+func TestConfigAPIAvailable_NilRestConfig(t *testing.T) {
+	_, err := tlsprofile.ConfigAPIAvailable(context.Background(), nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "must not be nil")
+}
+
+// A canceled context must abort discovery instead of performing it: callers
+// bound ConfigAPIAvailable with a timeout so an unhealthy API server cannot
+// stall maas-api startup or shutdown. The fake server would report
+// config.openshift.io as served, so a request made despite cancellation fails
+// the assertions.
+func TestConfigAPIAvailable_CanceledContext(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"kind":"APIGroupList","apiVersion":"v1","groups":[` +
+			`{"name":"config.openshift.io","versions":[{"groupVersion":"config.openshift.io/v1","version":"v1"}],` +
+			`"preferredVersion":{"groupVersion":"config.openshift.io/v1","version":"v1"}}]}`))
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	available, err := tlsprofile.ConfigAPIAvailable(ctx, &rest.Config{Host: server.URL})
+
+	require.Error(t, err, "a canceled context must fail discovery instead of performing it")
+	require.ErrorIs(t, err, context.Canceled)
+	assert.False(t, available)
+	assert.Zero(t, requests, "no discovery request may be made once the context is canceled")
 }

@@ -9,16 +9,6 @@ rules:
   resourceNames: ["maas-db-config"]
   verbs: ["get"]
 
-# Namespace read access
-- apiGroups: [""]
-  resources: ["namespaces"]
-  verbs: ["get", "list", "watch"]
-
-# ServiceAccount read access (informer)
-- apiGroups: [""]
-  resources: ["serviceaccounts"]
-  verbs: ["get", "list", "watch"]
-
 # Token review for authentication
 - apiGroups: ["authentication.k8s.io"]
   resources: ["tokenreviews"]
@@ -31,7 +21,11 @@ rules:
 
 # MaaS CRs for the models endpoint and subscription selector (cached via informer)
 - apiGroups: ["maas.opendatahub.io"]
-  resources: ["maasauthpolicies", "maasmodelrefs", "maassubscriptions"]
+  resources: ["aitenants", "maasauthpolicies", "maasmodelrefs", "maassubscriptions", "maastenantconfigs"]
+  verbs: ["get", "list", "watch"]
+
+- apiGroups: ["aigateway.opendatahub.io"]
+  resources: ["aiguardrails"]
   verbs: ["get", "list", "watch"]
 
 # Gateways for /v1/tenants endpoint (gateway discovery)
