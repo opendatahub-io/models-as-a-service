@@ -27,6 +27,7 @@ import (
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/constant"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/handlers"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/lokiproxy"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/metrics"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/middleware"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/models"
@@ -385,6 +386,21 @@ func registerHandlers(
 	internalRoutes.DELETE("/tenants/:tenant/api-keys", cleanupAuth, apiKeyHandler.RevokeTenantAPIKeys)
 	internalRoutes.DELETE("/tenants/:tenant/subscriptions/:subscription/api-keys", cleanupAuth, apiKeyHandler.RevokeSubscriptionAPIKeys)
 	internalRoutes.POST("/subscriptions/select", tokenHandler.RejectTrustedIdentityHeaders(), subscriptionHandler.SelectSubscription)
+
+	// Read-only Loki proxy (GET /v1/logs*). Only registered when
+	// LOKI_READ_ENDPOINT is configured; every query is restricted to the
+	// caller's organization and requires organization admin membership.
+	if cfg.LokiReadEndpoint != "" {
+		lokiHandler, err := lokiproxy.NewHandler(log, cfg.LokiReadEndpoint)
+		if err != nil {
+			return fmt.Errorf("failed to create Loki proxy handler: %w", err)
+		}
+		lokiRoutes := v1Routes.Group("", strictAuthMiddleware...)
+		lokiHandler.RegisterRoutes(lokiRoutes)
+		log.Info("Loki read proxy enabled", "upstream", cfg.LokiReadEndpoint)
+	} else {
+		log.Info("Loki read proxy disabled: LOKI_READ_ENDPOINT is not set")
+	}
 
 	return nil
 }

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -111,6 +112,11 @@ type Config struct {
 	// by model discovery probes. Default: false (HTTP/1.1 only).
 	DiscoveryEnableHTTP2 bool
 
+	// LokiReadEndpoint is the base URL of the upstream Loki read API that
+	// /v1/logs proxies to (e.g. https://loki-gateway.example.svc:8080/api/logs/v1/application).
+	// The Loki proxy routes are only registered when it is set.
+	LokiReadEndpoint string
+
 	// OTELEndpoint is the OTLP gRPC endpoint for trace export (e.g., "localhost:4317").
 	// Tracing is disabled when empty.
 	OTELEndpoint string
@@ -182,6 +188,7 @@ func Load() *Config {
 		MetricsSecure:               metricsSecure,
 		MetricsCertDir:              metricsCertDir,
 		DiscoveryEnableHTTP2:        discoveryEnableHTTP2,
+		LokiReadEndpoint:            env.GetString("LOKI_READ_ENDPOINT", ""),
 		OTELEndpoint:                env.GetString("OTEL_EXPORTER_OTLP_ENDPOINT", ""),
 		OTELInsecure:                otelInsecure,
 		OTELSampleRate:              otelSampleRate,
@@ -311,6 +318,13 @@ func (c *Config) Validate() error {
 
 	if c.MetricsSecure && strings.TrimSpace(c.MetricsCertDir) == "" {
 		return errors.New("METRICS_CERT_DIR must be non-empty when METRICS_SECURE is true")
+	}
+
+	if strings.TrimSpace(c.LokiReadEndpoint) != "" {
+		upstream, err := url.Parse(strings.TrimSpace(c.LokiReadEndpoint))
+		if err != nil || upstream.Host == "" || (upstream.Scheme != "http" && upstream.Scheme != "https") {
+			return fmt.Errorf("LOKI_READ_ENDPOINT must be a valid http(s) URL, got %q", c.LokiReadEndpoint)
+		}
 	}
 
 	return nil

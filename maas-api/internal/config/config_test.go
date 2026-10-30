@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 )
 
@@ -458,6 +460,68 @@ func TestHandleDeprecatedFlags(t *testing.T) {
 			t.Errorf("expected Address ':8443', got %q", cfg.Address)
 		}
 	})
+}
+
+func TestValidateLokiReadEndpoint(t *testing.T) {
+	t.Parallel()
+	base := func() Config {
+		return Config{
+			DBConnectionURL:           "postgresql://localhost/test",
+			APIKeyMaxExpirationDays:   30,
+			AccessCheckTimeoutSeconds: 15,
+			MetricsPort:               9090,
+			MaaSSubscriptionNamespace: "models-as-a-service",
+			TenantName:                "test-tenant",
+		}
+	}
+
+	tests := []struct {
+		name        string
+		endpoint    string
+		expectError string
+	}{
+		{
+			name:        "empty endpoint is valid (feature disabled)",
+			endpoint:    "",
+			expectError: "",
+		},
+		{
+			name:        "valid https endpoint",
+			endpoint:    "https://loki-gateway.example.svc:8080/api/logs/v1/application",
+			expectError: "",
+		},
+		{
+			name:        "not a URL",
+			endpoint:    "not-a-url",
+			expectError: "LOKI_READ_ENDPOINT must be a valid http(s) URL",
+		},
+		{
+			name:        "unsupported scheme",
+			endpoint:    "ftp://loki.example",
+			expectError: "LOKI_READ_ENDPOINT must be a valid http(s) URL",
+		},
+		{
+			name:        "missing host",
+			endpoint:    "https://",
+			expectError: "LOKI_READ_ENDPOINT must be a valid http(s) URL",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := base()
+			cfg.LokiReadEndpoint = tc.endpoint
+
+			err := cfg.Validate()
+			if tc.expectError == "" {
+				require.NoError(t, err)
+			} else {
+				require.ErrorContains(t, err, tc.expectError)
+			}
+		})
+	}
 }
 
 func TestValidateAPIKeyDeletionRetention(t *testing.T) {
