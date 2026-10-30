@@ -60,7 +60,7 @@ if [[ ! -d "$VENV_DIR" ]]; then
 fi
 # shellcheck disable=SC1091
 source "$VENV_DIR/bin/activate"
-pip install -q -r "$E2E_DIR/requirements.txt"
+python -m pip install --require-hashes --no-deps -q -r "$E2E_DIR/requirements-lock.txt"
 
 # ─── Port-forward ──────────────────────────────────────────────────────────
 
@@ -85,6 +85,10 @@ trap cleanup EXIT
 
 # ─── Environment ────────────────────────────────────────────────────────────
 
+export ARTIFACTS_DIR="${ARTIFACTS_DIR:-$E2E_DIR/reports}"
+mkdir -p "$ARTIFACTS_DIR"
+# These files describe one execution; do not attribute an earlier run's retries.
+rm -f -- "$ARTIFACTS_DIR"/transient-retries-*.jsonl "$ARTIFACTS_DIR/flake-report.json"
 export GATEWAY_HOST="localhost:${LOCAL_PORT}"
 export MAAS_API_BASE_URL="http://localhost:${LOCAL_PORT}/maas-api"
 export INSECURE_HTTP="true"

@@ -28,7 +28,9 @@ spec:
     - name: url
       value: https://github.com/opendatahub-io/odh-konflux-central.git
     - name: revision
-      value: main
+      # Keep the same draft qualification dependency as the regular group test.
+      # Do not merge until odh-konflux-central#761 lands; pin its merged commit.
+      value: 02ecb2957daff53a9f8f482030aae8a1d27e6d37
     - name: pathInRepo
       value: integration-tests/models-as-a-service/pr-group-testing-pipeline.yaml
   taskRunTemplate:
@@ -77,10 +79,10 @@ spec:
     serviceAccountName: konflux-integration-runner
   taskRunSpecs:
   - pipelineTaskName: e2e-maas-openshift
-    timeout: 2h30m
+    timeout: 3h30m
   timeouts:
-    pipeline: 4h0m0s
-    tasks: 3h
+    pipeline: 6h
+    tasks: 5h
   workspaces:
   - name: git-auth
     secret:

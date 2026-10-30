@@ -217,10 +217,14 @@ class TestEmbeddingPathRouting:
 
     def test_embedding_path_based_200(self, embedding_path_governance):
         """POST /{ns}/{model}/v1/embeddings returns valid embedding response."""
-        r = _embedding_inference(
+        # Route policy status can precede removal of the gateway's zero-token
+        # default-deny policy from the data plane. Assert eventual serving.
+        r = _poll_status(
             embedding_path_governance["api_key"],
+            200,
             path=EMBEDDING_MODEL_PATH,
             model_name=EMBEDDING_MODEL_NAME,
+            inference_fn=_embedding_inference,
         )
         log.info(f"[embedding] POST /v1/embeddings -> {r.status_code}")
         assert r.status_code == 200, f"Expected 200, got {r.status_code}: {r.text[:500]}"
@@ -262,11 +266,14 @@ class TestEmbeddingPathRouting:
         url = f"{_gateway_url()}/v1/embeddings"
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
         body = {"model": EMBEDDING_MODEL_CANONICAL_ID, "input": "The quick brown fox"}
-        _poll_status(
-            api_key, 200, path=EMBEDDING_MODEL_PATH, model_name=EMBEDDING_MODEL_NAME,
-            timeout=90, inference_fn=_embedding_inference,
+        # Prove propagation on the body route itself; a successful path-routed
+        # request does not establish this route's readiness on every replica.
+        r = _poll_status(
+            api_key, 200,
+            inference_fn=lambda *_args, **_kwargs: requests.post(
+                url, headers=headers, json=body, timeout=30, verify=TLS_VERIFY
+            ),
         )
-        r = requests.post(url, headers=headers, json=body, timeout=30, verify=TLS_VERIFY)
         log.info(f"[embedding-bbr] POST /v1/embeddings (model={EMBEDDING_MODEL_CANONICAL_ID}) -> {r.status_code}")
         assert r.status_code == 200, f"Expected 200, got {r.status_code}: {r.text[:500]}"
         data = r.json()

@@ -22,15 +22,23 @@ in ``tenant_external_model_helpers``, which builds on this module.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
 import time
 import uuid
+from pathlib import Path
 from typing import Any
 
 import requests
-from multitenancy_helpers import redact_sensitive
+from multitenancy_helpers import (
+    PAYLOAD_PROCESSING_TYPE_PRAXIS,
+    get_json_or_none,
+    payload_processing_rollout_ready,
+    redact_sensitive,
+    wait_until,
+)
 from test_helper import (
     _apply_cr,
     _is_transient_gateway_response,
@@ -58,6 +66,74 @@ EXTERNAL_ENDPOINT = os.environ.get("E2E_EXTERNAL_ENDPOINT", os.environ.get("E2E_
 # Secret data key holding the provider credential (contract in the
 # ExternalProvider/ExternalModel CRD descriptions).
 CREDENTIAL_DATA_KEY = "api-key"
+
+
+def external_processor_config_ready(deployment: dict, config_map: dict) -> bool:
+    """An old ready processor cannot serve a newly published credential set."""
+    config = (config_map.get("data") or {}).get("extproc.yaml")
+    if not config or not payload_processing_rollout_ready(deployment, PAYLOAD_PROCESSING_TYPE_PRAXIS):
+        return False
+    template = (deployment.get("spec") or {}).get("template") or {}
+    annotations = (template.get("metadata") or {}).get("annotations") or {}
+    return annotations.get("ai-gateway-controller.opendatahub.io/extproc-config-sha256") == hashlib.sha256(
+        config.encode("utf-8")
+    ).hexdigest()
+
+
+def wait_for_external_processor_ready(namespace: str, tenant_name: str = "", *, timeout: int | None = None) -> None:
+    """Wait for AGC's credential-bearing processor after publishing a model.
+
+    ExternalModel Ready reports route/overlay publication. The tenant-local
+    processor separately rolls out when its credential configuration changes.
+    Shared pre-auth/KServe processors do not establish readiness for this hop.
+    """
+    timeout = timeout or int(os.environ.get("E2E_TENANT_EXTERNAL_MODEL_READY_TIMEOUT", "300"))
+    suffix = f"-{tenant_name}" if tenant_name and tenant_name != "models-as-a-service" else ""
+    name = f"payload-processing-external-model{suffix}"
+    config_name = f"payload-processing-external-model-plugins{suffix}"
+
+    def check():
+        deployment = get_json_or_none("deployment", name, namespace) or {}
+        config_map = get_json_or_none("configmap", config_name, namespace) or {}
+        assert external_processor_config_ready(deployment, config_map), (
+            f"external processor {namespace}/{name} has not installed its current configuration; "
+            f"generation={(deployment.get('metadata') or {}).get('generation')}, "
+            f"status={deployment.get('status')}"
+        )
+        return True
+
+    wait_until(check, timeout, f"current external processor rollout for {namespace}/{name}")
+
+
+def capture_external_processor_failure(nodeid: str) -> None:
+    """Keep bounded, redacted runtime evidence before failed fixtures delete pods."""
+    artifacts = os.environ.get("ARTIFACTS_DIR")
+    if not artifacts:
+        return
+    try:
+        result = _run_oc(
+            ["oc", "get", "pods", "-A", "-l", "app=payload-processing-external-model", "-o", "json"],
+            timeout=5, retry_budget=0,
+        )
+        result.check_returncode()
+        pods = json.loads(result.stdout).get("items") or []
+        evidence = [nodeid]
+        # Never dump pod specs, environment variables, ConfigMaps or Secrets.
+        # Four 5s log requests plus the 5s pod list bound diagnostic overhead.
+        for pod in sorted(pods, key=lambda p: (p["metadata"]["namespace"], p["metadata"]["name"]))[:4]:
+            metadata = pod["metadata"]
+            namespace, name = metadata["namespace"], metadata["name"]
+            evidence.append(json.dumps({"namespace": namespace, "pod": name, "status": pod.get("status")}))
+            logs = _run_oc(
+                ["oc", "logs", name, "-n", namespace, "--all-containers=true", "--tail=100", "--prefix=true"],
+                timeout=5, retry_budget=0,
+            )
+            evidence.append(redact_sensitive(logs.stdout or logs.stderr, max_length=30000))
+        destination = Path(artifacts) / f"external-processor-failure-{hashlib.sha256(nodeid.encode()).hexdigest()[:16]}.txt"
+        destination.write_text(redact_sensitive("\n".join(evidence), max_length=160000), encoding="utf-8")
+        log.info("External processor failure evidence: %s", destination)
+    except Exception as exc:  # diagnostics must preserve the original test failure
+        log.warning("Unable to capture external processor evidence: %s", type(exc).__name__)
 
 
 # ─── Resource builders ──────────────────────────────────────────────────────

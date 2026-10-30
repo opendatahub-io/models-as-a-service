@@ -20,6 +20,23 @@ from test_helper import (
 log = logging.getLogger(__name__)
 
 _WORKER_ISOLATED_XDIST_GROUPS = frozenset({"api_keys", "models"})
+_EXTERNAL_PROCESSOR_DIAGNOSTICS = pytest.StashKey[set[str]]()
+_EXTERNAL_PROCESSOR_DIAGNOSTIC_LIMIT = 2
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item, call):
+    outcome = yield
+    report = outcome.get_result()
+    if report.failed and report.when in ("setup", "call") and "external_model" in item.nodeid:
+        captured = item.config.stash.get(_EXTERNAL_PROCESSOR_DIAGNOSTICS, set())
+        if item.nodeid in captured or len(captured) >= _EXTERNAL_PROCESSOR_DIAGNOSTIC_LIMIT:
+            return
+        captured.add(item.nodeid)
+        item.config.stash[_EXTERNAL_PROCESSOR_DIAGNOSTICS] = captured
+        from external_model_helpers import capture_external_processor_failure
+
+        capture_external_processor_failure(item.nodeid)
 
 
 def _xdist_worker_suffix() -> str:
