@@ -41,6 +41,7 @@ import pytest
 import requests
 
 from conftest import TLS_VERIFY
+from governance_scenarios import GovernedModelCase, assert_key_works, wait_for_key_denied
 from test_helper import (
     MODEL_NAME,
     MODEL_NAMESPACE,
@@ -954,9 +955,24 @@ class TestAPIKeyModelInference:
             timeout=60,
             verify=TLS_VERIFY,
         )
-        # Key should work (200) or might fail for other reasons - we just need to test revocation
-        initial_status = r_test.status_code
-        print(f"[inference] Key before revoke: HTTP {initial_status}")
+        assert r_test.status_code == 200, (
+            f"Key must work before revocation, got {r_test.status_code}: {r_test.text[:500]}"
+        )
+        catalog = _request_with_gateway_retry(
+            requests.get, f"{_maas_api_url()}/v1/models", headers={"Authorization": f"Bearer {key}"}
+        )
+        assert catalog.status_code == 200, f"Catalog precondition failed: {catalog.status_code}: {catalog.text[:500]}"
+        entry = next((item for item in catalog.json().get("data", []) if item.get("id") == inference_model_name), None)
+        assert entry, f"Catalog did not expose {inference_model_name} before revocation"
+        case = GovernedModelCase(
+            inference_model_name, MODEL_REF, designated, model_completions_url,
+            inference_model_name, entry.get("kind"), entry.get("owned_by"), key, key_id,
+        )
+        assert_key_works(
+            case,
+            lambda api_key: _request_with_gateway_retry(requests.get, f"{_maas_api_url()}/v1/models", headers={"Authorization": f"Bearer {api_key}"}),
+            lambda _case, api_key: requests.post(model_completions_url, headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}, json={"model": inference_model_name, "prompt": "Test", "max_tokens": 5}, timeout=30, verify=TLS_VERIFY),
+        )
 
         # Revoke the key
         r_revoke = requests.delete(
@@ -968,20 +984,13 @@ class TestAPIKeyModelInference:
         assert r_revoke.status_code == 200, f"Failed to revoke: {r_revoke.text}"
         assert r_revoke.json().get("status") == "revoked"
 
-        # Wait for revocation to propagate
-        time.sleep(2)
-
-        # Try to use revoked key
-        r_revoked = requests.post(
-            model_completions_url,
-            headers=key_headers,
-            json={"model": inference_model_name, "prompt": "Test", "max_tokens": 5},
-            timeout=30,
-            verify=TLS_VERIFY,
+        wait_for_key_denied(
+            case,
+            lambda api_key: _request_with_gateway_retry(requests.get, f"{_maas_api_url()}/v1/models", headers={"Authorization": f"Bearer {api_key}"}),
+            lambda _case, api_key: requests.post(model_completions_url, headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}, json={"model": inference_model_name, "prompt": "Test", "max_tokens": 5}, timeout=30, verify=TLS_VERIFY),
+            timeout=90,
         )
-
-        assert r_revoked.status_code == 403, f"Expected 403 for revoked key, got {r_revoked.status_code}: {r_revoked.text}"
-        print("[inference] Revoked key correctly rejected with 403")
+        print("[inference] Revoked key correctly rejected by catalog and inference")
 
     def test_api_key_chat_completions(
         self,

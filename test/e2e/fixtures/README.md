@@ -10,6 +10,7 @@ This directory contains kustomizations for end-to-end testing that combine publi
 
 ### Test-Only Fixtures
 - **unconfigured**: Model with no MaaSAuthPolicy or MaaSSubscription (served ID `test/e2e-unconfigured-model`; validates gateway denies access with 403)
+- **external-token-limit**: LLMInferenceService-only random simulator (served ID `e2e-external-token-limit-model`); its workload Service is used by the ExternalModel token-rate test and deliberately has no MaaSModelRef
 - **distinct**: First distinct model serving `test/e2e-distinct-model` (validates multiple distinct models in subscriptions)
 - **distinct-2**: Second distinct model serving `test/e2e-distinct-model-2` (validates multiple distinct models in subscriptions)
 - **trlp-test**: Model used to validate TRLP validation behavior

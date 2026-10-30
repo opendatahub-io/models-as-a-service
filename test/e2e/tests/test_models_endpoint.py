@@ -25,6 +25,11 @@ import pytest
 import requests
 
 import test_helper
+from governance_scenarios import (
+    GovernedModelCase,
+    assert_two_subscription_isolation,
+    wait_for_catalog_denied,
+)
 from worker_tenant_fixtures import wait_for_only_accessible_subscription
 from multitenancy_helpers import wait_for_llmisvc_backend_ready
 from test_helper import (
@@ -1629,21 +1634,18 @@ class TestModelsEndpoint:
             _delete_cr("maassubscription", subscription_name, namespace=ns)
             _wait_for_cr_absent("maassubscription", subscription_name, namespace=ns)
 
-            # Query with API key (gateway injects deleted subscription name)
-            log.info("Querying /v1/models with API key bound to deleted subscription")
-            r = _request_with_gateway_retry(
-                requests.get,
-                f"{_maas_api_url()}/v1/models",
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                },
+            # Poll the central catalog because controller/gateway deletion
+            # propagation is asynchronous.
+            case = GovernedModelCase(
+                MODEL_REF, MODEL_REF, subscription_name, "", MODEL_REF,
+                "LLMInferenceService", f"{MODEL_NAMESPACE}/{MODEL_REF}", api_key, "",
             )
-
-            # Should return 403 because subscription doesn't exist
-            assert r.status_code == 403, \
-                f"Expected 403 for API key with deleted subscription, got {r.status_code}: {r.text}"
-
-            log.info(f"✅ API key with deleted subscription → {r.status_code}")
+            wait_for_catalog_denied(
+                case,
+                lambda key: _get_models_with_gateway_retry(headers={"Authorization": f"Bearer {key}"}),
+                timeout=90,
+            )
+            log.info("✅ API key with deleted subscription was rejected by /v1/models")
 
         finally:
             # subscription_name already deleted
@@ -2033,6 +2035,16 @@ class TestModelsEndpoint:
 
             assert DISTINCT_MODEL_2_ID in model_ids2, f"Key2 should see {DISTINCT_MODEL_2_ID} from {sub2_name}"
             assert DISTINCT_MODEL_ID not in model_ids2, f"Key2 should NOT see {DISTINCT_MODEL_ID} from {sub1_name}"
+
+            entry1 = next(model for model in models1 if model.get("id") == DISTINCT_MODEL_ID)
+            entry2 = next(model for model in models2 if model.get("id") == DISTINCT_MODEL_2_ID)
+            case1 = GovernedModelCase(DISTINCT_MODEL_REF, DISTINCT_MODEL_REF, sub1_name, "", DISTINCT_MODEL_ID, entry1.get("kind"), entry1.get("owned_by"), api_key1, "")
+            case2 = GovernedModelCase(DISTINCT_MODEL_2_REF, DISTINCT_MODEL_2_REF, sub2_name, "", DISTINCT_MODEL_2_ID, entry2.get("kind"), entry2.get("owned_by"), api_key2, "")
+            assert_two_subscription_isolation(
+                case1, case2,
+                lambda key: _get_models_with_gateway_retry(headers={"Authorization": f"Bearer {key}"}),
+                lambda case, key: _inference(key, path=f"/{MODEL_NAMESPACE}/{case.external_model_name}", model_name=case.expected_catalog_id),
+            )
 
             log.info(f"✅ Multiple API keys with different bindings → Key1: {len(models1)} models, Key2: {len(models2)} models")
 

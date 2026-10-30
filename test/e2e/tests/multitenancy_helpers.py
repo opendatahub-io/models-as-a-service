@@ -29,12 +29,14 @@ from test_helper import (
     TIMEOUT,
     TLS_VERIFY,
     _apply_cr,
+    create_reencrypt_route,
     _delete_cr,
     _is_transient_gateway_response,
     _ns,
     _run_oc,
     create_api_key_at,  # noqa: F401 - re-exported for tenant-scoped maas-api callers
     kubectl_curl,
+    wait_for_route_admitted,
 )
 
 AUTH_REASON_HEADER = "x-ext-auth-reason"
@@ -788,17 +790,6 @@ def wait_for_gateway_programmed(gateway_name: str, *, timeout: int = 300) -> Non
         )
 
 
-def wait_for_route_admitted(route_name: str, *, timeout: int = 60, interval: int = 3) -> dict:
-    def _predicate(obj: dict) -> bool:
-        for ingress in (obj.get("status") or {}).get("ingress") or []:
-            for condition in ingress.get("conditions") or []:
-                if condition.get("type") == "Admitted" and condition.get("status") == "True":
-                    return True
-        return False
-
-    return wait_for_json("route", route_name, GATEWAY_NAMESPACE, predicate=_predicate, timeout=timeout, interval=interval)
-
-
 def _route_admitted(obj: dict) -> bool:
     for ingress in (obj.get("status") or {}).get("ingress") or []:
         for condition in ingress.get("conditions") or []:
@@ -969,34 +960,20 @@ def apply_gateway_route_fixture(gateway_name: str, *, fixture_label: str) -> Non
     hostname = f"{gateway_name}.{cluster_domain_from_default_route()}"
     wait_for_json("service", service_name, GATEWAY_NAMESPACE, timeout=120)
 
-    route: dict[str, Any] = {
-        "apiVersion": "route.openshift.io/v1",
-        "kind": "Route",
-        "metadata": {
-            "name": route_name,
-            "namespace": GATEWAY_NAMESPACE,
-            "labels": {
-                "app.kubernetes.io/component": "gateway",
-                "app.kubernetes.io/instance": gateway_name,
-                "app.kubernetes.io/name": "maas",
-                "e2e.maas.opendatahub.io/fixture": fixture_label,
-                "gateway.networking.k8s.io/gateway-name": gateway_name,
-            },
+    create_reencrypt_route(
+        name=route_name,
+        namespace=GATEWAY_NAMESPACE,
+        service_name=service_name,
+        target_port=443,
+        hostname=hostname,
+        labels={
+            "app.kubernetes.io/component": "gateway",
+            "app.kubernetes.io/instance": gateway_name,
+            "app.kubernetes.io/name": "maas",
+            "e2e.maas.opendatahub.io/fixture": fixture_label,
+            "gateway.networking.k8s.io/gateway-name": gateway_name,
         },
-        "spec": {
-            "host": hostname,
-            "to": {"kind": "Service", "name": service_name, "weight": 100},
-            "port": {"targetPort": 443},
-            "tls": {"termination": "reencrypt", "insecureEdgeTerminationPolicy": "Redirect"},
-        },
-    }
-
-    signing_ca = get_json_or_none("configmap", "signing-cabundle", "openshift-service-ca")
-    ca_bundle = ((signing_ca or {}).get("data") or {}).get("ca-bundle.crt", "")
-    if ca_bundle:
-        route["spec"]["tls"]["destinationCACertificate"] = ca_bundle
-
-    _apply(route)
+    )
     wait_for_route_admitted(route_name)
 
 
