@@ -31,7 +31,7 @@ spec:
           spec:
             datasource:
               kind: PrometheusDatasource
-              name: data-science-prometheus-datasource
+              name: cluster-prometheus-datasource
             labelName: authconfig
             matchers:
               - maas:auth_decisions:rate5m
@@ -57,7 +57,7 @@ spec:
                 spec:
                   datasource:
                     kind: PrometheusDatasource
-                    name: data-science-prometheus-datasource
+                    name: cluster-prometheus-datasource
                   query: sum(maas:auth_decisions:rate5m{authconfig=~"$authconfig"}) or vector(0)
                   seriesNameFormat: Decisions/sec
     overallDenyRate:
@@ -80,7 +80,7 @@ spec:
                 spec:
                   datasource:
                     kind: PrometheusDatasource
-                    name: data-science-prometheus-datasource
+                    name: cluster-prometheus-datasource
                   # Aggregate deny rate; filter NaN (zero traffic) before fallback
                   query: ((sum(maas:auth_decisions:rate5m{authconfig=~"$authconfig",status!="OK"}) / sum(maas:auth_decisions:rate5m{authconfig=~"$authconfig"})) > -Inf) or vector(0)
                   seriesNameFormat: Deny rate
@@ -103,7 +103,7 @@ spec:
                 spec:
                   datasource:
                     kind: PrometheusDatasource
-                    name: data-science-prometheus-datasource
+                    name: cluster-prometheus-datasource
                   # Average P95 latency across selected policies, filter NaN with > -Inf
                   query: avg(maas:auth_latency_p95:5m{authconfig=~"$authconfig"} > -Inf) or vector(0)
                   seriesNameFormat: P95 latency
@@ -127,7 +127,7 @@ spec:
                 spec:
                   datasource:
                     kind: PrometheusDatasource
-                    name: data-science-prometheus-datasource
+                    name: cluster-prometheus-datasource
                   query: count(group by (authconfig) (maas:auth_decisions:rate5m{authconfig=~"$authconfig"})) or vector(0)
                   seriesNameFormat: Policies
     # Time Series Charts
@@ -161,7 +161,7 @@ spec:
                 spec:
                   datasource:
                     kind: PrometheusDatasource
-                    name: data-science-prometheus-datasource
+                    name: cluster-prometheus-datasource
                   query: sum by (status) (maas:auth_decisions:rate5m{authconfig=~"$authconfig"})
                   seriesNameFormat: "{{status}}"
     decisionsByPolicy:
@@ -193,7 +193,7 @@ spec:
                 spec:
                   datasource:
                     kind: PrometheusDatasource
-                    name: data-science-prometheus-datasource
+                    name: cluster-prometheus-datasource
                   query: sum by (authconfig) (maas:auth_decisions:rate5m{authconfig=~"$authconfig"})
                   seriesNameFormat: "{{authconfig}}"
     denyRatioByPolicy:
@@ -226,7 +226,7 @@ spec:
                 spec:
                   datasource:
                     kind: PrometheusDatasource
-                    name: data-science-prometheus-datasource
+                    name: cluster-prometheus-datasource
                   query: maas:auth_deny_ratio:rate5m{authconfig=~"$authconfig"}
                   seriesNameFormat: "{{authconfig}}"
     latencyByPolicy:
@@ -258,7 +258,7 @@ spec:
                 spec:
                   datasource:
                     kind: PrometheusDatasource
-                    name: data-science-prometheus-datasource
+                    name: cluster-prometheus-datasource
                   # Filter NaN from histogram_quantile with > -Inf
                   query: maas:auth_latency_p95:5m{authconfig=~"$authconfig"} > -Inf
                   seriesNameFormat: "{{authconfig}}"
