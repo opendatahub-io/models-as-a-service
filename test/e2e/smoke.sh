@@ -32,7 +32,7 @@ setup_python_venv() {
     # Upgrade pip and install requirements
     echo "[smoke] Installing Python dependencies"
     python -m pip install --upgrade pip --quiet
-    python -m pip install -r "${DIR}/requirements.txt" --quiet
+    python -m pip install --require-hashes --no-deps -r "${DIR}/requirements-lock.txt" --quiet
 
     echo "[smoke] Virtual environment setup complete"
 }

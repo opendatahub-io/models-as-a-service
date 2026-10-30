@@ -493,7 +493,7 @@ func buildTelemetryLabels(
 		labels["group"] = "auth.identity.groups_str"
 	}
 	if captureModelUsage {
-		labels["model"] = "responseBodyJSON(\"/model\")"
+		labels["model"] = CELResolvedModelIdentity
 	}
 	return labels
 }

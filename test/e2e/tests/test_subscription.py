@@ -635,8 +635,9 @@ class TestSubscriptionEnforcement:
         model_path = UNCONFIGURED_MODEL_PATH
 
         # Create unique subscription and auth policy names
-        auth_policy_name = "e2e-rate-limit-test-auth"
-        subscription_name = "e2e-rate-limit-test-subscription"
+        suffix = uuid.uuid4().hex[:8]
+        auth_policy_name = f"e2e-rate-limit-test-auth-{suffix}"
+        subscription_name = f"e2e-rate-limit-test-subscription-{suffix}"
 
         # Low limit so we exhaust it quickly. Actual tokens consumed per
         # response are non-deterministic (max_tokens is a ceiling, not exact),
@@ -677,12 +678,24 @@ class TestSubscriptionEnforcement:
                 subscription=subscription_name,
             )
 
-            # 4. The driver validates OpenAI usage, a success-before-429
-            # transition, and that confirmation traffic cannot become 200.
-            # Past the planned count it keeps going until the enforcement
-            # deadline, since the limiter can trail the policy status.
+            # Policy status can precede replacement of the gateway's zero-token
+            # default deny. Establish serving with the same one-token request,
+            # then include that response in the driver's usage/quota accounting.
+            first_response = _poll_status(
+                api_key, 200, path=model_path,
+                inference_fn=lambda key, **kwargs: _inference(key, max_tokens=1, **kwargs),
+            )
+
+            def metered_responses():
+                yield first_response
+                while True:
+                    yield _inference(api_key, path=model_path, max_tokens=1)
+
+            responses = metered_responses()
+            # 4. Retain the driver's OpenAI usage validation, success-before-429
+            # requirement, and confirmation that traffic stays limited after 429.
             result = exercise_until_token_limited(
-                lambda: _inference(api_key, path=model_path, max_tokens=1),
+                lambda: next(responses),
                 max_attempts=total_requests,
                 enforcement_timeout_seconds=RATE_LIMIT_ENFORCEMENT_TIMEOUT,
             )

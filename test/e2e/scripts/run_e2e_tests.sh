@@ -111,8 +111,10 @@ if ! [[ "$E2E_PARALLEL_WORKERS" =~ ^[1-9][0-9]*$ ]]; then
     exit 1
 fi
 
-ARTIFACTS_DIR="${ARTIFACTS_DIR:-${ARTIFACT_DIR:-${ARTIFACTS:-${LOG_DIR:-$TEST_DIR/reports}}}}"
+export ARTIFACTS_DIR="${ARTIFACTS_DIR:-${ARTIFACT_DIR:-${ARTIFACTS:-${LOG_DIR:-$TEST_DIR/reports}}}}"
 mkdir -p "$ARTIFACTS_DIR"
+# Reset run-scoped retry evidence once, before the parallel and serial passes.
+rm -f -- "$ARTIFACTS_DIR"/transient-retries-*.jsonl "$ARTIFACTS_DIR/flake-report.json"
 
 # ── Phase timeouts (parallel only) ───────────────────────────────────────
 if [[ "$E2E_PARALLEL_WORKERS" -gt 1 ]]; then
@@ -136,7 +138,8 @@ fi
 # shellcheck disable=SC1091
 source "$TEST_DIR/.venv/bin/activate"
 python -m pip install --upgrade pip --quiet
-python -m pip install -r "$TEST_DIR/requirements.txt" --quiet
+# Match collection CI: unpinned upgrades can break xdist's worker-group affinity.
+python -m pip install --require-hashes --no-deps -r "$TEST_DIR/requirements-lock.txt" --quiet
 
 # ── Output paths ─────────────────────────────────────────────────────────
 user="$(oc whoami 2>/dev/null || echo 'unknown')"

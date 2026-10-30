@@ -68,6 +68,7 @@ from external_model_helpers import (
     external_model_binding,
     infer_external_chat,
     patch_external_model_provider_refs,
+    wait_for_external_processor_ready,
 )
 from multitenancy_helpers import (
     GATEWAY_NAMESPACE,
@@ -202,11 +203,19 @@ def _serve(env: dict, model: dict) -> str:
         model_namespace=env["model_ns"],
         model_ready_timeout=TENANT_EXTERNAL_MODEL_READY_TIMEOUT,
     )
-    return _create_api_key(
+    wait_for_external_processor_ready(_ns())
+    api_key = _create_api_key(
         _get_cluster_token(),
         f"e2e-extmod-rt-{uuid.uuid4().hex[:8]}",
         f"{model['name']}-sub",
     )
+    # A ready CR does not prove that the gateway has installed the new route.
+    # Warm up once; the routing/withdrawal samples retain their strict assertions.
+    response = _infer(
+        env, model, api_key, readiness_timeout=TENANT_EXTERNAL_MODEL_READY_TIMEOUT
+    )
+    assert_served_by_provider(response, model["client_tag"])
+    return api_key
 
 
 def _multi_provider_model(env: dict, name: str, provider_specs: list[dict]) -> dict:

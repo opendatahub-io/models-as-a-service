@@ -9,7 +9,8 @@ spec:
   metrics:
     default:
       labels:
-        model: responseBodyJSON("/model")
+        # Use the limiter's canonical MaaSModelRef identity; fall back before selection.
+        model: '(has(auth.identity) && has(auth.identity.subscription_info) && has(auth.identity.subscription_info.resolvedModel) && auth.identity.subscription_info.resolvedModel != "" ? auth.identity.subscription_info.resolvedModel : (size(request.path.split("/").filter(x, x != "")) >= 2 && request.path.split("/").filter(x, x != "")[0] != "v1" && request.path.split("/").filter(x, x != "")[0] != "maas-api" ? request.path.split("/").filter(x, x != "")[0] + "/" + request.path.split("/").filter(x, x != "")[1] : ("x-gateway-model-name" in request.headers ? request.headers["x-gateway-model-name"] : "")))'
         user: auth.identity.userid
         # Subscription metadata for usage attribution and billing
         subscription: auth.identity.selected_subscription

@@ -63,7 +63,9 @@ from test_helper import (
 
 log = logging.getLogger(__name__)
 
-pytestmark = pytest.mark.xdist_group("tenant_ipp")
+# Legacy controllers must not reconcile alongside the parallel Praxis routing
+# suites; these tests still run in the existing serial pass.
+pytestmark = [pytest.mark.xdist_group("tenant_ipp"), pytest.mark.serial]
 
 GATEWAY_PROPAGATION_RETRIES = 6
 GATEWAY_PROPAGATION_DELAY = 5
@@ -123,7 +125,7 @@ def ipp_tenant_cases():
     try:
         for case in (case_a, case_b):
             bootstrap_aitenant_tenant(case, payload_processing_type=PAYLOAD_PROCESSING_TYPE_IPP)
-            wait_for_per_tenant_ipp_ready(case)
+            wait_for_per_tenant_ipp_ready(case, payload_type=PAYLOAD_PROCESSING_TYPE_IPP)
         yield case_a, case_b
     finally:
         cleanup_discovery_case(case_a)
