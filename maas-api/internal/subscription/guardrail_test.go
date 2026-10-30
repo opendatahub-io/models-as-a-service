@@ -352,8 +352,12 @@ func newUnstructuredObject(namespace, name string, fields map[string]any) *unstr
 func selectionSubscription() *unstructured.Unstructured {
 	return newUnstructuredObject("tenant-a", "subscription-a", map[string]any{
 		"spec": map[string]any{
-			"owner":     map[string]any{"groups": []any{map[string]any{"name": "users"}}},
-			"modelRefs": []any{map[string]any{"namespace": "models", "name": "qwen3"}},
+			"owner": map[string]any{"groups": []any{map[string]any{"name": "users"}}},
+			"modelRefs": []any{map[string]any{
+				"namespace":       "models",
+				"name":            "qwen3",
+				"tokenRateLimits": []any{map[string]any{"limit": int64(1000), "window": "1m"}},
+			}},
 		},
 		"status": map[string]any{"phase": "Active"},
 	})

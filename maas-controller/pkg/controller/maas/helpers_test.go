@@ -102,19 +102,17 @@ func TestDeletionTimestampSet(t *testing.T) {
 // verbatim into Kuadrant TokenRateLimitPolicy rates[].window. Kuadrant only accepts
 // s (seconds), m (minutes), and h (hours) with short numeric segments. The previous
 // pattern (^(\d+)(s|m|h|d)$) allowed d (days) and unbounded numbers, both of which
-// Kuadrant rejects at TRLP apply time. The tightened pattern (^[1-9]\d{0,3}(s|m|h)$)
-// ensures CRD admission catches invalid values before they reach the controller.
+// Kuadrant rejects at TRLP apply time. The tightened pattern ensures CRD admission
+// catches invalid values before they reach the controller.
 //
 // Pattern breakdown:
-//   - ^[1-9]    — first digit must be 1-9 (no leading zeros, no zero window)
-//   - \d{0,3}   — up to 3 more digits (total 1-4 digits → range 1-9999)
-//   - (s|m|h)   — only Kuadrant-compatible time units
-//   - $         — no trailing characters
+//   - [1-9]\d{0,3}[sm] - seconds or minutes, 1-9999, no leading zeros
+//   - (...)h - hours, 1-8784 (366 days, the controller's maximum window)
 func TestTokenRateLimitWindowPattern(t *testing.T) {
 	// This must stay in sync with the +kubebuilder:validation:Pattern marker on
 	// TokenRateLimit.Window in maassubscription_types.go. If the marker changes,
 	// update this constant and re-run the test to verify.
-	windowPattern := regexp.MustCompile(`^[1-9]\d{0,3}(s|m|h)$`)
+	windowPattern := regexp.MustCompile(`^([1-9]\d{0,3}[sm]|([1-9]\d{0,2}|[1-7]\d{3}|8[0-6]\d{2}|87[0-7]\d|878[0-4])h)$`)
 
 	tests := []struct {
 		name  string
@@ -129,8 +127,11 @@ func TestTokenRateLimitWindowPattern(t *testing.T) {
 		{"5 minutes", "5m", true},
 		{"24 hours", "24h", true}, // common replacement for "1d"
 
-		// --- valid: numeric boundary values (1-9999) ---
-		{"max 4-digit value", "9999h", true}, // upper boundary
+		// --- valid: numeric boundary values ---
+		{"max seconds", "9999s", true},
+		{"max minutes", "9999m", true},
+		{"max hours: 366 days", "8784h", true},
+		{"4-digit hours below the cap", "1000h", true},
 		{"3-digit value", "100m", true},
 		{"2-digit value", "10s", true},
 		{"single digit", "9s", true}, // lower boundary (besides 1)
@@ -152,6 +153,11 @@ func TestTokenRateLimitWindowPattern(t *testing.T) {
 		{"zero seconds", "0s", false},
 		{"zero minutes", "0m", false},
 		{"zero hours", "0h", false},
+
+		// --- invalid: hours past 366 days ---
+		// The controller cannot enforce a longer window, so admission rejects it.
+		{"one hour past 366 days", "8785h", false},
+		{"max 4-digit hours", "9999h", false},
 
 		// --- invalid: exceeds 4-digit cap ---
 		// Kuadrant rejects oversized numeric segments. The pattern caps at 9999.
