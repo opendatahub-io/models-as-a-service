@@ -25,3 +25,9 @@ addopts = "--strict-markers"
 [tool.ruff]
 # Floor matches pytest 9 (Requires-Python >=3.10) and group-test / e2e-collect (3.11).
 target-version = "py311"
+
+[tool.vulture]
+# Fixtures, hooks and pytestmark are looked up by name, so vulture can't see their callers.
+paths = ["tests", "fixtures", "scripts"]
+ignore_decorators = ["@pytest.fixture", "@pytest.hookimpl"]
+ignore_names = ["pytest_*", "pytestmark"]

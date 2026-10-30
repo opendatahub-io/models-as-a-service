@@ -343,10 +343,6 @@ def tenant_gateway_host(gateway_name: str) -> str:
     return route["spec"]["host"]
 
 
-def tenant_gateway_url(gateway_name: str) -> str:
-    return f"https://{tenant_gateway_host(gateway_name)}"
-
-
 def bootstrap_external_model_tenant(case: dict[str, str]) -> dict[str, str]:
     """Bootstrap an AITenant on the praxis dataplane and enrich its case dict.
 
@@ -1022,14 +1018,6 @@ def wait_for_gateway_attachment_absent(
     )
 
 
-def external_model_http_route_name(model_name: str, model_namespace: str) -> str:
-    """Legacy single-attachment route name (status.httpRouteName or model name)."""
-    external_model = get_json_or_none(EXTERNAL_MODEL_KIND, model_name, model_namespace)
-    if external_model:
-        return (external_model.get("status") or {}).get("httpRouteName") or model_name
-    return model_name
-
-
 def external_model_reports_maas_route(model_name: str, model_namespace: str) -> bool:
     """Whether the MaaS stack can resolve this ExternalModel's serving route.
 
@@ -1570,15 +1558,6 @@ def assert_returns_usage(response: requests.Response) -> None:
     )
 
 
-def echo_headers(response: requests.Response) -> dict[str, str]:
-    """Headers the provider saw, as echoed by the external endpoint."""
-    try:
-        headers = response.json().get("headers") or {}
-        return {str(k).lower(): v for k, v in headers.items()}
-    except ValueError:
-        return {}
-
-
 # ─── MaaS governance + API keys per tenant ──────────────────────────────────
 
 
@@ -1695,12 +1674,6 @@ class TenantExternalModelResources:
                 _delete_cr(kind, name, namespace)
             except Exception as exc:  # noqa: BLE001 - one failed item must not abort the rest
                 log.warning("cleanup failed for %s/%s in %s: %s", kind, name, namespace, exc)
-
-    def cleanup_namespace(self, namespace: str) -> None:
-        from multitenancy_helpers import delete_namespace_best_effort
-
-        self.cleanup()
-        delete_namespace_best_effort(namespace)
 
 
 def _clear_finalizers_best_effort(kind: str, name: str, namespace: str | None) -> None:

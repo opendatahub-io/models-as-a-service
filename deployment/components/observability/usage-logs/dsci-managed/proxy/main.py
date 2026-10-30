@@ -11,7 +11,7 @@ import time
 import uuid
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from threading import Lock
-from urllib.parse import urlparse, parse_qs, urlencode, urljoin
+from urllib.parse import urlparse, parse_qs, urlencode
 
 from auth import extract_from_bearer_token, create_ssl_context
 from rewriter import QueryError, inject_user_filter

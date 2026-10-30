@@ -1,0 +1,49 @@
+name: Python lint
+
+# vulture reports module-level functions, constants and imports nothing references. ruff
+# only flags unused imports and locals, so helpers left behind by deleted tests go unnoticed.
+
+on:
+  pull_request:
+    paths:
+      - '**/*.py'
+      - '**/pyproject.toml'
+      - 'test/e2e/requirements-lint-lock.txt'
+      - '.github/workflows/python-lint.yml'
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  vulture:
+    name: Dead code
+    timeout-minutes: 5
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.ref }}-vulture
+      cancel-in-progress: true
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: test/e2e/requirements-lint-lock.txt
+
+      - name: Install vulture
+        run: pip install --require-hashes --no-deps -r test/e2e/requirements-lint-lock.txt
+
+      - name: E2E tests
+        working-directory: test/e2e
+        run: vulture
+
+      - name: Usage-logs tenancy proxy
+        run: vulture deployment/components/observability/usage-logs/dsci-managed/proxy

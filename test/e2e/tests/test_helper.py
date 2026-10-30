@@ -82,9 +82,6 @@ MODEL_PATH = os.environ.get("E2E_MODEL_PATH", "/llm/facebook-opt-125m-simulated"
 MODEL_NAME = os.environ.get("E2E_MODEL_NAME", "facebook/opt-125m")
 MODEL_REF = os.environ.get("E2E_MODEL_REF", "facebook-opt-125m-simulated")
 MODEL_NAMESPACE = os.environ.get("E2E_MODEL_NAMESPACE", "llm")
-# Canonical BBR model ID as returned by GET /v1/models (publishers/{namespace}/models/{spec.model.name}).
-# Clients must use this form in the "model" field when targeting the BBR gateway endpoint.
-MODEL_CANONICAL_ID = os.environ.get("E2E_MODEL_CANONICAL_ID", f"publishers/{MODEL_NAMESPACE}/models/{MODEL_NAME}")
 DEPLOYMENT_NAMESPACE = os.environ.get("DEPLOYMENT_NAMESPACE", "opendatahub")
 # Kuadrant gateway AuthPolicy that Authorino enforces for maas-api + model routes.
 GATEWAY_AUTH_POLICY_NAME = os.environ.get("E2E_GATEWAY_AUTH_POLICY_NAME", "maas-gateway-auth")
@@ -152,18 +149,10 @@ SIMULATOR_SUBSCRIPTION = os.environ.get("E2E_SIMULATOR_SUBSCRIPTION", "simulator
 PREMIUM_MODEL_REF = os.environ.get("E2E_PREMIUM_MODEL_REF", "premium-simulated-simulated-premium")
 PREMIUM_MODEL_NAME = os.environ.get("E2E_PREMIUM_MODEL_NAME", "facebook/opt-125m-premium")
 PREMIUM_MODEL_PATH = os.environ.get("E2E_PREMIUM_MODEL_PATH", "/llm/premium-simulated-simulated-premium")
-PREMIUM_MODEL_CANONICAL_ID = os.environ.get(
-    "E2E_PREMIUM_MODEL_CANONICAL_ID",
-    f"publishers/{MODEL_NAMESPACE}/models/{PREMIUM_MODEL_NAME}",
-)
 PREMIUM_SIMULATOR_SUBSCRIPTION = os.environ.get("E2E_PREMIUM_SIMULATOR_SUBSCRIPTION", "premium-simulator-subscription")
 ECHO_MODEL_REF = os.environ.get("E2E_ECHO_MODEL_REF", "echo-simulator")
 ECHO_MODEL_NAME = os.environ.get("E2E_ECHO_MODEL_NAME", "test/e2e-echo-model")
 ECHO_MODEL_PATH = os.environ.get("E2E_ECHO_MODEL_PATH", "/llm/echo-simulator")
-ECHO_MODEL_CANONICAL_ID = os.environ.get(
-    "E2E_ECHO_MODEL_CANONICAL_ID",
-    f"publishers/{MODEL_NAMESPACE}/models/{ECHO_MODEL_NAME}",
-)
 SIMULATOR_ACCESS_POLICY = os.environ.get("E2E_SIMULATOR_ACCESS_POLICY", "simulator-access")
 UNCONFIGURED_MODEL_REF = os.environ.get("E2E_UNCONFIGURED_MODEL_REF", "e2e-unconfigured-facebook-opt-125m-simulated")
 UNCONFIGURED_MODEL_PATH = os.environ.get("E2E_UNCONFIGURED_MODEL_PATH", "/llm/e2e-unconfigured-facebook-opt-125m-simulated")
@@ -1252,17 +1241,6 @@ def _poll_status(api_key, expected, path=None, extra_headers=None, model_name=No
 # HTTP helpers (used by test_smoke.py)
 # ---------------------------------------------------------------------------
 
-def _post(url: str, payload: dict, headers: dict, timeout_sec: int = 45) -> requests.Response:
-    return requests.post(
-        url,
-        headers=headers,
-        json=payload,
-        timeout=(timeout_sec, timeout_sec),
-        verify=TLS_VERIFY,
-        stream=False,
-    )
-
-
 def chat(prompt: str, model_v1: str, headers: dict, model_name: str, *,
          stream: bool = False, max_tokens: Optional[int] = None):
     url = f"{model_v1}/chat/completions"
@@ -1304,12 +1282,6 @@ def assert_openai_sse_chat_stream(response: requests.Response) -> list[str]:
 def completions(prompt: str, model_v1: str, headers: dict, model_name: str):
     url = f"{model_v1}/completions"
     body = {"model": model_name, "prompt": prompt, "max_tokens": 16}
-    return requests.post(url, headers=headers, json=body, timeout=30, verify=TLS_VERIFY)
-
-
-def embeddings(text: str, model_v1: str, headers: dict, model_name: str):
-    url = f"{model_v1}/embeddings"
-    body = {"model": model_name, "input": text}
     return requests.post(url, headers=headers, json=body, timeout=30, verify=TLS_VERIFY)
 
 
@@ -1376,11 +1348,6 @@ def _authpolicy_conditions(cr, *types):
                 condition.get("message"),
             )
     return result
-
-
-def _authpolicy_condition(cr, condition_type: str):
-    """Return (status, reason, message) for an AuthPolicy condition type, or (None, None, None)."""
-    return _authpolicy_conditions(cr, condition_type)[condition_type]
 
 
 def _truncate_auth_message(message: Optional[str], limit: int = 240) -> str:

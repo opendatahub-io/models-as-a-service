@@ -48,7 +48,6 @@ from test_helper import (
 
 @dataclass(frozen=True)
 class WorkerTenantContext:
-    worker_id: str
     suffix: str
     tenant_name: str
     tenant_namespace: str
@@ -56,7 +55,6 @@ class WorkerTenantContext:
     gateway_name: str
     route_host: str = ""
     api_base_url: str = ""
-    api_deployment_name: str = ""
     gateway_authpolicy_name: str = ""
     model_ref: str = ""
     premium_model_ref: str = ""
@@ -134,7 +132,6 @@ def serial_only_selection(request) -> bool:
 def build_worker_tenant_case(worker_suffix: str) -> WorkerTenantContext:
     case = new_named_tenant_case(f"e2e-worker-{worker_suffix}")
     return WorkerTenantContext(
-        worker_id=worker_suffix,
         suffix=case["suffix"],
         tenant_name=case["tenant_label_name"],
         tenant_namespace=case["tenant_ns"],
@@ -279,7 +276,6 @@ def bootstrap_worker_tenant(
         context,
         route_host=host,
         api_base_url=f"{scheme}://{host}/maas-api",
-        api_deployment_name=deployment_name,
         gateway_authpolicy_name=gateway_authpolicy_name,
     )
     if baseline:

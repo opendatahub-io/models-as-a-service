@@ -33,7 +33,6 @@ from test_helper import (
     DISTINCT_MODEL_ID,
     DISTINCT_MODEL_REF,
     GATEWAY_NAMESPACE,
-    MODEL_CANONICAL_ID,  # noqa: F401 - accessed through globals() by worker fixture
     MODEL_NAME,  # noqa: F401 - accessed through globals() by worker fixture
     MODEL_NAMESPACE,
     MODEL_REF,
@@ -106,7 +105,6 @@ def _worker_models_context(request):
             "MODEL_NAMESPACE",
             "MODEL_REF",
             "MODEL_NAME",
-            "MODEL_CANONICAL_ID",
             "DISTINCT_MODEL_REF",
             "DISTINCT_MODEL_2_REF",
             "DISTINCT_MODEL_ID",
@@ -126,9 +124,6 @@ def _worker_models_context(request):
             "MODEL_NAMESPACE": context.model_namespace,
             "MODEL_REF": context.model_ref,
             "MODEL_NAME": f"e2e/{context.model_ref}",
-            "MODEL_CANONICAL_ID": (
-                f"publishers/{context.model_namespace}/models/e2e/{context.model_ref}"
-            ),
             "DISTINCT_MODEL_REF": context.distinct_model_ref,
             "DISTINCT_MODEL_2_REF": context.distinct_model_2_ref,
             "DISTINCT_MODEL_ID": (
