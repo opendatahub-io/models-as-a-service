@@ -59,7 +59,9 @@ func GVR() schema.GroupVersionResource {
 //
 // For LLMInferenceService-backed models (BBR clusters), the model ID is read from
 // status.resolvedModelAlias (the canonical publishers/{ns}/models/{name} form).
-// For ExternalModel refs, the ExternalModel CR name is used as the ID.
+// For ExternalModel refs, the client-facing model identity is used: the
+// ExternalModel's spec.modelName as mirrored to status.resolvedModelAlias,
+// falling back to the ExternalModel CR name when the alias is not yet populated.
 // Both kinds advertise the shared gateway base URL from status.httpRouteHostnames[0]
 // when present (falling back to status.endpoint).
 func maasModelRefToModel(u *unstructured.Unstructured) *Model {
@@ -80,11 +82,15 @@ func maasModelRefToModel(u *unstructured.Unstructured) *Model {
 	modelID := name
 	switch kind {
 	case kindExternalModel:
-		// For ExternalModel refs, use the ExternalModel CR name as the model ID so that
-		// GET /v1/models returns the identifier that inference endpoints expect.
-		// ExternalModels skip the backend probe (no /v1/models discovery), so without
-		// this the catalog would expose the MaaSModelRef name which doesn't work for inference.
-		if modelRefName != "" {
+		// For ExternalModel refs, use the client-facing model identity from
+		// status.resolvedModelAlias (the ExternalModel's spec.modelName) so
+		// GET /v1/models returns the identifier the gateway serves at
+		// /{namespace}/{name} and inference requests expect. Falls back to
+		// the ExternalModel CR name when the alias is not yet populated or
+		// the model declares no client-facing name.
+		if alias, _, _ := unstructured.NestedString(u.Object, "status", "resolvedModelAlias"); alias != "" {
+			modelID = alias
+		} else if modelRefName != "" {
 			modelID = modelRefName
 		}
 	default:

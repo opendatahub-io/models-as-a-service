@@ -127,3 +127,49 @@ func TestMaasModelRefToModel_Nil(t *testing.T) {
 		t.Fatalf("expected nil, got %#v", m)
 	}
 }
+
+func newExternalModelRefUnstructured(name, modelRefName, resolvedAlias string) *unstructured.Unstructured {
+	u := &unstructured.Unstructured{}
+	u.SetGroupVersionKind(schema.GroupVersionKind{
+		Group:   "maas.opendatahub.io",
+		Version: "v1alpha1",
+		Kind:    "MaaSModelRef",
+	})
+	u.SetName(name)
+	u.SetNamespace("default")
+	_ = unstructured.SetNestedField(u.Object, "ExternalModel", "spec", "modelRef", "kind")
+	_ = unstructured.SetNestedField(u.Object, modelRefName, "spec", "modelRef", "name")
+	if resolvedAlias != "" {
+		_ = unstructured.SetNestedField(u.Object, resolvedAlias, "status", "resolvedModelAlias")
+	}
+	return u
+}
+
+// The /v1/models ID must be the client-facing model identity the gateway
+// serves, not the ExternalModel CR name: renamed and shared models have
+// modelRefs whose CR name differs from what clients must send.
+func TestMaasModelRefToModel_ExternalModelIDFollowsResolvedAlias(t *testing.T) {
+	u := newExternalModelRefUnstructured("modelref-a", "shared-model-cr", "client-facing-name")
+	m := models.MaasModelRefToModel(u)
+	if m == nil {
+		t.Fatalf("expected non-nil model")
+	}
+	if got, want := m.ID, "client-facing-name"; got != want {
+		t.Fatalf("ID = %q, want %q", got, want)
+	}
+	// OwnedBy keeps pointing at the MaaSModelRef itself for subscription filtering.
+	if got, want := m.OwnedBy, "default/modelref-a"; got != want {
+		t.Fatalf("OwnedBy = %q, want %q", got, want)
+	}
+}
+
+func TestMaasModelRefToModel_ExternalModelIDFallsBackToCRName(t *testing.T) {
+	u := newExternalModelRefUnstructured("modelref-a", "shared-model-cr", "")
+	m := models.MaasModelRefToModel(u)
+	if m == nil {
+		t.Fatalf("expected non-nil model")
+	}
+	if got, want := m.ID, "shared-model-cr"; got != want {
+		t.Fatalf("ID = %q, want %q", got, want)
+	}
+}
