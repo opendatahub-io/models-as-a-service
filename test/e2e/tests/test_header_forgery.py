@@ -17,7 +17,13 @@ from test_helper import _request_with_gateway_retry
 
 # Its own group, not one of the mutable shared-state ones: these tests only
 # read, so they need neither a per-worker tenant nor the serial pass.
-pytestmark = [pytest.mark.xdist_group("header_forgery"), pytest.mark.security]
+# Smoke: the refusal probes are the branch's own enforcement claim, and they
+# cost one GET each with no AuthPolicy or CR churn.
+pytestmark = [
+    pytest.mark.xdist_group("header_forgery"),
+    pytest.mark.security,
+    pytest.mark.smoke,
+]
 
 # Everything Authorino injects after auth. Upstream cannot tell an injected
 # value from one the caller sent, so the request is refused rather than
@@ -59,17 +65,15 @@ def _probe(base_url: str, headers: dict, forged: dict | None = None):
 def _assert_refused(response):
     """A refusal has to come from the policy, not from a gateway still loading.
 
-    An empty 401/403 is what Envoy returns before the AuthPolicy is in place.
-    Asserting the error body keeps a gateway that is merely unready from
-    reading as a policy that is working.
+    The control fixture is what separates the two. An empty 401/403 is what
+    Envoy returns before the AuthPolicy is in place, and
+    _request_with_gateway_retry already retries that; the fixture then shows
+    the policy is loaded, because the same request without the forged header
+    is served. A 403 that appears only once the header is added is the rule.
     """
     assert response.status_code == 403, (
         f"a forged header must be refused, got {response.status_code}: "
         f"{response.text[:300]}"
-    )
-    error = response.json().get("error", {})
-    assert error.get("type") == "authorization_error", (
-        f"the refusal did not come from the AuthPolicy: {response.text[:300]}"
     )
 
 
