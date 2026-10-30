@@ -108,16 +108,38 @@ deploy_maas_platform() {
         fi
 
         echo "Mounting ingress CA certificate into Authorino for OIDC JWKS discovery..."
+        local ca_tmp
+        ca_tmp=$(mktemp)
+        trap 'rm -f -- "$ca_tmp"; trap - RETURN' RETURN
         local ingress_cert_name
         ingress_cert_name=$(oc get ingresscontroller default -n openshift-ingress-operator \
             -o jsonpath='{.spec.defaultCertificate.name}' 2>/dev/null)
-        if [[ -n "$ingress_cert_name" ]]; then
-            local ca_tmp
-            ca_tmp=$(mktemp)
-            trap 'rm -f -- "$ca_tmp"; trap - RETURN' RETURN
-            if oc get secret "$ingress_cert_name" -n openshift-ingress -o jsonpath='{.data.tls\.crt}' | base64 -d > "$ca_tmp" 2>/dev/null && [[ -s "$ca_tmp" ]]; then
-                kubectl create configmap authorino-oidc-ca -n "$AUTHORINO_NAMESPACE" \
-                    --from-file=ca.crt="$ca_tmp" --dry-run=client -o yaml | kubectl apply -f -
+        local ca_source=""
+        if [[ -n "$ingress_cert_name" ]] \
+            && oc get secret "$ingress_cert_name" -n openshift-ingress -o jsonpath='{.data.tls\.crt}' | base64 -d > "$ca_tmp" 2>/dev/null \
+            && [[ -s "$ca_tmp" ]]; then
+            ca_source="secret openshift-ingress/$ingress_cert_name"
+        else
+            # Clusters without a custom default certificate serve the ingress
+            # operator's self-generated CA, which Authorino cannot verify
+            # against the system roots (every OIDC test then fails with 401 at
+            # discovery). Extract the served chain from the issuer instead —
+            # the CA that signed it is part of that chain.
+            local issuer_host
+            issuer_host="$(python3 -c 'import os; from urllib.parse import urlparse; print(urlparse(os.environ["OIDC_ISSUER_URL"]).hostname or "")')"
+            if [[ -n "$issuer_host" ]] \
+                && echo | openssl s_client -connect "${issuer_host}:443" -servername "${issuer_host}" -showcerts 2>/dev/null \
+                    | awk '/-----BEGIN CERTIFICATE-----/,/-----END CERTIFICATE-----/{print}' > "$ca_tmp" \
+                && grep -q "BEGIN CERTIFICATE" "$ca_tmp"; then
+                ca_source="served chain of ${issuer_host}"
+            fi
+        fi
+        if [[ -n "$ca_source" ]]; then
+            kubectl create configmap authorino-oidc-ca -n "$AUTHORINO_NAMESPACE" \
+                --from-file=ca.crt="$ca_tmp" --dry-run=client -o yaml | kubectl apply -f -
+            if oc get deployment authorino -n "$AUTHORINO_NAMESPACE" -o jsonpath='{.spec.template.spec.volumes[*].name}' 2>/dev/null | grep -qw oidc-ca; then
+                echo "Authorino CA volume already mounted"
+            else
                 oc patch deployment authorino -n "$AUTHORINO_NAMESPACE" --type=json -p '[
                   {"op": "add", "path": "/spec/template/spec/volumes/-", "value": {
                     "name": "oidc-ca", "configMap": {"name": "authorino-oidc-ca"}
@@ -127,15 +149,13 @@ deploy_maas_platform() {
                     "subPath": "ca.crt", "readOnly": true
                   }}
                 ]' 2>/dev/null || echo "⚠️  Authorino CA volume may already be mounted"
-                if ! oc rollout status deployment/authorino -n "$AUTHORINO_NAMESPACE" --timeout=120s; then
-                    echo "⚠️  WARNING: Authorino rollout did not complete within 120s, continuing anyway"
-                fi
-                echo "✅ Ingress CA mounted into Authorino"
-            else
-                echo "⚠️  WARNING: Could not extract TLS cert from secret $ingress_cert_name"
             fi
+            if ! oc rollout status deployment/authorino -n "$AUTHORINO_NAMESPACE" --timeout=120s; then
+                echo "⚠️  WARNING: Authorino rollout did not complete within 120s, continuing anyway"
+            fi
+            echo "✅ Ingress CA mounted into Authorino (from ${ca_source})"
         else
-            echo "⚠️  WARNING: No defaultCertificate found on IngressController — Authorino may fail OIDC JWKS discovery"
+            echo "⚠️  WARNING: Could not determine the ingress CA (no defaultCertificate and issuer chain unreadable) — Authorino may fail OIDC JWKS discovery"
         fi
     fi
 
