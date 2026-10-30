@@ -215,7 +215,7 @@ def pool_model():
         _create_test_subscription(subscription, llmis, users=[sa_user], token_limit=100000, inference_priority=10)
         _wait_for_maas_auth_policy_phase(policy)
         _wait_for_maas_subscription_phase(subscription)
-        _wait_for_model_ready(llmis, namespace=MODEL_NAMESPACE, timeout=120)
+        _wait_for_model_ready(llmis, namespace=MODEL_NAMESPACE)
 
         # Auth needs to propagate and the pool needs its picker, so wait for the first success.
         model = f"publishers/{MODEL_NAMESPACE}/models/{served_id}"
@@ -241,6 +241,7 @@ def pool_model():
         _wait_for_cr_absent("maassubscription", subscription)
         _wait_for_cr_absent("maasauthpolicy", policy)
         _wait_for_cr_absent("maasmodelref", llmis, namespace=MODEL_NAMESPACE)
+        # LLMIS teardown can lag the default 30s CR-absent wait under parallel load.
         _wait_for_cr_absent("llminferenceservice", llmis, namespace=MODEL_NAMESPACE, timeout=180)
 
 

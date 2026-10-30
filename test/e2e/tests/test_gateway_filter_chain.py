@@ -337,7 +337,7 @@ class TestEndpointPickerTraffic:
             _create_test_subscription(subscription, llmis, users=[sa_user], token_limit=100000)
             _wait_for_maas_auth_policy_phase(policy)
             _wait_for_maas_subscription_phase(subscription)
-            _wait_for_model_ready(llmis, namespace=MODEL_NAMESPACE, timeout=120)
+            _wait_for_model_ready(llmis, namespace=MODEL_NAMESPACE)
             api_key = _create_api_key(sa_token, name=f"e2e-epp-pool-{suffix}", subscription=subscription)
 
             # Config: every replica binds the model's route to its picker and sends the picker
@@ -415,4 +415,5 @@ class TestEndpointPickerTraffic:
             _wait_for_cr_absent("maassubscription", subscription)
             _wait_for_cr_absent("maasauthpolicy", policy)
             _wait_for_cr_absent("maasmodelref", llmis, namespace=MODEL_NAMESPACE)
+            # LLMIS teardown can lag the default 30s CR-absent wait under parallel load.
             _wait_for_cr_absent("llminferenceservice", llmis, namespace=MODEL_NAMESPACE, timeout=180)

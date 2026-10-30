@@ -185,7 +185,7 @@ def x_api_key_setup(api_key):
     # AuthPolicy YAML can list api-keys-x-api-key before Kuadrant/Authorino has
     # enforced it. Bearer still works via the existing api-keys identity, so a
     # Bearer-only readiness check misses empty-body 401s on x-api-key.
-    _wait_for_gateway_auth_enforced(timeout=120)
+    _wait_for_gateway_auth_enforced()
     _poll_status(api_key, 200, timeout=60)
     _poll_status(api_key, 200, timeout=120, inference_fn=_inference_x_api_key)
 

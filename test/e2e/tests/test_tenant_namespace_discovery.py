@@ -195,6 +195,8 @@ class TestTenantNamespaceDiscovery:
         try:
             bootstrap_aitenant_tenant(case, use_default_gateway=True)
             apply_maas_auth_policy(case["policy_name"], case["tenant_ns"])
+            # Fresh AITenant + gateway AuthPolicy merge under OIDC can exceed the 120s
+            # default phase wait before Kuadrant reports Active.
             _wait_for_maas_auth_policy_phase(case["policy_name"], namespace=case["tenant_ns"], timeout=180)
 
             gw_auth = get_gateway_authpolicy()
