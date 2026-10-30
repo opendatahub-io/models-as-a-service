@@ -26,6 +26,7 @@
 #     llmbatchgateways.yaml      - LLMBatchGateway definitions
 #     kuadrant-authpolicies.yaml - Kuadrant AuthPolicies managed by maas-controller
 #     kuadrant-tokenratelimitpolicies.yaml - Kuadrant TokenRateLimitPolicies
+#     limitadors-limitador.yaml  - Limitador CR (rendered limits, Ready condition)
 #     kserve-llminferenceservices.yaml - KServe LLMInferenceService definitions
 #   pod-logs/                  - Per-pod logs from the deployment namespace
 #
@@ -200,10 +201,12 @@ AIGATEWAY_CRDS=(
   "aigateways.components.platform.opendatahub.io"
   "llmbatchgateways.batch.llm-d.ai"
 )
-# Kuadrant policy CRDs managed by maas-controller
+# Kuadrant policy CRDs managed by maas-controller, plus the Limitador CR that
+# Kuadrant renders their limits into (its Ready condition gates TRLP Enforced).
 KUADRANT_CRDS=(
   "authpolicies.kuadrant.io"
   "tokenratelimitpolicies.kuadrant.io"
+  "limitadors.limitador.kuadrant.io"
 )
 # KServe CRDs — LLMInferenceService is the primary internal model backend
 KSERVE_CRDS=(
@@ -349,7 +352,7 @@ collect_namespace_pod_logs() {
   local pod container pods_json log_tail
   # A 500-line tail covers only minutes of these controllers' logs, and the
   # serial pass replaces their pods, so keep all of it for failure timelines.
-  local full_log_pods='^(kuadrant-operator-controller-manager|maas-controller)-[a-z0-9]+-[a-z0-9]{5}$'
+  local full_log_pods='^(kuadrant-operator-controller-manager|limitador-operator-controller-manager|maas-controller)-[a-z0-9]+-[a-z0-9]{5}$'
   for pod in $(kubectl get pods -n "$ns" -o jsonpath='{.items[*].metadata.name}' 2>/dev/null); do
     log_tail=500; [[ "$pod" =~ $full_log_pods ]] && log_tail=-1
     kubectl logs -n "$ns" "$pod" --all-containers --tail="$log_tail" 2>/dev/null | redact_tokens > "${outdir}/${pod}.log" || true
