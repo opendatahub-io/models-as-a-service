@@ -7,11 +7,11 @@
 | Metric | Type | Labels | Use For |
 |--------|------|--------|---------|
 | `authorized_hits` | Counter | `user`, `subscription`, `model` | **Billing/Cost** - Total tokens consumed (input + output) |
-| `authorized_calls` | Counter | `user`, `subscription` | **API Usage** - Number of API calls allowed |
-| `limited_calls` | Counter | `user`, `subscription` | **Rate Limiting** - Requests denied due to quotas |
+| `authorized_calls` | Counter | `user`, `subscription`, `model` | **API Usage** - Number of API calls allowed |
+| `limited_calls` | Counter | `user`, `subscription`, `model` | **Rate Limiting** - Requests denied due to quotas |
 
 !!! note "`model` label availability"
-    `model` label is only available on `authorized_hits`. `authorized_calls` and `limited_calls` carry `user` and `subscription` only.
+    The request-sourced `model` label is available on token, allowed-request and denied-request counters when `captureModelUsage` is enabled. It identifies the published MaaS model, not the backend response model or provider `targetModel`. The `user` label requires `captureUser`; inspect emitted metrics when upgrading from deployments with response-sourced labels. See [telemetry label sources and cardinality](../advanced-administration/telemetry-defaults-and-cardinality.md#how-maas-telemetry-works).
 
 !!! note "Total tokens only"
     Token consumption is reported as total tokens (prompt + completion) per request. Input/output split requires upstream Kuadrant wasm-shim changes.
