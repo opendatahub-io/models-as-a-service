@@ -35,6 +35,7 @@
 #   AIGC_GIT_URL / AIGC_GIT_REF - Optional overrides for deploy-aigc-companion.sh (defaults live in that script)
 #   DEPLOY_MODE - MaaS ownership mode (default: kustomize for presubmits)
 #   POLICY_ENGINE - Rate-limiting policy engine (default: rhcl)
+#   RHCL_CHANNEL - RHCL OLM channel (default: stable-1.5)
 #   RHCL_STARTING_CSV - Optional RHCL operator startingCSV pin
 #   RHCL_NAMESPACE - RHCL/Kuadrant workload namespace (default: kuadrant-system)
 #   OLM_BUNDLE_UNPACK_RETRY - Retry failed OLM bundle unpacks during deploy (default: true)
@@ -103,6 +104,7 @@ export DEPLOY_MODE=${DEPLOY_MODE:-kustomize}
 export DEPLOY_MODE=${DEPLOY_MODE:-kustomize}
 export POLICY_ENGINE="${POLICY_ENGINE:-rhcl}"
 export RHCL_NAMESPACE="${RHCL_NAMESPACE:-kuadrant-system}"
+export RHCL_CHANNEL="${RHCL_CHANNEL:-stable-1.5}"
 export RHCL_STARTING_CSV="${RHCL_STARTING_CSV:-}"
 export OLM_BUNDLE_UNPACK_RETRY="${OLM_BUNDLE_UNPACK_RETRY:-true}"
 
