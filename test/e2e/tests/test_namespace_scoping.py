@@ -306,8 +306,8 @@ class TestMaaSControllerWatchNamespace:
                     "modelRefs": [{"name": MODEL_REF, "namespace": MODEL_NAMESPACE, "tokenRateLimits": [{"limit": 1, "window": "1m"}]}],
                 },
             })
-            _wait_for_maas_auth_policy_phase("e2e-watched-auth", timeout=90)
-            _wait_for_maas_subscription_phase("e2e-watched-sub", namespace=ns, timeout=90)
+            _wait_for_maas_auth_policy_phase("e2e-watched-auth")
+            _wait_for_maas_subscription_phase("e2e-watched-sub", namespace=ns)
 
             trlp_name = f"maas-trlp-{MODEL_REF}"
             subscriptions = [x.strip() for x in (_get_cr_annotation("tokenratelimitpolicy", trlp_name, MODEL_NAMESPACE, "maas.opendatahub.io/subscriptions") or "").split(",") if x.strip()]
@@ -423,7 +423,7 @@ class TestModelRef:
                 },
             })
 
-            _wait_for_maas_auth_policy_phase(policy_name, timeout=90)
+            _wait_for_maas_auth_policy_phase(policy_name)
 
             auth_name = f"maas-auth-{MODEL_REF}"
             auth_name_other = f"maas-auth-{other_model_ref}"
@@ -499,7 +499,7 @@ class TestModelRef:
                 },
             })
 
-            _wait_for_maas_subscription_phase(sub_name, namespace=ns, timeout=90)
+            _wait_for_maas_subscription_phase(sub_name, namespace=ns)
 
             trlp_name = f"maas-trlp-{MODEL_REF}"
             trlp_name_other = f"maas-trlp-{other_model_ref}"

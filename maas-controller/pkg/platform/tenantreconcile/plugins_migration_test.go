@@ -92,6 +92,41 @@ profiles:
     - pluginRef: api-translation
 `
 
+// The ODH 3.5.0 ConfigMap, as an ODH 3.5.0 install shipped it.
+const odh350PreProcessingYAML = `apiVersion: llm-d.ai/v1alpha1
+kind: PayloadProcessorConfig
+plugins:
+- type: body-field-to-header
+  name: model-extractor
+  parameters:
+    fieldName: model
+    headerName: X-Gateway-Model-Name
+profiles:
+- name: default
+  plugins:
+    request:
+    - pluginRef: model-extractor
+`
+
+const odh350ProcessingYAML = `apiVersion: llm-d.ai/v1alpha1
+kind: PayloadProcessorConfig
+plugins:
+- type: stream-usage-enforcer
+- type: model-provider-resolver
+- type: api-translation
+- type: apikey-injection
+profiles:
+- name: default
+  plugins:
+    request:
+    - pluginRef: stream-usage-enforcer
+    - pluginRef: model-provider-resolver
+    - pluginRef: api-translation
+    - pluginRef: apikey-injection
+    response:
+    - pluginRef: api-translation
+`
+
 func pluginsMigrationScheme(t *testing.T) *runtime.Scheme {
 	t.Helper()
 	scheme := runtime.NewScheme()
@@ -123,6 +158,29 @@ func TestMatchKnownGoodIPPPluginsConfigMap(t *testing.T) {
 		baseline, ok, detail := matchKnownGoodIPPPluginsConfigMap(cm)
 		require.True(t, ok, detail)
 		assert.Equal(t, "default+response-api-translation", baseline)
+	})
+
+	t.Run("ODH 3.5.0 default", func(t *testing.T) {
+		t.Parallel()
+		cm := &corev1.ConfigMap{Data: map[string]string{
+			ippPreProcessingConfigKey: odh350PreProcessingYAML,
+			ippProcessingConfigKey:    odh350ProcessingYAML,
+		}}
+		baseline, ok, detail := matchKnownGoodIPPPluginsConfigMap(cm)
+		require.True(t, ok, detail)
+		assert.Equal(t, "odh-3.5.0", baseline)
+		assert.True(t, ippBaselineTranslatesRequests(baseline))
+	})
+
+	t.Run("ODH 3.5.0 chains only match together", func(t *testing.T) {
+		t.Parallel()
+		for _, data := range []map[string]string{
+			{ippPreProcessingConfigKey: odh350PreProcessingYAML, ippProcessingConfigKey: defaultProcessingYAML},
+			{ippPreProcessingConfigKey: defaultPreProcessingYAML, ippProcessingConfigKey: odh350ProcessingYAML},
+		} {
+			_, ok, _ := matchKnownGoodIPPPluginsConfigMap(&corev1.ConfigMap{Data: data})
+			assert.False(t, ok)
+		}
 	})
 
 	t.Run("custom plugin blocks", func(t *testing.T) {

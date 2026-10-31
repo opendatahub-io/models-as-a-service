@@ -125,6 +125,15 @@ spec:
 EOF
 ```
 
+**Subscription-specific Gateway headers (experimental):** Add the `experimental.maas.opendatahub.io/headers` annotation to inject one or more upstream request headers when Gateway authentication resolves a request to that subscription. The value must be a JSON object mapping `x-grid-*` header names to arrays of strings; multiple values are sent as a comma-separated header.
+Client-supplied `x-grid-*` headers are rejected unless their names are configured, and configured names are replaced with the selected subscription's values.
+
+```yaml
+metadata:
+  annotations:
+    experimental.maas.opendatahub.io/headers: '{"x-grid-geo-fencing":["region1","region2"]}'
+```
+
 Verify the MaaSSubscription is active (TokenRateLimitPolicy created and enforced):
 
 ```bash

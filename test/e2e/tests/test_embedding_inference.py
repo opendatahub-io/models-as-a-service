@@ -28,6 +28,7 @@ from test_helper import (
     EMBEDDING_MODEL_REF,
     EMBEDDING_MODEL_CANONICAL_ID,
     MODEL_NAMESPACE,
+    RATE_LIMIT_ENFORCEMENT_TIMEOUT,
     TIMEOUT,
     TLS_VERIFY,
     _create_api_key,
@@ -139,7 +140,6 @@ def embedding_path_governance(_worker_embedding_context):
         _wait_for_maas_auth_policy_phase(
             auth_policy_name,
             namespace=maas_ns,
-            timeout=90,
             require_auth_policies=False,
         )
         _wait_for_subscription_inference_ready(
@@ -147,7 +147,6 @@ def embedding_path_governance(_worker_embedding_context):
             EMBEDDING_MODEL_REF,
             namespace=maas_ns,
             model_namespace=MODEL_NAMESPACE,
-            timeout=180,
         )
         api_key = _create_api_key(
             _get_cluster_token(),
@@ -284,12 +283,11 @@ class TestEmbeddingGovernance:
                 token_limit=token_limit,
                 window=window,
             )
-            _wait_for_maas_auth_policy_phase(auth_policy_name, timeout=90, require_auth_policies=False)
+            _wait_for_maas_auth_policy_phase(auth_policy_name, require_auth_policies=False)
             _wait_for_subscription_inference_ready(
                 subscription_name,
                 EMBEDDING_MODEL_REF,
                 model_namespace=MODEL_NAMESPACE,
-                timeout=180,
             )
 
             oc_token = _get_cluster_token()
@@ -301,12 +299,15 @@ class TestEmbeddingGovernance:
 
             rate_limited = False
             success_count = 0
-
-            for i in range(total_requests):
+            # Past the planned count keep going until the enforcement deadline:
+            # the limiter can trail the policy status, and this asserts a 429.
+            deadline = time.time() + RATE_LIMIT_ENFORCEMENT_TIMEOUT
+            request_num = 0
+            while request_num < total_requests or time.time() < deadline:
+                request_num += 1
                 r = _embedding_inference(
                     api_key, path=EMBEDDING_MODEL_PATH, model_name=EMBEDDING_MODEL_NAME
                 )
-                request_num = i + 1
                 log.info(f"Embedding request {request_num}/{total_requests}: {r.status_code}")
 
                 if r.status_code == 200:
@@ -359,12 +360,11 @@ class TestEmbeddingGovernance:
                 token_limit=1000,
                 window="1m",
             )
-            _wait_for_maas_auth_policy_phase(auth_policy_name, timeout=90, require_auth_policies=False)
+            _wait_for_maas_auth_policy_phase(auth_policy_name, require_auth_policies=False)
             _wait_for_subscription_inference_ready(
                 subscription_name,
                 EMBEDDING_MODEL_REF,
                 model_namespace=MODEL_NAMESPACE,
-                timeout=180,
             )
 
             oc_token = _get_cluster_token()

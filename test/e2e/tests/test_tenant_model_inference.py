@@ -307,6 +307,9 @@ class TestTenantModelInference:
                         "model": "facebook/opt-125m",
                         "messages": [{"role": "user", "content": "Say hello"}],
                     },
+                    # The denial is what this test asserts; only retry real
+                    # dataplane 5xx, not the 401/403 we are waiting for.
+                    auth_denial_is_transient=False,
                 )
 
             assert is_gateway_auth_denial(response), (

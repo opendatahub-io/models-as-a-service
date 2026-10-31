@@ -56,7 +56,7 @@ const (
 
 type pluginsMigrationResult struct {
 	Decision pluginsMigrationDecision
-	Baseline string // "default", "default+response-api-translation", "praxis", "absent", or ""
+	Baseline string // "default", "default+response-api-translation", "odh-3.5.0", "praxis", "absent", or ""
 	Reason   string
 	Forced   bool // an explicit force annotation accepts compatibility loss
 }
@@ -94,8 +94,9 @@ type ippProcessorConfig struct {
 // Known-good baselines (RHOAIENG-98846):
 //  1. Pure product default (response processors empty)
 //  2. Default + response api-translation enabled
+//  3. The ODH 3.5.0 default, an earlier shape of baseline 2
 //
-// Baseline #3 (legacy metering) is intentionally omitted until a real customer
+// A legacy metering baseline is intentionally omitted until a real customer
 // example ConfigMap is collected.
 func evaluatePluginsConfigMapMigration(ctx context.Context, reader client.Reader, params PlatformParams, tenant client.Object) (pluginsMigrationResult, error) {
 	if mtc, ok := tenant.(*maasv1alpha1.MaasTenantConfig); ok {
@@ -250,7 +251,22 @@ func appendAcceptedAPITranslationMigrationRiskWarning(
 	return nil
 }
 
-// persistAPITranslationMigrationIntent records the recognized response-enabled
+// ippBaselineTranslatesRequests reports whether a recognized IPP baseline ran
+// model-provider-resolver and request-side api-translation, which sent each
+// provider its targetModel and path. AGC applies both only with
+// spec.apiTranslation.enabled; without it a migrated provider receives the
+// MaaS model name on the default path, so a renamed model fails while it
+// reports Ready.
+func ippBaselineTranslatesRequests(baseline string) bool {
+	switch baseline {
+	case "default", "default+response-api-translation", "odh-3.5.0":
+		return true
+	default:
+		return false
+	}
+}
+
+// persistAPITranslationMigrationIntent records the translation of a recognized
 // IPP baseline before cleanup can delete its ConfigMap. Update uses the live
 // resourceVersion and retries conflicts so an operator's explicit true/false
 // choice wins over automatic migration.
@@ -546,6 +562,9 @@ func matchKnownGoodIPPPluginsConfigMap(cm *corev1.ConfigMap) (baseline string, o
 		return "", false, "unexpected data keys: " + strings.Join(extra, ", ")
 	}
 
+	if matchODH350PreProcessing(pre) && matchODH350Processing(post) {
+		return "odh-3.5.0", true, ""
+	}
 	if !matchIPPPreProcessingDefault(pre) {
 		return "", false, "pre-processing plugins/profiles deviate from product default"
 	}
@@ -595,6 +614,36 @@ func matchIPPPreProcessingDefault(cfg ippProcessorConfig) bool {
 	wantRequest := []string{"model-extractor", "model-provider-resolver"}
 	return matchPluginDefs(cfg.Plugins, wantPlugins) &&
 		matchDefaultProfile(cfg.Profiles, wantRequest, nil)
+}
+
+// matchODH350PreProcessing matches the ODH 3.5.0 pre-processing chain, which
+// had no model-provider-resolver yet. It is recognized only together with the
+// ODH 3.5.0 processing chain.
+func matchODH350PreProcessing(cfg ippProcessorConfig) bool {
+	wantPlugins := []ippPlugin{{
+		Type: "body-field-to-header",
+		Name: "model-extractor",
+		Parameters: map[string]any{
+			"fieldName":  "model",
+			"headerName": "X-Gateway-Model-Name",
+		},
+	}}
+	return matchPluginDefs(cfg.Plugins, wantPlugins) &&
+		matchDefaultProfile(cfg.Profiles, []string{"model-extractor"}, nil)
+}
+
+// matchODH350Processing matches the ODH 3.5.0 processing chain: the product
+// default without maas-headers-guard, with response api-translation.
+func matchODH350Processing(cfg ippProcessorConfig) bool {
+	wantPlugins := []ippPlugin{
+		{Type: "stream-usage-enforcer"},
+		{Type: "model-provider-resolver"},
+		{Type: "api-translation"},
+		{Type: "apikey-injection"},
+	}
+	wantRequest := []string{"stream-usage-enforcer", "model-provider-resolver", "api-translation", "apikey-injection"}
+	return matchPluginDefs(cfg.Plugins, wantPlugins) &&
+		matchDefaultProfile(cfg.Profiles, wantRequest, []string{"api-translation"})
 }
 
 // matchIPPProcessingDefault returns the baseline name when cfg matches a

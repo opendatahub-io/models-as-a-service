@@ -69,7 +69,7 @@ pytest tests/<file>.py -v
 | `test_tenant_external_model_conflicts.py` | Multi-tenant AGC/Praxis external models: client-facing `modelName` conflicts and same-named objects in two namespaces (P0, overlay collision regression) |
 | `test_tenant_external_model_compat.py` | Multi-tenant AGC/Praxis external models: omitted-`gatewayRefs` compatibility (no-op own-tenant attachment) and legacy IPP coexistence (serial, gated on `TENANT_EXTERNAL_MODEL_LEGACY_IPP_E2E`) |
 | `test_tenant_external_model_crossns.py` | Multi-tenant AGC/Praxis external models: ReferenceGrant-gated cross-namespace providers, grant revoke/narrow, credential source selection (P1; gated on `TENANT_EXTERNAL_MODEL_CROSSNS_E2E`) |
-| `test_tenant_external_model_default_tenant.py` | 3.5-shaped external models (no `gatewayRefs`, `auth.type: simple`) in a namespace of no tenant (`llm`) served through the default tenant's Gateway by ai-gateway-controller; `gatewayRefs` replace the implicit attachment, deleting the model removes its objects (RHOAIENG-101754; skips without the AGC or when the default tenant is on IPP) |
+| `test_tenant_external_model_default_tenant.py` | 3.5-shaped external models (no `gatewayRefs`, `auth.type: simple`) in a namespace of no tenant (`llm`) served through the default tenant's Gateway by ai-gateway-controller; subscription-injected Gateway headers reach the provider and replace client values, `gatewayRefs` replace the implicit attachment, deleting the model removes its objects (RHOAIENG-101754; skips without the AGC or when the default tenant is on IPP) |
 
 The shared CI runner and `smoke.sh` execute all tests under `tests/`. Individual modules can still be run directly, for example `pytest tests/test_subscription_list_endpoints.py -v`.
 
@@ -162,11 +162,13 @@ SKIP_DEPLOYMENT=true ./test/e2e/run-tests-quick.sh
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `E2E_PARALLEL_WORKERS` | `7` | Parallel workers for pass 1 (`-m "not serial and not legacy_ipp"`). Pass 2 (`@serial`, not `legacy_ipp`) always runs on one worker. Set to `1` for single-worker pass 1 (no xdist); marker split is unchanged. |
-| `E2E_AUTHPOLICY_PHASE_TIMEOUT` | `120` (parallel) / `60` (serial) | MaaSAuthPolicy phase wait |
+| `E2E_AUTHPOLICY_PHASE_TIMEOUT` | `120` | MaaSAuthPolicy phase wait (`test_helper` default; parallel runner re-exports the same) |
+| `E2E_MAAS_SUBSCRIPTION_PHASE_TIMEOUT` | `120` | MaaSSubscription phase wait |
 | `E2E_GATEWAY_ENFORCED_TIMEOUT` | `240` (parallel) / `180` (serial) | Kuadrant gateway auth enforced wait |
 | `E2E_MULTITENANCY_PHASE_TIMEOUT` | `180` (parallel) / `120` (serial) | Tenant discovery phase wait |
 | `E2E_SUBSCRIPTION_INFERENCE_READY_TIMEOUT` | `300` | Subscription discovery + direct/mirrored TRLP enforcement |
 | `E2E_SUBSCRIPTION_TRLP_TIMEOUT` | `180` | Mirrored TRLP ready wait on tenant subscriptions |
+| `E2E_REQUIRE_TRLP_ENFORCED` | `false` | Gate TRLP waits on Kuadrant `Enforced=True`. Off because Limitador can leave it `False` long after the limit is programmed (known issue). |
 | `E2E_MODEL_BACKEND_READY_TIMEOUT` | `300` | LLMInferenceService backend ready (tenant model provisioning) |
 | `E2E_USE_WORKER_TENANT` | `true` | When `true`, xdist workers bootstrap a dedicated AITenant for Bucket C pilots (`test_subscription.py` first). Set `false` to keep using `models-as-a-service`. |
 

@@ -28,6 +28,14 @@
 #     kuadrant-tokenratelimitpolicies.yaml - Kuadrant TokenRateLimitPolicies
 #     kserve-llminferenceservices.yaml - KServe LLMInferenceService definitions
 #   pod-logs/                  - Per-pod logs from the deployment namespace
+#   limitador/                 - Limitador sync state (the TokenRateLimitPolicy handshake):
+#     limitador-cr.yaml          - Limitador CR incl. status conditions
+#     kuadrant-cr.yaml           - Kuadrant CR incl. status conditions
+#     tokenratelimitpolicies.yaml - Full YAML of every TRLP
+#     trlp-conditions.txt        - Compact per-TRLP conditions with generation
+#     pods.txt                   - kuadrant-system pod state
+#     metrics.txt                - Limitador /metrics (limitador_up, datastore_partitioned,
+#                                  authorized_hits, limited_calls)
 #
 # Usage:
 #   source test/e2e/scripts/auth_utils.sh
@@ -339,6 +347,90 @@ collect_cluster_state() {
 }
 
 # -----------------------------------------------------------------------------
+# Collect Limitador / TokenRateLimitPolicy sync state to artifact dir
+# -----------------------------------------------------------------------------
+# A TokenRateLimitPolicy stuck at
+#   Enforced=False, reason=Unknown,
+#   message="TokenRateLimitPolicy waiting for the following components to sync: [Limitador]"
+# means Kuadrant rendered the config and Limitador never acknowledged it. Nothing
+# else in the harness records the Limitador half of that handshake, so a stalled
+# limiter is indistinguishable from a slow one -- and it fails open: a token
+# limit that was never applied still admits every request, which is why only the
+# three tests that assert Enforced=True ever notice.
+# `timeout` is not in the macOS base image, and a wedged kubectl would otherwise
+# stall collection exactly where the run is already out of time budget.
+_limitador_timeout() {
+  local secs="$1"
+  shift
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "$secs" "$@"
+  else
+    "$@"
+  fi
+}
+
+_limitador_fetch() (
+  local ns="$1" pod="$2" path="$3" out="$4"
+  # The pod proxy needs no shell or curl inside the limitador image, which is
+  # all that is available on a distroless build.
+  if _limitador_timeout 20 kubectl get --raw "/api/v1/namespaces/${ns}/pods/${pod}:8080/proxy/${path}" \
+    > "$out" 2>/dev/null && [[ -s "$out" ]]; then
+    return 0
+  fi
+  _limitador_timeout 20 kubectl exec -n "$ns" "$pod" -- \
+    curl -sS --max-time 5 "http://localhost:8080/${path}" > "$out" 2>&1 || true
+)
+
+collect_limitador_state() {
+  local outdir="${1:-$ARTIFACTS_DIR/limitador}"
+  local ns="${RHCL_NAMESPACE:-${AUTHORINO_NAMESPACE:-kuadrant-system}}"
+  mkdir -p "$outdir"
+  echo "Collecting Limitador state from namespace $ns to $outdir"
+
+  # The CR carries Limitador's own status conditions; no CR at all is itself an
+  # answer (Kuadrant never created one). The Kuadrant CR covers the operator
+  # side of the same reconciliation.
+  _limitador_timeout 30 kubectl get limitador -n "$ns" -o yaml > "$outdir/limitador-cr.yaml" 2>&1 || true
+  _limitador_timeout 30 kubectl get kuadrant -n "$ns" -o yaml > "$outdir/kuadrant-cr.yaml" 2>&1 || true
+
+  # Conditions rather than the name/age dump cluster-state.log keeps: the
+  # condition message is the only existing signal that names the unsynced
+  # component, and generation vs observedGeneration separates "Limitador never
+  # saw the update" from "Limitador saw it and rejected it". The tests compare
+  # the top-level .status.observedGeneration, not the per-condition field, which
+  # this Kuadrant build leaves unset.
+  _limitador_timeout 30 kubectl get tokenratelimitpolicies.kuadrant.io -A -o yaml \
+    > "$outdir/tokenratelimitpolicies.yaml" 2>&1 || true
+  _limitador_timeout 30 kubectl get tokenratelimitpolicies.kuadrant.io -A -o json 2>/dev/null \
+    | jq -r '.items[] | .metadata.name as $n | .metadata.namespace as $m
+        | "--- \($n) (\($m)) generation=\(.metadata.generation // "-") observedGeneration=\(.status.observedGeneration // "-")",
+          ((.status.conditions // [])[]
+            | "    \(.type)=\(.status) reason=\(.reason // "-") \(.message // "")")' \
+    > "$outdir/trlp-conditions.txt" 2>/dev/null || true
+
+  _limitador_timeout 30 kubectl get pods -n "$ns" -o wide > "$outdir/pods.txt" 2>&1 || true
+
+  local pod
+  pod=$(kubectl get pods -n "$ns" -l app=limitador -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+  if [[ -z "$pod" ]]; then
+    pod=$(kubectl get pods -n "$ns" -o name 2>/dev/null | grep -m1 limitador | sed 's|^pod/||' || true)
+  fi
+  if [[ -z "$pod" ]]; then
+    echo "No Limitador pod found in namespace $ns" > "$outdir/limitador-pod-missing.txt"
+    return 0
+  fi
+  echo "Limitador pod: $pod" >> "$outdir/pods.txt"
+
+  # /metrics carries the health signals that matter here -- limitador_up and
+  # datastore_partitioned -- plus the counters that show whether the limiter is
+  # accepting config pushes and enforcing them at all. The /status endpoints are
+  # not collected: they answer 200 with an empty body, so a saved file cannot
+  # distinguish "healthy" from "probe failed".
+  _limitador_fetch "$ns" "$pod" metrics "$outdir/metrics.txt"
+  echo "  Saved Limitador state to $outdir"
+}
+
+# -----------------------------------------------------------------------------
 # Collect logs from all pods in the maas namespace
 # -----------------------------------------------------------------------------
 collect_namespace_pod_logs() {
@@ -363,6 +455,19 @@ collect_namespace_pod_logs() {
        "lastState=\(.lastState.terminated.reason // "-")/\(.lastState.terminated.exitCode // "-")",
        "finishedAt=\(.lastState.terminated.finishedAt // "-")"]
     | @tsv' <<<"$pods_json" > "${outdir}/pods.txt" 2>/dev/null || true
+  # A restart count says a container died; it does not say whether it was pinned
+  # against its memory limit first. Record the limits and the live usage beside
+  # the restart table so an OOMKilled controller can be told apart from a
+  # crash-looping one without re-running the suite.
+  jq -r '.items[] | .metadata.name as $pod | .spec.containers[]?
+    | [$pod, .name,
+       "cpu=\(.resources.requests.cpu // "-")/\(.resources.limits.cpu // "-")",
+       "mem=\(.resources.requests.memory // "-")/\(.resources.limits.memory // "-")"]
+    | @tsv' <<<"$pods_json" > "${outdir}/pod-resources.txt" 2>/dev/null || true
+  # Needs metrics-server, which is absent or slow on some clusters: best-effort,
+  # and bounded so artifact collection cannot hang the job.
+  kubectl top pod -n "$ns" --no-headers --request-timeout=20s \
+    > "${outdir}/pod-metrics.txt" 2>/dev/null || true
   while read -r pod container; do
     log_tail=500; [[ "$pod" =~ $full_log_pods ]] && log_tail=-1
     kubectl logs -n "$ns" "$pod" -c "$container" --previous --tail="$log_tail" 2>/dev/null \
@@ -384,6 +489,7 @@ collect_e2e_artifacts() {
   echo "Artifact dir: $ARTIFACTS_DIR"
   collect_authorino_logs_redacted "$ARTIFACTS_DIR/authorino-debug.log"
   collect_cluster_state "$ARTIFACTS_DIR"
+  collect_limitador_state "$ARTIFACTS_DIR/limitador"
   collect_maas_crs "$ARTIFACTS_DIR/maas-crs"
   local ns
   for ns in \

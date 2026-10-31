@@ -54,8 +54,9 @@ maas-controller inspects the live `payload-processing-plugins` ConfigMap
 
 | RHOAI 3.5 ConfigMap | Behavior |
 | --- | --- |
-| Exact product default | IPP already translated requests. `spec.apiTranslation.enabled` stays omitted/off for a new Praxis tenant. Cleanup proceeds only when active ExternalModels use OpenAI Chat Completions passthrough. |
+| Exact product default | IPP already translated requests, sending each provider its `targetModel` and `path`. Praxis applies those only with `spec.apiTranslation.enabled`, so before cleanup maas-controller durably writes `spec.apiTranslation.enabled: true`, unless an operator already set the field. Cleanup proceeds only when active ExternalModels use OpenAI Chat Completions passthrough. |
 | Exact default plus response `api-translation` | IPP translated requests and responses. Before cleanup, maas-controller durably writes `spec.apiTranslation.enabled: true`, unless an operator already set the field. The compatibility check still applies. |
+| ODH 3.5.0 default (no `model-provider-resolver` in pre-processing, no `maas-headers-guard` in processing, response `api-translation`) | An earlier shape of the previous row, handled the same way. |
 | Unknown or customized ConfigMap | Migration **blocked**; the controller does not infer equivalent Praxis behavior. |
 
 The legacy IPP request translator was a multi-provider catch-all documented for
@@ -80,7 +81,7 @@ fingerprint alone does not prove every historical provider direction.
 
 The pure-default IPP ConfigMap already enabled request-side `api-translation`;
 its response chain was empty. Baseline #2 added response-side processing.
-Recognizing either fingerprint preserves that migration intent, but does not
+Recognizing any of these fingerprints preserves that migration intent, but does not
 prove support for every provider or response mode. The recognized fingerprints
 and migration decisions are intentionally strict.
 
@@ -135,7 +136,19 @@ these models.
 
 When the default tenant switches to Praxis, the compatibility check above and
 the cleanup of IPP-owned HTTPRoutes also cover these models, not only those in
-the tenant namespace.
+the tenant namespace. The same cleanup removes the Service, ServiceEntry and
+DestinationRule that IPP created next to each ExternalProvider;
+ai-gateway-controller applies its own provider transport.
+
+## Legacy `maas.opendatahub.io` ExternalModels
+
+A legacy ExternalModel that IPP migrated reports `status.phase: Migrated`. When
+it reconciles a legacy object, maas-controller removes its owner reference from
+the `inference.opendatahub.io` ExternalModel and ExternalProvider created for it,
+even before the object is Migrated, so deleting the deprecated legacy object no
+longer deletes the live model. On releases without this change, or if
+maas-controller has not reconciled the legacy object since the upgrade, delete
+it with `kubectl delete externalmodels.maas.opendatahub.io <name> -n <namespace> --cascade=orphan`.
 ## Legacy metrics usage dashboard is opt-in
 
 `Config.spec.usageMetricsDashboard` defaults to `false`. After upgrade, the operator removes any controller-owned copy of the Prometheus-based Perses dashboard (`dashboard-3-maas-usage-admin`). To keep it:

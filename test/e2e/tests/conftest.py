@@ -1,12 +1,20 @@
+import collections
+import json
 import logging
 import os
 import socket
 import subprocess
+import time
+import uuid
 from urllib.parse import urlparse
 import pytest
 import requests
 
-from test_helper import MAAS_API_DEPLOYMENT_NAMESPACE
+from test_helper import (
+    MAAS_API_DEPLOYMENT_NAMESPACE,
+    _is_transient_gateway_response,
+    _request_with_gateway_retry,
+)
 
 
 log = logging.getLogger(__name__)
@@ -131,6 +139,11 @@ def _order_grid_oidc_tests_first(items):
 
 # TLS verification flag - set E2E_SKIP_TLS_VERIFY=true to disable cert verification
 TLS_VERIFY = os.environ.get("E2E_SKIP_TLS_VERIFY", "").lower() != "true"
+
+# Session/module fixtures mint a key or read the catalog once on behalf of many
+# tests. A single transient 5xx there errors the whole module (or session), so
+# they retry further than a single request would.
+FIXTURE_GATEWAY_RETRIES = int(os.environ.get("E2E_FIXTURE_GATEWAY_RETRIES", "8"))
 
 # When using port-forward (GATEWAY_HOST=127.0.0.1:PORT), set GATEWAY_ROUTE_HOST to the
 # real route hostname so OpenShift gateway routing matches the Host header.
@@ -283,9 +296,46 @@ def token() -> str:
 def headers(token: str):
     return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
+def _create_api_key(url: str, headers: dict, payload: dict, name_prefix: str) -> requests.Response:
+    """POST an API-key creation, retrying transient gateway responses.
+
+    Creation is not idempotent and the key is show-once: a 5xx can arrive after
+    the server already minted the key, and a retry under the same name would
+    collide with (or duplicate) a key whose plaintext was lost with the
+    response. Each attempt therefore gets a fresh name, so a retry can only
+    ever create a key the test goes on to use.
+    """
+    response = None
+    for attempt in range(1, FIXTURE_GATEWAY_RETRIES + 1):
+        body = dict(payload, name=f"{name_prefix}-{uuid.uuid4().hex[:6]}")
+        response = requests.post(url, headers=headers, json=body, timeout=30, verify=TLS_VERIFY)
+        if response.status_code in (200, 201):
+            return response
+        # A non-transient error is the answer, not a flake.
+        if not _is_transient_gateway_response(response) or attempt == FIXTURE_GATEWAY_RETRIES:
+            return response
+        log.info(
+            "API key creation returned %d (attempt %d/%d), retrying under a new name",
+            response.status_code,
+            attempt,
+            FIXTURE_GATEWAY_RETRIES,
+        )
+        time.sleep(min(2 * attempt, 10))
+    return response
+
+
 @pytest.fixture(scope="session")
 def model_catalog(maas_api_base_url: str, headers: dict):
-    r = requests.get(f"{maas_api_base_url}/v1/models", headers=headers, timeout=45, verify=TLS_VERIFY)
+    # Session-scoped: a single transient 5xx here would error every test that
+    # depends on the catalog, so it must ride out gateway/AuthPolicy reloads.
+    r = _request_with_gateway_retry(
+        requests.get,
+        f"{maas_api_base_url}/v1/models",
+        headers=headers,
+        timeout=45,
+        verify=TLS_VERIFY,
+        retries=FIXTURE_GATEWAY_RETRIES,
+    )
     r.raise_for_status()
     return r.json()
 
@@ -373,12 +423,11 @@ def api_key(api_keys_base_url: str, headers: dict) -> str:
     sim_sub = os.environ.get("E2E_SIMULATOR_SUBSCRIPTION", "simulator-subscription")
     key_name = f"e2e-test-inference-key-{_xdist_worker_suffix()}"
     print(f"[api_key] Creating API key for inference tests ({key_name})...")
-    r = requests.post(
+    r = _create_api_key(
         api_keys_base_url,
-        headers=headers,
-        json={"name": key_name, "subscription": sim_sub},
-        timeout=30,
-        verify=TLS_VERIFY,
+        headers,
+        {"subscription": sim_sub},
+        key_name,
     )
     # Accept both 200 and 201 as success
     if r.status_code not in (200, 201):
@@ -399,15 +448,11 @@ def worker_api_key(worker_tenant_context, headers: dict) -> str:
     from multitenancy_helpers import response_summary
 
     key_name = f"e2e-worker-inference-key-{_xdist_worker_suffix()}"
-    r = requests.post(
+    r = _create_api_key(
         f"{worker_tenant_context.api_base_url}/v1/api-keys",
-        headers=headers,
-        json={
-            "name": key_name,
-            "subscription": worker_tenant_context.subscription_name,
-        },
-        timeout=30,
-        verify=TLS_VERIFY,
+        headers,
+        {"subscription": worker_tenant_context.subscription_name},
+        key_name,
     )
     if r.status_code not in (200, 201):
         raise RuntimeError(f"Failed to create worker API key: {response_summary(r)}")
@@ -556,3 +601,59 @@ def shared_test_tenants(gateway_host: str, is_https: bool):
     finally:
         cleanup_discovery_case(case_a)
         cleanup_discovery_case(case_b)
+
+
+def pytest_terminal_summary(terminalreporter, exitstatus, config):
+    """Report gateway flakes that retries absorbed, and write them as an artifact.
+
+    A green run that needed 40 transparent retries is not the same signal as a
+    green run that needed none. Each xdist worker appends its retries to
+    ``$ARTIFACTS_DIR/transient-retries-<worker>.jsonl``; this hook (runs on the
+    controller) aggregates them into ``flake-report.json`` next to the junit XML.
+    """
+    artifacts_dir = os.environ.get("ARTIFACTS_DIR")
+    if not artifacts_dir or not os.path.isdir(artifacts_dir):
+        return
+
+    entries = []
+    for name in sorted(os.listdir(artifacts_dir)):
+        if not (name.startswith("transient-retries-") and name.endswith(".jsonl")):
+            continue
+        path = os.path.join(artifacts_dir, name)
+        try:
+            with open(path, encoding="utf-8") as fh:
+                for line in fh:
+                    try:
+                        entries.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        continue
+        except OSError:
+            continue
+    if not entries:
+        # Say so explicitly: a silent log would leave "zero retries" and
+        # "per-worker logging never ran" indistinguishable in CI output.
+        terminalreporter.write_sep("=", "gateway flake report (retried transient 5xx)")
+        terminalreporter.write_line("0 transient gateway responses retried")
+        return
+
+    counts = collections.Counter(entry.get("test", "<unknown>") for entry in entries)
+    report = {
+        "total_retries": len(entries),
+        "distinct_tests": len(counts),
+        "by_test": dict(counts.most_common()),
+        "entries": entries,
+    }
+    report_path = os.path.join(artifacts_dir, "flake-report.json")
+    try:
+        with open(report_path, "w", encoding="utf-8") as fh:
+            json.dump(report, fh, indent=2, sort_keys=False)
+    except OSError as exc:
+        log.warning("could not write %s: %s", report_path, exc)
+
+    terminalreporter.write_sep("=", "gateway flake report (retried transient 5xx)")
+    terminalreporter.write_line(
+        f"{len(entries)} transient gateway response(s) retried across "
+        f"{len(counts)} test(s); details in {report_path}"
+    )
+    for test, count in counts.most_common(10):
+        terminalreporter.write_line(f"  {count:>3}x  {test}")
