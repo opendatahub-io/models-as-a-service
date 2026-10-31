@@ -13,7 +13,7 @@
 set -euo pipefail
 
 # Preflight checks
-for cmd in kubectl kustomize yq; do
+for cmd in kubectl kustomize; do
     if ! command -v "$cmd" &>/dev/null; then
         echo "❌ Required command '$cmd' not found. Please install it first."
         exit 1
@@ -66,19 +66,6 @@ BASE_OBSERVABILITY_DIR="$PROJECT_ROOT/deployment/base/observability"
 if [ -d "$BASE_OBSERVABILITY_DIR" ]; then
     kustomize build "$BASE_OBSERVABILITY_DIR" | kubectl apply -f -
     echo "   ✅ TelemetryPolicy and Istio Telemetry deployed"
-
-    # Deploy Authorino server-metrics ServiceMonitor.
-    # The Kuadrant operator's authorino-operator-monitor only scrapes /metrics (controller-runtime).
-    # This additional ServiceMonitor scrapes /server-metrics for auth evaluation metrics
-    # (auth_server_authconfig_duration_seconds, auth_server_authconfig_response_status, etc.)
-    if ! kubectl get service -n kuadrant-system -l authorino-resource=authorino,control-plane=controller-manager &>/dev/null 2>&1; then
-        echo "   ⚠️  Authorino service not found - skipping Authorino server-metrics"
-    elif kuadrant_already_scrapes "/server-metrics"; then
-        echo "   ℹ️  Kuadrant already scrapes Authorino /server-metrics - skipping MaaS ServiceMonitor (no duplicates)"
-    else
-        kubectl apply -f "$BASE_OBSERVABILITY_DIR/authorino-server-metrics-servicemonitor.yaml"
-        echo "   ✅ Authorino /server-metrics ServiceMonitor deployed"
-    fi
 else
     echo "   ⚠️  Base observability directory not found - TelemetryPolicy may be missing!"
 fi
@@ -95,36 +82,9 @@ else
     echo "   ⚠️  Istio Gateway not found - skipping Istio metrics"
 fi
 
-echo ""
-echo "3️⃣ Deploying Authorino PrometheusRules..."
-
-# Detect Authorino namespace: rh-connectivity-link (RHOAI) or kuadrant-system (ODH)
-AUTHORINO_NAMESPACE="kuadrant-system"
-if kubectl get ns rh-connectivity-link &>/dev/null && kubectl get deploy -n rh-connectivity-link authorino &>/dev/null 2>&1; then
-    AUTHORINO_NAMESPACE="rh-connectivity-link"
-fi
-
-# Deploy metadata evaluator PrometheusRule (alerts on maas-api metadata failures)
-METADATA_RULE_FILE="$BASE_OBSERVABILITY_DIR/authorino-maas-metadata-evaluator-prometheusrule.yaml"
-if ! kubectl get deploy -n "$AUTHORINO_NAMESPACE" authorino &>/dev/null 2>&1; then
-    echo "   ⚠️  Authorino deployment not found in $AUTHORINO_NAMESPACE - skipping metadata evaluator PrometheusRule"
-elif [ -f "$METADATA_RULE_FILE" ]; then
-    yq eval ".metadata.namespace = \"$AUTHORINO_NAMESPACE\"" "$METADATA_RULE_FILE" | kubectl apply -f -
-    echo "   ✅ Metadata evaluator PrometheusRule deployed (namespace: $AUTHORINO_NAMESPACE)"
-else
-    echo "   ⚠️  Metadata evaluator PrometheusRule not found - skipping alert"
-fi
-
-# Deploy OIDC authentication PrometheusRule (alerts on OIDC/JWT auth failures and latency)
-OIDC_RULE_FILE="$BASE_OBSERVABILITY_DIR/authorino-maas-oidc-prometheusrule.yaml"
-if ! kubectl get deploy -n "$AUTHORINO_NAMESPACE" authorino &>/dev/null; then
-    echo "   ⚠️  Authorino deployment not found - skipping OIDC PrometheusRule"
-elif [ -f "$OIDC_RULE_FILE" ]; then
-    yq eval ".metadata.namespace = \"$AUTHORINO_NAMESPACE\"" "$OIDC_RULE_FILE" | kubectl apply -f -
-    echo "   ✅ OIDC PrometheusRule deployed (namespace: $AUTHORINO_NAMESPACE)"
-else
-    echo "   ⚠️  OIDC PrometheusRule not found - skipping alert"
-fi
+# Authorino monitoring is owned by maas-controller via Config.spec.authorinoMonitoring.
+# This script deliberately does not apply it: Config/default always exists once the
+# controller is running, so a second apply here would only fight the controller.
 
 # ==========================================
 # Summary
@@ -137,11 +97,12 @@ echo ""
 
 echo "📝 Metrics collection configured:"
 echo "   Limitador: authorized_hits, authorized_calls, limited_calls, limitador_up"
-echo "   Authorino: auth_server_authconfig_duration_seconds, auth_server_authconfig_response_status, auth_server_evaluator_* (metadata HTTP)"
+echo "   Authorino: auth_server_authconfig_duration_seconds, auth_server_authconfig_response_status_total, auth_server_evaluator_* (metadata HTTP)"
 echo "   Istio:     istio_requests_total, istio_request_duration_milliseconds"
 echo ""
 
-echo "🚨 Alerting configured (if Authorino found):"
+echo "🚨 Authorino alerts are managed by maas-controller via"
+echo "   Config.spec.authorinoMonitoring (enabled by default):"
 echo "   MaaSAuthorinoMetadataEvaluatorHighFailureRate - maas-api metadata call failure rate above configured threshold"
 echo "   MaaSAuthorinoAuthenticationHighFailureRate - gateway authentication failure rate above configured threshold"
 echo "   MaaSAuthorinoAuthenticationHighLatency - gateway authentication P95 latency above configured threshold"

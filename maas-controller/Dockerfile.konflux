@@ -28,6 +28,7 @@ COPY deployment/base/maas-controller/policies /deployment/base/maas-controller/p
 COPY deployment/base/payload-processing /deployment/base/payload-processing
 COPY deployment/base/maas-discovery /deployment/base/maas-discovery
 COPY deployment/components /deployment/components
+COPY deployment/base/observability /deployment/base/observability
 RUN chmod -R g=u /maas-api /deployment
 
 # Use a non-root user (OpenShift will assign random UID)
