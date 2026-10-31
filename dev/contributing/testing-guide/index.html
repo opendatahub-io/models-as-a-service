@@ -4200,7 +4200,7 @@ database topology.</p>
 </tr>
 <tr>
 <td><code>E2E_PARALLEL_WORKERS</code></td>
-<td>pytest-xdist worker count for pass 1 (default <code>7</code>). Set to <code>1</code> for single-worker pass 1 without xdist; pass 2 stays serial.</td>
+<td>pytest-xdist worker count for pass 1 (default <code>5</code>). Set to <code>1</code> for single-worker pass 1 without xdist; pass 2 stays serial.</td>
 </tr>
 <tr>
 <td><code>LLMISVC_CONTROLLER_CPU_REQUEST</code> / <code>LLMISVC_CONTROLLER_CPU_LIMIT</code></td>
@@ -4223,9 +4223,9 @@ model, while <code>E2E_MODEL_NAME</code> sets the ID sent in the inference reque
 does not identify the model route. SSE parsing is centralized in
 <code>test_helper.assert_openai_sse_chat_stream</code>.</p>
 <h3 id="parallel-e2e-pytest-xdist">Parallel E2E (pytest-xdist)</h3>
-<p><code>run_e2e_tests.sh</code> and <code>run-tests-quick.sh</code> run <strong>two marker-filtered passes</strong> by default (default <code>E2E_PARALLEL_WORKERS=7</code>). Use <code>--serial-only</code> to run pass 2 only (<code>-m serial</code>); that mode does not execute non-serial tests. Direct <code>pytest</code> invocations must use the same split when a module mixes <code>@serial</code> and worker-tenant tests.</p>
+<p><code>run_e2e_tests.sh</code> and <code>run-tests-quick.sh</code> run <strong>two marker-filtered passes</strong> by default (default <code>E2E_PARALLEL_WORKERS=5</code>). Use <code>--serial-only</code> to run pass 2 only (<code>-m serial</code>); that mode does not execute non-serial tests. Direct <code>pytest</code> invocations must use the same split when a module mixes <code>@serial</code> and worker-tenant tests.</p>
 <ol>
-<li><strong>Pass 1</strong>: <code>-m "not serial"</code> — with <code>--dist=loadgroup -n 7</code> when workers &gt; 1, or single-worker execution when <code>E2E_PARALLEL_WORKERS=1</code></li>
+<li><strong>Pass 1</strong>: <code>-m "not serial"</code> — with <code>--dist=loadgroup -n 5</code> when workers &gt; 1, or single-worker execution when <code>E2E_PARALLEL_WORKERS=1</code></li>
 <li><strong>Pass 2 (serial)</strong>: <code>-m serial</code> — tests that mutate shared cluster state (subscription delete/restore, controller/Kuadrant scaling)</li>
 </ol>
 <p>Set <code>E2E_PARALLEL_WORKERS=1</code> to disable xdist on pass 1 while keeping the serial/non-serial split (useful for debugging on shared clusters). Pass <code>./run_e2e_tests.sh --serial-only</code> only when intentionally limiting the run to serial mutators.</p>
@@ -4518,7 +4518,7 @@ does not identify the model route. SSE parsing is centralized in
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="October 28, 2026 21:16:37 UTC">October 28, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="October 31, 2026 02:39:08 UTC">October 31, 2026</span>
   </span>
 
     
