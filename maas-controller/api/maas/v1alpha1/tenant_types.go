@@ -73,11 +73,12 @@ type TenantSpec struct {
 	// +kubebuilder:validation:Optional
 	MaasAPI *TenantMaasAPIConfig `json:"maasApi,omitempty"`
 
-	// PayloadProcessing defines scaling configuration for payload-processing (IPP) pods.
+	// PayloadProcessing defines configuration for payload-processing pods
+	// (scaling/resources and ExtProc server.max_body_bytes).
 	// +kubebuilder:validation:Optional
 	PayloadProcessing *TenantPayloadProcessingConfig `json:"payloadProcessing,omitempty"`
 
-	// PayloadPreProcessing defines scaling configuration for payload-pre-processing (IPP) pods.
+	// PayloadPreProcessing defines scaling configuration for payload-pre-processing pods.
 	// +kubebuilder:validation:Optional
 	PayloadPreProcessing *TenantPayloadProcessingConfig `json:"payloadPreProcessing,omitempty"`
 }
@@ -254,8 +255,10 @@ type TenantMaasAPIConfig struct {
 	Resources *TenantResourceRequirements `json:"resources,omitempty"`
 }
 
-// TenantPayloadProcessingConfig defines scaling and resource configuration for an IPP
-// workload Deployment (payload-processing or payload-pre-processing).
+// TenantPayloadProcessingConfig defines configuration for a payload-processing
+// workload Deployment (payload-processing or payload-pre-processing), including
+// scaling/resources and, when used under MaasTenantConfig.spec.payloadProcessing,
+// the ExtProc request-body accumulation ceiling.
 type TenantPayloadProcessingConfig struct {
 	// Replicas overrides the Deployment replica count.
 	// When Autoscaling is enabled, this value sets the HPA minReplicas floor.
@@ -275,6 +278,20 @@ type TenantPayloadProcessingConfig struct {
 	// Resource claims are not supported.
 	// +kubebuilder:validation:Optional
 	Resources *TenantResourceRequirements `json:"resources,omitempty"`
+
+	// MaxBodyBytes bounds ExtProc request-body accumulation (server.max_body_bytes)
+	// for the Praxis payload-processing dataplane. This is ExtProc's accumulation
+	// ceiling, not Envoy's HTTP buffer filter. When set under
+	// MaasTenantConfig.spec.payloadProcessing, the AI Gateway controller always
+	// renders server.max_body_bytes and never allow_unbounded_body. Omission
+	// defaults to 10485760 (10 MiB); values above 104857600 (100 MiB) are rejected.
+	// Under payloadPreProcessing the field is currently unused by the AI Gateway
+	// controller. Keep the Maximum in sync with AGC MaxExtProcMaxBodyBytes.
+	// +kubebuilder:default=10485760
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=104857600
+	MaxBodyBytes *int64 `json:"maxBodyBytes,omitempty"`
 }
 
 // TenantResourceRequirements defines CPU and memory requests and limits for a container.
