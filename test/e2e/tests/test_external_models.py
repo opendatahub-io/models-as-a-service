@@ -16,6 +16,7 @@ Environment variables:
   prone to unrelated 503s that would silently skip every test in this file via
   _check_external_endpoint_reachable)
 - E2E_EXTERNAL_SUBSCRIPTION: Subscription name (default: e2e-external-subscription)
+- E2E_SHARED_PROVIDER_PATH: Upstream path for the shared-provider Praxis test (default: /post)
 - GATEWAY_HOST: MaaS gateway hostname (required)
 """
 
@@ -37,6 +38,7 @@ from test_helper import (
     _delete_cr,
     _get_cr,
     _ns,
+    _wait_for_cr_absent,
     _wait_for_httproute_accepted,
     _wait_for_maas_auth_policy_phase,
     _wait_for_maas_subscription_phase,
@@ -76,10 +78,10 @@ EXTERNAL_PROVIDER_SERVICE_NAME = EXTERNAL_PROVIDER_NAME
 # ─── Helpers ─────────────────────────────────────────────────────────────────
 
 def _patch_cr(kind: str, name: str, namespace: str, patch: dict):
-    """Patch a Kubernetes resource."""
+    """Patch a Kubernetes resource, raising if oc rejects the patch."""
     subprocess.run(
         ["oc", "patch", kind, name, "-n", namespace, "--type=merge", "-p", json.dumps(patch)],
-        capture_output=True, text=True,
+        capture_output=True, text=True, check=True,
     )
 
 
@@ -125,8 +127,9 @@ def _check_external_endpoint_reachable():
     return False
 
 
+_LEGACY_IPP = pytest.mark.legacy_ipp
+
 pytestmark = [
-    pytest.mark.legacy_ipp,
     pytest.mark.skipif(
         not _check_external_endpoint_reachable(),
         reason=f"External endpoint {EXTERNAL_ENDPOINT} is not reachable (disconnected environment?)",
@@ -295,6 +298,8 @@ def external_models_setup(gateway_url, headers, api_keys_base_url):
 # ─── Tests: Discovery ───────────────────────────────────────────────────────
 
 class TestExternalModelDiscovery:
+    pytestmark = _LEGACY_IPP
+
     """Verify ExternalModel reconciler creates the expected Istio resources."""
 
     def test_maasmodelref_created(self, external_models_setup):
@@ -316,6 +321,8 @@ class TestExternalModelDiscovery:
 # ─── Tests: Auth ─────────────────────────────────────────────────────────────
 
 class TestExternalModelAuth:
+    pytestmark = _LEGACY_IPP
+
     """Verify auth enforcement for external model routes."""
 
     @pytest.mark.parametrize(
@@ -338,6 +345,8 @@ class TestExternalModelAuth:
 # ─── Tests: Egress ───────────────────────────────────────────────────────────
 
 class TestExternalModelEgress:
+    pytestmark = _LEGACY_IPP
+
     """Verify requests are forwarded to the external endpoint."""
 
     def test_request_forwarded_returns_200(self, external_models_setup):
@@ -367,6 +376,8 @@ class TestExternalModelEgress:
 # ─── Tests: Cleanup ─────────────────────────────────────────────────────────
 
 class TestExternalModelCleanup:
+    pytestmark = _LEGACY_IPP
+
     """Verify resource cleanup when external models are deleted."""
 
     def test_delete_removes_httproute(self, external_models_setup):
@@ -416,6 +427,8 @@ class TestExternalModelCleanup:
 
 
 class TestExternalModelPathRouting:
+    pytestmark = _LEGACY_IPP
+
     """Verify path-based routing for external model endpoints.
 
     The URL path ``/{namespace}/{model}/v1/...`` determines which model
@@ -450,6 +463,8 @@ requires_ipp = pytest.mark.skipif(
 
 @requires_ipp
 class TestLegacyExternalModelMigration:
+    pytestmark = _LEGACY_IPP
+
     """Verify IPP migration is reflected on the retained legacy CR."""
 
     def test_migration_sets_legacy_status_and_removes_networking(self):
@@ -532,6 +547,8 @@ class TestLegacyExternalModelMigration:
 
 @requires_ipp
 class TestExternalModelBodyRouting:
+    pytestmark = _LEGACY_IPP
+
     """Verify body-based routing for external models.
 
     IPP pre-processing extracts the ``model`` field from the JSON body and
@@ -594,3 +611,407 @@ class TestExternalModelBodyRouting:
             "a 200 means body routing may not be active."
         )
         log.info("Body routing (%s): HTTP %d", case_name, r.status_code)
+
+
+# ─── Tests: Shared Provider (multi-model) ────────────────────────────────────
+
+SHARED_PROVIDER_PATH = os.environ.get("E2E_SHARED_PROVIDER_PATH", "/post")
+PAYLOAD_PROCESSING_TYPE_ANNOTATION = "maas.opendatahub.io/payload-processing-type"
+DEFAULT_TENANT_CONFIG_NAME = "default-tenant"
+
+
+def _wait_for_praxis_external_model(name: str, namespace: str, timeout: int = 180):
+    """Wait for an AIGC-ready model with its generated route and overlay digest."""
+    deadline = time.monotonic() + timeout
+    last_status = {}
+    while time.monotonic() < deadline:
+        model = _get_cr(EXTERNAL_MODEL_KIND, name, namespace)
+        if model:
+            last_status = model.get("status", {})
+            generation = model.get("metadata", {}).get("generation")
+            if (
+                last_status.get("phase") == "Ready"
+                and last_status.get("httpRouteName")
+                and last_status.get("overlayDigest")
+                and last_status.get("observedGeneration") == generation
+            ):
+                return model
+        time.sleep(2)
+    raise TimeoutError(
+        f"ExternalModel {namespace}/{name} did not publish Ready status, an HTTPRoute name, "
+        f"and a Praxis overlay digest within {timeout}s (last status: {last_status!r})"
+    )
+
+
+def _post_shared_provider_model(
+    gateway_url: str,
+    namespace: str,
+    model_name: str,
+    api_key: str,
+    *,
+    expected_status: int,
+    timeout: int = 120,
+):
+    """Poll the model route for a deterministic response from the shared provider."""
+    url = f"{gateway_url.rstrip('/')}/{namespace}/{model_name}{SHARED_PROVIDER_PATH}"
+    request_headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {api_key}",
+    }
+    body = {"model": model_name, "messages": [{"role": "user", "content": "shared provider test"}]}
+    deadline = time.monotonic() + timeout
+    last_status = "no response"
+    attempt = 0
+    while time.monotonic() < deadline:
+        attempt += 1
+        try:
+            response = requests.post(
+                url, headers=request_headers, json=body, timeout=30, verify=TLS_VERIFY,
+            )
+            last_status = response.status_code
+            if response.status_code == expected_status:
+                return response
+            if response.status_code not in (401, 403, 404, 429, 500, 502, 503, 504):
+                raise AssertionError(
+                    f"Shared-provider route {namespace}/{model_name} returned unexpected "
+                    f"HTTP {response.status_code}; expected HTTP {expected_status}"
+                )
+        except requests.RequestException as exc:
+            last_status = type(exc).__name__
+        log.info(
+            "Shared-provider route %s returned %s (attempt %d); waiting for HTTP %d",
+            model_name,
+            last_status,
+            attempt,
+            expected_status,
+        )
+        time.sleep(2)
+    raise AssertionError(
+        f"Shared-provider route {namespace}/{model_name} returned {last_status!r}; "
+        f"expected HTTP {expected_status} within {timeout}s"
+    )
+
+
+def _cleanup_shared_provider_resources(setup: dict):
+    """Delete test resources while still attempting every cleanup step on error."""
+    namespace = setup["namespace"]
+    cleanup_errors = []
+
+    def attempt(description, action):
+        try:
+            action()
+        except Exception as exc:  # cleanup must continue after any one failure
+            cleanup_errors.append(f"{description}: {exc}")
+
+    for kind, name in (
+        ("maassubscription", setup["subscription_name"]),
+        ("maasauthpolicy", setup["auth_policy_name"]),
+    ):
+        attempt(f"delete {kind}/{name}", lambda kind=kind, name=name: _delete_cr(kind, name, namespace))
+        attempt(
+            f"wait for {kind}/{name} deletion",
+            lambda kind=kind, name=name: _wait_for_cr_absent(kind, name, namespace=namespace, timeout=90),
+        )
+
+    for name in (setup["first_model"], setup["second_model"]):
+        model_ref = None
+        try:
+            model_ref = _get_cr("maasmodelref", name, namespace)
+        except Exception as exc:  # noqa: BLE001 - continue cleanup after API errors
+            cleanup_errors.append(f"get maasmodelref/{name}: {exc}")
+        if model_ref:
+            attempt(
+                f"remove finalizers from maasmodelref/{name}",
+                lambda name=name: _patch_cr(
+                    "maasmodelref", name, namespace, {"metadata": {"finalizers": []}},
+                ),
+            )
+        attempt(f"delete maasmodelref/{name}", lambda name=name: _delete_cr("maasmodelref", name, namespace))
+        attempt(
+            f"wait for maasmodelref/{name} deletion",
+            lambda name=name: _wait_for_cr_absent("maasmodelref", name, namespace=namespace, timeout=90),
+        )
+
+    for name in (setup["first_model"], setup["second_model"]):
+        attempt(
+            f"delete ExternalModel/{name}",
+            lambda name=name: _delete_cr(EXTERNAL_MODEL_KIND, name, namespace),
+        )
+    for name in (setup["first_model"], setup["second_model"]):
+        attempt(
+            f"wait for ExternalModel/{name} deletion",
+            lambda name=name: _wait_for_cr_absent(EXTERNAL_MODEL_KIND, name, namespace=namespace, timeout=180),
+        )
+
+    attempt(
+        f"delete ExternalProvider/{setup['provider_name']}",
+        lambda: _delete_cr(EXTERNAL_PROVIDER_KIND, setup["provider_name"], namespace),
+    )
+    attempt(
+        f"wait for ExternalProvider/{setup['provider_name']} deletion",
+        lambda: _wait_for_cr_absent(
+            EXTERNAL_PROVIDER_KIND, setup["provider_name"], namespace=namespace, timeout=90,
+        ),
+    )
+    attempt(
+        f"delete Secret/{setup['secret_name']}",
+        lambda: _delete_cr("secret", setup["secret_name"], namespace),
+    )
+    if cleanup_errors:
+        raise RuntimeError("Shared-provider fixture cleanup failed: " + "; ".join(cleanup_errors))
+
+
+class TestSharedProviderMultiModel:
+    """Verify two ExternalModels sharing one ExternalProvider both route correctly.
+
+    Regression test for RHOAIENG-98005: ai-gateway-controller produced
+    duplicate stable_id values in the routing overlay when two models
+    referenced the same provider, causing Praxis to reject the overlay
+    and the second model to return 404/503.
+    """
+
+    pytestmark = pytest.mark.external
+
+    @pytest.fixture(scope="class")
+    def shared_provider_setup(self, gateway_url, headers, api_keys_base_url):
+        """Use the already bootstrapped default tenant and its Praxis dataplane."""
+        namespace = _ns()
+        suffix = uuid.uuid4().hex[:8]
+        setup = {
+            "namespace": namespace,
+            "provider_name": f"e2e-shared-provider-{suffix}",
+            "first_model": f"e2e-shared-model-a-{suffix}",
+            "second_model": f"e2e-shared-model-b-{suffix}",
+            "auth_policy_name": f"e2e-shared-auth-{suffix}",
+            "subscription_name": f"e2e-shared-sub-{suffix}",
+            "secret_name": f"e2e-shared-secret-{suffix}",
+            "gateway_url": gateway_url,
+        }
+
+        tenant_config = _get_cr("maastenantconfig", DEFAULT_TENANT_CONFIG_NAME, namespace)
+        if tenant_config is None:
+            pytest.fail(
+                f"The bootstrapped MaaSTenantConfig {DEFAULT_TENANT_CONFIG_NAME}/{namespace} "
+                "is required for this Praxis regression test"
+            )
+        payload_processing_type = (
+            tenant_config.get("metadata", {}).get("annotations", {}).get(PAYLOAD_PROCESSING_TYPE_ANNOTATION, "")
+        )
+        if payload_processing_type not in ("", "praxis"):
+            if payload_processing_type == "ipp":
+                pytest.skip(
+                    f"MaaSTenantConfig {DEFAULT_TENANT_CONFIG_NAME}/{namespace} explicitly selects IPP; "
+                    "this regression test covers the default Praxis dataplane"
+                )
+            pytest.fail(
+                f"MaaSTenantConfig {DEFAULT_TENANT_CONFIG_NAME}/{namespace} selects "
+                f"payload processing {payload_processing_type!r}; this test requires the existing Praxis default"
+            )
+
+        try:
+            _apply_cr({
+                "apiVersion": "v1",
+                "kind": "Secret",
+                "metadata": {
+                    "name": setup["secret_name"],
+                    "namespace": namespace,
+                },
+                "type": "Opaque",
+                "stringData": {"api-key": "e2e-test-key"},
+            })
+            _apply_cr({
+                "apiVersion": "inference.opendatahub.io/v1alpha1",
+                "kind": "ExternalProvider",
+                "metadata": {"name": setup["provider_name"], "namespace": namespace},
+                "spec": {
+                    "provider": "openai",
+                    "endpoint": EXTERNAL_ENDPOINT,
+                    "auth": {
+                        "type": "simple",
+                        "secretRef": {"name": setup["secret_name"]},
+                    },
+                },
+            })
+
+            model_refs = []
+            for model_name in (setup["first_model"], setup["second_model"]):
+                _apply_cr({
+                    "apiVersion": "inference.opendatahub.io/v1alpha1",
+                    "kind": "ExternalModel",
+                    "metadata": {"name": model_name, "namespace": namespace},
+                    "spec": {
+                        "externalProviderRefs": [
+                            {
+                                "ref": {"name": setup["provider_name"]},
+                                "targetModel": TARGET_MODEL,
+                                "apiFormat": "openai-chat",
+                                "path": SHARED_PROVIDER_PATH,
+                            },
+                        ],
+                    },
+                })
+                _apply_cr({
+                    "apiVersion": "maas.opendatahub.io/v1alpha1",
+                    "kind": "MaaSModelRef",
+                    "metadata": {
+                        "name": model_name,
+                        "namespace": namespace,
+                        "annotations": {
+                            "maas.opendatahub.io/endpoint": EXTERNAL_ENDPOINT,
+                            "maas.opendatahub.io/provider": "openai",
+                        },
+                    },
+                    "spec": {
+                        "modelRef": {"kind": "ExternalModel", "name": model_name},
+                    },
+                })
+                model_refs.append({"name": model_name, "namespace": namespace})
+
+            _apply_cr({
+                "apiVersion": "maas.opendatahub.io/v1alpha1",
+                "kind": "MaaSAuthPolicy",
+                "metadata": {"name": setup["auth_policy_name"], "namespace": namespace},
+                "spec": {
+                    "modelRefs": model_refs,
+                    "subjects": {"groups": [{"name": "system:authenticated"}]},
+                },
+            })
+            _apply_cr({
+                "apiVersion": "maas.opendatahub.io/v1alpha1",
+                "kind": "MaaSSubscription",
+                "metadata": {"name": setup["subscription_name"], "namespace": namespace},
+                "spec": {
+                    "owner": {"groups": [{"name": "system:authenticated"}]},
+                    "modelRefs": [
+                        {
+                            **model_ref,
+                            "tokenRateLimits": [{"limit": 10000, "window": "1h"}],
+                        }
+                        for model_ref in model_refs
+                    ],
+                },
+            })
+
+            _wait_for_maas_auth_policy_phase(setup["auth_policy_name"], namespace=namespace)
+            _wait_for_maas_subscription_phase(
+                setup["subscription_name"],
+                namespace=namespace,
+                require_model_statuses=True,
+            )
+
+            for model_name in (setup["first_model"], setup["second_model"]):
+                external_model = _wait_for_praxis_external_model(model_name, namespace)
+                route_name = external_model["status"]["httpRouteName"]
+                route = _wait_for_httproute_accepted(route_name, namespace=namespace)
+                managed_by = route.get("metadata", {}).get("labels", {}).get("app.kubernetes.io/managed-by")
+                if managed_by != "ai-gateway-controller":
+                    pytest.fail(
+                        f"HTTPRoute {namespace}/{route_name} is managed by {managed_by!r}, "
+                        "not ai-gateway-controller; the test did not exercise the Praxis route"
+                    )
+                _wait_for_model_ready(model_name, namespace=namespace, timeout=180)
+
+            first_model_cr = _get_cr(EXTERNAL_MODEL_KIND, setup["first_model"], namespace)
+            second_model_cr = _get_cr(EXTERNAL_MODEL_KIND, setup["second_model"], namespace)
+            first_route_name = first_model_cr.get("status", {}).get("httpRouteName")
+            second_route_name = second_model_cr.get("status", {}).get("httpRouteName")
+            if not first_route_name or not second_route_name or first_route_name == second_route_name:
+                pytest.fail(
+                    "Expected each shared-provider ExternalModel to publish its own HTTPRoute name; "
+                    f"got {first_route_name!r} and {second_route_name!r}"
+                )
+            setup["first_route_name"] = first_route_name
+            setup["second_route_name"] = second_route_name
+
+            log.info("Creating API key for shared-provider Praxis test...")
+            response = requests.post(
+                api_keys_base_url,
+                headers=headers,
+                json={"name": f"e2e-shared-provider-{suffix}", "subscription": setup["subscription_name"]},
+                timeout=30,
+                verify=TLS_VERIFY,
+            )
+            if response.status_code not in (200, 201):
+                pytest.fail(f"Failed to create shared-provider API key: HTTP {response.status_code}")
+            setup["api_key"] = response.json().get("key")
+            if not setup["api_key"]:
+                pytest.fail("Shared-provider API key response did not include a key")
+
+            yield setup
+        finally:
+            _cleanup_shared_provider_resources(setup)
+
+    def test_both_models_reach_praxis_ready(self, shared_provider_setup):
+        """Both models publish AIGC routes and a Praxis overlay digest."""
+        setup = shared_provider_setup
+        for name, route_name in (
+            (setup["first_model"], setup["first_route_name"]),
+            (setup["second_model"], setup["second_route_name"]),
+        ):
+            model = _get_cr(EXTERNAL_MODEL_KIND, name, setup["namespace"])
+            assert model is not None, f"ExternalModel {name} not found"
+            status = model.get("status", {})
+            assert status.get("phase") == "Ready", f"ExternalModel {name} phase is {status.get('phase')!r}"
+            assert status.get("overlayDigest"), f"ExternalModel {name} has no distributed Praxis overlay digest"
+            assert status.get("httpRouteName") == route_name, (
+                f"ExternalModel {name} route status changed from {route_name!r} to {status.get('httpRouteName')!r}"
+            )
+
+    def test_second_model_routes_through_gateway(self, shared_provider_setup):
+        """The second model receives the known-success response from the configured upstream path."""
+        setup = shared_provider_setup
+        response = _post_shared_provider_model(
+            setup["gateway_url"], setup["namespace"], setup["second_model"], setup["api_key"],
+            expected_status=200,
+        )
+        log.info("Shared provider (second model): HTTP %d", response.status_code)
+
+    def test_first_model_still_routes(self, shared_provider_setup):
+        """The first model receives the same deterministic upstream response."""
+        setup = shared_provider_setup
+        response = _post_shared_provider_model(
+            setup["gateway_url"], setup["namespace"], setup["first_model"], setup["api_key"],
+            expected_status=200,
+        )
+        log.info("Shared provider (first model): HTTP %d", response.status_code)
+
+    def test_both_models_have_distinct_aigc_httproutes(self, shared_provider_setup):
+        """Each model status points to its own HTTPRoute owned by AIGC."""
+        setup = shared_provider_setup
+        route_names = (setup["first_route_name"], setup["second_route_name"])
+        assert route_names[0] != route_names[1], f"Models share HTTPRoute name {route_names[0]!r}"
+        for route_name in route_names:
+            route = _get_cr("httproute", route_name, setup["namespace"])
+            assert route is not None, f"AIGC HTTPRoute {route_name} not found"
+            labels = route.get("metadata", {}).get("labels", {})
+            assert labels.get("app.kubernetes.io/managed-by") == "ai-gateway-controller", (
+                f"HTTPRoute {route_name} is not owned by ai-gateway-controller: {labels!r}"
+            )
+
+    def test_delete_second_model_preserves_first(self, shared_provider_setup):
+        """Deleting the second model withdraws only its route and preserves the first."""
+        setup = shared_provider_setup
+        _delete_cr(EXTERNAL_MODEL_KIND, setup["second_model"], setup["namespace"])
+        _wait_for_cr_absent(
+            EXTERNAL_MODEL_KIND,
+            setup["second_model"],
+            namespace=setup["namespace"],
+            timeout=180,
+        )
+        _wait_for_cr_absent(
+            "httproute",
+            setup["second_route_name"],
+            namespace=setup["namespace"],
+            timeout=120,
+        )
+
+        response = _post_shared_provider_model(
+            setup["gateway_url"], setup["namespace"], setup["second_model"], setup["api_key"],
+            expected_status=404,
+        )
+        log.info("Shared provider (deleted second model): HTTP %d", response.status_code)
+        response = _post_shared_provider_model(
+            setup["gateway_url"], setup["namespace"], setup["first_model"], setup["api_key"],
+            expected_status=200,
+        )
+        log.info("Shared provider (first model after deletion): HTTP %d", response.status_code)
