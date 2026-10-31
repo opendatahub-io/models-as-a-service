@@ -828,6 +828,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#legacy-maasopendatahubio-externalmodels" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Legacy maas.opendatahub.io ExternalModels
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#legacy-metrics-usage-dashboard-is-opt-in" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3356,6 +3367,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#legacy-maasopendatahubio-externalmodels" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Legacy maas.opendatahub.io ExternalModels
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#legacy-metrics-usage-dashboard-is-opt-in" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3456,11 +3478,15 @@ maas-controller inspects the live <code>payload-processing-plugins</code> Config
 <tbody>
 <tr>
 <td>Exact product default</td>
-<td>IPP already translated requests. <code>spec.apiTranslation.enabled</code> stays omitted/off for a new Praxis tenant. Cleanup proceeds only when active ExternalModels use OpenAI Chat Completions passthrough.</td>
+<td>IPP already translated requests, sending each provider its <code>targetModel</code> and <code>path</code>. Praxis applies those only with <code>spec.apiTranslation.enabled</code>, so before cleanup maas-controller durably writes <code>spec.apiTranslation.enabled: true</code>, unless an operator already set the field. Cleanup proceeds only when active ExternalModels use OpenAI Chat Completions passthrough.</td>
 </tr>
 <tr>
 <td>Exact default plus response <code>api-translation</code></td>
 <td>IPP translated requests and responses. Before cleanup, maas-controller durably writes <code>spec.apiTranslation.enabled: true</code>, unless an operator already set the field. The compatibility check still applies.</td>
+</tr>
+<tr>
+<td>ODH 3.5.0 default (no <code>model-provider-resolver</code> in pre-processing, no <code>maas-headers-guard</code> in processing, response <code>api-translation</code>)</td>
+<td>An earlier shape of the previous row, handled the same way.</td>
 </tr>
 <tr>
 <td>Unknown or customized ConfigMap</td>
@@ -3488,7 +3514,7 @@ not prove ExternalModel compatibility, and a recognized IPP ConfigMap
 fingerprint alone does not prove every historical provider direction.</p>
 <p>The pure-default IPP ConfigMap already enabled request-side <code>api-translation</code>;
 its response chain was empty. Baseline #2 added response-side processing.
-Recognizing either fingerprint preserves that migration intent, but does not
+Recognizing any of these fingerprints preserves that migration intent, but does not
 prove support for every provider or response mode. The recognized fingerprints
 and migration decisions are intentionally strict.</p>
 <p>For a recognized ConfigMap baseline, an explicit
@@ -3535,7 +3561,17 @@ is served as <code>apikey</code>. While the default tenant selects IPP, IPP keep
 these models.</p>
 <p>When the default tenant switches to Praxis, the compatibility check above and
 the cleanup of IPP-owned HTTPRoutes also cover these models, not only those in
-the tenant namespace.</p>
+the tenant namespace. The same cleanup removes the Service, ServiceEntry and
+DestinationRule that IPP created next to each ExternalProvider;
+ai-gateway-controller applies its own provider transport.</p>
+<h2 id="legacy-maasopendatahubio-externalmodels">Legacy <code>maas.opendatahub.io</code> ExternalModels</h2>
+<p>A legacy ExternalModel that IPP migrated reports <code>status.phase: Migrated</code>. When
+it reconciles a legacy object, maas-controller removes its owner reference from
+the <code>inference.opendatahub.io</code> ExternalModel and ExternalProvider created for it,
+even before the object is Migrated, so deleting the deprecated legacy object no
+longer deletes the live model. On releases without this change, or if
+maas-controller has not reconciled the legacy object since the upgrade, delete
+it with <code>kubectl delete externalmodels.maas.opendatahub.io &lt;name&gt; -n &lt;namespace&gt; --cascade=orphan</code>.</p>
 <h2 id="legacy-metrics-usage-dashboard-is-opt-in">Legacy metrics usage dashboard is opt-in</h2>
 <p><code>Config.spec.usageMetricsDashboard</code> defaults to <code>false</code>. After upgrade, the operator removes any controller-owned copy of the Prometheus-based Perses dashboard (<code>dashboard-3-maas-usage-admin</code>). To keep it:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>kubectl<span class="w"> </span>patch<span class="w"> </span>configs.maas.opendatahub.io<span class="w"> </span>default<span class="w"> </span>--type<span class="o">=</span>merge<span class="w"> </span><span class="se">\</span>
@@ -3564,7 +3600,7 @@ the tenant namespace.</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="October 26, 2026 17:46:52 UTC">October 26, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="October 31, 2026 00:32:27 UTC">October 31, 2026</span>
   </span>
 
     
