@@ -38,13 +38,15 @@ spec:
     value: pull-request
   - name: enable-group-testing
     value: "true"
+  - name: enable-oidc-group-testing
+    value: "true"
   pipelineRef:
     resolver: git
     params:
     - name: url
-      value: https://github.com/opendatahub-io/odh-konflux-central.git
+      value: https://github.com/chaitanya1731/odh-konflux-central.git
     - name: revision
-      value: main
+      value: oidc-group-trigger
     - name: pathInRepo
       value: pipeline/multi-arch-container-build.yaml
   taskRunTemplate:
