@@ -28,6 +28,7 @@ from test_helper import (
     EMBEDDING_MODEL_REF,
     EMBEDDING_MODEL_CANONICAL_ID,
     MODEL_NAMESPACE,
+    RATE_LIMIT_ENFORCEMENT_TIMEOUT,
     TIMEOUT,
     TLS_VERIFY,
     _create_api_key,
@@ -319,12 +320,15 @@ class TestEmbeddingGovernance:
 
             rate_limited = False
             success_count = 0
-
-            for i in range(total_requests):
+            # Past the planned count keep going until the enforcement deadline:
+            # the limiter can trail the policy status, and this asserts a 429.
+            deadline = time.time() + RATE_LIMIT_ENFORCEMENT_TIMEOUT
+            request_num = 0
+            while request_num < total_requests or time.time() < deadline:
+                request_num += 1
                 r = _embedding_inference(
                     api_key, path=EMBEDDING_MODEL_PATH, model_name=EMBEDDING_MODEL_NAME
                 )
-                request_num = i + 1
                 log.info(f"Embedding request {request_num}/{total_requests}: {r.status_code}")
 
                 if r.status_code == 200:

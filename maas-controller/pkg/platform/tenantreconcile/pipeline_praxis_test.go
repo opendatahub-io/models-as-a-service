@@ -1373,3 +1373,79 @@ func TestCleanupIPPExternalModelRoutesPropagatesDeletePreconditionFailure(t *tes
 	got.SetGroupVersionKind(GVKHTTPRoute)
 	assert.NoError(t, cl.Get(context.Background(), client.ObjectKey{Namespace: ns, Name: route.GetName()}, got))
 }
+
+func ippProviderTransport(gvk schema.GroupVersionKind, namespace, provider string, uid types.UID, managedBy string) *unstructured.Unstructured {
+	obj := &unstructured.Unstructured{Object: map[string]any{
+		"metadata": map[string]any{
+			"name": provider, "namespace": namespace,
+			"labels": map[string]any{
+				"app.kubernetes.io/managed-by": managedBy,
+				ippExternalProviderLabel:       provider,
+			},
+			"ownerReferences": []any{map[string]any{
+				"apiVersion": "inference.opendatahub.io/v1alpha1", "kind": "ExternalProvider", "name": provider, "uid": string(uid), "controller": true,
+			}},
+		},
+	}}
+	obj.SetGroupVersionKind(gvk)
+	obj.SetUID(types.UID(strings.ToLower(gvk.Kind) + "-" + namespace + "-" + provider))
+	obj.SetResourceVersion("1")
+	return obj
+}
+
+func ippExternalProvider(namespace, name string, uid types.UID) *unstructured.Unstructured {
+	provider := &unstructured.Unstructured{Object: map[string]any{
+		"metadata": map[string]any{"name": name, "namespace": namespace, "uid": string(uid)},
+	}}
+	provider.SetGroupVersionKind(inferenceExternalProviderOwnerGVK)
+	return provider
+}
+
+func TestCleanupIPPExternalProviderTransport_DeletesOnlyIPPOwnedTransport(t *testing.T) {
+	const ns = "llm"
+	// The default tenant's IPP also served namespaces of no tenant.
+	params := PlatformParams{AppNamespace: "maas-system", ModelNamespace: "models-as-a-service", GatewayNamespace: "openshift-ingress"}
+	kinds := []schema.GroupVersionKind{GVKService, GVKServiceEntry, GVKDestinationRule}
+	objects := []client.Object{
+		ippExternalProvider(ns, "openai", "provider-uid"),
+		ippExternalProvider(ns, "recreated", "new-uid"),
+	}
+	for _, gvk := range kinds {
+		objects = append(objects,
+			ippProviderTransport(gvk, ns, "openai", "provider-uid", ippExternalProviderManagedBy),
+			// Owned by an earlier provider of the same name: not this one's.
+			ippProviderTransport(gvk, ns, "recreated", "old-uid", ippExternalProviderManagedBy),
+			// ai-gateway-controller's own transport for the provider.
+			ippProviderTransport(gvk, ns, "openai-agc", "provider-uid", aiGatewayControllerFieldOwner),
+		)
+	}
+	cl := fake.NewClientBuilder().WithScheme(praxisTestScheme(t)).WithObjects(objects...).Build()
+	require.NoError(t, cleanupIPPExternalProviderTransport(context.Background(), cl, params, logr.Discard()))
+
+	for _, gvk := range kinds {
+		got := &unstructured.Unstructured{}
+		got.SetGroupVersionKind(gvk)
+		assert.True(t, apierrors.IsNotFound(cl.Get(context.Background(), client.ObjectKey{Namespace: ns, Name: "openai"}, got)),
+			"IPP %s for provider openai remains", gvk.Kind)
+		assert.NoError(t, cl.Get(context.Background(), client.ObjectKey{Namespace: ns, Name: "recreated"}, got),
+			"%s owned by another provider UID was deleted", gvk.Kind)
+		assert.NoError(t, cl.Get(context.Background(), client.ObjectKey{Namespace: ns, Name: "openai-agc"}, got),
+			"%s not managed by IPP was deleted", gvk.Kind)
+	}
+}
+
+func TestCleanupIPPExternalProviderTransport_IsNamespaceScoped(t *testing.T) {
+	params := PlatformParams{AppNamespace: "maas-system", ModelNamespace: "team-a", GatewayNamespace: "openshift-ingress", TenantIdentifier: "team-a"}
+	cl := fake.NewClientBuilder().WithScheme(praxisTestScheme(t)).WithObjects(
+		ippExternalProvider("team-a", "openai", "a-uid"),
+		ippExternalProvider("llm", "openai", "llm-uid"),
+		ippProviderTransport(GVKServiceEntry, "team-a", "openai", "a-uid", ippExternalProviderManagedBy),
+		ippProviderTransport(GVKServiceEntry, "llm", "openai", "llm-uid", ippExternalProviderManagedBy),
+	).Build()
+	require.NoError(t, cleanupIPPExternalProviderTransport(context.Background(), cl, params, logr.Discard()))
+	got := &unstructured.Unstructured{}
+	got.SetGroupVersionKind(GVKServiceEntry)
+	assert.True(t, apierrors.IsNotFound(cl.Get(context.Background(), client.ObjectKey{Namespace: "team-a", Name: "openai"}, got)))
+	assert.NoError(t, cl.Get(context.Background(), client.ObjectKey{Namespace: "llm", Name: "openai"}, got),
+		"another tenant's cleanup must not touch namespaces outside its own")
+}

@@ -51,9 +51,10 @@ type SelectResponse struct {
 	OrganizationID string         `json:"organizationId,omitempty"` // Organization ID for billing
 	// AssociatedOrganizationID carries the administrative association internally
 	// without changing the Authorino callback response contract.
-	AssociatedOrganizationID string            `json:"-"`
-	CostCenter               string            `json:"costCenter,omitempty"` // Cost center for attribution
-	Labels                   map[string]string `json:"labels,omitempty"`     // Additional tracking labels
+	AssociatedOrganizationID string              `json:"-"`
+	CostCenter               string              `json:"costCenter,omitempty"` // Cost center for attribution
+	Labels                   map[string]string   `json:"labels,omitempty"`     // Additional tracking labels
+	Headers                  map[string][]string `json:"headers,omitempty"`
 	// ResolvedModel is the MaaSModelRef identity (namespace/name) after resolving
 	// body-based aliases such as publishers/{ns}/models/{served-id}. Used by the
 	// gateway AuthPolicy to build selected_subscription_key (telemetry/debug) and,

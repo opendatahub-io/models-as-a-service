@@ -235,7 +235,10 @@ func TestRunPlatformGatesOnlyUnsupportedExternalModelHandoffs(t *testing.T) {
 				stored := &maasv1alpha1.MaasTenantConfig{}
 				require.NoError(t, base.Get(context.Background(), client.ObjectKeyFromObject(tenant), stored))
 				require.Equal(t, PayloadProcessingMigrationBlocked, stored.Annotations[AnnotationPayloadProcessingMigration])
-				require.Nil(t, stored.Spec.APITranslation, "pure-default migration must not invent response translation intent")
+				// IPP's pure default translated requests, including targetModel and
+				// path, so its intent is recorded before the compatibility check.
+				require.NotNil(t, stored.Spec.APITranslation, "pure-default migration must record request translation intent")
+				require.True(t, *stored.Spec.APITranslation.Enabled)
 				return
 			}
 			require.True(t, apierrors.IsNotFound(err), "safe or explicitly accepted handoff should finish cleanup")

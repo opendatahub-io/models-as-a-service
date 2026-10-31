@@ -52,6 +52,8 @@ Environment variables (all optional unless noted):
   - E2E_MAAS_SUBSCRIPTION_PHASE_TIMEOUT: MaaSSubscription phase wait (default: 120)
   - E2E_SUBSCRIPTION_INFERENCE_READY_TIMEOUT: Discovery + direct/mirrored TRLP wait (default: 300)
   - E2E_SUBSCRIPTION_TRLP_TIMEOUT: MaaSSubscription mirrored TRLP ready wait (default: 180)
+  - E2E_REQUIRE_TRLP_ENFORCED: Gate TRLP waits on Kuadrant Enforced=True (default: false;
+    Limitador can leave it False long after the limit is programmed)
   - E2E_OC_TIMEOUT: Per-attempt `oc` process timeout in seconds (default: 60)
   - E2E_OC_RETRY_BUDGET: Wall-clock budget for retrying transient `oc` failures in seconds (default: 180)
 """
@@ -107,6 +109,16 @@ SUBSCRIPTION_INFERENCE_READY_TIMEOUT = int(
     os.environ.get("E2E_SUBSCRIPTION_INFERENCE_READY_TIMEOUT", "300")
 )
 SUBSCRIPTION_TRLP_STATUS_TIMEOUT = int(os.environ.get("E2E_SUBSCRIPTION_TRLP_TIMEOUT", "180"))
+# Limitador can leave a TokenRateLimitPolicy at Enforced=False ("waiting for
+# [Limitador]") long after the gateway is serving the limit. Gating waits on
+# that condition measures Kuadrant's status writer, not MaaS behaviour, so it is
+# off by default. Set E2E_REQUIRE_TRLP_ENFORCED=true to restore the old gate.
+REQUIRE_TRLP_ENFORCED = os.environ.get("E2E_REQUIRE_TRLP_ENFORCED", "").lower() == "true"
+# Rate-limit tests cannot lean on the Enforced gate above, so they wait for the
+# effect instead: keep sending past the planned request count until the limiter
+# refuses a request, and only then call it a failure. Covers Limitador lagging
+# the policy status by a few seconds.
+RATE_LIMIT_ENFORCEMENT_TIMEOUT = int(os.environ.get("E2E_RATE_LIMIT_ENFORCEMENT_TIMEOUT", "60"))
 OC_TIMEOUT = int(os.environ.get("E2E_OC_TIMEOUT", "60"))
 # An API server blip (TLS handshake timeout, admission webhook unreachable while
 # maas-controller restarts) must not fail a test or skip a teardown delete.
@@ -301,12 +313,18 @@ def kubectl_curl(
     headers: dict = None,
     json_body: dict = None,
     namespace: str = None,
+    attempts: int = 2,
 ) -> tuple[int, str]:
     """Execute an HTTP request from inside the cluster via kubectl exec.
 
     The pod is created without credentials in its spec.  Credentials
     (headers, request body) are passed only via stdin to ``kubectl exec -i``
     so that they never appear in the Pod object stored in the Kubernetes API.
+
+    An infrastructure failure (``status_code == 0``) is retried with a fresh
+    pod: with several workers probing at once the API server sporadically
+    stalls an exec stream past its timeout, and the probes that use this helper
+    are reads (validate a key, resolve a subscription) that are safe to repeat.
 
     Args:
         url: Target URL (must be reachable from within the cluster).
@@ -316,14 +334,44 @@ def kubectl_curl(
             when *method* is still the default ``GET``).
         namespace: Kubernetes namespace for the ephemeral curl pod
             (default: ``E2E_CURL_POD_NAMESPACE``).
+        attempts: How many probe attempts to allow before returning ``0``.
 
     Returns:
-        ``(status_code, response_body)``.  *status_code* is ``0`` on
-        infrastructure failure.
+        ``(status_code, response_body)``.  *status_code* is ``0`` when every
+        attempt failed for infrastructure reasons.
     """
     namespace = namespace or os.environ.get(
         "E2E_CURL_POD_NAMESPACE", E2E_CURL_POD_NAMESPACE,
     )
+    status_code, body = 0, ""
+    for attempt in range(1, attempts + 1):
+        status_code, body = _kubectl_curl_once(
+            url,
+            method=method,
+            headers=headers,
+            json_body=json_body,
+            namespace=namespace,
+        )
+        if status_code:
+            return status_code, body
+        if attempt < attempts:
+            log.warning(
+                "kubectl curl probe of %s failed (attempt %d/%d); retrying with a fresh pod",
+                url, attempt, attempts,
+            )
+            time.sleep(2)
+    return status_code, body
+
+
+def _kubectl_curl_once(
+    url: str,
+    *,
+    method: str,
+    headers: dict | None,
+    json_body: dict | None,
+    namespace: str,
+) -> tuple[int, str]:
+    """One ephemeral-pod probe for :func:`kubectl_curl`; ``0`` on any failure."""
     pod_name = f"test-curl-{os.getpid()}-{uuid.uuid4().hex[:6]}"
     ca_cert_path, ca_bundle_content = get_curl_ca_bundle(namespace)
 
@@ -534,22 +582,28 @@ def _get_cluster_token():
 # API Key Management
 # ---------------------------------------------------------------------------
 
-def _is_transient_gateway_response(response) -> bool:
+def _is_transient_gateway_response(response, *, auth_denial_is_transient=True) -> bool:
     """True when the gateway/Authorino response is a known propagation flake.
 
     Retryable signals:
     - Empty 401/403: Envoy has not loaded the AuthPolicy yet (common after
-      MaaSAuthPolicy churn; some gateways return 401 instead of 403).
+      MaaSAuthPolicy churn; some gateways return 401 instead of 403). Pass
+      ``auth_denial_is_transient=False`` for negative tests where a denial is
+      the expected answer: retrying there only burns the retry budget and
+      pollutes the flake report with denials that were never flaky.
     - 500 with AUTH_FAILURE: Authorino race while AuthConfig is updating.
     - Empty, plain-text, or HTML proxy 500/503 ("Internal Server Error",
       "Service Unavailable", "Application is not available"): Envoy/router
       failure while upstream or auth filters are mid-reload. Distinct from
       maas-api JSON errors like {"error":"Failed to create API key"}.
+    - Envoy/Istio route failure text ("upstream connect error", "no healthy
+      upstream"): the dataplane has no ready endpoint yet. Always a reload or
+      rollout artifact, never a maas-api response.
     """
     body = (response.text or "").strip()
     if response.status_code in (401, 403) and not body:
-        return True
-    if response.status_code not in (500, 503):
+        return auth_denial_is_transient
+    if response.status_code not in (500, 502, 503):
         return False
     if "AUTH_FAILURE" in body:
         return True
@@ -558,6 +612,8 @@ def _is_transient_gateway_response(response) -> bool:
         "Internal Server Error.",
         "Service Unavailable",
         "Service Unavailable.",
+        "Bad Gateway",
+        "Bad Gateway.",
     ):
         return True
     if body.startswith("<") and any(
@@ -565,11 +621,72 @@ def _is_transient_gateway_response(response) -> bool:
         for marker in (
             "Internal Server Error",
             "Service Unavailable",
+            "Bad Gateway",
             "Application is not available",
         )
     ):
         return True
+    if body.startswith("upstream connect error") or body.startswith("no healthy upstream"):
+        return True
     return False
+
+
+# One JSONL line per transient retry, written by whichever xdist worker hit it.
+# The session report (conftest.pytest_terminal_summary) aggregates them so each
+# CI run yields a flake rate instead of an anecdote.
+_TRANSIENT_RETRY_LOG_ENV = "ARTIFACTS_DIR"
+
+
+def _transient_body_kind(response) -> str:
+    """Classify a transient body without recording it.
+
+    These artifacts are uploaded from CI, so the report carries the category
+    and never the body: an error page is not where a leaked header or token
+    should surface. The categories are the ones the classifier accepts.
+    """
+    body = (getattr(response, "text", "") or "").strip()
+    if not body:
+        return "empty"
+    if "AUTH_FAILURE" in body:
+        return "auth_failure"
+    if body.startswith("upstream connect error"):
+        return "upstream_connect_error"
+    if body.startswith("no healthy upstream"):
+        return "no_healthy_upstream"
+    if body.startswith("<"):
+        return "html_error_page"
+    if "\n" not in body and len(body) <= 64:
+        return "plaintext"
+    return "other"
+
+
+def _record_transient_retry(response, attempt: int, retries: int) -> None:
+    """Account for a retried transient response, per running test."""
+    nodeid = (os.environ.get("PYTEST_CURRENT_TEST") or "<session>").split(" ")[0]
+    entry = {
+        "test": nodeid,
+        "status": getattr(response, "status_code", 0),
+        "body_kind": _transient_body_kind(response),
+        "attempt": attempt,
+        "retries": retries,
+        "ts": time.time(),
+    }
+    log.warning(
+        "transient gateway response retried for %s: %s (%s)",
+        nodeid,
+        entry["status"],
+        entry["body_kind"],
+    )
+    artifacts_dir = os.environ.get(_TRANSIENT_RETRY_LOG_ENV)
+    if not artifacts_dir:
+        return
+    worker = os.environ.get("PYTEST_XDIST_WORKER", "master")
+    path = os.path.join(artifacts_dir, f"transient-retries-{worker}.jsonl")
+    try:
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(entry) + "\n")
+    except OSError as exc:  # telemetry must never fail a test
+        log.debug("could not write transient retry log %s: %s", path, exc)
 
 
 def _is_connect_failure(exc: requests.exceptions.ConnectionError) -> bool:
@@ -592,6 +709,9 @@ def _request_with_gateway_retry(method, url, retries=None, delay=None, deadline=
     Connection errors are retried only when the request was never sent
     (``_is_connect_failure``), which is safe for POST.
 
+    Pass ``auth_denial_is_transient=False`` (keyword) for negative tests that
+    expect a 401/403: an empty denial is then the answer rather than a flake.
+
     When ``deadline`` is set (Unix timestamp), each request timeout, retry delay,
     and gateway-enforcement wait is clamped to the remaining time so polling loops
     cannot exceed their outer deadline.
@@ -604,6 +724,7 @@ def _request_with_gateway_retry(method, url, retries=None, delay=None, deadline=
     delay = GATEWAY_PROPAGATION_DELAY if delay is None else delay
     timeout = kwargs.pop("timeout", TIMEOUT)
     verify = kwargs.pop("verify", TLS_VERIFY)
+    auth_denial_is_transient = kwargs.pop("auth_denial_is_transient", True)
     r = None
     for attempt in range(1, retries + 1):
         if deadline is not None:
@@ -635,18 +756,24 @@ def _request_with_gateway_retry(method, url, retries=None, delay=None, deadline=
             if retry_delay > 0:
                 time.sleep(retry_delay)
             continue
-        if _is_transient_gateway_response(r) and attempt < retries:
+        if (
+            _is_transient_gateway_response(
+                r, auth_denial_is_transient=auth_denial_is_transient
+            )
+            and attempt < retries
+        ):
+            _record_transient_retry(r, attempt, retries)
             log.info(
-                "Gateway returned %d (attempt %d/%d, body=%.80r), retrying in %ds...",
+                "Gateway returned %d (attempt %d/%d, body_kind=%s), retrying in %ds...",
                 r.status_code,
                 attempt,
                 retries,
-                (r.text or "").strip(),
+                _transient_body_kind(r),
                 delay,
             )
             # After the first proxy-style 500/503, re-check AuthPolicy Enforced
             # so remaining attempts are less likely to hit a mid-reload window.
-            if r.status_code in (500, 503) and attempt == 1:
+            if r.status_code in (500, 502, 503) and attempt == 1:
                 enforcement_timeout = min(60, GATEWAY_ENFORCED_TIMEOUT)
                 if deadline is not None:
                     enforcement_timeout = min(
@@ -1499,10 +1626,16 @@ def _wait_for_gateway_auth_enforced(
 def _wait_for_token_rate_limit_policy(
     model_ref, model_namespace=MODEL_NAMESPACE, timeout=180, *, subscription_name=None, subscription_namespace=None
 ):
-    """Wait for the current TokenRateLimitPolicy generation to be enforced.
+    """Wait for the current TokenRateLimitPolicy generation to be observed.
 
-    If a subscription is supplied, wait until the policy includes it. This
-    prevents accepting the old policy before the controller updates its spec.
+    Waits until the policy exists, its observedGeneration matches the current
+    generation, and (when a subscription is supplied) its spec includes that
+    subscription. This prevents accepting the old policy before the controller
+    updates its spec.
+
+    The Enforced condition is not required by default: Limitador can leave it
+    at False ("waiting for [Limitador]") long after the limit is programmed.
+    Set E2E_REQUIRE_TRLP_ENFORCED=true to gate on it again once that is fixed.
 
     Args:
         model_ref: Name of the model (e.g., "e2e-distinct-simulated")
@@ -1512,7 +1645,7 @@ def _wait_for_token_rate_limit_policy(
         subscription_namespace: Subscription namespace (defaults to _ns())
 
     Raises:
-        TimeoutError: If TRLP isn't created and enforced within timeout
+        TimeoutError: If TRLP isn't created and observed within timeout
     """
     trlp_name = f"maas-trlp-{model_ref}"
     expected_subscription = (
@@ -1545,16 +1678,23 @@ def _wait_for_token_rate_limit_policy(
                     ).split(",")
                 }
                 includes_subscription = expected_subscription is None or expected_subscription in subscriptions
+                enforced_ok = enforced is not None and enforced.get("status") == "True"
                 last_snapshot = (
                     f"generation={generation}, observedGeneration={observed}, "
                     f"Enforced={enforced}, includes_subscription={includes_subscription}"
                 )
                 if (
-                    enforced and enforced.get("status") == "True"
+                    (enforced_ok or not REQUIRE_TRLP_ENFORCED)
                     and generation is not None and observed == generation
                     and includes_subscription
                 ):
-                    log.info(f"TokenRateLimitPolicy {trlp_name} generation {generation} is enforced")
+                    if enforced_ok:
+                        log.info(f"TokenRateLimitPolicy {trlp_name} generation {generation} is enforced")
+                    else:
+                        log.info(
+                            f"TokenRateLimitPolicy {trlp_name} generation {generation} is observed; "
+                            "not gating on Enforced (known Limitador issue)"
+                        )
                     return
                 log.debug(f"TokenRateLimitPolicy {trlp_name} is not ready: {last_snapshot}")
             except (json.JSONDecodeError, KeyError) as e:
@@ -1812,16 +1952,13 @@ def _wait_for_subscription_inference_ready(
     """Wait for model discovery plus direct and mirrored TRLP enforcement.
 
     Args:
-        require_enforced_trlp: Wait for Kuadrant to report the TRLP as
-            Enforced. Keep True (default) for tests that assert rate-limit
-            behaviour (429s, exemptions, shared limits) — the limit must be
-            programmed on the gateway for those assertions to mean anything.
-            Pass False for access-matrix tests whose assertions are proven by
-            the inference request itself: Kuadrant's TRLP status updater loses
-            optimistic-concurrency races under parallel load and can leave
-            Enforced=False long after the gateway is actually serving, so
-            gating those tests on it measures Kuadrant's status writer rather
-            than the behaviour under test.
+        require_enforced_trlp: Wait for the TRLP to reach the subscription's
+            current generation. The Enforced condition itself is not gated on
+            by default (see REQUIRE_TRLP_ENFORCED): Limitador can leave it
+            False long after the limit is programmed, so waiting on it measures
+            Kuadrant's status writer rather than MaaS behaviour. Pass False for
+            access-matrix tests whose assertions are proven by the inference
+            request itself and do not need to wait for the policy at all.
     """
     namespace = namespace or _ns()
     _wait_for_subscription_discovery_ready(

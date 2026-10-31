@@ -943,6 +943,6 @@ func (r *TenantReconciler) ensureGatewayManagementAuth(ctx context.Context, log 
 		ctx, log,
 		authR.fetchOIDCConfig(ctx, log, tenant.Namespace),
 		authR.discoverXAPIKeyNeeded(ctx, log),
-		tenantID, gatewayNs, gatewayName,
+		tenant.Namespace, tenantID, gatewayNs, gatewayName,
 	)
 }

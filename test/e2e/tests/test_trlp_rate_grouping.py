@@ -78,7 +78,7 @@ from test_helper import (
 
 log = logging.getLogger(__name__)
 
-pytestmark = [pytest.mark.serial]
+pytestmark = [pytest.mark.serial, pytest.mark.limitador]
 
 MODEL_REF = UNCONFIGURED_MODEL_REF
 MODEL_PATH = UNCONFIGURED_MODEL_PATH
