@@ -32,7 +32,7 @@ from test_helper import (
     _wait_for_subscription_trlp_status,
 )
 
-pytestmark = pytest.mark.xdist_group("tenant_isolation")
+pytestmark = pytest.mark.xdist_group("tenant_iso_rate")
 
 # Tenant rate-limit isolation tests are enabled by default (Phase 1 implementation)
 

@@ -36,7 +36,7 @@ from multitenancy_helpers import (
     wait_for_json,
 )
 
-pytestmark = pytest.mark.xdist_group("mt_lifecycle")
+pytestmark = pytest.mark.xdist_group("mt_lc_maas_api")
 AUTHORINO_NAMESPACE = os.environ.get("AUTHORINO_NAMESPACE", "kuadrant-system")
 HTTPROUTE_RULE_AUTHCONFIG_ANNOTATION = "HTTPRouteRule.gateway.networking.k8s.io"
 AUTHCONFIG_QUIET_WINDOW = 15

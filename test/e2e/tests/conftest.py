@@ -19,7 +19,20 @@ from test_helper import (
 
 log = logging.getLogger(__name__)
 
-_WORKER_ISOLATED_XDIST_GROUPS = frozenset({"api_keys", "models"})
+# Groups whose tests mutate worker-scoped cluster state. Anything in this set must
+# opt in to isolation via @pytest.mark.worker_tenant (or run @pytest.mark.serial).
+# Keep in sync when splitting a group: one group id per test file.
+_WORKER_ISOLATED_XDIST_GROUPS = frozenset({
+    "api_keys_core",
+    "api_embedding",
+    "api_subscription",
+    "api_keys_sub_endpoints",
+    "api_xkey",
+    "models_endpoint",
+    "models_identity",
+    "models_gw_authpolicy",
+    "models_mt_integration",
+})
 
 
 # pr_new marking lives in pr_new_selection.py (pytest_plugins) so it is not

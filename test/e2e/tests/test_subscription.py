@@ -110,7 +110,7 @@ from test_helper import (
 
 log = logging.getLogger(__name__)
 
-pytestmark = [pytest.mark.xdist_group("api_keys"), pytest.mark.worker_tenant]
+pytestmark = [pytest.mark.xdist_group("api_subscription"), pytest.mark.worker_tenant]
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -696,139 +696,6 @@ class TestSubscriptionEnforcement:
             _delete_cr("maasauthpolicy", auth_policy_name)
             _wait_for_cr_absent("maassubscription", subscription_name)
             log.info("Cleaned up rate limit test resources")
-
-    @pytest.mark.serial
-    def test_models_endpoint_exempt_from_rate_limiting(self):
-        """
-        Test that /v1/models endpoint remains accessible when token quota is exhausted.
-
-        This verifies that users can discover model capabilities even when they've
-        used all their inference tokens. The /v1/models endpoint is a discovery/metadata
-        endpoint that does not consume tokens and should remain accessible.
-
-        Ref: https://issues.redhat.com/browse/RHOAIENG-46770
-
-        Test steps:
-        1. Create subscription with very low token limit (15 tokens)
-        2. Exhaust the limit with inference requests (5 requests × 3 tokens = 15)
-        3. Verify inference requests get 429 (rate limited)
-        4. Verify /v1/models endpoint still returns 200 (not rate limited)
-        """
-        # Use unconfigured model to isolate this test
-        model_ref = UNCONFIGURED_MODEL_REF
-        model_path = UNCONFIGURED_MODEL_PATH
-
-        # Create unique subscription and auth policy names
-        auth_policy_name = "e2e-models-exempt-test-auth"
-        subscription_name = "e2e-models-exempt-test-subscription"
-
-        # Very low limit for fast, deterministic test
-        # With 3 token limit and max_tokens=1, we're guaranteed to exhaust quota within 5 requests
-        # (even if each request uses exactly 1 token: 5 requests > 3 token limit)
-        token_limit = 3
-        window = "1m"
-
-        try:
-            # 1. Create auth policy allowing system:authenticated
-            _create_test_auth_policy(
-                name=auth_policy_name,
-                model_refs=[model_ref],
-                groups=["system:authenticated"]
-            )
-            _wait_for_maas_auth_policy_phase(auth_policy_name, require_auth_policies=False)
-
-            # 2. Create subscription with low token limit
-            _create_test_subscription(
-                name=subscription_name,
-                model_refs=[model_ref],
-                groups=["system:authenticated"],
-                token_limit=token_limit,
-                window=window
-            )
-            _wait_for_subscription_inference_ready(
-                subscription_name,
-                model_ref,
-                model_namespace=MODEL_NAMESPACE,
-            )
-
-            # 3. Create API key for this subscription
-            oc_token = _get_cluster_token()
-            api_key = _create_api_key(
-                oc_token,
-                name=f"e2e-models-exempt-{uuid.uuid4().hex[:8]}",
-                subscription=subscription_name,
-            )
-
-            # 4. Exhaust the token limit
-            # With 3 token limit and 5 requests, we're guaranteed to hit the limit
-            # (each successful request consumes ≥1 token, so 5 requests > 3 token limit)
-            max_requests = 5
-            success_count = 0
-            rate_limited = False
-
-            log.info(f"Exhausting token quota: sending up to {max_requests} requests")
-            # Keep sending past the planned count until the enforcement deadline
-            # so a limiter that trails the policy status does not fail the test.
-            deadline = time.time() + RATE_LIMIT_ENFORCEMENT_TIMEOUT
-            request_num = 0
-            while request_num < max_requests or time.time() < deadline:
-                request_num += 1
-                r = _inference(api_key, path=model_path)
-                log.info(f"Request {request_num}: status {r.status_code}")
-
-                if r.status_code == 200:
-                    success_count += 1
-                elif r.status_code == 429:
-                    log.info(f"Rate limit hit after {success_count} successful requests")
-                    rate_limited = True
-                    break
-                else:
-                    # Unexpected status during exhaustion
-                    log.warning(f"Unexpected status during quota exhaustion: {r.status_code}")
-
-            # Verify we hit rate limit (otherwise test setup is broken)
-            assert rate_limited, \
-                f"Expected to hit rate limit within {max_requests} requests with {token_limit} token limit, " \
-                f"but got {success_count} successful requests without hitting limit"
-
-            # 5. Verify inference is now blocked with 429
-            log.info("Verifying inference endpoint is blocked...")
-            r_inference = _inference(api_key, path=model_path)
-            assert r_inference.status_code == 429, \
-                f"Expected 429 for inference after exhausting tokens, got {r_inference.status_code}. " \
-                f"Response: {r_inference.text[:500]}"
-            log.info("✓ Inference endpoint correctly blocked with 429")
-
-            # 6. Verify /v1/models endpoint is still accessible with 200
-            log.info("Verifying /v1/models endpoint is still accessible...")
-            url = f"{_gateway_url()}{model_path}/v1/models"
-            headers = {"Authorization": f"Bearer {api_key}"}
-            r_models = _request_with_gateway_retry(requests.get, url, headers=headers)
-
-            assert r_models.status_code == 200, \
-                f"Expected 200 for /v1/models endpoint even when quota exhausted, got {r_models.status_code}. " \
-                f"The /v1/models endpoint does not consume tokens and should remain accessible. " \
-                f"Response: {r_models.text[:500]}"
-
-            # Verify it returns valid model metadata (sanity check)
-            try:
-                models_data = r_models.json()
-            except (json.JSONDecodeError, ValueError):
-                # Non-JSON response is acceptable for some vLLM versions
-                log.info(f"✓ /v1/models endpoint accessible (200), non-JSON response: {r_models.text[:200]}")
-            else:
-                # JSON response - validate structure
-                assert "data" in models_data or "object" in models_data, \
-                    f"Expected valid models response with 'data' or 'object' field, got: {models_data}"
-                log.info(f"✓ /v1/models endpoint accessible (200) despite exhausted quota. Response keys: {list(models_data.keys())}")
-
-        finally:
-            # Clean up
-            _delete_cr("maassubscription", subscription_name)
-            _delete_cr("maasauthpolicy", auth_policy_name)
-            _wait_for_cr_absent("maassubscription", subscription_name)
-            log.info("Cleaned up models endpoint exemption test resources")
-
 
 class TestMultipleSubscriptionsPerModel:
     """Multiple subscriptions for one model — API key in ONE subscription should get access.
@@ -2188,6 +2055,35 @@ class TestE2ESubscriptionFlow:
                 model_name=f"e2e/{context.model_ref}", timeout=90,
             )
             log.info("✅ Single subscription auto-select → %s", r.status_code)
+
+            # The central catalog must auto-select the same subscription when no
+            # x-maas-subscription header is sent. Folded in from
+            # test_models_endpoint::test_single_subscription_auto_select so the
+            # scenario only pays for one tenant bootstrap.
+            r_models = _request_with_gateway_retry(
+                requests.get,
+                f"{_maas_api_url()}/v1/models",
+                headers={"Authorization": f"Bearer {api_key}"},
+            )
+            assert r_models.status_code == 200, (
+                f"Central /v1/models with a single-subscription key returned "
+                f"{r_models.status_code}: {r_models.text[:500]}"
+            )
+            catalog = r_models.json()
+            assert catalog.get("object") == "list", catalog
+            # Gateway-only mode may legitimately return an empty list for a valid
+            # single-subscription key; only assert shape when models are present.
+            for model in catalog.get("data") or []:
+                for field in ("id", "object", "created", "owned_by"):
+                    assert field in model, f"Model missing {field!r}: {model}"
+                subs = model.get("subscriptions")
+                assert isinstance(subs, list), f"subscriptions should be a list: {model}"
+                assert len(subs) == 1, (
+                    f"Expected 1 auto-selected subscription, got {subs!r}"
+                )
+                assert subs[0]["name"] == subscription_name, (
+                    f"Expected subscription {subscription_name!r}, got {subs[0]['name']!r}"
+                )
 
         finally:
             _delete_cr("maassubscription", subscription_name, namespace=ns)

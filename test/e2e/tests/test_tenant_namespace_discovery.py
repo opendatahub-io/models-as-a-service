@@ -65,7 +65,7 @@ from multitenancy_helpers import (
 )
 from test_helper import MODEL_NAMESPACE, MODEL_REF, _wait_for_maas_auth_policy_phase
 
-pytestmark = pytest.mark.xdist_group("mt_lifecycle")
+pytestmark = pytest.mark.xdist_group("mt_lc_ns_discovery")
 
 
 @pytest.fixture(scope="module", autouse=True)

@@ -73,7 +73,7 @@ from test_helper import (
 
 log = logging.getLogger(__name__)
 
-pytestmark = [pytest.mark.xdist_group("api_keys"), pytest.mark.worker_tenant]
+pytestmark = [pytest.mark.xdist_group("api_keys_core"), pytest.mark.worker_tenant]
 
 
 @pytest.fixture(scope="module", autouse=True)

@@ -136,7 +136,26 @@ fi
 # shellcheck disable=SC1091
 source "$TEST_DIR/.venv/bin/activate"
 python -m pip install --upgrade pip --quiet
-python -m pip install -r "$TEST_DIR/requirements.txt" --quiet
+# Prefer the hash-pinned lock so CI installs exactly the reviewed set. Installing
+# requirements.txt alone let pytest drift to 9.2.0, which silently disables
+# --dist=loadgroup (see test/e2e/tests/test_xdist_config.py).
+if [[ -f "$TEST_DIR/requirements-lock.txt" ]]; then
+    python -m pip install --require-hashes --no-deps -r "$TEST_DIR/requirements-lock.txt" --quiet
+else
+    python -m pip install -r "$TEST_DIR/requirements.txt" --quiet
+fi
+python - <<'PY'
+import sys
+import pytest
+
+major, minor = (int(x) for x in pytest.__version__.split(".")[:2])
+if (major, minor) >= (9, 2):
+    sys.exit(
+        f"ERROR: pytest {pytest.__version__} breaks --dist=loadgroup "
+        "(the @group nodeid suffix is no longer appended). Install pytest<9.2, "
+        "e.g. from test/e2e/requirements-lock.txt."
+    )
+PY
 
 # ── Output paths ─────────────────────────────────────────────────────────
 user="$(oc whoami 2>/dev/null || echo 'unknown')"
