@@ -62,7 +62,11 @@ from test_helper import (
 
 log = logging.getLogger(__name__)
 
-pytestmark = pytest.mark.xdist_group("tenant_ipp")
+pytestmark = [
+    pytest.mark.legacy_ipp,
+    pytest.mark.serial,
+    pytest.mark.xdist_group("tenant_ipp_legacy"),
+]
 
 GATEWAY_PROPAGATION_RETRIES = 6
 GATEWAY_PROPAGATION_DELAY = 5

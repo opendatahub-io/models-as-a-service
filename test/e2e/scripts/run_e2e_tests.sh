@@ -9,7 +9,8 @@
 #   Pass 1: parallel with pytest-xdist (-m "not serial and not serial_exclusive and
 #           not legacy_ipp", --dist=loadgroup)
 #   Pass 2a: serial_exclusive cluster-wide tests (-m "serial_exclusive …", single worker)
-#   Pass 2b: serial cluster mutators (-m "serial and not serial_exclusive …",
+#   Pass 2b: serial cluster mutators and legacy IPP suites (-m "(serial or legacy_ipp)
+#           and not serial_exclusive …",
 #            E2E_SERIAL_WORKERS lanes, default 1)
 #   Pass 3 (optional): -m nightly when MAAS_PYTEST_INCLUDE_NIGHTLY=true (e.g. EXTERNAL_OIDC deploys)
 #

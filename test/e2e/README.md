@@ -182,11 +182,11 @@ By default, `run_e2e_tests.sh` runs tests in **three marker-filtered passes** (d
 
 1. **Pass 1:** `-m "not serial and not serial_exclusive and not legacy_ipp"` — parallel across files when `E2E_PARALLEL_WORKERS > 1` (`--dist=loadgroup`), or single-worker serial execution when `E2E_PARALLEL_WORKERS=1`
 2. **Pass 2a:** `-m "serial_exclusive and not legacy_ipp"` — tests that need the whole cluster to themselves (they scale `maas-controller` or Kuadrant to 0, or delete a cluster-scoped CRD). Always one worker.
-3. **Pass 2b:** `-m "serial and not serial_exclusive and not legacy_ipp"` — the remaining cluster-wide mutators: simulator-subscription lifecycle, UNCONFIGURED model auth, TRLP rebuilds. Runs on one worker. `E2E_SERIAL_WORKERS > 1` adds `-n N --dist=loadgroup` and splits between files only, but **lanes are not safe yet**: grouping is per file, while several of these files create and delete `MaaSAuthPolicy`/`MaaSSubscription` objects on the same shared models (`test_models_endpoint` reads the UNCONFIGURED model's visibility, which `test_subscription` mutates, and neither declares the same `xdist_group`). Measured at 3 lanes: `test_empty_model_list` failed for exactly that reason. Leave it at `1` until the shared-model dependency audit lands.
+3. **Pass 2b:** `-m "(serial or legacy_ipp) and not serial_exclusive"` — simulator-subscription lifecycle, UNCONFIGURED model auth, TRLP rebuilds, and **legacy IPP** suites (`test_per_tenant_ipp_isolation`, `test_gateway_filter_chain`, legacy `test_external_models`, and `TestLegacyIppCoexistence`). Praxis/AGC tenant external-model modules stay in pass 1 only. Runs on one worker by default (`E2E_SERIAL_WORKERS=1`); see shared-model lane notes below if raising serial workers.
 
-Passes 2a and 2b are skipped when pass 1 fails (saves CI time on red runs).
+Passes 2a and 2b still run when pass 1 fails (both results are reported).
 
-Legacy maas-controller IPP suites (per-tenant IPP isolation, maas EnvoyFilter chain, ExternalModel reconciler) are marked `legacy_ipp` and skipped by default. Opt in with `pytest -m legacy_ipp` (from `test/e2e/` with env vars exported, or target specific files).
+Legacy IPP tests are **`legacy_ipp`** (and **`serial`** where the whole module runs in pass 2b). They no longer run in pass 1, so they cannot race Praxis external-model work there. Opt-in only for a legacy-only run: `pytest -m legacy_ipp`.
 
 Pass 1 and the serial passes must stay separate: several modules mix `@serial` tests with worker-tenant tests, and module-scoped fixtures reject a single session that selects both.
 
@@ -205,7 +205,7 @@ SKIP_DEPLOYMENT=true ./test/e2e/run-tests-quick.sh
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `E2E_PARALLEL_WORKERS` | `7` | Parallel workers for pass 1 (`-m "not serial and not serial_exclusive and not legacy_ipp"`). Set to `1` for single-worker pass 1 (no xdist); marker split is unchanged. |
-| `E2E_SERIAL_WORKERS` | `1` | Workers for pass 2b (`-m "serial and not serial_exclusive and not legacy_ipp"`). Above 1 adds `-n N --dist=loadgroup`, splitting between files only — but lanes race on shared model auth state (see step 3 above), so keep it at `1`. Pass 2a is always one worker. |
+| `E2E_SERIAL_WORKERS` | `1` | Workers for pass 2b (`-m "(serial or legacy_ipp) and not serial_exclusive"`). Above 1 adds `-n N --dist=loadgroup`, splitting between files only — but lanes race on shared model auth state (see step 3 above), so keep it at `1`. Pass 2a is always one worker. |
 | `E2E_AUTHPOLICY_PHASE_TIMEOUT` | `120` | MaaSAuthPolicy phase wait (`test_helper` default; parallel runner re-exports the same) |
 | `E2E_MAAS_SUBSCRIPTION_PHASE_TIMEOUT` | `120` | MaaSSubscription phase wait |
 | `E2E_GATEWAY_ENFORCED_TIMEOUT` | `240` (parallel) / `180` (serial) | Kuadrant gateway auth enforced wait |

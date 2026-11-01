@@ -78,10 +78,7 @@ from test_helper import (
 
 log = logging.getLogger(__name__)
 
-# Serialized with tenant_ipp until the legacy IPP controllers skip
-# gatewayRefs ExternalModels (image pin pending): without that guard they
-# adopt this suite's models and flap status.httpRouteName.
-pytestmark = pytest.mark.xdist_group("tenant_ipp")
+pytestmark = pytest.mark.xdist_group("tenant_ipp_ext_shared")
 
 # Tenant A gets a tiny budget so quota isolation is observable quickly;
 # tenant B gets a large one (mirrors test_tenant_rate_limit_isolation.py).
