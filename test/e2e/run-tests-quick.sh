@@ -64,6 +64,12 @@ fi
 if [[ "$E2E_PARALLEL_WORKERS" -gt 1 ]]; then
     echo "  E2E_PARALLEL_WORKERS: ${E2E_PARALLEL_WORKERS}"
 fi
+export E2E_SERIAL_WORKERS="${E2E_SERIAL_WORKERS:-3}"
+if ! [[ "$E2E_SERIAL_WORKERS" =~ ^[1-9][0-9]*$ ]]; then
+    echo "ERROR: E2E_SERIAL_WORKERS must be a positive integer (>= 1), got '$E2E_SERIAL_WORKERS'" >&2
+    exit 1
+fi
+echo "  E2E_SERIAL_WORKERS: ${E2E_SERIAL_WORKERS}"
 echo ""
 echo "Running tests..."
 echo ""

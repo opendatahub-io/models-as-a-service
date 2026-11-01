@@ -196,7 +196,8 @@ The E2E framework auto-discovers most values from the cluster. These are the mos
 | `MODEL_NAME` | Override model ID (defaults to first from catalog) |
 | `E2E_MODEL_PATH` | Override the model route path used by inference tests (for example, `/llm/facebook-opt-125m-simulated`; omit `/v1`) |
 | `EXTERNAL_OIDC` | Set `true` to enable external OIDC tests |
-| `E2E_PARALLEL_WORKERS` | pytest-xdist worker count for pass 1 (default `5`). Set to `1` for single-worker pass 1 without xdist; pass 2 stays serial. |
+| `E2E_PARALLEL_WORKERS` | pytest-xdist worker count for pass 1 (default `5`). Set to `1` for single-worker pass 1 without xdist; the serial passes are unaffected. |
+| `E2E_SERIAL_WORKERS` | pytest-xdist lane count for serial pass 2b (default `1` when calling `run_e2e_tests.sh` directly, `3` from CI and `run-tests-quick.sh`). Pass 2a is always one worker. Set to `1` to restore the single-worker serial pass. |
 | `LLMISVC_CONTROLLER_CPU_REQUEST` / `LLMISVC_CONTROLLER_CPU_LIMIT` | CPU that `deploy-platform.sh` gives `llmisvc-controller-manager` on the test cluster (defaults `1` / `2`; shipped is 100m). Set the limit empty to keep the shipped resources. |
 
 See `test/e2e/tests/conftest.py` and individual test module docstrings for the full set of supported variables.
