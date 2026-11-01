@@ -2157,6 +2157,87 @@ func TestCheckModelIdentityConflict_ConflictDetected(t *testing.T) {
 	assertRecordedEvent(t, recorder, "Warning ModelNameConflict")
 }
 
+// TestCheckModelIdentityConflict_PerTenantModelRefsNotConflicts verifies that
+// same-namespace modelRefs sharing an alias but resolving to different
+// tenants — the per-tenant modelRefs serving one shared model — are not
+// reported as identity conflicts.
+func TestCheckModelIdentityConflict_PerTenantModelRefsNotConflicts(t *testing.T) {
+	const sharedAlias = "shared-client-name"
+
+	modelA := &maasv1alpha1.MaaSModelRef{
+		ObjectMeta: metav1.ObjectMeta{Name: "shared-a", Namespace: "default", Generation: 1},
+		Status: maasv1alpha1.MaaSModelStatus{
+			ResolvedModelAlias: sharedAlias,
+			ResolvedTenantRef:  "tenant-a",
+		},
+	}
+	modelB := &maasv1alpha1.MaaSModelRef{
+		ObjectMeta: metav1.ObjectMeta{Name: "shared-b", Namespace: "default"},
+		Status: maasv1alpha1.MaaSModelStatus{
+			ResolvedModelAlias: sharedAlias,
+			ResolvedTenantRef:  "tenant-b",
+		},
+	}
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(modelA, modelB).
+		WithStatusSubresource(&maasv1alpha1.MaaSModelRef{}).
+		Build()
+	r := &MaaSModelRefReconciler{Client: c, Scheme: scheme}
+
+	for _, model := range []*maasv1alpha1.MaaSModelRef{modelA, modelB} {
+		r.checkModelIdentityConflict(context.Background(), ctrl.Log.WithName("test"), model)
+		cond := findCondition(model.Status.Conditions, ConditionModelIdentityUnique)
+		if cond == nil {
+			t.Fatalf("ModelIdentityUnique condition not set for %s", model.Name)
+		}
+		if cond.Status != metav1.ConditionTrue {
+			t.Errorf("%s: expected True for per-tenant modelRefs sharing an alias, got %v (%s)",
+				model.Name, cond.Status, cond.Message)
+		}
+	}
+}
+
+// TestCheckModelIdentityConflict_SameTenantSharedAliasIsConflict verifies the
+// tenant exclusion does not mask genuine collisions: same-tenant modelRefs
+// sharing an alias are still reported.
+func TestCheckModelIdentityConflict_SameTenantSharedAliasIsConflict(t *testing.T) {
+	const sharedAlias = "publishers/default/models/shared-model"
+
+	modelA := &maasv1alpha1.MaaSModelRef{
+		ObjectMeta: metav1.ObjectMeta{Name: "model-a", Namespace: "default", Generation: 1},
+		Status: maasv1alpha1.MaaSModelStatus{
+			ResolvedModelAlias: sharedAlias,
+			ResolvedTenantRef:  "tenant-a",
+		},
+	}
+	modelB := &maasv1alpha1.MaaSModelRef{
+		ObjectMeta: metav1.ObjectMeta{Name: "model-b", Namespace: "default"},
+		Status: maasv1alpha1.MaaSModelStatus{
+			ResolvedModelAlias: sharedAlias,
+			ResolvedTenantRef:  "tenant-a",
+		},
+	}
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(modelA, modelB).
+		WithStatusSubresource(&maasv1alpha1.MaaSModelRef{}).
+		Build()
+	r := &MaaSModelRefReconciler{Client: c, Scheme: scheme}
+
+	r.checkModelIdentityConflict(context.Background(), ctrl.Log.WithName("test"), modelA)
+
+	cond := findCondition(modelA.Status.Conditions, ConditionModelIdentityUnique)
+	if cond == nil {
+		t.Fatal("ModelIdentityUnique condition not set")
+	}
+	if cond.Status != metav1.ConditionFalse {
+		t.Errorf("expected False for same-tenant shared alias, got %v (%s)", cond.Status, cond.Message)
+	}
+}
+
 func TestCheckModelIdentityConflict_ConflictResolved(t *testing.T) {
 	model := &maasv1alpha1.MaaSModelRef{
 		ObjectMeta: metav1.ObjectMeta{Name: "model-a", Namespace: "default", Generation: 1},
@@ -2288,6 +2369,56 @@ func TestEnqueueSiblingsWithAlias(t *testing.T) {
 				if got[i] != name {
 					t.Errorf("enqueued[%d] = %q, want %q", i, got[i], name)
 				}
+			}
+		})
+	}
+}
+
+// A resolved-tenant change alone can flip a sibling's ModelIdentityUnique
+// condition while the alias stays the same, so the sibling watch must requeue
+// on ResolvedTenantRef changes too, not only alias changes.
+func TestSiblingConflictFieldsChanged(t *testing.T) {
+	base := func(alias, tenant string) *maasv1alpha1.MaaSModelRef {
+		return &maasv1alpha1.MaaSModelRef{
+			ObjectMeta: metav1.ObjectMeta{Name: "model-a", Namespace: "default"},
+			Status:     maasv1alpha1.MaaSModelStatus{ResolvedModelAlias: alias, ResolvedTenantRef: tenant},
+		}
+	}
+	tests := []struct {
+		name string
+		old  *maasv1alpha1.MaaSModelRef
+		new  *maasv1alpha1.MaaSModelRef
+		want bool
+	}{
+		{
+			name: "no change",
+			old:  base("alias-a", "tenant-a"),
+			new:  base("alias-a", "tenant-a"),
+			want: false,
+		},
+		{
+			name: "alias change",
+			old:  base("alias-a", "tenant-a"),
+			new:  base("alias-b", "tenant-a"),
+			want: true,
+		},
+		{
+			name: "tenant change with same alias",
+			old:  base("alias-a", "tenant-a"),
+			new:  base("alias-a", "tenant-b"),
+			want: true,
+		},
+		{
+			name: "tenant cleared",
+			old:  base("alias-a", "tenant-a"),
+			new:  base("alias-a", ""),
+			want: true,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := siblingConflictFieldsChanged(tc.old, tc.new); got != tc.want {
+				t.Errorf("siblingConflictFieldsChanged() = %v, want %v", got, tc.want)
 			}
 		})
 	}

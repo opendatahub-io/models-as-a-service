@@ -150,7 +150,7 @@ def echo_access():
         # policy pair exists, and only then publishes its endpoint. Without this
         # wait the first request can race the route and fail as a 404 or 403 that
         # looks like a product bug rather than a fixture that is not up yet.
-        _wait_for_model_ready(ECHO_MODEL_REF, namespace=MODEL_NAMESPACE, timeout=120)
+        _wait_for_model_ready(ECHO_MODEL_REF, namespace=MODEL_NAMESPACE)
         _wait_for_gateway_auth_enforced()
 
         # A Ready model and an enforced gateway AuthPolicy are not sufficient:
@@ -163,7 +163,6 @@ def echo_access():
             ECHO_MODEL_REF,
             namespace=ns,
             model_namespace=MODEL_NAMESPACE,
-            timeout=180,
         )
 
         yield _create_api_key(oc_token, subscription=subscription_name)

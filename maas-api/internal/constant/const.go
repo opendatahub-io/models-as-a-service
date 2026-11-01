@@ -49,6 +49,10 @@ const (
 	// Prefer status.rateLimitIdentity; still read as a migration fallback.
 	AnnotationRateLimitIdentity = "maas.opendatahub.io/rate-limit-identity"
 
+	// AnnotationSubscriptionHeaders configures experimental x-grid-* headers
+	// injected by the Gateway for requests resolved to an annotated MaaSSubscription.
+	AnnotationSubscriptionHeaders = "experimental.maas.opendatahub.io/headers"
+
 	// MaxLabelsEntries is the maximum number of label key-value pairs per API key (prevent abuse).
 	MaxLabelsEntries    = 50
 	MaxLabelKeyLength   = 128

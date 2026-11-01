@@ -45,6 +45,7 @@ from test_helper import (
     _get_auth_policies_authorizing_identity_for_model,
     _maas_api_url,
     _ns,
+    _is_transient_gateway_response,
     _request_with_gateway_retry,
     _sa_to_user,
     _wait_for_maas_auth_policy_phase,
@@ -54,6 +55,10 @@ from test_helper import (
 log = logging.getLogger(__name__)
 
 pytestmark = [pytest.mark.xdist_group("api_keys"), pytest.mark.worker_tenant]
+
+# Budget for the gateway AuthPolicy to finish propagating after a policy change.
+# Only used to ride out proxy 5xx; a settled gateway answers on the first try.
+AUTH_PROPAGATION_TIMEOUT = 60
 
 
 def _wait_for_subscription_in_list(
@@ -278,7 +283,22 @@ class TestListSubscriptions:
     def test_unauthenticated_returns_401(self, endpoint):
         """Both subscription-list endpoints require authentication."""
         url = f"{_maas_api_url()}{endpoint}"
+        # While Envoy reloads the gateway AuthPolicy it answers requests with a
+        # proxy 5xx before the policy is loaded, which is indistinguishable from
+        # a real error on a single sample. Retry only proxy 5xx: a genuine 401
+        # passes immediately and a genuine server error still fails.
+        deadline = time.time() + AUTH_PROPAGATION_TIMEOUT
         r = requests.get(url, timeout=TIMEOUT, verify=TLS_VERIFY)
+        while (
+            r.status_code >= 500
+            and _is_transient_gateway_response(r)
+            and time.time() < deadline
+        ):
+            log.info(
+                "GET %s (no auth) -> %s while auth propagates, retrying", endpoint, r.status_code
+            )
+            time.sleep(5)
+            r = requests.get(url, timeout=TIMEOUT, verify=TLS_VERIFY)
         assert r.status_code == 401, f"Expected 401, got {r.status_code}: {r.text}"
         log.info("GET %s (no auth) -> %s", endpoint, r.status_code)
 

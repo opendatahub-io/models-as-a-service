@@ -977,7 +977,9 @@ func TestMaaSAuthPolicyReconciler_EnsureBaseGatewayAuthPolicyDoesNotResolveGuard
 	if _, err := r.reconcileGatewayAuthPolicy(context.Background(), logr.Discard(), nil, false, tenantNamespace, "", gatewayNamespace, gatewayName); err == nil {
 		t.Fatal("reconcileGatewayAuthPolicy() error = nil, want guardrail resolution failure")
 	}
-	if err := r.ensureBaseGatewayAuthPolicy(context.Background(), logr.Discard(), nil, false, "", gatewayNamespace, gatewayName); err != nil {
+	if err := r.ensureBaseGatewayAuthPolicy(
+		context.Background(), logr.Discard(), nil, false, tenantNamespace, "", gatewayNamespace, gatewayName,
+	); err != nil {
 		t.Fatalf("ensureBaseGatewayAuthPolicy() error = %v", err)
 	}
 
@@ -1036,10 +1038,13 @@ func TestMaaSAuthPolicyReconciler_LastPolicyDeletionDoesNotResolveGuardrails(t *
 		TenantNamespace:  tenantNamespace,
 	}
 	// Simulate the guardrail catalog created before this was the last policy.
-	if _, err := r.reconcileGatewayAuthPolicyWithHeaders(context.Background(), logr.Discard(), nil, false, "", gatewayNamespace, gatewayName, []guardrailHeader{{
-		ID:   "check-a",
-		Name: "x-aigateway-guardrail-check-a",
-	}}); err != nil {
+	if _, err := r.reconcileGatewayAuthPolicyWithHeaders(
+		context.Background(), logr.Discard(), nil, false, tenantNamespace, "", gatewayNamespace, gatewayName,
+		[]guardrailHeader{{
+			ID:   "check-a",
+			Name: "x-aigateway-guardrail-check-a",
+		},
+		}); err != nil {
 		t.Fatalf("create gateway AuthPolicy with guardrail catalog: %v", err)
 	}
 

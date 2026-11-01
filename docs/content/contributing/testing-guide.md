@@ -189,7 +189,7 @@ The E2E framework auto-discovers most values from the cluster. These are the mos
 | `MODEL_NAME` | Override model ID (defaults to first from catalog) |
 | `E2E_MODEL_PATH` | Override the model route path used by inference tests (for example, `/llm/facebook-opt-125m-simulated`; omit `/v1`) |
 | `EXTERNAL_OIDC` | Set `true` to enable external OIDC tests |
-| `E2E_PARALLEL_WORKERS` | pytest-xdist worker count for pass 1 (default `7`). Set to `1` for single-worker pass 1 without xdist; pass 2 stays serial. |
+| `E2E_PARALLEL_WORKERS` | pytest-xdist worker count for pass 1 (default `5`). Set to `1` for single-worker pass 1 without xdist; pass 2 stays serial. |
 | `LLMISVC_CONTROLLER_CPU_REQUEST` / `LLMISVC_CONTROLLER_CPU_LIMIT` | CPU that `deploy-platform.sh` gives `llmisvc-controller-manager` on the test cluster (defaults `1` / `2`; shipped is 100m). Set the limit empty to keep the shipped resources. |
 
 See `test/e2e/tests/conftest.py` and individual test module docstrings for the full set of supported variables.
@@ -210,9 +210,9 @@ does not identify the model route. SSE parsing is centralized in
 
 ### Parallel E2E (pytest-xdist)
 
-`run_e2e_tests.sh` and `run-tests-quick.sh` run **two marker-filtered passes** by default (default `E2E_PARALLEL_WORKERS=7`). Use `--serial-only` to run pass 2 only (`-m serial`); that mode does not execute non-serial tests. Direct `pytest` invocations must use the same split when a module mixes `@serial` and worker-tenant tests.
+`run_e2e_tests.sh` and `run-tests-quick.sh` run **two marker-filtered passes** by default (default `E2E_PARALLEL_WORKERS=5`). Use `--serial-only` to run pass 2 only (`-m serial`); that mode does not execute non-serial tests. Direct `pytest` invocations must use the same split when a module mixes `@serial` and worker-tenant tests.
 
-1. **Pass 1**: `-m "not serial"` — with `--dist=loadgroup -n 7` when workers > 1, or single-worker execution when `E2E_PARALLEL_WORKERS=1`
+1. **Pass 1**: `-m "not serial"` — with `--dist=loadgroup -n 5` when workers > 1, or single-worker execution when `E2E_PARALLEL_WORKERS=1`
 2. **Pass 2 (serial)**: `-m serial` — tests that mutate shared cluster state (subscription delete/restore, controller/Kuadrant scaling)
 
 Set `E2E_PARALLEL_WORKERS=1` to disable xdist on pass 1 while keeping the serial/non-serial split (useful for debugging on shared clusters). Pass `./run_e2e_tests.sh --serial-only` only when intentionally limiting the run to serial mutators.

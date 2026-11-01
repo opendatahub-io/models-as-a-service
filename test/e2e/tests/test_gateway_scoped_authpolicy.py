@@ -98,7 +98,6 @@ class TestGatewayAuthPolicyLifecycle:
             _wait_for_maas_auth_policy_phase(
                 policy_name,
                 namespace=context.tenant_namespace,
-                timeout=120,
                 require_auth_policies=False,
             )
 
