@@ -197,7 +197,7 @@ The E2E framework auto-discovers most values from the cluster. These are the mos
 | `E2E_MODEL_PATH` | Override the model route path used by inference tests (for example, `/llm/facebook-opt-125m-simulated`; omit `/v1`) |
 | `EXTERNAL_OIDC` | Set `true` to enable external OIDC tests |
 | `E2E_PARALLEL_WORKERS` | pytest-xdist worker count for pass 1 (default `5`). Set to `1` for single-worker pass 1 without xdist; the serial passes are unaffected. |
-| `E2E_SERIAL_WORKERS` | pytest-xdist lane count for serial pass 2b (default `1` when calling `run_e2e_tests.sh` directly, `3` from CI and `run-tests-quick.sh`). Pass 2a is always one worker. Set to `1` to restore the single-worker serial pass. |
+| `E2E_SERIAL_WORKERS` | pytest-xdist lane count for serial pass 2b (default `1` everywhere, including CI). Lanes above 1 are implemented and were measured at 2 and 3 lanes, but they are **not enabled by default**: pass-2b files share the stored auth state of common models even across different `xdist_group`s, so concurrent lanes race (measured failure: `test_models_endpoint::test_empty_model_list`). Pass 2a is always one worker. |
 | `LLMISVC_CONTROLLER_CPU_REQUEST` / `LLMISVC_CONTROLLER_CPU_LIMIT` | CPU that `deploy-platform.sh` gives `llmisvc-controller-manager` on the test cluster (defaults `1` / `2`; shipped is 100m). Set the limit empty to keep the shipped resources. |
 
 See `test/e2e/tests/conftest.py` and individual test module docstrings for the full set of supported variables.
@@ -222,7 +222,7 @@ does not identify the model route. SSE parsing is centralized in
 
 1. **Pass 1**: `-m "not serial and not serial_exclusive"` — with `--dist=loadgroup -n 5` when workers > 1, or single-worker execution when `E2E_PARALLEL_WORKERS=1`
 2. **Pass 2a (`serial_exclusive`)**: `-m serial_exclusive` — tests that need the whole cluster to themselves (they scale the controller or Kuadrant down, or delete a cluster-scoped CRD). Always one worker.
-3. **Pass 2b (serial)**: `-m "serial and not serial_exclusive"` — the other shared-cluster mutators (subscription delete/restore, TRLP rebuilds). One worker unless `E2E_SERIAL_WORKERS > 1`, which adds `-n N --dist=loadgroup`. Lanes split between files only; files that mutate the same shared model share an `xdist_group` so they never land on two lanes.
+3. **Pass 2b (serial)**: `-m "serial and not serial_exclusive"` — the other shared-cluster mutators (subscription delete/restore, TRLP rebuilds). Runs on one worker. `E2E_SERIAL_WORKERS > 1` splits it into lanes with `-n N --dist=loadgroup`, splitting between files only, but that is **not** safe today: grouping is per file while several of these files create and delete `MaaSAuthPolicy`/`MaaSSubscription` objects on the same shared models, so a lane can observe another lane's objects. Opt in only for experimentation.
 
 Set `E2E_PARALLEL_WORKERS=1` to disable xdist on pass 1 while keeping the serial/non-serial split (useful for debugging on shared clusters). Pass `./run_e2e_tests.sh --serial-only` only when intentionally limiting the run to serial mutators.
 
