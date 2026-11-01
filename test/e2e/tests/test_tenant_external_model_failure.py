@@ -35,7 +35,7 @@ log = logging.getLogger(__name__)
 
 # Serialized with the rest of the tenant-external-model suite (shared tenant
 # gateways / IPP coexistence) — see test_tenant_external_model_shared.py.
-pytestmark = pytest.mark.xdist_group("tenant_ipp_ext_failure")
+pytestmark = pytest.mark.xdist_group("tenant_ipp")
 
 # httpbin-compatible endpoints return /status/<code> as that status, so routing
 # tenant A here fails its upstream deterministically. Override these if

@@ -65,7 +65,7 @@ log = logging.getLogger(__name__)
 # Serialized with tenant_ipp until the legacy IPP controllers skip
 # gatewayRefs ExternalModels (image pin pending): without that guard they
 # adopt this suite's models and flap status.httpRouteName.
-pytestmark = pytest.mark.xdist_group("tenant_ipp_ext_compat")
+pytestmark = pytest.mark.xdist_group("tenant_ipp")
 
 DEFAULT_BACKEND_SWITCH_TIMEOUT = int(os.environ.get("E2E_TENANT_BACKEND_SWITCH_TIMEOUT", "420"))
 
