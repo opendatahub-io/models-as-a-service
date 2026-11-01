@@ -110,7 +110,7 @@ from test_helper import (
 
 log = logging.getLogger(__name__)
 
-pytestmark = [pytest.mark.xdist_group("api_subscription"), pytest.mark.worker_tenant]
+pytestmark = [pytest.mark.xdist_group("api_unconfigured_model"), pytest.mark.worker_tenant]
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -2591,7 +2591,7 @@ class TestStatusReporting:
             _delete_sa(sa_name, namespace=MODEL_NAMESPACE)
             _wait_for_cr_absent("maassubscription", subscription_name)
 
-    @pytest.mark.serial
+    @pytest.mark.serial_exclusive  # scales the Kuadrant controller down
     def test_subscription_degraded_trlp_blocks_inference(self):
         """
         Test: Degraded subscription with TRLP not ready blocks inference.

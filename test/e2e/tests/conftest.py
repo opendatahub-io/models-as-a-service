@@ -25,7 +25,7 @@ log = logging.getLogger(__name__)
 _WORKER_ISOLATED_XDIST_GROUPS = frozenset({
     "api_keys_core",
     "api_embedding",
-    "api_subscription",
+    "api_unconfigured_model",
     "api_keys_sub_endpoints",
     "api_xkey",
     "models_endpoint",
@@ -116,13 +116,18 @@ def pytest_collection_modifyitems(config, items):  # noqa: ARG001 - pytest hook 
     state (simulator-subscription, UNCONFIGURED model auth, MODEL_REF TRLP churn).
     CI runs serial tests in a second pass.
 
+    Pass 2 keeps every serial file in its own xdist group so run_e2e_tests.sh can
+    spread serial work over several lanes. Files that mutate the same shared
+    model belong to one group so they can never land on two lanes at once.
+    Tests that need the whole cluster (they scale a control plane down or delete
+    a cluster-scoped CRD) are marked serial_exclusive instead and run in their
+    own single-worker pass, selected by marker expression — not by a hook-added
+    xdist_group, which cannot override a module-level one.
+
     Every xdist worker collects every test, so isolation must never be inferred
     from the collected xdist groups. The worker_tenant marker is the opt-in.
     """
     for item in items:
-        if item.get_closest_marker("serial"):
-            item.add_marker(pytest.mark.xdist_group("serial"))
-
         xdist_markers = list(item.iter_markers("xdist_group"))
         if not xdist_markers:
             raise pytest.UsageError(

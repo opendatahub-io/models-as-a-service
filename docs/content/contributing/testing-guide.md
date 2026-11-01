@@ -217,10 +217,11 @@ does not identify the model route. SSE parsing is centralized in
 
 ### Parallel E2E (pytest-xdist)
 
-`run_e2e_tests.sh` and `run-tests-quick.sh` run **two marker-filtered passes** by default (default `E2E_PARALLEL_WORKERS=5`). Use `--serial-only` to run pass 2 only (`-m serial`); that mode does not execute non-serial tests. Direct `pytest` invocations must use the same split when a module mixes `@serial` and worker-tenant tests.
+`run_e2e_tests.sh` and `run-tests-quick.sh` run **three marker-filtered passes** by default (default `E2E_PARALLEL_WORKERS=5`). Use `--serial-only` to run the two serial passes only; that mode does not execute non-serial tests. Direct `pytest` invocations must use the same split when a module mixes `@serial` and worker-tenant tests.
 
-1. **Pass 1**: `-m "not serial"` — with `--dist=loadgroup -n 5` when workers > 1, or single-worker execution when `E2E_PARALLEL_WORKERS=1`
-2. **Pass 2 (serial)**: `-m serial` — tests that mutate shared cluster state (subscription delete/restore, controller/Kuadrant scaling)
+1. **Pass 1**: `-m "not serial and not serial_exclusive"` — with `--dist=loadgroup -n 5` when workers > 1, or single-worker execution when `E2E_PARALLEL_WORKERS=1`
+2. **Pass 2a (`serial_exclusive`)**: `-m serial_exclusive` — tests that need the whole cluster to themselves (they scale the controller or Kuadrant down, or delete a cluster-scoped CRD). Always one worker.
+3. **Pass 2b (serial)**: `-m "serial and not serial_exclusive"` — the other shared-cluster mutators (subscription delete/restore, TRLP rebuilds). One worker unless `E2E_SERIAL_WORKERS > 1`, which adds `-n N --dist=loadgroup`. Lanes split between files only; files that mutate the same shared model share an `xdist_group` so they never land on two lanes.
 
 Set `E2E_PARALLEL_WORKERS=1` to disable xdist on pass 1 while keeping the serial/non-serial split (useful for debugging on shared clusters). Pass `./run_e2e_tests.sh --serial-only` only when intentionally limiting the run to serial mutators.
 
