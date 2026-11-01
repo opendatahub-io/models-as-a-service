@@ -54,7 +54,7 @@ from test_helper import (
 
 log = logging.getLogger(__name__)
 
-pytestmark = [pytest.mark.xdist_group("api_keys"), pytest.mark.worker_tenant]
+pytestmark = [pytest.mark.xdist_group("api_keys_sub_endpoints"), pytest.mark.worker_tenant]
 
 # Budget for the gateway AuthPolicy to finish propagating after a policy change.
 # Only used to ride out proxy 5xx; a settled gateway answers on the first try.

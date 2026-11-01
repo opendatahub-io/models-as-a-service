@@ -25,7 +25,6 @@ import pytest
 import requests
 
 import test_helper
-from worker_tenant_fixtures import wait_for_only_accessible_subscription
 from multitenancy_helpers import wait_for_llmisvc_backend_ready
 from test_helper import (
     DISTINCT_MODEL_2_ID,
@@ -55,6 +54,7 @@ from test_helper import (
     _delete_governance_and_wait,
     _delete_sa,
     _get_auth_policies_for_model,
+    _gateway_url,
     _get_cr,
     _get_subscriptions_for_model,
     _inference,
@@ -74,7 +74,7 @@ from test_helper import (
 
 log = logging.getLogger(__name__)
 
-pytestmark = [pytest.mark.xdist_group("models"), pytest.mark.worker_tenant]
+pytestmark = [pytest.mark.xdist_group("models_endpoint"), pytest.mark.worker_tenant]
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -323,7 +323,9 @@ class TestModelsEndpoint:
     SUCCESS CASES (HTTP 200) - Legacy Behaviors (backwards compatibility)
     ═══════════════════════════════════════════════════════════════════════════
     8. test_single_subscription_auto_select
-       → User with one subscription, no header → 200 (returns that subscription's models)
+       → Moved to test_subscription.py::TestE2ESubscriptionFlow::
+         test_e2e_single_subscription_auto_selects, which asserts both the
+         inference path and the central catalog for the same tenant bootstrap.
 
     9. test_explicit_subscription_header
        → K8s token with explicit X-MaaS-Subscription header → 200 (filters to that subscription)
@@ -423,97 +425,6 @@ class TestModelsEndpoint:
         log.info("=" * 60)
         log.info("✅ All prerequisites validated - proceeding with /v1/models tests")
         log.info("=" * 60)
-
-    @pytest.mark.serial
-    def test_single_subscription_auto_select(self, single_subscription_tenant):
-        """
-        Test: User with exactly one accessible subscription can list models without
-        providing x-maas-subscription header (auto-selection).
-
-        Expected: HTTP 200 with models from that subscription.
-
-        Note: Makes use of an isolated tenant to ensure that there is only one accessible subscription.
-        """
-        context = single_subscription_tenant
-
-        sa_name = "e2e-models-single-sub-sa"
-        sa_ns = context.tenant_namespace
-        maas_ns = context.tenant_namespace
-        auth_policy_name = "e2e-single-sub-auth"
-        subscription_name = "e2e-single-sub-subscription"
-
-        try:
-            # Create service account
-            sa_token = _create_sa_token(sa_name, namespace=sa_ns)
-            sa_user = _sa_to_user(sa_name, namespace=sa_ns)
-
-            # Grant access only to this test service account.
-            log.info(f"Creating auth policy and subscription for {sa_user} with {context.model_ref}")
-            _create_test_auth_policy(
-                auth_policy_name, context.model_ref, users=[sa_user],
-                namespace=context.tenant_namespace, model_namespace=context.model_namespace,
-            )
-            _create_test_subscription(
-                subscription_name, context.model_ref, users=[sa_user],
-                namespace=context.tenant_namespace, model_namespace=context.model_namespace,
-            )
-
-            # Wait for subscription to reconcile before creating API key
-            _wait_for_subscription_discovery_ready(subscription_name, namespace=maas_ns)
-
-            # Wait for model to become Ready after governance pairing is created
-            log.info("Waiting for model to reconcile and become Ready...")
-            _wait_for_model_ready(context.model_ref, namespace=context.model_namespace)
-
-            # Create API key for inference
-            wait_for_only_accessible_subscription(sa_token, subscription_name)
-
-            api_key = _create_api_key(sa_token, name=f"{sa_name}-key")
-
-            _wait_for_maas_auth_policy_phase(auth_policy_name, namespace=context.tenant_namespace, require_enforced=False)
-
-            # Query /v1/models
-            log.info("Testing: GET /v1/models with single subscription (no header, auto-select)")
-            r = _get_models_with_gateway_retry(
-                headers={"Authorization": f"Bearer {api_key}"}
-            )
-
-            # Validate response structure
-            data = r.json()
-            assert data.get("object") == "list", f"Expected object='list', got {data.get('object')}"
-            assert "data" in data, "Response missing 'data' field"
-
-            # Handle API bug: data may be null instead of []
-            models = data.get("data") or []
-
-            # In gateway-only mode this endpoint may return an empty list for a valid
-            # single-subscription key while still returning HTTP 200.
-            if len(models) == 0:
-                log.info("✅ Single subscription auto-select returned 200 with empty model list")
-            else:
-                # Validate model structure when models are present.
-                for model in models:
-                    assert "id" in model, "Model missing 'id' field"
-                    assert "object" in model, "Model missing 'object' field"
-                    assert "created" in model, "Model missing 'created' field"
-                    assert "owned_by" in model, "Model missing 'owned_by' field"
-
-                    # Validate subscriptions field (new feature)
-                    assert "subscriptions" in model, "Model missing 'subscriptions' field"
-                    assert isinstance(model["subscriptions"], list), "subscriptions should be a list"
-                    assert len(model["subscriptions"]) == 1, \
-                        f"Expected 1 subscription (auto-selected), got {len(model['subscriptions'])}"
-                    assert model["subscriptions"][0]["name"] == subscription_name, \
-                        f"Expected subscription '{subscription_name}', got '{model['subscriptions'][0]['name']}'"
-
-                log.info(f"✅ Single subscription auto-select → {r.status_code} with {len(models)} model(s)")
-
-        finally:
-            _delete_cr("maasauthpolicy", auth_policy_name, namespace=maas_ns)
-            _delete_cr("maassubscription", subscription_name, namespace=maas_ns)
-            _delete_sa(sa_name, namespace=sa_ns)
-            _wait_for_cr_absent("maassubscription", subscription_name, namespace=maas_ns)
-            _wait_for_cr_absent("maasauthpolicy", auth_policy_name, namespace=maas_ns)
 
     @pytest.mark.serial
     def test_explicit_subscription_header(self):
@@ -2339,6 +2250,18 @@ class TestModelsEndpoint:
             assert matching_models, (
                 f"Central /v1/models lost subscription {subscription_name} "
                 "after quota exhaustion"
+            )
+
+            # The per-model discovery path must stay exempt too. Covered here so
+            # the duplicate scenario in test_subscription.py can be dropped.
+            per_model = _request_with_gateway_retry(
+                requests.get,
+                f"{_gateway_url()}{model_path}/v1/models",
+                headers={"Authorization": f"Bearer {api_key}"},
+            )
+            assert per_model.status_code == 200, (
+                f"Expected 200 for {model_path}/v1/models after quota exhaustion, "
+                f"got {per_model.status_code}: {per_model.text[:500]}"
             )
         finally:
             _delete_cr("maassubscription", subscription_name)

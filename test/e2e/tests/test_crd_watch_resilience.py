@@ -26,7 +26,7 @@ import pytest
 log = logging.getLogger(__name__)
 
 pytestmark = [
-    pytest.mark.xdist_group("mt_lifecycle"),
+    pytest.mark.xdist_group("mt_lc_crd_watch"),
     pytest.mark.serial,
     pytest.mark.skipif(
         os.environ.get("E2E_RUN_CRD_WATCH_RESILIENCE", "").lower()
