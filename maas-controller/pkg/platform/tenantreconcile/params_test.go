@@ -141,7 +141,7 @@ func TestPatchGatewayBodyBufferLimit(t *testing.T) {
 			"configPatches": []any{map[string]any{
 				"patch": map[string]any{
 					"value": map[string]any{
-						"per_connection_buffer_limit_bytes": int64(DefaultGatewayBodyBufferLimitMB * 1024 * 1024),
+						"per_connection_buffer_limit_bytes": DefaultGatewayBodyBufferLimitMB * 1024 * 1024,
 					},
 				},
 			}},
@@ -165,8 +165,12 @@ func TestPatchGatewayBodyBufferLimit(t *testing.T) {
 	patches, found, err := unstructured.NestedSlice(filter.Object, "spec", "configPatches")
 	require.NoError(t, err)
 	require.True(t, found)
-	patch := patches[0].(map[string]any)
-	value := patch["patch"].(map[string]any)["value"].(map[string]any)
+	patch, ok := patches[0].(map[string]any)
+	require.True(t, ok)
+	patchBody, ok := patch["patch"].(map[string]any)
+	require.True(t, ok)
+	value, ok := patchBody["value"].(map[string]any)
+	require.True(t, ok)
 	assert.Equal(t, int64(32*1024*1024), value["per_connection_buffer_limit_bytes"])
 }
 
