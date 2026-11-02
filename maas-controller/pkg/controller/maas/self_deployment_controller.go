@@ -1190,14 +1190,14 @@ func (r *LifecycleReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	// missing at startup; those watches are registered when the CRD appears.
 	smExists := crdExists(context.Background(), mgr.GetAPIReader(), serviceMonitorCRD)
 	if smExists {
-		b = b.Watches(managedMonitoringObject(serviceMonitorGVK),
+		b = b.WatchesMetadata(managedMonitoringObject(serviceMonitorGVK),
 			handler.EnqueueRequestsFromMapFunc(r.enqueueSelfDeployment),
 			builder.WithPredicates(r.managedInMonitoringNamespace()),
 		)
 	}
 	ruleExists := crdExists(context.Background(), mgr.GetAPIReader(), prometheusRuleCRD)
 	if ruleExists {
-		b = b.Watches(managedMonitoringObject(prometheusRuleGVK),
+		b = b.WatchesMetadata(managedMonitoringObject(prometheusRuleGVK),
 			handler.EnqueueRequestsFromMapFunc(r.enqueueSelfDeployment),
 			builder.WithPredicates(r.managedInMonitoringNamespace()),
 		)
@@ -1235,10 +1235,10 @@ var (
 	prometheusRuleGVK = schema.GroupVersionKind{Group: "monitoring.rhobs", Version: "v1", Kind: "PrometheusRule"}
 )
 
-// managedMonitoringObject returns an unstructured stub for a monitoring GVK, so the
-// watch does not require the prometheus-operator Go types as a dependency.
+// managedMonitoringObject returns metadata only: watch predicates need labels and
+// namespace, not full monitoring specifications from every namespace.
 func managedMonitoringObject(gvk schema.GroupVersionKind) client.Object {
-	obj := &unstructured.Unstructured{}
+	obj := &metav1.PartialObjectMetadata{}
 	obj.SetGroupVersionKind(gvk)
 	return obj
 }

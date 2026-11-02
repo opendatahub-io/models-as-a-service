@@ -17,6 +17,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 
@@ -183,4 +184,32 @@ func TestAuthorinoMonitoringProductResources(t *testing.T) {
 	g.Expect(alerts["MaaSAuthorinoAuthenticationHighLatency"]).To(ContainSubstring(") > 2"))
 	g.Expect(alerts["MaaSAuthorinoMetadataEvaluatorHighFailureRate"]).To(ContainSubstring("auth_server_evaluator_cancelled_total{"))
 	g.Expect(alerts["MaaSAuthorinoMetadataEvaluatorHighFailureRate"]).To(ContainSubstring(") > 0.1"))
+}
+
+// Monitoring watches must admit deletion events so reconciliation can recreate
+// resources, without waking the controller for unrelated monitoring objects.
+func TestMonitoringWatchEvents(t *testing.T) {
+	r := &LifecycleReconciler{MonitoringNamespace: "product-monitoring", DeploymentNS: "applications", DeploymentName: "maas-controller"}
+	for _, gvk := range []schema.GroupVersionKind{serviceMonitorGVK, prometheusRuleGVK} {
+		t.Run(gvk.Kind, func(t *testing.T) {
+			g := NewWithT(t)
+			obj := managedMonitoringObject(gvk)
+			g.Expect(obj).To(BeAssignableToTypeOf(&metav1.PartialObjectMetadata{}))
+			g.Expect(obj.GetObjectKind().GroupVersionKind()).To(Equal(gvk))
+			obj.SetNamespace(r.MonitoringNamespace)
+			obj.SetLabels(map[string]string{"app.kubernetes.io/part-of": "maas-observability"})
+			filter := r.managedInMonitoringNamespace()
+			g.Expect(filter.Create(event.CreateEvent{Object: obj})).To(BeTrue())
+			g.Expect(filter.Delete(event.DeleteEvent{Object: obj})).To(BeTrue())
+			requests := r.enqueueSelfDeployment(context.Background(), obj)
+			g.Expect(requests).To(HaveLen(1))
+			g.Expect(requests[0].Namespace).To(Equal(r.DeploymentNS))
+			g.Expect(requests[0].Name).To(Equal(r.DeploymentName))
+			obj.SetNamespace("unrelated")
+			g.Expect(filter.Delete(event.DeleteEvent{Object: obj})).To(BeFalse())
+			obj.SetNamespace(r.MonitoringNamespace)
+			obj.SetLabels(nil)
+			g.Expect(filter.Delete(event.DeleteEvent{Object: obj})).To(BeFalse())
+		})
+	}
 }

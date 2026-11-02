@@ -180,21 +180,9 @@ kubectl delete servicemonitor,service -n openshift-ingress istio-gateway-metrics
 
 #### Authorino monitoring
 
-The Authorino `ServiceMonitor` (`authorino-server-metrics`) and the PrometheusRules
-(`authorino-maas-metadata-evaluator-high-failure-rate`, `authorino-maas-authentication-alerts`)
-are owned by maas-controller through an `ownerReference` on `Config/default`. Deleting
-them by hand does not work — the controller recreates them on the next reconcile.
-
-Turn them off through the feature gate instead:
-
-```bash
-kubectl patch configs.maas.opendatahub.io default --type=merge \
-  -p '{"spec":{"authorinoMonitoring":false}}'
-```
-
-The controller then removes the resources it owns. Resources it does not own —
-Authorino itself, and any monitoring objects applied independently — are preserved.
-Deleting `Config/default` garbage-collects them as well.
+The Authorino ServiceMonitor and PrometheusRules are managed by maas-controller
+through `Config/default`. See [Authorino monitoring](setup.md#authorino-monitoring)
+for configuration and feature-gate behavior.
 
 ### Troubleshooting Missing Metrics
 
