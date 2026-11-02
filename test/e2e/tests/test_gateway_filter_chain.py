@@ -61,7 +61,6 @@ from test_helper import (
 
 pytestmark = [
     pytest.mark.legacy_ipp,
-    pytest.mark.serial,
     pytest.mark.xdist_group("legacy_ipp_filter_chain"),
 ]
 

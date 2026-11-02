@@ -63,7 +63,7 @@ from test_helper import (
 log = logging.getLogger(__name__)
 
 pytestmark = [
-    pytest.mark.legacy_ipp,
+    pytest.mark.legacy_ipp_pass2b,
     pytest.mark.serial,
     pytest.mark.xdist_group("tenant_ipp_legacy"),
 ]

@@ -175,11 +175,14 @@ fi
     export GATEWAY_HOST="maas.apps.your-cluster.example.com"
     export E2E_SKIP_TLS_VERIFY=true
 
-    # Mixed-marker modules need separate passes (or use run_e2e_tests.sh for the full suite).
-    pytest tests/ -m "not serial" -v
-    pytest tests/ -m serial -v
-    pytest tests/test_subscription.py -m "not serial" -v
-    pytest tests/test_api_keys.py::TestAPIKeyCRUD -m "not serial" -v
+    # Match run_e2e_tests.sh (three passes):
+    pytest tests/ -m "not serial and not serial_exclusive and not legacy_ipp and not legacy_ipp_pass2b" -n 5 --dist=loadgroup -v
+    pytest tests/ -m "serial_exclusive and not legacy_ipp" -v
+    pytest tests/ -m "((serial and not legacy_ipp) or legacy_ipp_pass2b) and not serial_exclusive" -v
+
+    # Single file in pass 1 only:
+    pytest tests/test_subscription.py -m "not serial and not serial_exclusive and not legacy_ipp and not legacy_ipp_pass2b" -v
+    pytest tests/test_api_keys.py::TestAPIKeyCRUD -m "not serial and not serial_exclusive and not legacy_ipp and not legacy_ipp_pass2b" -v
     ```
 
 ### Key Environment Variables
@@ -218,11 +221,11 @@ does not identify the model route. SSE parsing is centralized in
 
 ### Parallel E2E (pytest-xdist)
 
-`run_e2e_tests.sh` and `run-tests-quick.sh` run **three marker-filtered passes** by default (default `E2E_PARALLEL_WORKERS=5`). Use `--serial-only` to run the two serial passes only; that mode does not execute non-serial tests. Direct `pytest` invocations must use the same split when a module mixes `@serial` and worker-tenant tests.
+`run_e2e_tests.sh` and `run-tests-quick.sh` run **three marker-filtered passes** by default (default `E2E_PARALLEL_WORKERS=5`). Use `--serial-only` to run passes **2a and 2b** only; that mode skips pass 1. Direct `pytest` invocations must use the same selectors when a module mixes `@serial` and worker-tenant tests.
 
-1. **Pass 1**: `-m "not serial and not serial_exclusive and not legacy_ipp"` — Praxis/AGC work including split `test_tenant_external_model_*` modules; with `--dist=loadgroup -n 5` when workers > 1, or single-worker when `E2E_PARALLEL_WORKERS=1`
-2. **Pass 2a (`serial_exclusive`)**: `-m "serial_exclusive and not legacy_ipp"` — tests that need the whole cluster to themselves (they scale the controller or Kuadrant down, or delete a cluster-scoped CRD). Always one worker.
-3. **Pass 2b (serial)**: `-m "(serial or legacy_ipp) and not serial_exclusive"` — shared-cluster mutators plus legacy IPP suites (`test_per_tenant_ipp_isolation`, `test_gateway_filter_chain`, legacy `test_external_models`, `TestLegacyIppCoexistence`). Legacy IPP does not run in pass 1. Default one worker (`E2E_SERIAL_WORKERS=1`); serial lanes remain unsafe for shared-model files — see README.
+1. **Pass 1**: `-m "not serial and not serial_exclusive and not legacy_ipp and not legacy_ipp_pass2b"`
+2. **Pass 2a (`serial_exclusive`)**: `-m "serial_exclusive and not legacy_ipp"`
+3. **Pass 2b (serial)**: `-m "((serial and not legacy_ipp) or legacy_ipp_pass2b) and not serial_exclusive"` — includes `test_per_tenant_ipp_isolation` after parallel work. Full legacy IPP catalog (`test_external_models`, `test_gateway_filter_chain`) stays **`legacy_ipp` opt-in** only.
 
 Set `E2E_PARALLEL_WORKERS=1` to disable xdist on pass 1 while keeping the serial/non-serial split (useful for debugging on shared clusters). Pass `./run_e2e_tests.sh --serial-only` only when intentionally limiting the run to serial mutators.
 
