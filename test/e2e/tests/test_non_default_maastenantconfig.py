@@ -13,15 +13,12 @@ from collections.abc import Iterator
 from typing import Any
 
 import pytest
-import requests
 from multitenancy_helpers import (
-    GATEWAY_NAMESPACE,
     INFRA_NAMESPACE,
     MODEL_BACKEND_READY_TIMEOUT,
     TENANT_CONFIG_KIND,
     TENANT_CR_NAME,
     _oc_run,
-    bearer_headers,
     create_api_key_at,
     make_tenant_model_accessible,
     per_tenant_maas_api_names,
@@ -29,17 +26,13 @@ from multitenancy_helpers import (
     wait_for_json,
 )
 from test_helper import (
-    TIMEOUT,
-    TLS_VERIFY,
     _delete_cr,
     _delete_governance_and_wait,
     _get_cluster_token,
-    _get_cr,
 )
 
 pytestmark = [pytest.mark.tenant_isolation, pytest.mark.xdist_group("tenant_isolation")]
 
-MAAS_TENANT_CONFIG_CRD = "maastenantconfigs.maas.opendatahub.io"
 CONVERGENCE_TIMEOUT = 300
 
 # Far below the platform default so a key the tenant must reject stays acceptable
@@ -47,9 +40,6 @@ CONVERGENCE_TIMEOUT = 300
 TENANT_MAX_EXPIRATION_DAYS = 7
 EXCEEDS_TENANT_WITHIN_DEFAULT_DAYS = 30
 HOURS_PER_DAY = 24
-
-# Follow-up for cases skipped because the installed CRD predates the field.
-CRD_FIELD_FOLLOW_UP = "RHOAIENG-100759"
 
 
 def _non_default_tenant(shared_test_tenants) -> dict[str, str]:
@@ -84,21 +74,32 @@ def _tenant_config_patched(tenant_namespace: str, spec_patch: dict[str, Any], *r
 def _wait_for_env_rollout(
     deployment_name: str, namespace: str, env_var: str, expected_value: str, timeout: int = CONVERGENCE_TIMEOUT
 ) -> None:
-    """Poll until a Deployment's container has the expected environment variable value."""
+    # maas-api reads the cap once at startup, so the patched value only takes effect
+    # when the new pod is the only one serving. Checking spec.env alone passes while
+    # the old pod still answers, which reads as "policy not enforced".
 
-    def _has_env_value(obj: dict[str, Any]) -> bool:
-        containers = (((obj.get("spec") or {}).get("template") or {}).get("spec") or {}).get("containers") or []
+    def _rolled_out(obj: dict[str, Any]) -> bool:
+        spec = obj.get("spec") or {}
+        status = obj.get("status") or {}
+        metadata = obj.get("metadata") or {}
+
+        containers = ((spec.get("template") or {}).get("spec") or {}).get("containers") or []
         if not containers:
             return False
         env = containers[0].get("env") or []
-        for var in env:
-            if var.get("name") == env_var and var.get("value") == expected_value:
-                return True
-        return False
+        if not any(v.get("name") == env_var and v.get("value") == expected_value for v in env):
+            return False
 
-    wait_for_json("deployment", deployment_name, namespace, predicate=_has_env_value, timeout=timeout)
+        desired = spec.get("replicas")
+        return (
+            status.get("observedGeneration", 0) >= metadata.get("generation", 0)
+            and status.get("replicas") == desired
+            and status.get("updatedReplicas") == desired
+            and status.get("readyReplicas") == desired
+            and status.get("availableReplicas") == desired
+        )
 
-
+    wait_for_json("deployment", deployment_name, namespace, predicate=_rolled_out, timeout=timeout)
 
 
 @pytest.fixture(scope="module")
@@ -142,7 +143,6 @@ def tenant_key_governance(shared_test_tenants):
 class TestNonDefaultTenantAPIKeysPolicy:
     """spec.apiKeys policy is enforced by the tenant's own maas-api and stays tenant-scoped."""
 
-    @pytest.mark.skip(reason="Pending cluster convergence: policy enforcement timing varies by cluster config")
     def test_key_exceeding_tenant_policy_is_rejected(self, shared_test_tenants, tenant_key_governance):
         """Given spec.apiKeys.maxExpirationDays on a non-default MaasTenantConfig,
         when a key is minted through that tenant's maas-api with a longer expiry,
@@ -159,7 +159,7 @@ class TestNonDefaultTenantAPIKeysPolicy:
                 "API_KEY_MAX_EXPIRATION_DAYS",
                 str(TENANT_MAX_EXPIRATION_DAYS),
             )
-            # The env rollout confirms deployment picked up the new policy
+            # Rollout complete: only the new pod serves, so the cap is live
             # Positive control: a key under the cap should succeed
             under_cap_response = create_api_key_at(
                 tenant["base_url"],
@@ -186,11 +186,15 @@ class TestNonDefaultTenantAPIKeysPolicy:
                 f"{EXCEEDS_TENANT_WITHIN_DEFAULT_DAYS}-day key returned {over_cap_response.status_code} "
                 f"instead of 400 — the cap is known to the service but not enforced on create"
             )
-            # Verify the response body explains why it was rejected
-            body = over_cap_response.json()
-            error = body.get("error", "")
-            assert "exceeds" in error.lower() or "maximum allowed" in error.lower(), (
-                f"Error should mention the expiration cap; got: {error}"
+            # Must be the cap that rejected it, not some other 400. The day count
+            # proves the tenant's own value was applied rather than the platform default.
+            error = over_cap_response.json().get("error", "")
+            assert "exceeds maximum allowed" in error, (
+                f"Rejection should cite the expiration cap; got: {error!r}"
+            )
+            assert f"({TENANT_MAX_EXPIRATION_DAYS} days)" in error, (
+                f"Rejection should cite this tenant's {TENANT_MAX_EXPIRATION_DAYS}-day cap rather than "
+                f"the platform default; got: {error!r}"
             )
 
     def test_policy_does_not_apply_to_sibling_tenant(self, shared_test_tenants, tenant_key_governance):
