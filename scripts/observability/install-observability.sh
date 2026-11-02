@@ -82,10 +82,6 @@ else
     echo "   ⚠️  Istio Gateway not found - skipping Istio metrics"
 fi
 
-# Authorino monitoring is owned by maas-controller via Config.spec.authorinoMonitoring.
-# This script deliberately does not apply it: Config/default always exists once the
-# controller is running, so a second apply here would only fight the controller.
-
 # ==========================================
 # Summary
 # ==========================================
@@ -97,15 +93,7 @@ echo ""
 
 echo "📝 Metrics collection configured:"
 echo "   Limitador: authorized_hits, authorized_calls, limited_calls, limitador_up"
-echo "   Authorino: auth_server_authconfig_duration_seconds, auth_server_authconfig_response_status_total, auth_server_evaluator_* (metadata HTTP)"
 echo "   Istio:     istio_requests_total, istio_request_duration_milliseconds"
-echo ""
-
-echo "🚨 Authorino alerts are managed by maas-controller via"
-echo "   Config.spec.authorinoMonitoring (enabled by default):"
-echo "   MaaSAuthorinoMetadataEvaluatorHighFailureRate - maas-api metadata call failure rate above configured threshold"
-echo "   MaaSAuthorinoAuthenticationHighFailureRate - gateway authentication failure rate above configured threshold"
-echo "   MaaSAuthorinoAuthenticationHighLatency - gateway authentication P95 latency above configured threshold"
 echo ""
 
 echo "💡 This script does not apply Perses dashboards."

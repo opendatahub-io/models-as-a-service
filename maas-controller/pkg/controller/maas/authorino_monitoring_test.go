@@ -79,8 +79,9 @@ func TestAuthorinoMonitoringGate(t *testing.T) {
 
 func TestAuthorinoMonitoringPreservesUnownedResources(t *testing.T) {
 	g := NewWithT(t)
+	ctx := context.Background()
 	s := lifecycleTestScheme(t)
-	cfg := &maasv1alpha1.Config{ObjectMeta: metav1.ObjectMeta{Name: "default", UID: "config-uid"}, Spec: maasv1alpha1.ConfigSpec{AuthorinoMonitoring: ptr.To(false)}}
+	cfg := &maasv1alpha1.Config{ObjectMeta: metav1.ObjectMeta{Name: "default", UID: "config-uid"}}
 	resources, err := authorinoMonitoringResources(authorinoTestManifestsPath, "product-monitoring")
 	g.Expect(err).NotTo(HaveOccurred())
 	objects := []client.Object{cfg}
@@ -89,11 +90,52 @@ func TestAuthorinoMonitoringPreservesUnownedResources(t *testing.T) {
 	}
 	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(objects...).Build()
 	r := &LifecycleReconciler{Client: cl, Scheme: s, AuthorinoMonitoringManifestsPath: authorinoTestManifestsPath, MonitoringNamespace: "product-monitoring"}
-	g.Expect(r.ensureAuthorinoMonitoring(context.Background(), logr.Discard())).To(Succeed())
-	for _, resource := range resources {
-		obj := resource.DeepCopy()
-		g.Expect(cl.Get(context.Background(), client.ObjectKeyFromObject(obj), obj)).To(Succeed())
-		g.Expect(obj.GetOwnerReferences()).To(BeEmpty())
+	// Enabling must not adopt unowned objects and make them eligible for deletion.
+	for _, enabled := range []*bool{nil, ptr.To(false), ptr.To(true)} {
+		g.Expect(cl.Get(ctx, client.ObjectKeyFromObject(cfg), cfg)).To(Succeed())
+		cfg.Spec.AuthorinoMonitoring = enabled
+		g.Expect(cl.Update(ctx, cfg)).To(Succeed())
+		g.Expect(r.ensureAuthorinoMonitoring(ctx, logr.Discard())).To(Succeed())
+		for _, resource := range resources {
+			obj := resource.DeepCopy()
+			g.Expect(cl.Get(ctx, client.ObjectKeyFromObject(obj), obj)).To(Succeed())
+			g.Expect(obj.GetOwnerReferences()).To(BeEmpty())
+			g.Expect(obj.Object["spec"]).To(Equal(resource.Object["spec"]))
+		}
+	}
+}
+
+func TestAuthorinoMonitoringLookupErrors(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		group     string
+		err       error
+		wantError bool
+	}{
+		{name: "optional API absent", group: "monitoring.rhobs", err: &apimeta.NoKindMatchError{GroupKind: schema.GroupKind{Group: "monitoring.rhobs", Kind: "PrometheusRule"}}},
+		{name: "core API absent", group: "monitoring.coreos.com", err: &apimeta.NoKindMatchError{GroupKind: schema.GroupKind{Group: "monitoring.coreos.com", Kind: "ServiceMonitor"}}, wantError: true},
+		{name: "lookup forbidden", group: "monitoring.rhobs", err: apierrors.NewForbidden(schema.GroupResource{Group: "monitoring.rhobs", Resource: "prometheusrules"}, "", errors.New("denied")), wantError: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			g := NewWithT(t)
+			s := lifecycleTestScheme(t)
+			cfg := &maasv1alpha1.Config{ObjectMeta: metav1.ObjectMeta{Name: "default", UID: "config-uid"}}
+			cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cfg).WithInterceptorFuncs(interceptor.Funcs{
+				Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+					if obj.GetObjectKind().GroupVersionKind().Group == tc.group {
+						return tc.err
+					}
+					return c.Get(ctx, key, obj, opts...)
+				},
+			}).Build()
+			r := &LifecycleReconciler{Client: cl, Scheme: s, AuthorinoMonitoringManifestsPath: authorinoTestManifestsPath, MonitoringNamespace: "product-monitoring"}
+			err := r.ensureAuthorinoMonitoring(context.Background(), logr.Discard())
+			if tc.wantError {
+				g.Expect(err).To(MatchError(ContainSubstring(tc.err.Error())))
+			} else {
+				g.Expect(err).NotTo(HaveOccurred())
+			}
+		})
 	}
 }
 
@@ -199,6 +241,12 @@ func TestMonitoringWatchEvents(t *testing.T) {
 			obj.SetNamespace(r.MonitoringNamespace)
 			obj.SetLabels(map[string]string{"app.kubernetes.io/part-of": "maas-observability"})
 			filter := r.managedInMonitoringNamespace()
+			unlabeled, ok := obj.DeepCopyObject().(client.Object)
+			g.Expect(ok).To(BeTrue())
+			unlabeled.SetLabels(nil)
+			g.Expect(filter.Update(event.UpdateEvent{ObjectOld: obj, ObjectNew: unlabeled})).To(BeTrue())
+			g.Expect(filter.Update(event.UpdateEvent{ObjectOld: unlabeled, ObjectNew: obj})).To(BeTrue())
+			g.Expect(filter.Update(event.UpdateEvent{ObjectOld: unlabeled, ObjectNew: unlabeled})).To(BeFalse())
 			g.Expect(filter.Create(event.CreateEvent{Object: obj})).To(BeTrue())
 			g.Expect(filter.Delete(event.DeleteEvent{Object: obj})).To(BeTrue())
 			requests := r.enqueueSelfDeployment(context.Background(), obj)

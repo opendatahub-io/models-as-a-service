@@ -40,6 +40,19 @@ func (r *LifecycleReconciler) ensureAuthorinoMonitoring(ctx context.Context, log
 	}
 	for _, resource := range resources {
 		res := resource.DeepCopy()
+		existing := &unstructured.Unstructured{}
+		existing.SetGroupVersionKind(res.GroupVersionKind())
+		if err := r.Get(ctx, client.ObjectKeyFromObject(res), existing); err == nil {
+			if !isOwnedByConfigOrController(existing, cfg.UID) {
+				log.Info("skipping Authorino monitoring apply over unowned resource",
+					"kind", res.GetKind(), "namespace", res.GetNamespace(), "name", res.GetName())
+				continue
+			}
+		} else if apimeta.IsNoMatchError(err) && isOptionalAPIGroup(res.GroupVersionKind().Group) {
+			continue
+		} else if !apierrors.IsNotFound(err) {
+			return fmt.Errorf("get Authorino %s %s/%s: %w", res.GetKind(), res.GetNamespace(), res.GetName(), err)
+		}
 		if err := controllerutil.SetControllerReference(&cfg, res, r.Scheme); err != nil {
 			return fmt.Errorf("set Authorino monitoring owner: %w", err)
 		}
