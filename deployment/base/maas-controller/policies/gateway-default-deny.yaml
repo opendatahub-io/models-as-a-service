@@ -3,7 +3,8 @@
 # like /maas-api/ or /v1/models (the MaaS API management endpoints).
 #
 # The when predicate below excludes /maas-api and the specific /v1/*
-# management endpoints (/v1/models, /v1/subscriptions, /v1/api-keys, /v1/me) so
+# management endpoints (/v1/models, /v1/subscriptions, /v1/api-keys, /v1/me)
+# plus the consumer portal UI paths (/maas-portal, /oauth2), so
 # this deny applies to all other paths, including model inference paths
 # (e.g. /llm/..., /production/..., /v1/chat/completions via body-routing).
 #
@@ -36,7 +37,7 @@ spec:
     limits:
       deny-all-by-default:
         when:
-          - predicate: '!request.path.startsWith("/maas-api") && !request.path.startsWith("/v1/models") && !request.path.startsWith("/v1/subscriptions") && !request.path.startsWith("/v1/api-keys") && !(request.path == "/v1/me")'
+          - predicate: '!request.path.startsWith("/maas-api") && !request.path.startsWith("/v1/models") && !request.path.startsWith("/v1/subscriptions") && !request.path.startsWith("/v1/api-keys") && !(request.path == "/v1/me") && !request.path.startsWith("/maas-portal") && !request.path.startsWith("/oauth2")'
         rates:
           - limit: 0
             window: 1m
