@@ -11,7 +11,7 @@
 #   deploy-platform.sh    Install cert-manager, ODH, deploy MaaS via deploy.sh
 #   deploy-models.sh      Deploy e2e fixtures (LLMIS, MaaSModelRef, AuthPolicy, Subscription)
 #   setup-test-tokens.sh  Create test users (admin + regular) and extract auth tokens
-#   run_e2e_tests.sh      pytest execution: two-pass xdist (parallel + serial)
+#   run_e2e_tests.sh      pytest execution: three marker-filtered passes
 #
 # USAGE:
 #   ./test/e2e/scripts/prow_run_smoke_test.sh

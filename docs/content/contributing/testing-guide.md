@@ -48,44 +48,38 @@ Tests are organized into **xdist groups** for parallel execution. All tests in a
 
 | Group | Module | What it covers |
 |-------|--------|---------------|
-| `readonly` | `test_smoke.py` | Health checks, catalog shape, basic inference |
-| `readonly` | `test_config_tenant.py` | Read-only Config CR validation |
-| `readonly` | `test_tenant.py` | Read-only MaasTenantConfig validation |
-| `readonly` | `test_tenant_discovery.py` | Read-only /v1/tenants endpoint checks |
-| `readonly` | `test_networkpolicy.py` | NetworkPolicy + connectivity checks |
-| `readonly` | `test_gateway_filter_chain.py` | Gateway filter order (ipp-pre -> auth -> ipp -> endpoint picker); its InferencePool traffic test is `serial` |
-| `api_keys` | `test_api_keys.py` | API key CRUD, admin authorization, validation |
-| `api_keys` | `test_subscription.py` | Subscription enforcement, rate limiting, auth flows |
-| `api_keys` | `test_subscription_list_endpoints.py` | Subscription listing endpoints |
-| `api_keys` | `test_x_api_key_auth.py` | X-API-Key header authentication (IPP ExternalModel) |
-| `models` | `test_models_endpoint.py` | `/v1/models` subscription-aware filtering |
-| `models` | `test_gateway_scoped_authpolicy.py` | Gateway AuthPolicy structure, lifecycle, enforcement gaps |
-| `models` | `test_model_identity_conflict.py` | MaaSModelRef model-identity collision detection |
-| `models` | `test_multi_tenant_integration.py` | Full lifecycle, two-tenant coexistence (placed here to even out pass 1) |
-| `security` | `test_negative_security.py` | Header spoofing, expired keys, cross-model access |
-| `security` | `test_namespace_scoping.py` | Namespace isolation behavior |
-| `mt_lifecycle` | `test_aitenant_lifecycle.py` | AITenant create/migrate/delete |
-| `mt_lifecycle` | `test_multi_tenant_maas_api.py` | Per-tenant Deployment, Service, HTTPRoute; dual-listener AuthConfig/wasm checks are `@pytest.mark.serial` |
-| `mt_lifecycle` | `test_tenant_namespace_discovery.py` | Namespace-label discovery, webhook validation |
-| `mt_lifecycle` | `test_crd_watch_resilience.py` | Dynamic CRD watch registration (restarts controller) |
-| `tenant_isolation` | `test_tenant_auth_isolation.py` | Cross-tenant key rejection, OIDC scoping |
-| `tenant_isolation` | `test_tenant_rate_limit_isolation.py` | Per-tenant rate limit independence |
-| `tenant_isolation` | `test_tenant_subscription_isolation.py` | Per-tenant subscription scoping |
-| `tenant_isolation` | `test_tenant_discovery_isolation.py` | Per-tenant /v1/tenants isolation |
-| `tenant_inference` | `test_tenant_model_inference.py` | Cross-gateway auth isolation and per-Gateway AuthPolicy EnvoyFilter selectors |
-| `tenant_ipp` | `test_per_tenant_ipp_isolation.py` | Per-tenant IPP stacks, routing isolation |
-| `tenant_auto_resolve` | `test_tenant_auto_resolve.py` | MaaSModelRef tenant auto-resolution from the gateway parentRef |
-| `tenant_ipp` | `test_tenant_external_model_attachment.py` | Multi-tenant AGC/Praxis external models: user-ns models on tenant gateways, lifecycle cleanup, `NotAllowedByListeners` |
-| `tenant_ipp` | `test_tenant_external_model_shared.py` | Multi-tenant AGC/Praxis external models: shared model on two gateways, auth/quota isolation |
-| `tenant_ipp` | `test_tenant_external_model_conflicts.py` | Multi-tenant AGC/Praxis external models: modelName conflicts, same-named objects (overlay collision regression) |
-| `tenant_ipp` | `test_tenant_external_model_compat.py` | Multi-tenant AGC/Praxis external models: omitted-gatewayRefs compatibility; legacy IPP coexistence (`serial`, gated on `TENANT_EXTERNAL_MODEL_LEGACY_IPP_E2E`) |
-| `tenant_ipp` | `test_tenant_external_model_crossns.py` | ReferenceGrant-gated cross-namespace providers (P1; gated on `TENANT_EXTERNAL_MODEL_CROSSNS_E2E`) |
-| `tenant_ipp` | `test_tenant_external_model_default_tenant.py` | AGC/Praxis: models without `gatewayRefs` outside tenant namespaces served through the default tenant's Gateway (3.5 compatibility), `gatewayRefs` transition, deletion cleanup |
-| `inference_priority` | `test_inference_priority.py` | Subscription `inferencePriority`: InferenceObjective lifecycle, `flowControlStatuses`, gateway flow-control headers (`serial`; skips without the `inferenceobjectives.llm-d.ai` CRD) |
-| `external` | `test_external_oidc.py` | External OIDC token flows (skipped unless `EXTERNAL_OIDC=true`) |
-| `external` | `test_external_models.py` | ExternalModel/ExternalProvider, egress, body routing |
+| `readonly` | `test_smoke.py`, `test_config_tenant.py`, `test_tenant.py`, `test_tenant_discovery.py`, `test_networkpolicy.py`, `test_authpolicy_generation_stability.py`, `test_gateway_filter_chain_praxis.py`, `test_xdist_config.py` | Read-only cluster/API checks |
+| `legacy_ipp_filter_chain` | `test_gateway_filter_chain.py` | Legacy IPP filter order (`legacy_ipp` opt-in; not default CI) |
+| `legacy_ipp_external_models` | `test_external_models.py` | Legacy ExternalModel routing (`legacy_ipp` opt-in) |
+| `api_keys_core` | `test_api_keys.py` | API key CRUD, admin authorization, validation (`worker_tenant`) |
+| `api_unconfigured_model` | `test_subscription.py`, `test_trlp_rate_grouping.py` | Subscription enforcement, rate limiting, TRLP grouping (`worker_tenant`) |
+| `api_keys_sub_endpoints` | `test_subscription_list_endpoints.py` | Subscription listing endpoints (`worker_tenant`) |
+| `api_xkey` | `test_x_api_key_auth.py` | X-API-Key header authentication |
+| `api_embedding` | `test_embedding_inference.py` | Embedding inference (`worker_tenant`) |
+| `models_endpoint` | `test_models_endpoint.py` | `/v1/models` subscription-aware filtering (`worker_tenant`) |
+| `models_gw_authpolicy` | `test_gateway_scoped_authpolicy.py` | Gateway AuthPolicy structure and enforcement (`worker_tenant`) |
+| `models_identity` | `test_model_identity_conflict.py` | MaaSModelRef model-identity collision (`worker_tenant`) |
+| `models_mt_integration` | `test_multi_tenant_integration.py` | Multi-tenant lifecycle coexistence (`worker_tenant`) |
+| `security` | `test_negative_security.py`, `test_namespace_scoping.py` | Security / namespace isolation on the default gateway |
+| `mt_lc_aitenant` | `test_aitenant_lifecycle.py` | AITenant create/migrate/delete |
+| `mt_lc_maas_api` | `test_multi_tenant_maas_api.py` | Per-tenant maas-api infra; dual-listener checks are `@nightly` |
+| `mt_lc_ns_discovery` | `test_tenant_namespace_discovery.py` | Namespace-label discovery, webhook validation |
+| `mt_lc_crd_watch` | `test_crd_watch_resilience.py` | CRD watch registration (`serial_exclusive`; pass 2a only) |
+| `tenant_iso_auth` | `test_tenant_auth_isolation.py` | Cross-tenant key rejection, OIDC scoping |
+| `tenant_iso_rate` | `test_tenant_rate_limit_isolation.py` | Per-tenant rate limit independence |
+| `tenant_iso_sub` | `test_tenant_subscription_isolation.py` | Per-tenant subscription scoping |
+| `tenant_iso_discovery` | `test_tenant_discovery_isolation.py` | Per-tenant `/v1/tenants` isolation |
+| `tenant_inference` | `test_tenant_model_inference.py` | Cross-gateway auth isolation, per-Gateway AuthPolicy selectors |
+| `tenant_ipp_legacy` | `test_per_tenant_ipp_isolation.py` | Legacy IPP stacks (`legacy_ipp_pass2b`; serial pass 2b, not pass 1) |
+| `tenant_ipp_praxis` | `test_per_tenant_praxis_isolation.py` | Praxis per-tenant isolation |
+| `tenant_ipp_ext_*` | `test_tenant_external_model_*.py` (one group per file, e.g. `tenant_ipp_ext_attach`) | AGC/Praxis external models on tenant gateways (pass 1; split for wall clock) |
+| `tenant_ipp_extproc_*` | `test_praxis_extproc_restart.py`, `test_praxis_extproc_secret_rotation.py` | Praxis extproc lifecycle |
+| `tenant_auto_resolve` | `test_tenant_auto_resolve.py` | MaaSModelRef tenant auto-resolution from gateway parentRef |
+| `inference_priority` | `test_inference_priority.py` | Subscription `inferencePriority` / InferenceObjective (`serial`) |
+| `echo_io` | `test_echo_large_io.py` | Large payload echo (`serial`) |
+| `external` | `test_external_oidc.py`, `test_external_model_routing.py`, Grid governance modules | Externally gated OIDC/routing/admin tests |
 
-The `test_tenant_external_model_*` modules share the `tenant_ipp` group for now: the legacy IPP controllers do not yet skip ExternalModels with gatewayRefs (upstream image pin pending), so without the guard they adopt this suite's models and flap `status.httpRouteName` when the groups run concurrently. Split them back into their own `tenant_external_model` group once the guard ships.
+Each test file declares exactly one `xdist_group` (see module-level `pytestmark`). Pass 1 runs parallel groups; `@serial_exclusive` runs alone in pass 2a; `@serial` and `@legacy_ipp_pass2b` run in pass 2b. Opt-in `@legacy_ipp` suites are excluded from default CI passes.
 
 ## Running Tests
 
@@ -247,33 +241,42 @@ When adding a new test file, assign it to a group using these criteria (in prior
 
 1. **Mutation scope**: Tests that create, modify, or delete the same CRs (MaaSAuthPolicy, MaaSSubscription, MaaSModelRef, etc.) must be in the same group. This prevents two workers from concurrently mutating the same resource.
 
-2. **Functional domain**: Group tests by what they exercise. API key tests go with `api_keys`, gateway AuthPolicy tests go with `models`, multi-tenant lifecycle tests go with `mt_lifecycle`, etc.
+2. **Functional domain**: Group tests by what they exercise (for example `api_keys_core`, `models_endpoint`, `mt_lc_*`, `tenant_ipp_ext_*`).
 
 3. **Read-only tests go in `readonly`**: Tests that only read cluster state (no creates, no deletes, no patches) belong in the `readonly` group. This group finishes fast and never conflicts with other groups.
 
-4. **Self-managing tenant tests go in `mt_lifecycle` or a `tenant_*` group**: Tests that create their own AITenant CRs belong in one of these groups. `mt_lifecycle` for lifecycle operations (create/delete/migrate), `tenant_isolation` for cross-tenant isolation assertions using the `shared_test_tenants` fixture. A long isolation module that builds its own tenant pair gets its own group (`tenant_inference`, `tenant_ipp`), so its runtime doesn't add to `tenant_isolation`'s.
+4. **Self-managing tenant tests** use `mt_lc_*`, `tenant_iso_*`, `tenant_inference`, or `tenant_ipp_ext_*` groups. Legacy per-tenant IPP isolation (`test_per_tenant_ipp_isolation.py`) uses `legacy_ipp_pass2b` and runs in serial pass 2b, not pass 1.
 
 5. **Externally-gated tests go in `external`**: Tests that require external infrastructure (Keycloak OIDC, external endpoints) and use `pytest.mark.skipif` to self-gate belong in the `external` group.
 
 6. **Prefer existing groups over new ones**: Adding more groups increases cluster resource pressure. Only create a new group if the test's mutation scope genuinely conflicts with all existing groups. The exception is wall clock: with `--dist=loadgroup` pass 1 cannot finish before its longest group, so split a group whose runtime alone sets the pass length, as long as the parts share no tenants or CRs and make no negative assertions (quiet logs, counters) on components the others touch. Pass 1 has more groups than workers: xdist starts the groups with the most tests first and hands the rest to whichever worker drains first, so a long group with few tests starts late.
 
-#### Serial Marker
+#### Serial markers
 
-Tests that mutate **global** cluster state must be marked `@pytest.mark.serial`:
+Tests that mutate **global** cluster state use `@pytest.mark.serial` or `@pytest.mark.serial_exclusive`:
 
 ```python
 @pytest.mark.serial
 def test_delete_shared_subscription_then_restore(self):
     ...
+
+@pytest.mark.serial_exclusive  # pass 2a only — scales a control plane or deletes a cluster CRD
+def test_scale_controller_for_status_patch(self):
+    ...
 ```
 
-Serial tests run in Pass 2 on a single worker. Use `@serial` when the test:
+- **`serial`**: shared-cluster mutators; run in **pass 2b** (with `@legacy_ipp_pass2b` tests), not pass 1.
+- **`serial_exclusive`**: needs the whole cluster alone; run in **pass 2a** (single worker), never with pass 1 parallel work.
+
+Use `@serial` when the test:
 
 - Deletes or modifies a shared fixture (e.g., `simulator-subscription`, `simulator-access`)
-- Scales or restarts a cluster operator (maas-controller, Kuadrant)
-- Modifies a CRD or cluster-scoped resource that other groups depend on
+- Scales or restarts a cluster operator (maas-controller, Kuadrant) but other parallel groups can resume after pass 2a
+- Modifies cluster-scoped state that other groups depend on, without requiring an exclusive cluster window
 
-Do **not** use `@serial` for tests that only create/delete their own uniquely-named resources — those are safe to run in parallel within their group.
+Use `@serial_exclusive` when scaling a control plane to zero or deleting a cluster-scoped CRD that pass 1 still needs.
+
+Do **not** use `@serial` for tests that only create/delete their own uniquely-named resources — those are safe to run in parallel within their group. Modules with `@pytest.mark.worker_tenant` skip worker bootstrap for any test marked `serial` or `serial_exclusive`.
 
 ## CI Pipeline
 

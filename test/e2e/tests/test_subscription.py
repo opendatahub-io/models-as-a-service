@@ -2071,9 +2071,14 @@ class TestE2ESubscriptionFlow:
             )
             catalog = r_models.json()
             assert catalog.get("object") == "list", catalog
+            assert "data" in catalog, f"Response missing 'data' field: {catalog}"
+            assert isinstance(catalog["data"], list), (
+                f"'data' must be an array, got {type(catalog['data']).__name__}: "
+                f"{catalog['data']!r}"
+            )
             # Gateway-only mode may legitimately return an empty list for a valid
-            # single-subscription key; only assert shape when models are present.
-            for model in catalog.get("data") or []:
+            # single-subscription key; only assert per-model shape when present.
+            for model in catalog["data"]:
                 for field in ("id", "object", "created", "owned_by"):
                     assert field in model, f"Model missing {field!r}: {model}"
                 subs = model.get("subscriptions")

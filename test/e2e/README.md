@@ -16,7 +16,7 @@ Existing cluster (skip deploy):
 SKIP_DEPLOYMENT=true ./test/e2e/scripts/prow_run_smoke_test.sh
 ```
 
-Parallel pytest on an existing cluster (default 7 workers):
+Parallel pytest on an existing cluster (default 5 workers):
 
 ```bash
 SKIP_DEPLOYMENT=true ./test/e2e/run-tests-quick.sh
@@ -126,7 +126,7 @@ CI runs `./test/e2e/scripts/prow_run_smoke_test.sh`, a thin orchestrator that se
 | 3. Setup tokens | `scripts/setup-test-tokens.sh` | admin + regular user tokens (htpasswd / SA fallback) |
 | 4. Validate | `scripts/validate-deployment.sh` | pods, CRDs, deployment readiness |
 | 5. Pre-test waits | `prow_run_smoke_test.sh` | gateway reachability, auth chain, OIDC readiness |
-| 6. Test | `scripts/run_e2e_tests.sh` | pytest: two-pass xdist (parallel + serial) |
+| 6. Test | `scripts/run_e2e_tests.sh` | pytest: three marker-filtered passes (parallel, serial_exclusive, serial) |
 
 `prow_run_smoke_test.sh` contains only orchestration (prereqs, env defaults, phase sequencing, artifact collection). `deploy-platform.sh` and `deploy-models.sh` are runnable standalone (they bootstrap `PROJECT_ROOT` and source helpers if not already loaded). `setup-test-tokens.sh` must be sourced (exports `TOKEN`/`ADMIN_OC_TOKEN` into the parent shell).
 
@@ -212,7 +212,7 @@ SKIP_DEPLOYMENT=true ./test/e2e/run-tests-quick.sh
 | `E2E_MODEL_BACKEND_READY_TIMEOUT` | `300` | LLMInferenceService backend ready (tenant model provisioning) |
 | `E2E_USE_WORKER_TENANT` | `true` | When `true`, xdist workers bootstrap a dedicated AITenant for Bucket C pilots (`test_subscription.py` first). Set `false` to keep using `models-as-a-service`. |
 
-`@serial` tests run in pass 2; verify the current set with `pytest -m serial tests/ --collect-only -q`.
+`@serial` and `@serial_exclusive` tests are excluded from pass 1; verify markers with `pytest -m serial tests/ --collect-only -q` and `pytest -m serial_exclusive tests/ --collect-only -q`.
 
 **Worker tenant (Phase 3 pilot):** each xdist worker (`gw0`, `gw1`, …) bootstraps its own AITenant namespace with baseline `simulator-subscription` / `simulator-access` CRs. Non-serial tests in opted-in modules route `MAAS_SUBSCRIPTION_NAMESPACE`, `GATEWAY_HOST`, and `MAAS_API_BASE_URL` to that tenant for the duration of the test.
 

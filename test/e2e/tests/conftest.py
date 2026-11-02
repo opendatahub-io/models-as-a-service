@@ -101,9 +101,9 @@ def single_subscription_tenant(monkeypatch):
 @pytest.fixture(autouse=True)
 def _activate_marked_worker_tenant(request):
     """Provision isolation only when the test explicitly opts in by marker."""
-    if (
-        request.node.get_closest_marker("worker_tenant")
-        and not request.node.get_closest_marker("serial")
+    if request.node.get_closest_marker("worker_tenant") and not (
+        request.node.get_closest_marker("serial")
+        or request.node.get_closest_marker("serial_exclusive")
     ):
         request.getfixturevalue("worker_tenant_context")
 
@@ -142,6 +142,7 @@ def pytest_collection_modifyitems(config, items):  # noqa: ARG001 - pytest hook 
         if (
             grouped_state
             and not item.get_closest_marker("serial")
+            and not item.get_closest_marker("serial_exclusive")
             and not item.get_closest_marker("worker_tenant")
         ):
             groups = ", ".join(sorted(grouped_state))

@@ -2267,6 +2267,14 @@ class TestModelsEndpoint:
                 "after quota exhaustion"
             )
 
+            # Catalog polling can span the quota window; confirm inference is still
+            # blocked before asserting the per-model discovery exemption.
+            still_blocked = _inference(api_key, path=model_path, max_tokens=1)
+            assert still_blocked.status_code == 429, (
+                f"Expected inference to remain rate limited before per-model check, "
+                f"got {still_blocked.status_code}: {still_blocked.text[:500]}"
+            )
+
             # The per-model discovery path must stay exempt too. Covered here so
             # the duplicate scenario in test_subscription.py can be dropped.
             per_model = _request_with_gateway_retry(
@@ -2278,6 +2286,17 @@ class TestModelsEndpoint:
                 f"Expected 200 for {model_path}/v1/models after quota exhaustion, "
                 f"got {per_model.status_code}: {per_model.text[:500]}"
             )
+            try:
+                per_model_data = per_model.json()
+            except (json.JSONDecodeError, ValueError):
+                log.info(
+                    "Per-model /v1/models accessible (200), non-JSON body: %s",
+                    per_model.text[:200],
+                )
+            else:
+                assert "data" in per_model_data or "object" in per_model_data, (
+                    f"Expected valid models response, got: {per_model_data}"
+                )
         finally:
             _delete_cr("maassubscription", subscription_name)
             _delete_cr("maasauthpolicy", auth_policy_name)

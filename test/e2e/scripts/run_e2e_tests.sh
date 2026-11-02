@@ -144,7 +144,8 @@ fi
 # shellcheck disable=SC1091
 source "$TEST_DIR/.venv/bin/activate"
 python -m pip install --upgrade pip --quiet
-# Prefer the hash-pinned lock so CI installs exactly the reviewed set. Installing
+# Prefer the hash-pinned lock so CI installs exactly the reviewed set. Lock is
+# compiled for Python 3.10+ (includes exceptiongroup/tomli on 3.10). Installing
 # requirements.txt alone let pytest drift to 9.2.0, which silently disables
 # --dist=loadgroup (see test/e2e/tests/test_xdist_config.py).
 if [[ -f "$TEST_DIR/requirements-lock.txt" ]]; then
