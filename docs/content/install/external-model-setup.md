@@ -49,7 +49,7 @@ The exact 3.5 product-default profile ran `api-translation` on the **request** p
 
 The legacy IPP `api-translation` plugin was a multi-provider catch-all documented for OpenAI, Anthropic, Azure OpenAI, Vertex AI, and Bedrock Mantle. Current Praxis qualification is narrower. `spec.apiTranslation.enabled` is one tenant permission for the shared Anthropic Messages client → OpenAI-compatible backend flow and the ExternalModel OpenAI Chat Completions client → selected Anthropic Messages provider flow. For ExternalModels, `intelligent_route` selects the provider first; its trusted profile controls request and response translation. OpenAI `openai-chat` candidates remain pass-through. The currently qualified ExternalModel profiles are OpenAI `openai-chat` and Anthropic `messages`; Azure OpenAI, Vertex AI, Bedrock, custom provider types, and other formats are not claimed as supported. Do not infer their support from the legacy IPP ConfigMap.
 
-The current ExternalModel ExtProc configuration buffers each selected-provider request body up to 1 MiB for validation and target-model rewriting. Larger requests are rejected before reaching the provider, including for OpenAI-compatible candidates.
+The current ExternalModel ExtProc configuration buffers each selected-provider request body up to 10 MiB for validation and target-model rewriting. Larger requests are rejected before reaching the provider, including for OpenAI-compatible candidates.
 
 ```bash
 GATEWAY_NAMESPACE="${GATEWAY_NAMESPACE:-openshift-ingress}"

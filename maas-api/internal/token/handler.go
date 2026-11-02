@@ -34,6 +34,9 @@ func ParseGroupsHeader(header string) ([]string, error) {
 	if header == "" {
 		return nil, errors.New("header is empty")
 	}
+	if strings.TrimSpace(header) == "[]" {
+		return []string{}, nil
+	}
 
 	var parsedGroups []string
 
@@ -147,49 +150,28 @@ func (h *Handler) ExtractUserInfo() gin.HandlerFunc {
 // that must remain accessible when no auth policy is active (e.g. no
 // LLMInferenceService deployed). When the identity headers are entirely absent
 // the middleware continues without setting a user context, letting the handler
-// decide what to return. If headers ARE present but malformed, it still aborts
-// so that real configuration errors are surfaced.
+// decide what to return. A verified identity takes precedence over legacy
+// headers. Otherwise, if headers ARE present but malformed, it still aborts so
+// that real configuration errors are surfaced.
 func (h *Handler) ExtractUserInfoOptional() gin.HandlerFunc {
 	return func(c *gin.Context) {
+		if _, exists := c.Get("verified_identity"); exists {
+			c.Next()
+			return
+		}
+
 		requestLogger := h.logger.WithContext(c.Request.Context())
 
 		username := strings.TrimSpace(c.GetHeader(constant.HeaderUsername))
 		groupHeader := c.GetHeader(constant.HeaderGroup)
 		organizationID := strings.TrimSpace(c.GetHeader(constant.HeaderOrganizationID))
 
-		// When both identity headers are absent, continue without user context.
-		// This allows the handler to return a graceful response (e.g. empty list).
-		if username == "" && groupHeader == "" {
-			requestLogger.Debug("Auth identity headers not present, continuing without user context")
+		// Incomplete legacy identity headers are treated as absent. This keeps
+		// a verified identity, when present, authoritative and lets handlers
+		// reject requests that have no usable identity.
+		if username == "" || groupHeader == "" {
+			requestLogger.Debug("Auth identity headers not present or incomplete, continuing without user context")
 			c.Next()
-			return
-		}
-
-		// If only one header is present, that is a partial / broken auth config.
-		if username == "" {
-			requestLogger.Error("Missing or empty username header while group header is present",
-				"header", constant.HeaderUsername,
-			)
-			c.JSON(http.StatusInternalServerError, gin.H{
-				"error":         "Exception thrown while generating token",
-				"exceptionCode": "AUTH_FAILURE",
-				"refId":         "001",
-			})
-			c.Abort()
-			return
-		}
-
-		if groupHeader == "" {
-			requestLogger.Error("Missing group header while username header is present",
-				"header", constant.HeaderGroup,
-				"username", logger.RedactValue(username),
-			)
-			c.JSON(http.StatusInternalServerError, gin.H{
-				"error":         "Exception thrown while generating token",
-				"exceptionCode": "AUTH_FAILURE",
-				"refId":         "002",
-			})
-			c.Abort()
 			return
 		}
 

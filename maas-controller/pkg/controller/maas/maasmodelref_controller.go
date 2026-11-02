@@ -131,6 +131,28 @@ func tenantAssociationIndexer(obj client.Object) []string {
 	return []string{tenantAssociationUnresolved}
 }
 
+// backendNotReadyRequeueInterval is how often a model whose backend is not yet
+// ready is re-checked without an event.
+//
+// The LLMInferenceService watch normally delivers the Ready transition, but the
+// dynamic (late-CRD) path registers the watch asynchronously and may miss the
+// event if the backend becomes ready in the narrow window before the watch is
+// established. This backstop closes that gap. It is deliberately narrow: it
+// fires only while the backend itself is not ready, not for models that are
+// intentionally not Ready because governance is missing or the HTTPRoute has
+// not appeared yet — those have their own watches and do not need polling.
+const backendNotReadyRequeueInterval = 10 * time.Second
+
+// requeueWhileBackendNotReady returns a timed re-check when the backend is not
+// yet ready, so a dropped LLMInferenceService Ready event cannot strand the
+// phase. Returns an empty Result (event-only) once the backend is ready.
+func requeueWhileBackendNotReady(runtimeReady bool) ctrl.Result {
+	if runtimeReady {
+		return ctrl.Result{}
+	}
+	return ctrl.Result{RequeueAfter: backendNotReadyRequeueInterval}
+}
+
 // Reconcile is part of the main kubernetes reconciliation loop
 func (r *MaaSModelRefReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	ctx = oteljson.IntoContext(ctx)
@@ -179,8 +201,8 @@ func (r *MaaSModelRefReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			return ctrl.Result{}, r.updateStatusWithReason(ctx, model, "Failed", fmt.Sprintf("kind not implemented: %s", kind), "Unsupported", statusSnapshot)
 		}
 		if errors.Is(err, ErrHTTPRouteNotFound) {
-			// HTTPRoute doesn't exist yet - this is normal during startup.
-			// Set status to Pending (not Failed). The HTTPRoute watch will trigger reconciliation when the route is created.
+			// HTTPRoute doesn't exist yet — normal during startup. The HTTPRoute
+			// watch re-enqueues this model when the route is created.
 			model.Status.Endpoint = ""
 			return ctrl.Result{}, r.updateStatus(ctx, model, "Pending", "Waiting for HTTPRoute to be created", statusSnapshot)
 		}
@@ -240,7 +262,10 @@ func (r *MaaSModelRefReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	if phase != "Ready" {
 		model.Status.Endpoint = ""
 	}
-	return ctrl.Result{}, r.updateStatus(ctx, model, phase, message, statusSnapshot)
+	if err := r.updateStatus(ctx, model, phase, message, statusSnapshot); err != nil {
+		return ctrl.Result{}, err
+	}
+	return requeueWhileBackendNotReady(runtimeReady), nil
 }
 
 // checkGovernanceAttached returns true if there is at least one active
@@ -674,24 +699,6 @@ func crdEstablished(crd *apiextensionsv1.CustomResourceDefinition) bool {
 	return false
 }
 
-// unstructuredLLMIsvcReadyStatus extracts the Ready condition status from an
-// unstructured LLMInferenceService — mirrors llmisvcReadyStatus for typed objects.
-func unstructuredLLMIsvcReadyStatus(obj *unstructured.Unstructured) string {
-	conditions, _, _ := unstructured.NestedSlice(obj.Object, "status", "conditions")
-	for _, c := range conditions {
-		cond, ok := c.(map[string]any)
-		if !ok {
-			continue
-		}
-		if cond["type"] == "Ready" {
-			if status, ok := cond["status"].(string); ok {
-				return status
-			}
-		}
-	}
-	return ""
-}
-
 func (r *MaaSModelRefReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	ctx := context.Background()
 
@@ -718,8 +725,9 @@ func (r *MaaSModelRefReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		), builder.WithPredicates(httpRouteChangedForModelRef())).
 		// Watch sibling MaaSModelRefs so model-identity-conflict detection stays
 		// current: a newly created/deleted sibling, or one whose resolved alias
-		// changed, can introduce or resolve a conflict for every other model in
-		// the namespace even though those models' own specs didn't change.
+		// or resolved tenant changed, can introduce or resolve a conflict for
+		// every other model in the namespace even though those models' own
+		// specs didn't change.
 		//
 		// Only siblings sharing the affected alias are enqueued (not the entire
 		// namespace) to avoid O(N²) fan-out in namespaces with many models.
@@ -732,7 +740,7 @@ func (r *MaaSModelRefReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			UpdateFunc: func(ctx context.Context, e event.UpdateEvent, q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
 				oldM, ok1 := e.ObjectOld.(*maasv1alpha1.MaaSModelRef)
 				newM, ok2 := e.ObjectNew.(*maasv1alpha1.MaaSModelRef)
-				if ok1 && ok2 && oldM.Status.ResolvedModelAlias != newM.Status.ResolvedModelAlias {
+				if ok1 && ok2 && siblingConflictFieldsChanged(oldM, newM) {
 					r.enqueueSiblingsWithAlias(ctx, newM, q, oldM.Status.ResolvedModelAlias)
 				}
 			},
@@ -790,41 +798,21 @@ func (r *MaaSModelRefReconciler) SetupWithManager(mgr ctrl.Manager) error {
 
 	if !llmisvcExists {
 		if err := registerWatchWhenCRDAppears(c, mgr, llmisvcCRD, func() source.Source {
-			// Use unstructured to bypass the REST mapper — typed watches require the REST
-			// mapper to know the GVK, which may be stale when the CRD is installed after startup.
-			llmisvc := &unstructured.Unstructured{}
-			llmisvc.SetGroupVersionKind(schema.GroupVersionKind{
-				Group: "serving.kserve.io", Version: "v1alpha2", Kind: "LLMInferenceService",
-			})
-			return source.Kind(mgr.GetCache(), llmisvc,
-				// Mirror the static-path predicates (GenerationChangedPredicate +
-				// llmisvcReadyChangedPredicate) using handler.TypedFuncs so we have
-				// access to both old and new objects on Update events.
-				handler.TypedFuncs[*unstructured.Unstructured, reconcile.Request]{
-					CreateFunc: func(ctx context.Context, e event.TypedCreateEvent[*unstructured.Unstructured], q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
-						for _, req := range r.mapLLMISvcToMaaSModelRefs(ctx, e.Object) {
-							q.Add(req)
-						}
-					},
-					UpdateFunc: func(ctx context.Context, e event.TypedUpdateEvent[*unstructured.Unstructured], q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
-						if e.ObjectOld == nil || e.ObjectNew == nil {
-							return
-						}
-						// Mirrors GenerationChangedPredicate + llmisvcReadyChangedPredicate.
-						if e.ObjectOld.GetGeneration() == e.ObjectNew.GetGeneration() &&
-							unstructuredLLMIsvcReadyStatus(e.ObjectOld) == unstructuredLLMIsvcReadyStatus(e.ObjectNew) {
-							return
-						}
-						for _, req := range r.mapLLMISvcToMaaSModelRefs(ctx, e.ObjectNew) {
-							q.Add(req)
-						}
-					},
-					DeleteFunc: func(ctx context.Context, e event.TypedDeleteEvent[*unstructured.Unstructured], q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
-						for _, req := range r.mapLLMISvcToMaaSModelRefs(ctx, e.Object) {
-							q.Add(req)
-						}
-					},
-				},
+			// Use a typed watch, identical to the static path above. An unstructured
+			// watch would look equivalent but creates a separate informer: controller-
+			// runtime keys informers by object type, so an unstructured watch and the
+			// typed r.Get in Status() run independent LIST/WATCH loops with independent
+			// resource versions. A Ready transition event can then arrive while the
+			// typed informer still returns the pre-transition object, leaving the model
+			// stranded in a not-ready phase with no further requeue.
+			//
+			// source.Kind retries GetInformer until the REST mapper knows the GVK
+			// (the dynamic REST mapper reloads on a NoKindMatchError), so a typed
+			// late-CRD watch is safe — this pattern is already used for InferenceObjective
+			// in the subscription controller.
+			return source.Kind(mgr.GetCache(), client.Object(&kservev1alpha2.LLMInferenceService{}),
+				handler.EnqueueRequestsFromMapFunc(r.mapLLMISvcToMaaSModelRefs),
+				predicate.Or(predicate.GenerationChangedPredicate{}, llmisvcReadyChangedPredicate{}),
 			)
 		}); err != nil {
 			return fmt.Errorf("failed to register CRD watcher for LLMInferenceService: %w", err)
@@ -922,6 +910,16 @@ func (r *MaaSModelRefReconciler) mapHTTPRouteToMaaSModelRefs(ctx context.Context
 		})
 	}
 	return requests
+}
+
+// siblingConflictFieldsChanged reports whether an update to a MaaSModelRef can
+// change its model-identity-conflict verdict against its siblings. The verdict
+// depends on both the resolved alias and the resolved tenant: a tenant change
+// alone can flip a sibling's ModelIdentityUnique condition while the alias
+// stays the same, so siblings sharing the alias must be requeued either way.
+func siblingConflictFieldsChanged(oldM, newM *maasv1alpha1.MaaSModelRef) bool {
+	return oldM.Status.ResolvedModelAlias != newM.Status.ResolvedModelAlias ||
+		oldM.Status.ResolvedTenantRef != newM.Status.ResolvedTenantRef
 }
 
 // enqueueSiblingsWithAlias enqueues only the sibling MaaSModelRefs whose
@@ -1047,9 +1045,6 @@ func (r *MaaSModelRefReconciler) mapAITenantToMaaSModelRefs(ctx context.Context,
 // mapLLMISvcToMaaSModelRefs returns reconcile requests for all MaaSModels that
 // reference the given LLMInferenceService by name in the same namespace.
 func (r *MaaSModelRefReconciler) mapLLMISvcToMaaSModelRefs(ctx context.Context, obj client.Object) []reconcile.Request {
-	// Use GetName/GetNamespace — works for both typed *kservev1alpha2.LLMInferenceService
-	// (static watch at startup) and *unstructured.Unstructured (dynamic watch registered
-	// via registerWatchWhenCRDAppears when KServe CRD appears after startup).
 	return r.modelRefsReferencing(ctx, "LLMInferenceService", obj)
 }
 

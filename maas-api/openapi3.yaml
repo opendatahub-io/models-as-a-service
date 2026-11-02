@@ -40,16 +40,18 @@ paths:
         get:
             tags:
                 - identity
-            summary: Return the verified SSO caller identity
+            summary: Return the authenticated caller identity
             description: |
                 Returns the verified `iss` and `sub` claims, optional profile claims, and all literal
-                organization membership entries from the trusted OIDC identity envelope. Optional
-                claims are returned verbatim when present and nonempty; they are omitted when absent
-                or empty, and are never replaced with `null` or an empty array. The response contains
-                no computed permissions, subscriptions, or inventory. Group claims and organization
-                membership entries are independent literal claims; neither is used to infer or
-                validate the other. API-key and Kubernetes authentication cannot provide this
-                SSO-only response.
+                organization membership entries from the trusted OIDC identity envelope. Other
+                gateway-authenticated callers receive the same response shape with the trusted
+                gateway identity as `sub`, `name`, and `preferred_username`, and the authenticated
+                group list. `iss` is omitted for those callers because they do not provide an OIDC
+                issuer claim. Optional claims are returned verbatim when present and nonempty; they
+                are omitted when absent or empty, and are never replaced with `null` or an empty
+                array. The response contains no computed permissions, subscriptions, or inventory.
+                Group claims and organization membership entries are independent literal claims;
+                neither is used to infer or validate the other.
             operationId: identity#get-me
             responses:
                 "200":
@@ -78,7 +80,7 @@ paths:
                                           - admins
                                     - organization_id: 53d4f57e-3588-55e8-b96c-4ec54a7c42fa
                 "401":
-                    description: Unauthorized. Verified SSO identity is missing or invalid.
+                    description: Unauthorized. Authenticated identity is missing or invalid.
                     content:
                         application/json:
                             schema:
@@ -1193,22 +1195,23 @@ components:
         CallerIdentity:
             type: object
             description: |
-                Verified SSO identity fields only; no computed permissions or inventory. `iss` and
-                `sub` are always present. Optional scalar and array fields are returned verbatim
-                when present and nonempty, and are omitted otherwise.
+                Caller identity fields without computed permissions or inventory. `sub` is always
+                present. OIDC responses also carry the verified `iss` claim; other
+                gateway-authenticated responses omit `iss`. Optional scalar and array fields are
+                returned verbatim when present and nonempty, and are omitted otherwise.
             properties:
                 iss:
                     type: string
                     format: uri
-                    description: Verified issuer claim
+                    description: Verified OIDC issuer claim. Omitted for other authenticated callers.
                     example: https://issuer.example.com
                 sub:
                     type: string
-                    description: Verified subject claim
+                    description: Verified OIDC subject claim, or trusted gateway identity.
                     example: user-1
                 name:
                     type: string
-                    description: Verified full-name claim. Omitted when absent or empty.
+                    description: Verified OIDC full-name claim, or trusted gateway identity. Omitted when absent or empty.
                     example: Alex User
                 given_name:
                     type: string
@@ -1220,7 +1223,7 @@ components:
                     example: User
                 preferred_username:
                     type: string
-                    description: Verified preferred-username claim. Omitted when absent or empty.
+                    description: Verified OIDC preferred-username claim, or trusted gateway identity. Omitted when absent or empty.
                     example: alex
                 email:
                     type: string
@@ -1230,9 +1233,9 @@ components:
                 groups:
                     type: array
                     description: |
-                        All literal verified group claims. Omitted when the claim is absent or empty.
-                        Group names are independent of organization membership entries and do not
-                        imply an organization role.
+                        All literal verified OIDC group claims, or groups associated with the trusted
+                        gateway identity. Omitted when absent or empty. Group names are independent
+                        of organization membership entries and do not imply an organization role.
                     items:
                         type: string
                     example:
@@ -1245,7 +1248,6 @@ components:
                     items:
                         $ref: '#/components/schemas/OrganizationMembership'
             required:
-                - iss
                 - sub
 
         OrganizationMembership:

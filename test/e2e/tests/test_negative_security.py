@@ -535,7 +535,7 @@ class TestMissingModelRef:
                 groups=["system:authenticated"],
             )
 
-            _wait_for_maas_subscription_phase(sub_name, "Degraded", timeout=60)
+            _wait_for_maas_subscription_phase(sub_name, "Degraded")
 
             # No TRLP should exist for the ghost model
             ghost_trlp_name = f"maas-trlp-{ghost_model}"
@@ -575,7 +575,7 @@ class TestMissingModelRef:
                 groups=["system:authenticated"],
             )
 
-            _wait_for_maas_auth_policy_phase(policy_name, "Degraded", timeout=60, require_auth_policies=False)
+            _wait_for_maas_auth_policy_phase(policy_name, "Degraded", require_auth_policies=False)
 
             # No AuthPolicy should exist for the ghost model
             ghost_auth_name = f"maas-auth-{ghost_model}"

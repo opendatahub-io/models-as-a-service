@@ -330,10 +330,6 @@ func registerHandlers(
 	)
 	v1Routes.GET("/models", append(modelAuthMiddleware, modelsHandler.ListLLMs)...)
 
-	// /v1/me is intentionally SSO-only. Legacy username/group headers and API
-	// keys cannot reconstruct the verified OIDC identity response.
-	v1Routes.GET("/me", tokenHandler.ExtractVerifiedIdentity(), tokenHandler.GetMe)
-
 	// Management routes may receive the new verified-identity envelope. Keeping
 	// it optional here preserves older gateways and deployments with no
 	// LLMInferenceService; malformed or duplicate envelopes still fail closed.
@@ -342,6 +338,11 @@ func registerHandlers(
 		tokenHandler.ExtractUserInfoOptional(),
 		middleware.TenantLogger(log, tenantLogCfg),
 	}
+
+	// Non-OIDC authentication methods reach maas-api through the gateway's
+	// trusted username/group headers. GetMe prefers the verified OIDC envelope
+	// when it is available.
+	v1Routes.GET("/me", append(optionalAuthMiddleware, tokenHandler.GetMe)...)
 
 	// Subscription listing routes use optional auth so they can return an empty
 	// list when no LLMInferenceService is deployed (same rationale as /v1/models).
