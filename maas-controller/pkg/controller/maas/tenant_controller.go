@@ -440,10 +440,17 @@ func (r *TenantReconciler) mapGatewayToMaasTenantConfigs(ctx context.Context, ob
 			Namespace: r.TenantNamespace,
 		}] = struct{}{}
 	}
+	enqueueRequests := func() []reconcile.Request {
+		result := make([]reconcile.Request, 0, len(requests))
+		for key := range requests {
+			result = append(result, reconcile.Request{NamespacedName: key})
+		}
+		return result
+	}
 	var tenants maasv1alpha1.AITenantList
 	if err := r.List(ctx, &tenants); err != nil {
 		oteljson.FromContext(ctx).Error(err, "failed to list AITenants for Gateway annotation change")
-		return nil
+		return enqueueRequests()
 	}
 	for i := range tenants.Items {
 		ref := tenants.Items[i].Status.GatewayRef
@@ -455,9 +462,5 @@ func (r *TenantReconciler) mapGatewayToMaasTenantConfigs(ctx context.Context, ob
 			Namespace: tenantreconcile.TenantNamespaceForAITenant(tenants.Items[i].Name, r.TenantNamespace),
 		}] = struct{}{}
 	}
-	result := make([]reconcile.Request, 0, len(requests))
-	for key := range requests {
-		result = append(result, reconcile.Request{NamespacedName: key})
-	}
-	return result
+	return enqueueRequests()
 }
