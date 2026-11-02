@@ -11,6 +11,9 @@ spec:
   # default response-buffer limit when Kuadrant extracts usage from the body.
   # Keep the mitigation scoped to MaaS gateway workloads and make the bound
   # explicit so it can be removed when non-buffering accounting is available.
+  # The tenant controller rewrites this filter's name, selector, and value for
+  # each resolved Gateway. The experimental Gateway annotation is expressed in
+  # MB; absent or invalid values fall back to 64 MB.
   configPatches:
     - applyTo: LISTENER
       match:
