@@ -62,6 +62,7 @@ from test_helper import (
     MODEL_REF,
     PREMIUM_MODEL_PATH,
     PREMIUM_MODEL_REF,
+    RATE_LIMIT_ENFORCEMENT_TIMEOUT,
     SIMULATOR_ACCESS_POLICY,
     SIMULATOR_SUBSCRIPTION,
     TIMEOUT,
@@ -96,6 +97,7 @@ from test_helper import (
     _wait_for_gateway_auth_enforced,
     _wait_for_maas_auth_policy_phase,
     _wait_for_maas_subscription_phase,
+    _wait_for_model_ready,
     _scale_kuadrant_controller_down,
     _scale_kuadrant_controller_up,
     _wait_for_subscription_trlp_status,
@@ -113,13 +115,23 @@ pytestmark = [pytest.mark.xdist_group("api_keys"), pytest.mark.worker_tenant]
 @pytest.fixture(scope="module", autouse=True)
 def _worker_subscription_context(request):
     """Point non-serial subscription tests at worker-owned tenant resources."""
-    from worker_tenant_fixtures import activate_worker_tenant, serial_only_selection
+    from worker_tenant_fixtures import (
+        activate_worker_tenant,
+        ensure_worker_models,
+        serial_only_selection,
+    )
 
     if serial_only_selection(request):
         yield
         return
 
     context = request.getfixturevalue("worker_tenant_context")
+    # The baseline models are bootstrapped once per worker session; re-ensure
+    # them here so a backend that drifted Unhealthy during the run is healed,
+    # then wait the way every other module does before its Ready prerequisite.
+    ensure_worker_models(context, (context.model_ref, context.premium_model_ref))
+    for model_ref in (context.model_ref, context.premium_model_ref):
+        _wait_for_model_ready(model_ref, namespace=context.model_namespace)
     names = (
         "MODEL_NAME", "MODEL_NAMESPACE", "MODEL_PATH", "MODEL_REF",
         "PREMIUM_MODEL_PATH", "PREMIUM_MODEL_REF", "SIMULATOR_ACCESS_POLICY",
@@ -661,13 +673,17 @@ class TestSubscriptionEnforcement:
                 subscription=subscription_name,
             )
 
-            # 4. Send requests to exhaust the limit
+            # 4. Send requests to exhaust the limit. Past the planned count keep
+            # going until the enforcement deadline: the limiter can trail the
+            # policy status, and this test asserts a 429, not a status field.
             rate_limited = False
             success_count = 0
+            deadline = time.time() + RATE_LIMIT_ENFORCEMENT_TIMEOUT
 
-            for i in range(total_requests):
+            request_num = 0
+            while request_num < total_requests or time.time() < deadline:
+                request_num += 1
                 r = _inference(api_key, path=model_path, max_tokens=1)
-                request_num = i + 1
                 log.info(f"Request {request_num}/{total_requests}: {r.status_code}")
 
                 if r.status_code == 200:
@@ -789,9 +805,13 @@ class TestSubscriptionEnforcement:
             rate_limited = False
 
             log.info(f"Exhausting token quota: sending up to {max_requests} requests")
-            for i in range(max_requests):
+            # Keep sending past the planned count until the enforcement deadline
+            # so a limiter that trails the policy status does not fail the test.
+            deadline = time.time() + RATE_LIMIT_ENFORCEMENT_TIMEOUT
+            request_num = 0
+            while request_num < max_requests or time.time() < deadline:
+                request_num += 1
                 r = _inference(api_key, path=model_path)
-                request_num = i + 1
                 log.info(f"Request {request_num}: status {r.status_code}")
 
                 if r.status_code == 200:
@@ -2013,6 +2033,7 @@ class TestE2ESubscriptionFlow:
         log.info("=" * 60)
 
 
+    @pytest.mark.limitador
     def test_e2e_with_both_access_and_subscription_gets_200(self):
         """
         API key with both access and subscription should get 200 OK.
@@ -2212,6 +2233,7 @@ class TestE2ESubscriptionFlow:
             _delete_sa(sa_name, namespace=ns)
             _wait_for_cr_absent("maassubscription", subscription_name, namespace=ns)
 
+    @pytest.mark.limitador
     def test_e2e_multiple_subscriptions_separate_keys_gets_200(self):
         """
         User with two subscriptions for the same model: mint one API key per subscription;
@@ -2335,6 +2357,7 @@ class TestE2ESubscriptionFlow:
             _delete_sa(sa_user, namespace=ns)
             _delete_sa(sa_other, namespace=ns)
 
+    @pytest.mark.limitador
     def test_e2e_group_based_access_gets_200(self):
         """
         E2E test: Group-based auth and subscription (success case).

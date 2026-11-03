@@ -725,8 +725,9 @@ func (r *MaaSModelRefReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		), builder.WithPredicates(httpRouteChangedForModelRef())).
 		// Watch sibling MaaSModelRefs so model-identity-conflict detection stays
 		// current: a newly created/deleted sibling, or one whose resolved alias
-		// changed, can introduce or resolve a conflict for every other model in
-		// the namespace even though those models' own specs didn't change.
+		// or resolved tenant changed, can introduce or resolve a conflict for
+		// every other model in the namespace even though those models' own
+		// specs didn't change.
 		//
 		// Only siblings sharing the affected alias are enqueued (not the entire
 		// namespace) to avoid O(N²) fan-out in namespaces with many models.
@@ -739,7 +740,7 @@ func (r *MaaSModelRefReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			UpdateFunc: func(ctx context.Context, e event.UpdateEvent, q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
 				oldM, ok1 := e.ObjectOld.(*maasv1alpha1.MaaSModelRef)
 				newM, ok2 := e.ObjectNew.(*maasv1alpha1.MaaSModelRef)
-				if ok1 && ok2 && oldM.Status.ResolvedModelAlias != newM.Status.ResolvedModelAlias {
+				if ok1 && ok2 && siblingConflictFieldsChanged(oldM, newM) {
 					r.enqueueSiblingsWithAlias(ctx, newM, q, oldM.Status.ResolvedModelAlias)
 				}
 			},
@@ -909,6 +910,16 @@ func (r *MaaSModelRefReconciler) mapHTTPRouteToMaaSModelRefs(ctx context.Context
 		})
 	}
 	return requests
+}
+
+// siblingConflictFieldsChanged reports whether an update to a MaaSModelRef can
+// change its model-identity-conflict verdict against its siblings. The verdict
+// depends on both the resolved alias and the resolved tenant: a tenant change
+// alone can flip a sibling's ModelIdentityUnique condition while the alias
+// stays the same, so siblings sharing the alias must be requeued either way.
+func siblingConflictFieldsChanged(oldM, newM *maasv1alpha1.MaaSModelRef) bool {
+	return oldM.Status.ResolvedModelAlias != newM.Status.ResolvedModelAlias ||
+		oldM.Status.ResolvedTenantRef != newM.Status.ResolvedTenantRef
 }
 
 // enqueueSiblingsWithAlias enqueues only the sibling MaaSModelRefs whose

@@ -237,9 +237,22 @@ def get_json_or_none(kind: str, name: str, namespace: Optional[str] = None) -> O
     raise RuntimeError(f"`oc {' '.join(args)}` failed: {result.stderr.strip() or result.stdout.strip()}")
 
 
-def list_json(kind: str, namespace: Optional[str] = None, *, labels: Optional[str] = None) -> list[dict]:
+def list_json(
+    kind: str,
+    namespace: Optional[str] = None,
+    *,
+    labels: Optional[str] = None,
+    all_namespaces: bool = False,
+) -> list[dict]:
+    """List ``kind`` as parsed JSON.
+
+    Without ``namespace`` this lists the current context's namespace, not the
+    cluster — pass ``all_namespaces=True`` when the objects can live anywhere.
+    """
     args = ["get", kind, "-o", "json"]
-    if namespace:
+    if all_namespaces:
+        args.append("-A")
+    elif namespace:
         args.extend(["-n", namespace])
     if labels:
         args.extend(["-l", labels])
@@ -1631,11 +1644,52 @@ def auth_can_create_maassubscription(subject: str, namespace: str) -> bool:
     return result.returncode == 0 and result.stdout.strip() == "yes"
 
 
+def wait_for_tenant_model_refs_gone(tenant_name: str, *, timeout: int = 120, interval: int = 2) -> bool:
+    """Wait until no MaaSModelRef anywhere in the cluster pins AITenant ``tenant_name``.
+
+    The refs are not necessarily in the tenant namespace: worker tenants deploy
+    models into ``e2e-models-<tenant>``, so a namespaced list there finds nothing
+    and the wait would pass instantly.
+
+    Removing the MaaSModelRef finalizer is an UPDATE that the validating webhook
+    re-checks against ``spec.tenantRef``. If the AITenant is deleted first, every
+    such update is denied ("references AITenant that does not exist"), the
+    finalizer never goes away, and the namespace hangs in Terminating while
+    maas-controller retries the denial. Returns False on timeout so callers can
+    report the leak instead of turning it into a teardown error.
+    """
+    deadline = time.time() + timeout
+    remaining: list[str] = []
+    while time.time() < deadline:
+        remaining = [
+            f"{(ref.get('metadata') or {}).get('namespace', '')}/{(ref.get('metadata') or {}).get('name')}"
+            for ref in list_json("maasmodelref", all_namespaces=True)
+            if ((ref.get("spec") or {}).get("tenantRef") or "") == tenant_name
+        ]
+        if not remaining:
+            return True
+        time.sleep(interval)
+    print(
+        f"[cleanup] MaaSModelRefs still reference AITenant/{tenant_name} "
+        f"after {timeout}s: {remaining}"
+    )
+    return False
+
+
 def cleanup_discovery_case(case: dict[str, str], *, delete_gateway: bool = True) -> None:
-    delete_best_effort(AITENANT_KIND, case["tenant_label_name"], AITENANT_NAMESPACE, timeout="180s")
     delete_maas_auth_policy(case["policy_name"], case["tenant_ns"])
     delete_maas_subscription(case["subscription_name"], case["tenant_ns"])
+    # Tear down the tenant namespace before its AITenant, and only delete the
+    # AITenant once the MaaSModelRefs pinned to it are gone. Namespace deletion
+    # is the force that removes those refs, but some callers (worker tenant
+    # teardown) submit it with --wait=false, so the drain has to be explicit
+    # here. It lists cluster-wide because the refs can live outside tenant_ns
+    # (worker models live in e2e-models-<tenant>). Ordering this way avoids the
+    # finalizer deadlock described on wait_for_tenant_model_refs_gone and costs
+    # nothing when nothing is left.
     delete_namespace_best_effort(case["tenant_ns"])
+    wait_for_tenant_model_refs_gone(case["tenant_label_name"])
+    delete_best_effort(AITENANT_KIND, case["tenant_label_name"], AITENANT_NAMESPACE, timeout="180s")
     if delete_gateway and case["gateway_name"] != DEFAULT_GATEWAY_NAME:
         delete_best_effort("route", f"{case['gateway_name']}-route", GATEWAY_NAMESPACE)
         delete_best_effort("gateway", case["gateway_name"], GATEWAY_NAMESPACE)
