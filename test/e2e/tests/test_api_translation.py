@@ -38,7 +38,7 @@ from test_helper import (
 
 log = logging.getLogger(__name__)
 
-pytestmark = pytest.mark.xdist_group("tenant_ipp")
+pytestmark = [pytest.mark.xdist_group("tenant_ipp"), pytest.mark.api_translation]
 
 DEFAULT_TENANT_NS = "models-as-a-service"
 TENANT_CONFIG = "maastenantconfig"
@@ -78,10 +78,15 @@ def _plugins_have_translator() -> bool:
     return all(key in data for key in TRANSLATOR_KEYS)
 
 
-def _wait_translator_rendered(timeout: int = RENDER_TIMEOUT) -> bool:
+def _wait_translator_state(present: bool, timeout: int = RENDER_TIMEOUT) -> bool:
+    """Wait until the translator chain is present (enable) or absent (disable) in the
+    ConfigMap, i.e. until the controller has reconciled the apiTranslation toggle. This
+    is the barrier that makes the subsequent rollout meaningful: without it, oc rollout
+    status can race ahead of the controller and report the pre-toggle generation as
+    already complete."""
     deadline = time.time() + timeout
     while time.time() < deadline:
-        if _plugins_have_translator():
+        if _plugins_have_translator() == present:
             return True
         time.sleep(POLL)
     return False
@@ -99,7 +104,11 @@ def _rollout_extproc() -> None:
 
 def _apply_api_translation(enabled: bool, *, gate: bool = False) -> bool:
     _set_api_translation(enabled)
-    if enabled and gate and not _wait_translator_rendered():
+    # Wait for the controller to reconcile the toggle (keys present on enable, absent on
+    # disable) before rolling the ExtProc, so the rollout waits for the post-toggle
+    # generation rather than racing the controller.
+    reconciled = _wait_translator_state(present=enabled)
+    if enabled and gate and not reconciled:
         return False
     _rollout_extproc()
     return True
@@ -173,6 +182,8 @@ def _is_well_formed_anthropic(body: dict) -> bool:
 
 @pytest.fixture(scope="module")
 def api_translation_env():
+    """Shared setup: a real API key, gateway auth enforced, and restoration of the
+    tenant's original apiTranslation state after the module's tests finish."""
     original = _api_translation_enabled()
     _wait_for_gateway_auth_enforced()
     api_key = _create_default_api_key()
@@ -182,23 +193,40 @@ def api_translation_env():
         _apply_api_translation(original)
 
 
+@pytest.fixture
+def translation_on(api_translation_env):
+    """Enable apiTranslation and wait for the ExtProc to render the translator
+    chain. Skips the test if the deployed image cannot render it."""
+    log.info("Enabling apiTranslation on %s/%s", DEFAULT_TENANT_NS, DEFAULT_TENANT)
+    if not _apply_api_translation(True, gate=True):
+        pytest.skip("deployed Praxis/ExtProc image did not render the apiTranslation chain")
+    return api_translation_env["api_key"]
+
+
+@pytest.fixture
+def translation_off(api_translation_env):
+    """Disable apiTranslation and roll the ExtProc so the change takes effect."""
+    log.info("Disabling apiTranslation on %s/%s", DEFAULT_TENANT_NS, DEFAULT_TENANT)
+    _apply_api_translation(False)
+    return api_translation_env["api_key"]
+
+
 class TestApiTranslation:
     """Anthropic->OpenAI translation works when enabled and is gated when off."""
 
     @pytest.mark.serial
-    def test_anthropic_to_openai_translation_and_gating(self, api_translation_env):
-        api_key = api_translation_env["api_key"]
-        gw = _gateway_url().rstrip("/")
-        messages_url = f"{gw}/v1/messages"
-        chat_url = f"{gw}/v1/chat/completions"
+    def test_auth_rejects_invalid_key(self, api_translation_env):
+        """An invalid key must be rejected at the gateway regardless of translation state."""
+        messages_url = f"{_gateway_url().rstrip('/')}/v1/messages"
+        invalid = _post(messages_url, "sk-invalid-not-real", _anthropic_body())
+        assert invalid.status_code == 401, f"expected 401 Unauthorized for invalid key, got {invalid.status_code}"
 
-        log.info("Auth: a bogus key must be rejected at the gateway")
-        bogus = _post(messages_url, "sk-bogus-not-real", _anthropic_body())
-        assert bogus.status_code in (401, 403), f"expected 401/403 for bogus key, got {bogus.status_code}"
-
-        log.info("Enabling apiTranslation on %s/%s", DEFAULT_TENANT_NS, DEFAULT_TENANT)
-        if not _apply_api_translation(True, gate=True):
-            pytest.skip("deployed Praxis/ExtProc image did not render the apiTranslation chain")
+    @pytest.mark.serial
+    def test_translation_when_enabled(self, translation_on):
+        """With apiTranslation on, Anthropic /v1/messages returns well-formed Anthropic
+        for both JSON and SSE responses."""
+        api_key = translation_on
+        messages_url = f"{_gateway_url().rstrip('/')}/v1/messages"
 
         log.info("Anthropic /v1/messages (JSON) must return well-formed Anthropic")
         r = _post(messages_url, api_key, _anthropic_body())
@@ -211,14 +239,19 @@ class TestApiTranslation:
         names = _sse_event_names(stream)
         assert "message_start" in names and "message_stop" in names, f"expected Anthropic SSE events, got {names}"
 
-        log.info("Disabling apiTranslation; translation must be gated off, passthrough intact")
-        _apply_api_translation(False)
-        passthrough = _post(chat_url, api_key, _openai_body())
+    @pytest.mark.serial
+    def test_gated_when_disabled(self, translation_off):
+        """With apiTranslation off, OpenAI passthrough still works and Anthropic
+        /v1/messages is no longer translated."""
+        api_key = translation_off
+        gw = _gateway_url().rstrip("/")
+
+        passthrough = _post(f"{gw}/v1/chat/completions", api_key, _openai_body())
         assert passthrough.status_code == 200, (
             f"OpenAI passthrough failed after disabling: {passthrough.status_code} "
             f"{redact_sensitive(passthrough.text[:300])}"
         )
-        gated = _post(messages_url, api_key, _anthropic_body())
+        gated = _post(f"{gw}/v1/messages", api_key, _anthropic_body())
         assert not (gated.status_code == 200 and _is_well_formed_anthropic(gated.json() if gated.ok else {})), (
             "Anthropic /v1/messages was still translated after disabling apiTranslation"
         )
