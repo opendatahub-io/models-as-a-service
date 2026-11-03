@@ -31,7 +31,12 @@ from typing import Any
 
 import requests
 from multitenancy_helpers import redact_sensitive
-from test_helper import _apply_cr, _request_with_gateway_retry, _run_oc
+from test_helper import (
+    _apply_cr,
+    _is_transient_gateway_response,
+    _request_with_gateway_retry,
+    _run_oc,
+)
 
 log = logging.getLogger(__name__)
 
@@ -395,6 +400,7 @@ def infer_external_chat(
     content: str = "multi-tenant external model e2e",
     retries: int = 6,
     delay: int = 5,
+    readiness_timeout: int | None = None,
 ) -> requests.Response:
     """POST a chat completion through a specific gateway, retrying route
     propagation (404) and transient gateway/auth responses.
@@ -404,6 +410,12 @@ def infer_external_chat(
     model-name prefix. ``provider_path`` overrides it for bindings whose
     provider serves a different path (e.g. an OpenAI-style simulator behind
     another gateway, whose model path must reach it verbatim).
+
+    ``readiness_timeout`` keeps retrying transient responses until that many
+    seconds have passed, instead of stopping after ``retries`` attempts. Use it
+    for the first inference after creating a route: the per-tenant ExtProc and
+    route are still programming, and an empty 5xx there says nothing about the
+    behavior under test.
     """
     if provider_path is None:
         provider_path = echo_provider_path(path_tag) if path_tag else "/v1/chat/completions"
@@ -416,28 +428,56 @@ def infer_external_chat(
         "messages": [{"role": "user", "content": content}],
         "max_tokens": 8,
     }
+    deadline = time.time() + readiness_timeout if readiness_timeout else None
     response = None
-    for attempt in range(1, retries + 1):
+    attempt = 0
+    while True:
+        attempt += 1
         # The caller's budget bounds transient gateway/auth retries too —
         # negative tests pass retries=1 to get the refusal verdict from a
         # single attempt instead of riding out propagation windows.
-        response = _request_with_gateway_retry(
-            requests.post, url, headers=headers, json=body, retries=retries, delay=delay
-        )
+        try:
+            response = _request_with_gateway_retry(
+                requests.post,
+                url,
+                headers=headers,
+                json=body,
+                retries=retries,
+                delay=delay,
+                deadline=deadline,
+            )
+        except TimeoutError:
+            # The readiness budget can lapse between probes. Report what the
+            # gateway last said instead of turning a propagation wait into an
+            # error the caller would read as a harness failure.
+            if response is None:
+                raise
+            log.info("%s still %d at deadline, giving up", url, response.status_code)
+            return response
         if response.status_code == 200:
             return response
-        if response.status_code == 404 and attempt < retries:
-            log.info(
-                "%s got 404 (attempt %d/%d), retrying in %ds (route propagation)",
-                url,
-                attempt,
-                retries,
-                delay,
-            )
-            time.sleep(delay)
-            continue
-        return response
-    return response
+        # One classifier for the whole suite: a second copy here drifted from
+        # test_helper's list of proxy 5xx bodies.
+        transient = response.status_code == 404 or _is_transient_gateway_response(response)
+        if not transient:
+            return response
+        if deadline is not None:
+            # The deadline is the contract: stop on it, not on ``retries``, or
+            # a caller asking for 120s of readiness would still give up after
+            # six 5s attempts and report a half-programmed route as a failure.
+            if time.time() + delay > deadline:
+                log.info("%s still %d at deadline, giving up", url, response.status_code)
+                return response
+        elif attempt >= retries:
+            return response
+        log.info(
+            "%s got %d (attempt %d), retrying in %ds",
+            url,
+            response.status_code,
+            attempt,
+            delay,
+        )
+        time.sleep(delay)
 
 
 # ─── Attribution assertions ─────────────────────────────────────────────────

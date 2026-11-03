@@ -157,6 +157,22 @@ func TestSelector_OrganizationIDPrecedence(t *testing.T) {
 	}
 }
 
+func TestSelector_SubscriptionHeadersAnnotation(t *testing.T) {
+	subscriptionObject := createSubscription("headers-sub", []string{"g1"}, nil, 10, defaultTestTokenRateLimit, "", "")
+	subscriptionObject.SetAnnotations(map[string]string{
+		"experimental.maas.opendatahub.io/headers": `{"x-grid-geo-fencing":["region1","region2"]}`,
+	})
+
+	selector := subscription.NewSelector(logger.New(false), &fakeLister{subscriptions: []*unstructured.Unstructured{subscriptionObject}}, nil, nil)
+	response, err := selector.Select([]string{"g1"}, "", "", "")
+	if err != nil {
+		t.Fatalf("Select() error = %v", err)
+	}
+	if !slices.Equal(response.Headers["x-grid-geo-fencing"], []string{"region1", "region2"}) {
+		t.Fatalf("Headers = %#v, want normalized x-grid-geo-fencing values", response.Headers)
+	}
+}
+
 func TestGetAllAccessible(t *testing.T) {
 	log := logger.New(false)
 
