@@ -3669,6 +3669,18 @@
 </thead>
 <tbody>
 <tr>
+<td><code>tenant_name</code></td>
+<td>Reconciled MaaS tenant</td>
+<td>Always enabled</td>
+<td>Bounded by tenant count</td>
+</tr>
+<tr>
+<td><code>tenant_namespace</code></td>
+<td>Reconciled MaaS tenant namespace</td>
+<td>Always enabled</td>
+<td>Bounded by tenant count</td>
+</tr>
+<tr>
 <td><code>user</code></td>
 <td><code>auth.identity.userid</code></td>
 <td><strong>Disabled</strong> (<code>captureUser: false</code>)</td>
@@ -3718,13 +3730,13 @@
 <tr>
 <td><code>authorized_hits</code></td>
 <td>Counter</td>
-<td><code>subscription</code>, <code>model</code>, <code>limitador_namespace</code></td>
+<td><code>tenant_name</code>, <code>tenant_namespace</code>, <code>subscription</code>, <code>model</code>, <code>limitador_namespace</code></td>
 <td>Token consumption (from <code>usage.total_tokens</code> in response body)</td>
 </tr>
 <tr>
 <td><code>authorized_calls</code></td>
 <td>Counter</td>
-<td><code>subscription</code>, <code>limitador_namespace</code></td>
+<td><code>tenant_name</code>, <code>tenant_namespace</code>, <code>subscription</code>, <code>limitador_namespace</code></td>
 <td>Requests allowed through rate limiting</td>
 </tr>
 <tr>
@@ -3737,11 +3749,11 @@
 </table>
 <div class="admonition note">
 <p class="admonition-title">Label availability varies by metric</p>
-<p>The <code>model</code> label is available <strong>only on <code>authorized_hits</code></strong>. The <code>limited_calls</code> metric carries only <code>limitador_namespace</code> — it does not include <code>subscription</code> or other TelemetryPolicy labels. When <code>captureUser</code> is enabled, the <code>user</code> label appears on <code>authorized_hits</code> and <code>authorized_calls</code>. The <code>organization_id</code> and <code>cost_center</code> labels appear only when the corresponding fields are set on the <code>MaaSSubscription</code> CR.</p>
+<p>The <code>model</code> label is available <strong>only on <code>authorized_hits</code></strong>. The <code>limited_calls</code> metric carries only <code>limitador_namespace</code> — it does not include <code>subscription</code> or other TelemetryPolicy labels. When <code>captureUser</code> is enabled, the <code>user</code> label appears on <code>authorized_hits</code> and <code>authorized_calls</code>. The <code>organization_id</code> and <code>cost_center</code> labels appear only when the corresponding fields are set on the <code>MaaSSubscription</code> CR; otherwise their value is empty. Organization-specific queries must require <code>organization_id != ""</code> (and nonempty tenant and subscription scope) so incomplete or unscopable aggregates are not presented as organization metrics.</p>
 </div>
 <p>Metrics that intentionally avoid high-cardinality labels:</p>
 <ul>
-<li><code>istio_request_duration_milliseconds_bucket</code> — uses <code>subscription</code> only (histograms have high base cardinality from bucket boundaries)</li>
+<li><code>istio_request_duration_milliseconds_bucket</code> — uses producer scope, subscription, and organization labels, but not model or per-user labels (histograms have high base cardinality from bucket boundaries)</li>
 <li><code>vllm:*</code> — uses <code>model_name</code> only (vLLM has no visibility into user identity)</li>
 </ul>
 <h3 id="model-cardinality">Model Cardinality</h3>
@@ -3783,7 +3795,7 @@
 <p>The theoretical maximum series count for a single metric is the cross-product of all <strong>independent</strong> label values:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>worst_case = users × models × subscriptions × limitador_namespaces
 </code></pre></div>
-<p><code>organization_id</code> and <code>cost_center</code> are <strong>not</strong> independent multipliers — each subscription belongs to exactly one org and one cost center, so they are determined by the <code>subscription</code> value.</p>
+<p><code>tenant_namespace</code>, <code>organization_id</code>, and <code>cost_center</code> are <strong>not</strong> independent multipliers — each subscription belongs to exactly one tenant namespace, org, and cost center, so they are determined by the <code>subscription</code> value.</p>
 <p>The primary cardinality drivers are:</p>
 <ul>
 <li><strong><code>user</code></strong> — grows with the active user base; this is the largest dimension</li>
@@ -3946,7 +3958,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="October 12, 2026 12:12:18 UTC">October 12, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="November 3, 2026 23:30:24 UTC">November 3, 2026</span>
   </span>
 
     

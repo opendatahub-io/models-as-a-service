@@ -3951,7 +3951,7 @@ they are available.</p>
 <a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a><span class="w">  </span><span class="s2">&quot;https://data-science-thanos-querier-route-&lt;monitoring-namespace&gt;.&lt;cluster&gt;/api/v1/query&quot;</span><span class="w"> </span><span class="p">|</span><span class="w"> </span><span class="se">\</span>
 <a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a><span class="w">  </span>jq<span class="w"> </span><span class="s1">&#39;.data.result[] | {metric: .metric.__name__, series: .value[1]}&#39;</span>
 </code></pre></div>
-<p>Watch: <code>authorized_hits_total{user!=""}</code>, <code>authorized_calls_total{user!=""}</code>, <code>istio_request_duration_milliseconds_bucket{subscription!=""}</code>.</p>
+<p>Watch: <code>authorized_hits_total{user!="",organization_id!="",tenant_name!="",tenant_namespace!="",subscription!=""}</code>, <code>authorized_calls_total{user!="",organization_id!="",tenant_name!="",tenant_namespace!="",subscription!=""}</code>, and <code>istio_request_duration_milliseconds_bucket{tenant_name!="",tenant_namespace!="",subscription!=""}</code>. Empty scope labels identify incomplete or unscopable series and must not be included in organization-specific claims.</p>
 <h3 id="regular-maintenance-tasks">Regular Maintenance Tasks</h3>
 <table>
 <thead>
@@ -4035,6 +4035,11 @@ they are available.</p>
 <td>OTel prometheus receiver stores Limitador counters as <code>authorized_hits_total</code> (and the same for <code>authorized_calls</code> / <code>limited_calls</code>)</td>
 <td>Query the <code>_total</code> names; Grafana panels that omit <code>_total</code> return no data</td>
 </tr>
+<tr>
+<td><strong>MaaS labels on <code>limited_calls_total</code></strong></td>
+<td>Limitador emits only <code>limitador_namespace</code> for this family</td>
+<td>Use <code>authorized_hits_total</code> or <code>authorized_calls_total</code> for tenant/subscription/organization attribution</td>
+</tr>
 </tbody>
 </table>
 <div class="admonition note">
@@ -4054,17 +4059,17 @@ they are available.</p>
 <tr>
 <td><strong>Latency per subscription</strong></td>
 <td><code>istio_request_duration_milliseconds_bucket</code></td>
-<td><code>subscription</code></td>
+<td><code>subscription</code>, <code>tenant_namespace</code>, <code>tenant_name</code></td>
 </tr>
 <tr>
 <td><strong>Tokens per user</strong></td>
 <td><code>authorized_hits_total</code></td>
-<td><code>user</code></td>
+<td><code>user</code>, <code>tenant_name</code>, <code>tenant_namespace</code>, <code>subscription</code></td>
 </tr>
 <tr>
 <td><strong>Tokens per subscription</strong></td>
 <td><code>authorized_hits_total</code></td>
-<td><code>subscription</code></td>
+<td><code>subscription</code>, <code>tenant_namespace</code>, <code>tenant_name</code></td>
 </tr>
 <tr>
 <td><strong>Tokens per model</strong></td>
@@ -4082,14 +4087,9 @@ they are available.</p>
 <td><code>subscription</code></td>
 </tr>
 <tr>
-<td><strong>Rate limited per user</strong></td>
+<td><strong>Rate limited totals</strong></td>
 <td><code>limited_calls_total</code></td>
-<td><code>user</code></td>
-</tr>
-<tr>
-<td><strong>Rate limited per subscription</strong></td>
-<td><code>limited_calls_total</code></td>
-<td><code>subscription</code></td>
+<td><code>limitador_namespace</code> only</td>
 </tr>
 </tbody>
 </table>
@@ -4122,7 +4122,7 @@ they are available.</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="October 20, 2026 14:37:20 UTC">October 20, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="November 3, 2026 23:30:24 UTC">November 3, 2026</span>
   </span>
 
     

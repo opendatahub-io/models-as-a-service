@@ -3467,26 +3467,26 @@
 <tr>
 <td><code>authorized_hits</code></td>
 <td>Counter</td>
-<td><code>user</code>, <code>subscription</code>, <code>model</code></td>
+<td><code>user</code>, <code>tenant_name</code>, <code>tenant_namespace</code>, <code>subscription</code>, <code>model</code></td>
 <td><strong>Billing/Cost</strong> - Total tokens consumed (input + output)</td>
 </tr>
 <tr>
 <td><code>authorized_calls</code></td>
 <td>Counter</td>
-<td><code>user</code>, <code>subscription</code></td>
+<td><code>user</code>, <code>tenant_name</code>, <code>tenant_namespace</code>, <code>subscription</code></td>
 <td><strong>API Usage</strong> - Number of API calls allowed</td>
 </tr>
 <tr>
 <td><code>limited_calls</code></td>
 <td>Counter</td>
-<td><code>user</code>, <code>subscription</code></td>
+<td><code>limitador_namespace</code></td>
 <td><strong>Rate Limiting</strong> - Requests denied due to quotas</td>
 </tr>
 </tbody>
 </table>
 <div class="admonition note">
 <p class="admonition-title"><code>model</code> label availability</p>
-<p><code>model</code> label is only available on <code>authorized_hits</code>. <code>authorized_calls</code> and <code>limited_calls</code> carry <code>user</code> and <code>subscription</code> only.</p>
+<p><code>model</code> label is only available on <code>authorized_hits</code>. <code>limited_calls</code> does not carry MaaS producer-scope labels. Organization-specific queries must require nonempty <code>organization_id</code>, tenant, and subscription scope; empty values identify incomplete or unscopable series.</p>
 </div>
 <div class="admonition note">
 <p class="admonition-title">Total tokens only</p>
@@ -3504,8 +3504,8 @@
 <tbody>
 <tr>
 <td><code>istio_request_duration_milliseconds_bucket</code></td>
-<td><code>destination_service_name</code>, <code>subscription</code></td>
-<td>Gateway-level latency (subscription-only to bound cardinality)</td>
+<td><code>destination_service_name</code>, <code>tenant_name</code>, <code>tenant_namespace</code>, <code>subscription</code>, <code>organization_id</code> (optional)</td>
+<td>Gateway-level latency (no model or user label)</td>
 </tr>
 <tr>
 <td><code>vllm:e2e_request_latency_seconds</code></td>
@@ -3525,7 +3525,7 @@
 </tbody>
 </table>
 <h4 id="per-subscription-latency-tracking">Per-Subscription Latency Tracking</h4>
-<p>Istio Telemetry adds a <code>subscription</code> dimension to gateway latency from the <code>X-MaaS-Subscription</code> header. See <a href="../../architecture-internals/authentication-internals/#identity-headers-and-defense-in-depth">Identity headers</a> for when AuthPolicy injects or preserves this header.</p>
+<p>Istio Telemetry adds producer-scope and subscription dimensions to gateway latency from controller-resolved values and the <code>X-MaaS-Subscription</code> and <code>x-maas-organization-id</code> response headers. The organization dimension is controlled by <code>metrics.captureOrganization</code>. See <a href="../../architecture-internals/authentication-internals/#identity-headers-and-defense-in-depth">Identity headers</a>.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">telemetry.istio.io/v1</span>
 <a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Telemetry</span>
 <a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="nt">metadata</span><span class="p">:</span>
@@ -3753,8 +3753,8 @@
 <div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="c1"># Rate limit ratio (% rejected)</span>
 <a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="o">(</span><span class="k">sum</span><span class="o">(</span><span class="nv">limited_calls</span><span class="o">)</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="o">(</span><span class="k">sum</span><span class="o">(</span><span class="nv">authorized_calls</span><span class="o">)</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="k">sum</span><span class="o">(</span><span class="nv">limited_calls</span><span class="o">)))</span><span class="w"> </span><span class="nv">OR</span><span class="w"> </span><span class="kr">vector</span><span class="o">(</span><span class="mi">0</span><span class="o">)</span>
 <a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>
-<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="c1"># Rate limit violations per second by subscription</span>
-<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="k">sum</span><span class="w"> </span><span class="k">by</span><span class="w"> </span><span class="o">(</span><span class="nv">subscription</span><span class="o">)</span><span class="w"> </span><span class="o">(</span><span class="kr">rate</span><span class="o">(</span><span class="nv">limited_calls</span><span class="p">[</span><span class="s">5m</span><span class="p">]</span><span class="o">))</span>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="c1"># Rate limit violations per second by limitador namespace</span>
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="k">sum</span><span class="w"> </span><span class="k">by</span><span class="w"> </span><span class="o">(</span><span class="nv">limitador_namespace</span><span class="o">)</span><span class="w"> </span><span class="o">(</span><span class="kr">rate</span><span class="o">(</span><span class="nv">limited_calls</span><span class="p">[</span><span class="s">5m</span><span class="p">]</span><span class="o">))</span>
 </code></pre></div>
 <p><strong>Latency (per-subscription SLA):</strong></p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="c1"># P99 latency per subscription</span>
@@ -3823,7 +3823,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="October 14, 2026 12:04:22 UTC">October 14, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="November 3, 2026 23:30:24 UTC">November 3, 2026</span>
   </span>
 
     

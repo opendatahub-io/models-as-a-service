@@ -3480,8 +3480,8 @@
 </code></pre></div>
 <p>This creates:</p>
 <ul>
-<li><strong>TelemetryPolicy</strong> (<code>maas-telemetry</code>) - Adds <code>subscription</code>, <code>model</code>, <code>organization_id</code> labels to Limitador metrics (user and group labels disabled by default)</li>
-<li><strong>Istio Telemetry</strong> (<code>latency-per-subscription</code>) - Adds <code>subscription</code> label to gateway latency</li>
+<li><strong>TelemetryPolicy</strong> (<code>maas-telemetry</code>) - Adds canonical <code>tenant_name</code>, <code>tenant_namespace</code>, <code>subscription</code>, <code>organization_id</code>, and <code>model</code> labels to supported Limitador metrics (user and group labels disabled by default)</li>
+<li><strong>Istio Telemetry</strong> (<code>latency-per-subscription</code>) - Adds producer scope, subscription, and organization labels to gateway latency; organization is controlled by <code>metrics.captureOrganization</code> and defaults to enabled</li>
 </ul>
 <p><strong>Verify:</strong></p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>kubectl<span class="w"> </span>get<span class="w"> </span>telemetry<span class="w"> </span>-n<span class="w"> </span>openshift-ingress<span class="w"> </span>latency-per-subscription
@@ -3492,7 +3492,7 @@
 </div>
 <div class="admonition warning">
 <p class="admonition-title">AuthPolicy Dependency</p>
-<p>Istio Telemetry reads <code>X-MaaS-Subscription</code>. If the header is absent, the <code>subscription</code> label is empty. See <a href="../../architecture-internals/authentication-internals/#identity-headers-and-defense-in-depth">Identity headers</a> for its behavior with API keys and user tokens.</p>
+<p>Istio Telemetry reads <code>X-MaaS-Subscription</code> and <code>x-maas-organization-id</code>. MaaS sets these response headers from resolved subscription data, using empty values when scope is unresolved. The organization label is emitted only when <code>metrics.captureOrganization</code> is enabled. See <a href="../../architecture-internals/authentication-internals/#identity-headers-and-defense-in-depth">Identity headers</a>.</p>
 </div>
 <p>Additionally, a Perses dashboard for metrics-based usage is applied by the operator (<code>LifecycleReconciler.ensureUsageDashboard</code>) when <code>usageMetricsDashboard</code> is <code>true</code> on <code>Config</code> (defaults to <code>false</code>). It is <strong>not</strong> created by <code>install-observability.sh</code>. The dashboard shows data when <code>captureUser</code> and <code>captureModelUsage</code> are turned on.</p>
 <p>To enable the legacy metrics-based usage dashboard:</p>
@@ -3518,6 +3518,7 @@
 <p class="admonition-title">Privacy</p>
 <p>Structured access logs record request attributes.
 User identity (<code>user_id</code>) is included only when <code>MaasTenantConfig.spec.telemetry.logs.captureUser</code> is <code>true</code>.
+Tenant attribution (<code>tenant_name</code> and <code>service.namespace</code>) is always included from controller-resolved values. Cluster attribution is owned by the telemetry collector.
 Organization ID (<code>organization_id</code>) is included by default when the field is set on the <code>MaaSSubscription</code>. Set <code>MaasTenantConfig.spec.telemetry.logs.captureOrganization</code> to <code>false</code> to omit it. Independent of <code>metrics.captureOrganization</code>.
 Cost center is included when that field is set on the <code>MaaSSubscription</code>.
 Review GDPR/privacy requirements, retention, and dashboard access before enabling either setting.</p>
@@ -3643,7 +3644,7 @@ Review GDPR/privacy requirements, retention, and dashboard access before enablin
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="October 27, 2026 12:22:54 UTC">October 27, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="November 3, 2026 23:30:24 UTC">November 3, 2026</span>
   </span>
 
     
