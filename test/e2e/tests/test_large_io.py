@@ -47,6 +47,7 @@ from test_helper import (
     _create_test_auth_policy,
     _create_test_subscription,
     _delete_governance_and_wait,
+    _delete_sa,
     _gateway_url,
     _ns,
     _sa_to_user,
@@ -201,6 +202,7 @@ def large_io_access():
             subscriptions=[(subscription_name, ns)],
             auth_policies=[(auth_name, ns)],
         )
+        _delete_sa(sa_name, namespace=MODEL_NAMESPACE)
 
 
 @pytest.mark.models
