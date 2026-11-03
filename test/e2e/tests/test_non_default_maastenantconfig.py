@@ -15,11 +15,11 @@ from typing import Any
 import pytest
 from multitenancy_helpers import (
     INFRA_NAMESPACE,
-    MODEL_BACKEND_READY_TIMEOUT,
     TENANT_CONFIG_KIND,
     TENANT_CR_NAME,
     _oc_run,
     create_api_key_at,
+    deployment_env,
     make_tenant_model_accessible,
     per_tenant_maas_api_names,
     provision_tenant_model,
@@ -35,6 +35,9 @@ pytestmark = [pytest.mark.tenant_isolation, pytest.mark.xdist_group("tenant_isol
 
 CONVERGENCE_TIMEOUT = 300
 
+# Rendered onto every tenant's maas-api Deployment; read once at pod startup.
+API_KEY_MAX_EXPIRATION_ENV = "API_KEY_MAX_EXPIRATION_DAYS"
+
 # Far below the platform default so a key the tenant must reject stays acceptable
 # elsewhere, which is what makes the namespace-scoping check meaningful.
 TENANT_MAX_EXPIRATION_DAYS = 7
@@ -48,8 +51,24 @@ def _non_default_tenant(shared_test_tenants) -> dict[str, str]:
 
 
 @contextlib.contextmanager
-def _tenant_config_patched(tenant_namespace: str, spec_patch: dict[str, Any], *remove_paths: str) -> Iterator[None]:
-    """Merge-patch a tenant's MaasTenantConfig and remove the added paths on exit."""
+def _tenant_config_patched(
+    tenant_namespace: str,
+    spec_patch: dict[str, Any],
+    *remove_paths: str,
+    settle_deployment: str,
+    settle_env: str,
+    settle_namespace: str = INFRA_NAMESPACE,
+) -> Iterator[None]:
+    """Merge-patch a tenant's MaasTenantConfig and undo it on exit.
+
+    Removing the patch starts a second rollout. The modules sharing this xdist
+    group reuse the same tenants, so returning while maas-api is still rolling
+    hands the next one a half-updated Deployment. The value to settle back to is
+    read before patching rather than hardcoded, so it tracks whatever the
+    renderer's default is.
+    """
+    original = deployment_env(settle_deployment, settle_namespace).get(settle_env)
+
     body = json.dumps({"spec": spec_patch})
     result = _oc_run(
         ["patch", TENANT_CONFIG_KIND, TENANT_CR_NAME, "-n", tenant_namespace, "--type=merge", "-p", body]
@@ -58,17 +77,30 @@ def _tenant_config_patched(tenant_namespace: str, spec_patch: dict[str, Any], *r
         f"Failed to patch {TENANT_CONFIG_KIND}/{TENANT_CR_NAME} in '{tenant_namespace}': "
         f"{(result.stderr or result.stdout or '').strip()}"
     )
+    body_failed = False
     try:
         yield
+    except BaseException:
+        # Teardown problems must not replace the failure the test actually hit.
+        body_failed = True
+        raise
     finally:
         removals = json.dumps([{"op": "remove", "path": path} for path in remove_paths])
         result = _oc_run(
             ["patch", TENANT_CONFIG_KIND, TENANT_CR_NAME, "-n", tenant_namespace, "--type=json", "-p", removals]
         )
-        assert result.returncode == 0, (
-            f"Failed to cleanup {TENANT_CONFIG_KIND}/{TENANT_CR_NAME} in '{tenant_namespace}': "
-            f"{(result.stderr or result.stdout or '').strip()}"
-        )
+        if result.returncode != 0:
+            if not body_failed:
+                raise AssertionError(
+                    f"Failed to cleanup {TENANT_CONFIG_KIND}/{TENANT_CR_NAME} in '{tenant_namespace}': "
+                    f"{(result.stderr or result.stdout or '').strip()}"
+                )
+        elif original is not None:
+            try:
+                _wait_for_env_rollout(settle_deployment, settle_namespace, settle_env, original)
+            except BaseException:
+                if not body_failed:
+                    raise
 
 
 def _wait_for_env_rollout(
@@ -114,20 +146,17 @@ def tenant_key_governance(shared_test_tenants):
     suffix = uuid.uuid4().hex[:6]
     policy_name = f"e2e-mt-tenantcfg-{suffix}"
     subscription_name = f"e2e-mt-tenantcfg-{suffix}"
-    cases = [dict(case) for case in shared_test_tenants]
-
-    for case in cases:
-        case["model_name"] = f"tenantcfg-model-{case['suffix']}"
-        provision_tenant_model(case["model_name"], case["tenant_ns"], case["gateway_name"])
+    cases = [{**case, "model_name": f"tenantcfg-model-{case['suffix']}"} for case in shared_test_tenants]
     try:
         for case in cases:
+            provision_tenant_model(case["model_name"], case["tenant_ns"], case["gateway_name"])
             make_tenant_model_accessible(
                 case["model_name"],
                 case["tenant_ns"],
                 policy_name,
                 subscription_name,
                 gateway_name=case["gateway_name"],
-                trlp_timeout=MODEL_BACKEND_READY_TIMEOUT,
+                require_trlp_ready=False,
             )
         yield subscription_name
     finally:
@@ -150,13 +179,18 @@ class TestNonDefaultTenantAPIKeysPolicy:
         """
         tenant = _non_default_tenant(shared_test_tenants)
         token = _get_cluster_token()
+        deployment = per_tenant_maas_api_names(tenant["name"])["deployment"]
         with _tenant_config_patched(
-            tenant["namespace"], {"apiKeys": {"maxExpirationDays": TENANT_MAX_EXPIRATION_DAYS}}, "/spec/apiKeys"
+            tenant["namespace"],
+            {"apiKeys": {"maxExpirationDays": TENANT_MAX_EXPIRATION_DAYS}},
+            "/spec/apiKeys",
+            settle_deployment=deployment,
+            settle_env=API_KEY_MAX_EXPIRATION_ENV,
         ):
             _wait_for_env_rollout(
-                per_tenant_maas_api_names(tenant["name"])["deployment"],
+                deployment,
                 INFRA_NAMESPACE,
-                "API_KEY_MAX_EXPIRATION_DAYS",
+                API_KEY_MAX_EXPIRATION_ENV,
                 str(TENANT_MAX_EXPIRATION_DAYS),
             )
             # Rollout complete: only the new pod serves, so the cap is live
@@ -205,13 +239,18 @@ class TestNonDefaultTenantAPIKeysPolicy:
         tenant = _non_default_tenant(shared_test_tenants)
         sibling = shared_test_tenants[0]
         token = _get_cluster_token()
+        deployment = per_tenant_maas_api_names(tenant["name"])["deployment"]
         with _tenant_config_patched(
-            tenant["namespace"], {"apiKeys": {"maxExpirationDays": TENANT_MAX_EXPIRATION_DAYS}}, "/spec/apiKeys"
+            tenant["namespace"],
+            {"apiKeys": {"maxExpirationDays": TENANT_MAX_EXPIRATION_DAYS}},
+            "/spec/apiKeys",
+            settle_deployment=deployment,
+            settle_env=API_KEY_MAX_EXPIRATION_ENV,
         ):
             _wait_for_env_rollout(
-                per_tenant_maas_api_names(tenant["name"])["deployment"],
+                deployment,
                 INFRA_NAMESPACE,
-                "API_KEY_MAX_EXPIRATION_DAYS",
+                API_KEY_MAX_EXPIRATION_ENV,
                 str(TENANT_MAX_EXPIRATION_DAYS),
             )
             # Sibling tenant should not have the policy and should accept 30-day keys
