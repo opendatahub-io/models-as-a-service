@@ -11,8 +11,8 @@
 #   Pass 3 (optional): -m nightly when MAAS_PYTEST_INCLUDE_NIGHTLY=true (e.g. EXTERNAL_OIDC deploys)
 #
 # Passes 1–2 always exclude @pytest.mark.nightly; the flag below only gates pass 3.
-# When E2E_SMOKE_ONLY=true (prow/group-test default), passes 1–2 additionally require
-# @pytest.mark.smoke so CI runs a low-churn subset instead of the full suite.
+# When E2E_SMOKE_ONLY=true (/group-test sets this), passes 1–2 additionally require
+# @pytest.mark.smoke so PR CI runs a low-churn subset instead of the full suite.
 #
 # Called by:
 #   - prow_run_smoke_test.sh (CI: deploy → validate → THIS)
@@ -36,7 +36,7 @@
 #   E2E_RECONCILE_WAIT            seconds between reconcile polls (default: 4)
 #   ARTIFACTS_DIR                 output directory for JUnit/HTML (default: test/e2e/reports)
 #   E2E_SMOKE_ONLY                When true, restrict passes 1–2 to @pytest.mark.smoke
-#                                 (prow defaults true; set false for the full suite)
+#                                 (/group-test sets true; unset/false = full suite)
 #   MAAS_PYTEST_INCLUDE_NIGHTLY   When true, run pass 3 (-m nightly) after serial pass
 #   E2E_RUN_ONLY_OIDC_TESTS       When true, skip passes 1–2 and run only pass 3 (external
 #                                 OIDC tests); requires EXTERNAL_OIDC=true
