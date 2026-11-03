@@ -78,7 +78,7 @@ from test_helper import (
 
 log = logging.getLogger(__name__)
 
-pytestmark = [pytest.mark.serial]
+pytestmark = [pytest.mark.serial, pytest.mark.limitador]
 
 MODEL_REF = UNCONFIGURED_MODEL_REF
 MODEL_PATH = UNCONFIGURED_MODEL_PATH
@@ -418,6 +418,7 @@ def cleanup():
         subscriptions = [name for kind, name in created.crs if kind == "maassubscription"]
         for name in subscriptions:
             try:
+                # Multi-sub TRLP rebuild can delay finalizers past the 30s default.
                 _wait_for_cr_absent("maassubscription", name, namespace=ns, timeout=60)
             except Exception as e:
                 log.warning("maassubscription %s/%s not removed: %s", ns, name, e)

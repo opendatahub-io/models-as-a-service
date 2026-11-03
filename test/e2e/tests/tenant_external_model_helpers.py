@@ -57,6 +57,11 @@ Environment variables:
   (requires an AGC build with cross-namespace provider support packaged)
 - TENANT_EXTERNAL_MODEL_LEGACY_IPP_E2E: opt-in for the legacy IPP coexistence scenario
   (requires the MaaS IPP image pin containing the legacy-controller exclusion guard)
+- TENANT_EXTERNAL_MODEL_WITHDRAWAL_E2E: umbrella opt-in for both provider-withdrawal
+  scenarios; per-issue flags TENANT_EXTERNAL_MODEL_LAST_PROVIDER_WITHDRAWAL_E2E (#106)
+  and TENANT_EXTERNAL_MODEL_PARTIAL_WITHDRAWAL_E2E (#108) enable them independently
+  (requires the praxis release containing the partial/last-provider withdrawal
+  fixes for issues #108/#106)
 - AGC_DEPLOYMENT_NAME / AGC_DEPLOYMENT_NAMESPACE: overrides for locating the
   ai-gateway-controller Deployment (defaults: "ai-gateway-controller" in
   DEPLOYMENT_NAMESPACE)
@@ -73,7 +78,36 @@ import uuid
 from typing import Any
 
 import pytest
-import requests
+
+# Tenant-agnostic external model builders, inference and attribution
+# assertions live in external_model_helpers; re-exported here so existing
+# imports from this module keep working.
+from external_model_helpers import (  # noqa: F401 - re-exported contract
+    CREDENTIAL_DATA_KEY,
+    EXTERNAL_ENDPOINT,
+    EXTERNAL_MODEL_CRD,
+    EXTERNAL_MODEL_KIND,
+    EXTERNAL_PROVIDER_KIND,
+    INFERENCE_API_VERSION,
+    REFERENCE_GRANT_API_VERSION,
+    REFERENCE_GRANT_CRD,
+    apply_credential_secret,
+    apply_external_model,
+    apply_external_provider,
+    apply_maas_model_ref_for_external,
+    apply_reference_grant,
+    assert_returns_usage,
+    assert_served_by_provider,
+    echo_headers,
+    echo_provider_path,
+    external_chat_url,
+    external_model_binding,
+    external_model_route_name,
+    infer_external_chat,
+    patch_external_model_gateway_refs,
+    patch_external_model_provider_refs,
+    provider_external_name_service,
+)
 from multitenancy_helpers import (
     ANNOTATION_PAYLOAD_PROCESSING_TYPE,
     GATEWAY_NAMESPACE,
@@ -81,47 +115,29 @@ from multitenancy_helpers import (
     TENANT_CR_NAME,
     _oc_run,
     apply_gateway_access_label,
-    apply_maas_auth_policy,
-    apply_maas_subscription,
     bootstrap_aitenant_tenant,
     create_api_key_at,
     ensure_namespace,
+    env_bool,
     extproc_deployment_uses_praxis,
+    gateway_route_host,
     get_json_or_none,
     list_json,
+    make_tenant_model_accessible,
     per_tenant_ipp_names,
     redact_sensitive,
-    wait_for_gateway_authpolicy_ready,
     wait_for_per_tenant_ipp_ready,
-    wait_for_status_phase,
     wait_until,
 )
 from test_helper import (
     DEPLOYMENT_NAMESPACE,
-    TLS_VERIFY,
-    _apply_cr,
     _delete_cr,
     _get_cluster_token,
-    _wait_for_model_ready,
-    _wait_for_subscription_trlp_status,
 )
 
 log = logging.getLogger(__name__)
 
 # ─── Constants ──────────────────────────────────────────────────────────────
-
-EXTERNAL_MODEL_CRD = "externalmodels.inference.opendatahub.io"
-EXTERNAL_MODEL_KIND = "externalmodels.inference.opendatahub.io"
-EXTERNAL_PROVIDER_KIND = "externalproviders.inference.opendatahub.io"
-INFERENCE_API_VERSION = "inference.opendatahub.io/v1alpha1"
-
-REFERENCE_GRANT_CRD = "referencegrants.gateway.networking.k8s.io"
-REFERENCE_GRANT_API_VERSION = "gateway.networking.k8s.io/v1beta1"
-
-# Header-echo endpoint: responses under /anything/* echo the request headers
-# and URL back in the JSON body, proving which provider served the request
-# (unique path tag) and which credential was injected (unique marker value).
-EXTERNAL_ENDPOINT = os.environ.get("E2E_EXTERNAL_ENDPOINT", os.environ.get("E2E_SIMULATOR_ENDPOINT", "httpbingo.org"))
 
 TENANT_EXTERNAL_MODEL_READY_TIMEOUT = int(os.environ.get("E2E_TENANT_EXTERNAL_MODEL_READY_TIMEOUT", "300"))
 
@@ -129,10 +145,6 @@ TENANT_EXTERNAL_MODEL_READY_TIMEOUT = int(os.environ.get("E2E_TENANT_EXTERNAL_MO
 # condition naming is not frozen in the shared CRD; match across plausible
 # spellings until it is.
 _READY_CONDITION_TYPES = ("Ready", "Accepted", "Attached")
-
-# Secret data key holding the provider credential (contract in the
-# ExternalProvider/ExternalModel CRD descriptions).
-CREDENTIAL_DATA_KEY = "api-key"
 
 AGC_DEPLOYMENT_NAME = os.environ.get("AGC_DEPLOYMENT_NAME", "ai-gateway-controller")
 AGC_DEPLOYMENT_NAMESPACE = os.environ.get("AGC_DEPLOYMENT_NAMESPACE", DEPLOYMENT_NAMESPACE)
@@ -145,11 +157,6 @@ AGC_DEPLOYMENT_NAMESPACE = os.environ.get("AGC_DEPLOYMENT_NAMESPACE", DEPLOYMENT
 # retry until the tenant name changes).
 AGC_LONGEST_RESOURCE_BASE = "payload-processing-external-model-filters-"
 MAX_AITENANT_NAME_LENGTH = 63 - len(AGC_LONGEST_RESOURCE_BASE)
-
-
-def env_flag(name: str) -> bool:
-    value = os.environ.get(name, "")
-    return value.lower() in {"1", "true", "yes", "y", "on"}
 
 
 # ─── Capability detection ───────────────────────────────────────────────────
@@ -249,7 +256,7 @@ def require_tenant_external_model_support() -> dict[str, bool]:
 
 def require_crossns_provider_support() -> None:
     """Gate P1 cross-namespace provider scenarios."""
-    if not env_flag("TENANT_EXTERNAL_MODEL_CROSSNS_E2E"):
+    if not env_bool("TENANT_EXTERNAL_MODEL_CROSSNS_E2E"):
         pytest.skip(
             "cross-namespace provider E2E is gated until AGC ships "
             "cross-namespace provider support; set TENANT_EXTERNAL_MODEL_CROSSNS_E2E=true to enable"
@@ -261,11 +268,57 @@ def require_crossns_provider_support() -> None:
 
 def require_legacy_ipp_coexistence_support() -> None:
     """Gate the legacy IPP coexistence scenario (IPP image pin required)."""
-    if not env_flag("TENANT_EXTERNAL_MODEL_LEGACY_IPP_E2E"):
+    if not env_bool("TENANT_EXTERNAL_MODEL_LEGACY_IPP_E2E"):
         pytest.skip(
             "legacy IPP coexistence E2E requires the MaaS IPP image pin containing "
             "the legacy-controller exclusion guard; set "
             "TENANT_EXTERNAL_MODEL_LEGACY_IPP_E2E=true to enable"
+        )
+
+
+_WITHDRAWAL_ISSUE_FLAGS = {
+    "#106": "TENANT_EXTERNAL_MODEL_LAST_PROVIDER_WITHDRAWAL_E2E",
+    "#108": "TENANT_EXTERNAL_MODEL_PARTIAL_WITHDRAWAL_E2E",
+}
+
+
+def withdrawal_gate_enabled(issue: str) -> bool:
+    """The effective per-issue withdrawal gate state.
+
+    A scenario is enabled by its per-issue flag or by the umbrella
+    TENANT_EXTERNAL_MODEL_WITHDRAWAL_E2E flag — the same resolution the
+    gate and the evidence artifact must agree on, so it lives here once.
+    """
+    return env_bool(_WITHDRAWAL_ISSUE_FLAGS[issue]) or env_bool(
+        "TENANT_EXTERNAL_MODEL_WITHDRAWAL_E2E"
+    )
+
+
+def require_provider_withdrawal_support(issue: str) -> None:
+    """Gate provider-withdrawal scenarios per issue (praxis release pending).
+
+    The flags are per issue so they can be flipped independently as the
+    fixes land — and because they assert an expectation, not just an opt-in:
+    with a flag set, the corresponding test fails red if the contract does
+    not hold, so a post-fix regression cannot hide behind a skip.
+
+    - issue #106 (last-provider withdrawal: an old route may keep serving
+      instead of the empty routing revision producing no-route) — verified
+      passing on current builds; safe to enable now.
+    - issue #108 (partial withdrawal: an old gateway pod may keep selecting
+      a removed provider / routing may disrupt instead of failing over) —
+      enable only on clusters carrying the AGC seamless-failover fix;
+      until then the test fails red on a disruptive withdrawal.
+
+    ``TENANT_EXTERNAL_MODEL_WITHDRAWAL_E2E`` remains as an umbrella alias
+    enabling both.
+    """
+    flag = _WITHDRAWAL_ISSUE_FLAGS[issue]
+    if not withdrawal_gate_enabled(issue):
+        pytest.skip(
+            f"provider withdrawal E2E for {issue} is gated; set {flag}=true to enable "
+            f"(with it set, the {issue} contract is expected to hold and a violation "
+            "fails red)"
         )
 
 
@@ -301,8 +354,15 @@ def record_tenant_external_model_evidence() -> dict:
         "externalModelCrd": _safe(installed_crd_capabilities, {}),
         "referenceGrantCrdInstalled": _safe(lambda: _crd_exists(REFERENCE_GRANT_CRD), False),
         "gates": {
-            "TENANT_EXTERNAL_MODEL_CROSSNS_E2E": env_flag("TENANT_EXTERNAL_MODEL_CROSSNS_E2E"),
-            "TENANT_EXTERNAL_MODEL_LEGACY_IPP_E2E": env_flag("TENANT_EXTERNAL_MODEL_LEGACY_IPP_E2E"),
+            "TENANT_EXTERNAL_MODEL_CROSSNS_E2E": env_bool("TENANT_EXTERNAL_MODEL_CROSSNS_E2E"),
+            "TENANT_EXTERNAL_MODEL_LEGACY_IPP_E2E": env_bool("TENANT_EXTERNAL_MODEL_LEGACY_IPP_E2E"),
+            # Effective gate state (per-issue flag OR umbrella), matching
+            # what actually gated the run — the umbrella flag alone enables
+            # both scenarios, so recording only the raw per-issue flags
+            # would misreport that configuration.
+            "TENANT_EXTERNAL_MODEL_LAST_PROVIDER_WITHDRAWAL_E2E": withdrawal_gate_enabled("#106"),
+            "TENANT_EXTERNAL_MODEL_PARTIAL_WITHDRAWAL_E2E": withdrawal_gate_enabled("#108"),
+            "TENANT_EXTERNAL_MODEL_WITHDRAWAL_E2E": env_bool("TENANT_EXTERNAL_MODEL_WITHDRAWAL_E2E"),
         },
         "externalEndpoint": EXTERNAL_ENDPOINT,
     }
@@ -332,15 +392,25 @@ def _crd_exists(name: str) -> bool:
     return result.returncode == 0
 
 
+def maas_model_ref_alias(namespace: str, name: str) -> str:
+    """The MaaSModelRef's ``status.resolvedModelAlias``.
+
+    The controller publishes this as the model identity the gateway auth
+    resolves for client-facing names. While it carries the ExternalModel CRD
+    name instead of the client-facing ``spec.modelName``, models whose
+    client-facing name differs from their CRD name cannot be called
+    through the gateway (the routes match the client-facing name).
+    """
+    ref = get_json_or_none("maasmodelref", name, namespace) or {}
+    return ((ref.get("status") or {}).get("resolvedModelAlias")) or ""
+
+
 # ─── Tenant and namespace fixtures ──────────────────────────────────────────
 
 
 def tenant_gateway_host(gateway_name: str) -> str:
-    """Return the route hostname exposing a tenant gateway."""
-    route = get_json_or_none("route", f"{gateway_name}-route", GATEWAY_NAMESPACE)
-    if not route:
-        raise RuntimeError(f"route {gateway_name}-route not found in {GATEWAY_NAMESPACE}")
-    return route["spec"]["host"]
+    """Return the route hostname exposing a tenant gateway (shared helper)."""
+    return gateway_route_host(gateway_name, namespace=GATEWAY_NAMESPACE)
 
 
 def tenant_gateway_url(gateway_name: str) -> str:
@@ -419,170 +489,6 @@ def gateway_ref(gateway_name: str, gateway_namespace: str = GATEWAY_NAMESPACE) -
 # ─── Resource builders ──────────────────────────────────────────────────────
 
 
-def apply_credential_secret(name: str, namespace: str, credential: str) -> dict:
-    """Create a provider credential Secret (data key ``api-key``).
-
-    Keeps the legacy ``inference.llm-d.ai/ipp-managed`` label so payload
-    processing credential injection finds it on either dataplane.
-    """
-    secret = {
-        "apiVersion": "v1",
-        "kind": "Secret",
-        "metadata": {
-            "name": name,
-            "namespace": namespace,
-            "labels": {"inference.llm-d.ai/ipp-managed": "true"},
-        },
-        "type": "Opaque",
-        "stringData": {CREDENTIAL_DATA_KEY: credential},
-    }
-    _apply_cr(secret)
-    return secret
-
-
-def apply_external_provider(
-    name: str,
-    namespace: str,
-    *,
-    credential_secret: str,
-    endpoint: str = EXTERNAL_ENDPOINT,
-    provider: str = "openai",
-    config: dict[str, str] | None = None,
-) -> dict:
-    """Create an ExternalProvider pointing at the header-echo endpoint.
-
-    The echo path tag that identifies this provider's traffic is configured on
-    the ExternalModel binding (see ``apply_external_model``). Auth must be
-    ``apikey``: the AGC resolver only accepts that strategy (openai +
-    openai-chat injects the Secret value as ``Authorization: Bearer``), and
-    the credential Secret must carry the ``api-key`` key.
-
-    ``endpoint`` is a bare hostname: the CRD's endpoint pattern rejects
-    scheme and port, and the gateway always dials 443 — an in-cluster
-    provider Service must therefore listen on 443.
-
-    ``config`` sets provider-specific ``spec.config`` keys — e.g.
-    ``{"tls.caCertificates": path}`` so envoy verifies a provider whose cert
-    is signed by a CA mounted in the gateway pods (the AGC requires an
-    absolute file path and applies it to the provider DestinationRule).
-    """
-    spec: dict[str, Any] = {
-        "provider": provider,
-        "endpoint": endpoint,
-        "auth": {
-            "type": "apikey",
-            "secretRef": {"name": credential_secret},
-        },
-    }
-    if config:
-        spec["config"] = dict(config)
-    external_provider = {
-        "apiVersion": INFERENCE_API_VERSION,
-        "kind": "ExternalProvider",
-        "metadata": {"name": name, "namespace": namespace},
-        "spec": spec,
-    }
-    _apply_cr(external_provider)
-    return external_provider
-
-
-def apply_external_model(
-    name: str,
-    namespace: str,
-    *,
-    provider_name: str,
-    provider_namespace: str | None = None,
-    gateway_refs: list[dict[str, str]] | None = None,
-    model_name: str | None = None,
-    path_tag: str | None = None,
-    provider_path: str | None = None,
-    credential_secret: str | None = None,
-    target_model: str = "gpt-3.5-turbo",
-    extra_provider_refs: list[dict] | None = None,
-) -> dict:
-    """Create an ExternalModel, optionally attached to explicit gateways.
-
-    Args:
-        provider_name/provider_namespace: the ExternalProvider to bind. A
-            provider_namespace different from the model namespace creates the
-            P1 cross-namespace reference (requires a ReferenceGrant).
-        gateway_refs: explicit tenant gateway attachments (spec.gatewayRefs).
-            None keeps the legacy shape (tenant-local resolution).
-        model_name: client-facing modelName (defaults to metadata.name).
-        path_tag: unique echo-path tag; defaults to a fresh uuid so responses
-            identify this binding's provider.
-        provider_path: the path the provider serves, for bindings whose
-            provider is not the header-echo endpoint (e.g. an OpenAI-style
-            simulator behind another gateway). Overrides the echo path.
-        credential_secret: per-model auth override Secret (in the model
-            namespace). None uses the provider-local Secret.
-        extra_provider_refs: additional provider bindings (same shape as the
-            primary binding) for multi-provider models.
-    """
-    path_tag = path_tag or uuid.uuid4().hex[:10]
-    ref: dict[str, str] = {"name": provider_name}
-    if provider_namespace:
-        ref["namespace"] = provider_namespace
-    binding: dict[str, Any] = {
-        "ref": ref,
-        "targetModel": target_model,
-        "apiFormat": "openai-chat",
-        "path": provider_path or echo_provider_path(path_tag),
-    }
-    if credential_secret:
-        binding["auth"] = {
-            "type": "apikey",
-            "secretRef": {"name": credential_secret},
-        }
-    bindings = [binding]
-    if extra_provider_refs:
-        bindings.extend(extra_provider_refs)
-    spec: dict[str, Any] = {"externalProviderRefs": bindings}
-    if gateway_refs is not None:
-        spec["gatewayRefs"] = gateway_refs
-    if model_name:
-        spec["modelName"] = model_name
-    external_model = {
-        "apiVersion": INFERENCE_API_VERSION,
-        "kind": "ExternalModel",
-        "metadata": {"name": name, "namespace": namespace},
-        "spec": spec,
-    }
-    _apply_cr(external_model)
-    return external_model
-
-
-def patch_external_model_gateway_refs(
-    name: str,
-    namespace: str,
-    gateway_refs: list[dict[str, str]] | None,
-) -> None:
-    """Set (or clear) spec.gatewayRefs; gatewayRefs is a list-map so a merge
-    patch replaces the whole list."""
-    patch: dict[str, Any] = {}
-    if gateway_refs is None:
-        patch = {"spec": {"gatewayRefs": None}}
-    else:
-        patch = {"spec": {"gatewayRefs": gateway_refs}}
-    result = _oc_run(
-        [
-            "patch",
-            EXTERNAL_MODEL_KIND,
-            name,
-            "-n",
-            namespace,
-            "--type=merge",
-            "-p",
-            json.dumps(patch),
-        ]
-    )
-    if result.returncode != 0:
-        raise RuntimeError(
-            f"failed to patch gatewayRefs on {EXTERNAL_MODEL_KIND}/{namespace}/{name}: "
-            f"{result.stderr.strip() or result.stdout.strip()}"
-        )
-
-
 def payload_processing_annotation(tenant_namespace: str) -> str | None:
     """Read the tenant config's payload-processing annotation.
 
@@ -621,43 +527,6 @@ def restore_payload_processing_annotation(tenant_namespace: str, original: str |
             f"{TENANT_CONFIG_KIND}/{tenant_namespace}/{TENANT_CR_NAME}: "
             f"{result.stderr.strip() or result.stdout.strip()}"
         )
-
-
-def apply_maas_model_ref_for_external(
-    name: str,
-    namespace: str,
-    *,
-    endpoint: str = EXTERNAL_ENDPOINT,
-    provider: str = "openai",
-    ref_name: str | None = None,
-    tenant_ref: str | None = None,
-) -> dict:
-    """Create the MaaSModelRef pointing at an ExternalModel (same name/ns).
-
-    ``ref_name`` names the MaaSModelRef differently from the ExternalModel:
-    per-tenant modelRefs for a shared model must have distinct names, since
-    ``spec.modelRef`` resolves within the modelRef's own namespace.
-    ``tenant_ref`` pins the modelRef's tenant selection (``spec.tenantRef``)
-    so a model attached to several gateways resolves one attachment per
-    modelRef instead of an ambiguous multi-gateway selection.
-    """
-    model_ref = {
-        "apiVersion": "maas.opendatahub.io/v1alpha1",
-        "kind": "MaaSModelRef",
-        "metadata": {
-            "name": ref_name or name,
-            "namespace": namespace,
-            "annotations": {
-                "maas.opendatahub.io/endpoint": endpoint,
-                "maas.opendatahub.io/provider": provider,
-            },
-        },
-        "spec": {"modelRef": {"kind": "ExternalModel", "name": name}},
-    }
-    if tenant_ref:
-        model_ref["spec"]["tenantRef"] = tenant_ref
-    _apply_cr(model_ref)
-    return model_ref
 
 
 def provision_external_model_stack(
@@ -772,41 +641,6 @@ def provision_external_model_stack(
         "override_secret": override_secret,
         "path_tag": path_tag,
     }
-
-
-def apply_reference_grant(
-    name: str,
-    provider_namespace: str,
-    *,
-    from_namespace: str,
-    to_name: str | None = None,
-) -> dict:
-    """Authorize ExternalModels in *from_namespace* to reference providers in
-    the grant's namespace (P1 cross-namespace contract).
-
-    Grants authorize at namespace granularity only: ReferenceGrant v1beta1's
-    ``from`` has no ``name`` field, and the API server prunes unknown fields,
-    so every ExternalModel in *from_namespace* is covered.
-    """
-    grant_from: dict[str, str] = {
-        "group": "inference.opendatahub.io",
-        "kind": "ExternalModel",
-        "namespace": from_namespace,
-    }
-    grant_to: dict[str, str] = {
-        "group": "inference.opendatahub.io",
-        "kind": "ExternalProvider",
-    }
-    if to_name:
-        grant_to["name"] = to_name
-    grant = {
-        "apiVersion": REFERENCE_GRANT_API_VERSION,
-        "kind": "ReferenceGrant",
-        "metadata": {"name": name, "namespace": provider_namespace},
-        "spec": {"from": [grant_from], "to": [grant_to]},
-    }
-    _apply_cr(grant)
-    return grant
 
 
 # ─── ExternalModel per-gateway status ───────────────────────────────────────
@@ -1378,207 +1212,6 @@ def wait_for_no_destination_rules_referencing(
 # ─── Inference through a specific gateway ───────────────────────────────────
 
 
-def provider_external_name_service(provider_name: str) -> str:
-    """The AGC's ExternalName Service name for a provider.
-
-    The attachment HTTPRoute's backendRefs reference this Service (created in
-    the model namespace, resolving to the provider endpoint), alongside the
-    provider-selection sink Service.
-    """
-    return f"provider-{provider_name}"
-
-
-def external_model_route_name(model_name: str) -> str:
-    """The AGC's HTTPRoute name for a tenant-local (legacy-shaped) model.
-
-    The AGC renders ``external-model-<name>`` regardless of the gatewayRefs
-    shape — tenant-local resolution included; cross-namespace attachments
-    append a gateway hash. ``status.httpRouteName`` carries this value and
-    the MaaS stack consumes it for TokenRateLimitPolicy creation.
-    """
-    return f"external-model-{model_name}"
-
-
-def maas_model_ref_alias(namespace: str, name: str) -> str:
-    """The MaaSModelRef's ``status.resolvedModelAlias``.
-
-    The controller publishes this as the model identity the gateway auth
-    resolves for client-facing names. While it carries the ExternalModel
-    CRD name instead of the client-facing ``spec.modelName``, models whose
-    client-facing name differs from their CRD name cannot be called
-    through the gateway (the routes match the client-facing name).
-    """
-    ref = get_json_or_none("maasmodelref", name, namespace) or {}
-    return ((ref.get("status") or {}).get("resolvedModelAlias")) or ""
-
-
-def echo_provider_path(path_tag: str) -> str:
-    """Provider path of an echo binding: the external endpoint echoes any
-    request under ``/anything/<tag>``.
-
-    The AGC passes the client's path after the ``/{namespace}/{modelName}``
-    prefix through to the provider verbatim, so requests to echo bindings
-    must ask for this path (real OpenAI-style providers instead receive the
-    client's natural ``/v1/chat/completions`` suffix).
-    """
-    return f"/anything/{path_tag}"
-
-
-def external_chat_url(
-    gateway_url: str,
-    model_namespace: str,
-    client_model_name: str,
-    *,
-    provider_path: str = "/v1/chat/completions",
-) -> str:
-    """Chat-completions URL for an external model through a given gateway.
-
-    The AGC's attachment HTTPRoute matches the ``/{namespace}/{modelName}``
-    path prefix (namespace = the model's namespace, modelName = the
-    client-facing name) and rewrites the matched prefix to ``/``, so
-    whatever the client appends after the model name reaches the provider
-    verbatim: OpenAI-style clients append ``/v1/chat/completions`` (the
-    default) and the echo endpoint serves ``/anything/<tag>``. The
-    MaaSModelRef ``status.endpoint`` is NOT used: it identifies the serving
-    gateway (its value may even be the cluster-local Gateway address) and
-    carries no model path.
-    """
-    base = gateway_url.rstrip("/")
-    return f"{base}/{model_namespace}/{client_model_name}{provider_path}"
-
-
-def _post_with_retries(
-    url: str,
-    headers: dict[str, str],
-    body: dict,
-    *,
-    retries: int,
-    delay: int,
-    label: str,
-) -> requests.Response:
-    """POST, retrying route propagation (404) and transient responses."""
-    response = None
-    for attempt in range(1, retries + 1):
-        response = requests.post(url, headers=headers, json=body, timeout=45, verify=TLS_VERIFY)
-        if response.status_code == 200:
-            return response
-        transient = response.status_code == 404 or _looks_transient(response)
-        if transient and attempt < retries:
-            log.info(
-                "%s got %d (attempt %d/%d), retrying in %ds",
-                label,
-                response.status_code,
-                attempt,
-                retries,
-                delay,
-            )
-            time.sleep(delay)
-            continue
-        return response
-    return response
-
-
-def infer_external_chat(
-    gateway_url: str,
-    model_namespace: str,
-    client_model_name: str,
-    api_key: str,
-    *,
-    path_tag: str | None = None,
-    provider_path: str | None = None,
-    content: str = "multi-tenant external model e2e",
-    retries: int = 6,
-    delay: int = 5,
-) -> requests.Response:
-    """POST a chat completion through a specific gateway, retrying route
-    propagation (404) and transient gateway responses.
-
-    ``path_tag`` requests the echo binding's provider path — see
-    external_chat_url for why the provider's own path must follow the
-    model-name prefix. ``provider_path`` overrides it for bindings whose
-    provider serves a different path (e.g. an OpenAI-style simulator behind
-    another gateway, whose model path must reach it verbatim).
-    """
-    if provider_path is None:
-        provider_path = echo_provider_path(path_tag) if path_tag else "/v1/chat/completions"
-    url = external_chat_url(
-        gateway_url, model_namespace, client_model_name, provider_path=provider_path
-    )
-    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-    body = {
-        "model": client_model_name,
-        "messages": [{"role": "user", "content": content}],
-        "max_tokens": 8,
-    }
-    return _post_with_retries(
-        url, headers, body, retries=retries, delay=delay, label=f"inference via {gateway_url}"
-    )
-
-
-def _looks_transient(response: requests.Response) -> bool:
-    if response.status_code in (401, 403) and not (response.text or "").strip():
-        return True
-    if response.status_code in (500, 503):
-        body = (response.text or "").strip()
-        return not body or "AUTH_FAILURE" in body
-    return False
-
-
-def assert_served_by_provider(response: requests.Response, path_tag: str, *, credential: str | None = None) -> None:
-    """Assert a request reached the expected provider (and credential).
-
-    The echo endpoint reflects the outgoing request URL and headers in the
-    response body: the path tag confirms the path the client requested is
-    the path the provider received (the gateway rewrites only the
-    ``/{namespace}/{modelName}`` prefix), and the credential marker
-    identifies the injected Secret — i.e. which provider binding served.
-    """
-    assert response.status_code == 200, (
-        f"expected 200 from external model inference, got {response.status_code}: "
-        f"{redact_sensitive(response.text)}"
-    )
-    assert path_tag in response.text, (
-        f"response did not come from provider binding {path_tag}: {redact_sensitive(response.text)}"
-    )
-    if credential is not None:
-        assert credential in response.text, (
-            f"expected credential marker to reach the provider, response: "
-            f"{redact_sensitive(response.text)}"
-        )
-
-
-def assert_returns_usage(response: requests.Response) -> None:
-    """Assert an inference response carries OpenAI-style usage tokens.
-
-    Token quotas are accounted from ``usage.total_tokens`` in the response,
-    so a provider that returns no usage (e.g. the header-echo endpoint)
-    can never exhaust a budget — quota assertions are only meaningful
-    against responses that pass this check.
-    """
-    assert response.status_code == 200, (
-        f"expected 200 from external model inference, got {response.status_code}: "
-        f"{redact_sensitive(response.text)}"
-    )
-    try:
-        usage = (response.json() or {}).get("usage") or {}
-    except ValueError:
-        usage = {}
-    total_tokens = usage.get("total_tokens")
-    assert isinstance(total_tokens, int) and total_tokens > 0, (
-        "response carries no usage.total_tokens for token accounting: "
-        f"{redact_sensitive(response.text)}"
-    )
-
-
-def echo_headers(response: requests.Response) -> dict[str, str]:
-    """Headers the provider saw, as echoed by the external endpoint."""
-    try:
-        headers = response.json().get("headers") or {}
-        return {str(k).lower(): v for k, v in headers.items()}
-    except ValueError:
-        return {}
-
-
 # ─── MaaS governance + API keys per tenant ──────────────────────────────────
 
 
@@ -1600,9 +1233,9 @@ def serve_external_model_in_tenant(
     Creates MaaSAuthPolicy + MaaSSubscription in the tenant namespace
     referencing a model that may live in a user namespace, waits for
     reconciliation (including the mirrored TRLP) and mints a tenant API key
-    Callers start tracking the policy/subscription only after a successful
-    return, so on failure this call deletes whatever it already applied
-    before the error propagates.
+    for the subscription. Resources are tracked before they are applied, so
+    a failure partway through reconciliation still cleans up whatever was
+    already created.
     """
     timeout = timeout or TENANT_EXTERNAL_MODEL_READY_TIMEOUT
     tenant_namespace = case["tenant_ns"]
@@ -1610,45 +1243,25 @@ def serve_external_model_in_tenant(
     subscription_name = subscription_name or f"{model_name}-sub"
     created = TenantExternalModelResources()
     try:
-        apply_maas_auth_policy(
-            policy_name,
-            tenant_namespace,
-            model_ref=model_name,
-            model_namespace=model_namespace,
-        )
+        # Tracked before applying: cleanup must cover a reconciliation that
+        # fails after the policy/subscription were already created.
         created.track("maasauthpolicy", policy_name, tenant_namespace)
-        wait_for_status_phase(
-            "maasauthpolicy",
+        created.track("maassubscription", subscription_name, tenant_namespace)
+        # Shared policy/subscription/reconciliation flow (make_tenant_model_
+        # accessible), pointed at the user-namespace model via model_namespace.
+        make_tenant_model_accessible(
+            model_name,
+            tenant_namespace,
             policy_name,
-            tenant_namespace,
-            expected_phase="Active",
-            timeout=timeout,
-        )
-        wait_for_gateway_authpolicy_ready(case["gateway_name"])
-        apply_maas_subscription(
             subscription_name,
-            tenant_namespace,
-            model_ref=model_name,
-            model_namespace=model_namespace,
             token_limit=token_limit,
             window=window,
+            trlp_timeout=timeout,
+            gateway_name=case["gateway_name"],
+            model_namespace=model_namespace,
+            require_model_ready=wait_model_ready,
+            model_ready_timeout=timeout,
         )
-        created.track("maassubscription", subscription_name, tenant_namespace)
-        wait_for_status_phase(
-            "maassubscription",
-            subscription_name,
-            tenant_namespace,
-            expected_phase=("Active", "Degraded"),
-            timeout=timeout,
-        )
-        _wait_for_subscription_trlp_status(
-            subscription_name,
-            expected_ready=True,
-            namespace=tenant_namespace,
-            timeout=timeout,
-        )
-        if wait_model_ready:
-            _wait_for_model_ready(model_name, model_namespace, timeout=timeout)
         api_key = mint_tenant_api_key(
             case,
             key_name or f"e2e-extmod-{uuid.uuid4().hex[:8]}",
