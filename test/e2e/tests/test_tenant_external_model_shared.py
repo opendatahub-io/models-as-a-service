@@ -74,6 +74,7 @@ from tenant_external_model_helpers import (
 from test_helper import (
     LLM_D_INFERENCE_SIM_IMAGE,
     _apply_cr,
+    _is_transient_gateway_response,
 )
 
 log = logging.getLogger(__name__)
@@ -665,9 +666,13 @@ class TestTenantQuotaIsolation:
             elif limited.status_code == 429:
                 if successes:
                     break
+            elif _is_transient_gateway_response(limited):
+                time.sleep(1.0)
+                continue
             else:
                 raise AssertionError(
-                    f"unexpected inference response on tenant A: {redact_sensitive(limited.text)}"
+                    f"unexpected inference response on tenant A "
+                    f"({limited.status_code}): {redact_sensitive(limited.text)}"
                 )
             time.sleep(1.0)
         assert limited is not None and limited.status_code == 429, (

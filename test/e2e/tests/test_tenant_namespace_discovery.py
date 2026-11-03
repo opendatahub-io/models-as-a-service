@@ -78,6 +78,7 @@ def _require_multitenancy_prerequisites():
 class TestTenantNamespaceDiscovery:
     """S27 section 1 — tenant namespace discovery (S1 / PR #975)."""
 
+    @pytest.mark.serial  # waits for Active while pass 1 churns openshift-ingress/maas-gateway-auth
     def test_labeled_tenant_namespace_is_discovered(self):
         """1.1: Controller discovers labeled tenant namespaces and reconciles CRs."""
         case = new_discovery_case(use_default_gateway=True)
@@ -160,6 +161,7 @@ class TestTenantNamespaceDiscovery:
             delete_maas_subscription(sub_name, unlabeled_ns)
             delete_namespace_best_effort(unlabeled_ns)
 
+    @pytest.mark.serial  # same shared default-gateway AuthPolicy dependency as 1.1
     def test_dynamic_discovery_after_label_added(self):
         """1.2 variant: Pre-existing CRs reconcile after namespace gains discovery labels."""
         case = new_discovery_case(use_default_gateway=True)
