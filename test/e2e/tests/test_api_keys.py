@@ -928,6 +928,7 @@ class TestAPIKeyModelInference:
         assert r.status_code == 401, f"Expected 401 for missing auth, got {r.status_code}: {r.text}"
         print("[inference] Missing auth header correctly rejected with 401")
 
+    @pytest.mark.smoke
     def test_revoked_api_key_rejected(
         self,
         api_keys_base_url: str,
@@ -1241,6 +1242,7 @@ class TestEphemeralKeyCleanup:
         from test_helper import MAAS_API_DEPLOYMENT_NAMESPACE
         return MAAS_API_DEPLOYMENT_NAMESPACE
 
+    @pytest.mark.smoke
     def test_cronjob_exists_and_configured(
         self, deployment_namespace: str, _worker_api_keys_context,
     ):
