@@ -29,6 +29,9 @@ spec:
     value: feat/maas-konflux-tls-scan
   - name: odh-konflux-central-git-url
     value: https://github.com/somya-bhatnagar/odh-konflux-central.git
+  # DEBUG: remove after TLS scan validated on #764 — see konflux PR comment.
+  - name: run-tls-scan-if-e2e-failed
+    value: "true"
   pipelineRef:
     resolver: git
     params:
