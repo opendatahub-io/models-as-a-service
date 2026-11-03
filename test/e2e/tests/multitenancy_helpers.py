@@ -21,8 +21,6 @@ MODEL_BACKEND_READY_TIMEOUT = int(os.environ.get("E2E_MODEL_BACKEND_READY_TIMEOU
 
 from test_helper import (
     DEPLOYMENT_NAMESPACE,
-    GATEWAY_PROPAGATION_DELAY,
-    GATEWAY_PROPAGATION_RETRIES,
     MAAS_API_DEPLOYMENT_NAMESPACE,
     MODEL_NAMESPACE,
     MODEL_REF,
@@ -34,8 +32,8 @@ from test_helper import (
     _delete_cr,
     _is_transient_gateway_response,
     _ns,
-    _request_with_gateway_retry,
     _run_oc,
+    create_api_key_at,  # noqa: F401 - re-exported for tenant-scoped maas-api callers
     kubectl_curl,
 )
 
@@ -239,9 +237,22 @@ def get_json_or_none(kind: str, name: str, namespace: Optional[str] = None) -> O
     raise RuntimeError(f"`oc {' '.join(args)}` failed: {result.stderr.strip() or result.stdout.strip()}")
 
 
-def list_json(kind: str, namespace: Optional[str] = None, *, labels: Optional[str] = None) -> list[dict]:
+def list_json(
+    kind: str,
+    namespace: Optional[str] = None,
+    *,
+    labels: Optional[str] = None,
+    all_namespaces: bool = False,
+) -> list[dict]:
+    """List ``kind`` as parsed JSON.
+
+    Without ``namespace`` this lists the current context's namespace, not the
+    cluster — pass ``all_namespaces=True`` when the objects can live anywhere.
+    """
     args = ["get", kind, "-o", "json"]
-    if namespace:
+    if all_namespaces:
+        args.append("-A")
+    elif namespace:
         args.extend(["-n", namespace])
     if labels:
         args.extend(["-l", labels])
@@ -801,6 +812,29 @@ def wait_for_route_admitted(route_name: str, *, timeout: int = 60, interval: int
     return wait_for_json("route", route_name, GATEWAY_NAMESPACE, predicate=_predicate, timeout=timeout, interval=interval)
 
 
+def _route_admitted(obj: dict) -> bool:
+    for ingress in (obj.get("status") or {}).get("ingress") or []:
+        for condition in ingress.get("conditions") or []:
+            if condition.get("type") == "Admitted" and condition.get("status") == "True":
+                return True
+    return False
+
+
+def gateway_route_host(gateway_name: str, *, namespace: str | None = None) -> str:
+    """The route hostname exposing a gateway's listener.
+
+    Shared by the tenant gateway helpers and the worker-tenant fixtures so
+    both resolve gateway hosts the same way: waits for the route to be
+    admitted first, so a just-created gateway's host is usable immediately.
+    """
+    ns = namespace or GATEWAY_NAMESPACE
+    route = wait_for_json("route", f"{gateway_name}-route", ns, predicate=_route_admitted)
+    host = (route.get("spec") or {}).get("host")
+    if not host:
+        raise RuntimeError(f"route {gateway_name}-route in {ns} missing spec.host")
+    return host
+
+
 def wait_for_httproute_accepted(
     route_name: str,
     namespace: str,
@@ -1248,20 +1282,29 @@ def make_tenant_model_accessible(
     require_trlp_ready: bool = True,
     gateway_name: str | None = None,
     gateway_namespace: str = GATEWAY_NAMESPACE,
+    model_namespace: Optional[str] = None,
+    require_model_ready: bool = True,
+    model_ready_timeout: int = 180,
 ) -> None:
     """Make a deployed tenant model accessible per ADR MS-0003 (tenant admin role).
 
     Creates MaasAuthPolicy + MaasSubscription in the tenant namespace and waits
     for controller reconciliation. Inference callers retain the default strict
     mirrored TRLP wait; management-only callers may disable that wait.
+
+    ``model_namespace`` points the policy/subscription modelRefs at a model
+    living outside the tenant namespace (e.g. a user-namespace ExternalModel)
+    and scopes the MaaSModelRef readiness wait to that namespace; it defaults
+    to the tenant namespace (tenant-local models).
     """
     from test_helper import _wait_for_subscription_trlp_status
 
+    model_namespace = model_namespace or tenant_namespace
     apply_maas_auth_policy(
         auth_policy_name,
         tenant_namespace,
         model_ref=model_name,
-        model_namespace=tenant_namespace,
+        model_namespace=model_namespace,
     )
     wait_for_status_phase(
         "maasauthpolicy",
@@ -1275,7 +1318,7 @@ def make_tenant_model_accessible(
         subscription_name,
         tenant_namespace,
         model_ref=model_name,
-        model_namespace=tenant_namespace,
+        model_namespace=model_namespace,
         token_limit=token_limit,
         window=window,
         priority=priority,
@@ -1293,13 +1336,14 @@ def make_tenant_model_accessible(
             namespace=tenant_namespace,
             timeout=trlp_timeout,
         )
-    wait_for_status_phase(
-        "maasmodelref",
-        model_name,
-        tenant_namespace,
-        expected_phase="Ready",
-        timeout=180,
-    )
+    if require_model_ready:
+        wait_for_status_phase(
+            "maasmodelref",
+            model_name,
+            model_namespace,
+            expected_phase="Ready",
+            timeout=model_ready_timeout,
+        )
 
 
 def delete_maas_auth_policy(name: str, namespace: str) -> None:
@@ -1600,11 +1644,52 @@ def auth_can_create_maassubscription(subject: str, namespace: str) -> bool:
     return result.returncode == 0 and result.stdout.strip() == "yes"
 
 
+def wait_for_tenant_model_refs_gone(tenant_name: str, *, timeout: int = 120, interval: int = 2) -> bool:
+    """Wait until no MaaSModelRef anywhere in the cluster pins AITenant ``tenant_name``.
+
+    The refs are not necessarily in the tenant namespace: worker tenants deploy
+    models into ``e2e-models-<tenant>``, so a namespaced list there finds nothing
+    and the wait would pass instantly.
+
+    Removing the MaaSModelRef finalizer is an UPDATE that the validating webhook
+    re-checks against ``spec.tenantRef``. If the AITenant is deleted first, every
+    such update is denied ("references AITenant that does not exist"), the
+    finalizer never goes away, and the namespace hangs in Terminating while
+    maas-controller retries the denial. Returns False on timeout so callers can
+    report the leak instead of turning it into a teardown error.
+    """
+    deadline = time.time() + timeout
+    remaining: list[str] = []
+    while time.time() < deadline:
+        remaining = [
+            f"{(ref.get('metadata') or {}).get('namespace', '')}/{(ref.get('metadata') or {}).get('name')}"
+            for ref in list_json("maasmodelref", all_namespaces=True)
+            if ((ref.get("spec") or {}).get("tenantRef") or "") == tenant_name
+        ]
+        if not remaining:
+            return True
+        time.sleep(interval)
+    print(
+        f"[cleanup] MaaSModelRefs still reference AITenant/{tenant_name} "
+        f"after {timeout}s: {remaining}"
+    )
+    return False
+
+
 def cleanup_discovery_case(case: dict[str, str], *, delete_gateway: bool = True) -> None:
-    delete_best_effort(AITENANT_KIND, case["tenant_label_name"], AITENANT_NAMESPACE, timeout="180s")
     delete_maas_auth_policy(case["policy_name"], case["tenant_ns"])
     delete_maas_subscription(case["subscription_name"], case["tenant_ns"])
+    # Tear down the tenant namespace before its AITenant, and only delete the
+    # AITenant once the MaaSModelRefs pinned to it are gone. Namespace deletion
+    # is the force that removes those refs, but some callers (worker tenant
+    # teardown) submit it with --wait=false, so the drain has to be explicit
+    # here. It lists cluster-wide because the refs can live outside tenant_ns
+    # (worker models live in e2e-models-<tenant>). Ordering this way avoids the
+    # finalizer deadlock described on wait_for_tenant_model_refs_gone and costs
+    # nothing when nothing is left.
     delete_namespace_best_effort(case["tenant_ns"])
+    wait_for_tenant_model_refs_gone(case["tenant_label_name"])
+    delete_best_effort(AITENANT_KIND, case["tenant_label_name"], AITENANT_NAMESPACE, timeout="180s")
     if delete_gateway and case["gateway_name"] != DEFAULT_GATEWAY_NAME:
         delete_best_effort("route", f"{case['gateway_name']}-route", GATEWAY_NAMESPACE)
         delete_best_effort("gateway", case["gateway_name"], GATEWAY_NAMESPACE)
@@ -1648,27 +1733,6 @@ def require_tenant_api_base_urls(*slots: str) -> dict[str, str]:
 
 def bearer_headers(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-
-
-def create_api_key_at(base_url: str, oc_token: str, name: str, *, subscription: Optional[str] = None) -> requests.Response:
-    """Create an API key against a tenant-scoped maas-api URL.
-
-    Retries empty 403 / Authorino AUTH_FAILURE while per-tenant gateway
-    AuthPolicy enforcement catches up (same flake mode as single-tenant helpers).
-    """
-    body: dict[str, str] = {"name": name}
-    if subscription:
-        body["subscription"] = subscription
-    return _request_with_gateway_retry(
-        requests.post,
-        f"{base_url}/v1/api-keys",
-        headers=bearer_headers(oc_token),
-        json=body,
-        retries=GATEWAY_PROPAGATION_RETRIES,
-        delay=GATEWAY_PROPAGATION_DELAY,
-        timeout=TIMEOUT,
-        verify=TLS_VERIFY,
-    )
 
 
 def get_api_key_at(base_url: str, oc_token: str, key_id: str) -> requests.Response:
