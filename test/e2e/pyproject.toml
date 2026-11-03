@@ -6,6 +6,7 @@ markers = [
     "xdist_group(name): pytest-xdist group marker for parallel test groups",
     "readonly: read-only smoke and validation tests (no cluster mutations)",
     "api_keys: API key CRUD, auth enforcement, subscription binding",
+    "limitador: TokenRateLimitPolicy -> Limitador sync subset; triage a stalled limiter with -m limitador at varying -n",
     "models: /v1/models endpoint and gateway-scoped AuthPolicy",
     "api_translation: Anthropic<->OpenAI API translation (apiTranslation flag; cluster-wide ExtProc + tenant config mutations)",
     "security: negative security paths and namespace scoping",

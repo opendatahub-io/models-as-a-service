@@ -52,6 +52,8 @@
 #   GATEWAY_NAMESPACE - Gateway namespace (default: openshift-ingress)
 #   MODEL_NAMESPACE - Namespace of models (default: llm)
 #   E2E_PARALLEL_WORKERS - pytest-xdist worker count (default: 5)
+#   E2E_MAXFAIL - failures before a pass stops (default: 0 here, i.e. never;
+#                 run_e2e_tests.sh defaults to 5 when invoked directly)
 #   TENANT_EXTERNAL_MODEL_CROSSNS_E2E - Opt in to P1 cross-namespace external
 #                         provider E2E (needs AGC cross-namespace provider
 #                         support packaged, default: false)
@@ -466,6 +468,13 @@ print(f"azp={authorized_party}, audience={token_audience!r}, organizations={len(
     # Delegate pytest execution to run_e2e_tests.sh
     export ARTIFACTS_DIR
     export E2E_PARALLEL_WORKERS="${E2E_PARALLEL_WORKERS:-5}"
+    # Run the whole parallel pass even when some tests fail. The cluster's
+    # control plane (kuadrant-operator, maas-controller) is shared by all
+    # workers and goes unhealthy in roughly one run in five; a low cap aborts
+    # the pass around 87%, so the summary undercounts the damage and the flake
+    # report covers only the part that ran. The serial pass still runs after a
+    # parallel failure so its own result is reported independently.
+    export E2E_MAXFAIL="${E2E_MAXFAIL:-0}"
     export E2E_RECONCILE_WAIT="${E2E_RECONCILE_WAIT:-4}"
     # Nightly tier (pass 3) only when EXTERNAL_OIDC is deployed; passes 1–2 always skip nightly.
     if [[ "${EXTERNAL_OIDC}" == "true" ]]; then
