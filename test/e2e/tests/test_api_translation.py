@@ -53,7 +53,9 @@ GATEWAY_RETRIES = 6
 GATEWAY_RETRY_DELAY = 5
 
 
-def _set_api_translation(enabled: bool) -> None:
+def _set_api_translation(enabled: bool | None) -> None:
+    # enabled=None removes the field via a JSON merge-patch null, restoring an
+    # originally-omitted spec.apiTranslation.enabled instead of writing an explicit false.
     body = json.dumps({"spec": {"apiTranslation": {"enabled": enabled}}})
     result = _oc_run(
         ["patch", TENANT_CONFIG, DEFAULT_TENANT, "-n", DEFAULT_TENANT_NS, "--type=merge", "-p", body],
@@ -63,13 +65,21 @@ def _set_api_translation(enabled: bool) -> None:
         raise RuntimeError(f"Failed to set apiTranslation={enabled}: {(result.stderr or result.stdout).strip()}")
 
 
-def _api_translation_enabled() -> bool:
+def _api_translation_state() -> bool | None:
+    """Tri-state read of spec.apiTranslation.enabled so teardown can restore faithfully:
+    None when the field is omitted, else the bool. Raises if the read fails rather than
+    masking it as False (which would disable translation on a tenant that had it on)."""
     result = _oc_run(
         ["get", TENANT_CONFIG, DEFAULT_TENANT, "-n", DEFAULT_TENANT_NS,
          "-o", "jsonpath={.spec.apiTranslation.enabled}"],
         timeout=60,
     )
-    return (result.stdout or "").strip() == "true"
+    if result.returncode != 0:
+        raise RuntimeError(f"Failed to read apiTranslation state: {(result.stderr or result.stdout).strip()}")
+    value = (result.stdout or "").strip()
+    if value == "":
+        return None
+    return value == "true"
 
 
 def _plugins_have_translator() -> bool:
@@ -102,12 +112,13 @@ def _rollout_extproc() -> None:
     )
 
 
-def _apply_api_translation(enabled: bool, *, gate: bool = False) -> bool:
+def _apply_api_translation(enabled: bool | None, *, gate: bool = False) -> bool:
     _set_api_translation(enabled)
     # Wait for the controller to reconcile the toggle (keys present on enable, absent on
     # disable) before rolling the ExtProc, so the rollout waits for the post-toggle
-    # generation rather than racing the controller.
-    reconciled = _wait_translator_state(present=enabled)
+    # generation rather than racing the controller. A restored-to-omitted state (None)
+    # is treated as disabled for the translator-chain barrier.
+    reconciled = _wait_translator_state(present=bool(enabled))
     if enabled and gate and not reconciled:
         return False
     _rollout_extproc()
@@ -184,7 +195,7 @@ def _is_well_formed_anthropic(body: dict) -> bool:
 def api_translation_env():
     """Shared setup: a real API key, gateway auth enforced, and restoration of the
     tenant's original apiTranslation state after the module's tests finish."""
-    original = _api_translation_enabled()
+    original = _api_translation_state()
     _wait_for_gateway_auth_enforced()
     api_key = _create_default_api_key()
     try:
