@@ -33,20 +33,27 @@ import (
 // ConditionModelIdentityUnique indicates whether this MaaSModelRef's resolved
 // model alias (the canonical identity used for body-based routing, e.g.
 // publishers/{namespace}/models/{name}) is unique among other MaaSModelRefs in
-// the same namespace.
+// the same namespace that resolve to the same tenant. ModelRefs resolving to
+// different tenants are the per-tenant modelRefs serving one shared model and
+// are not conflicts.
 const ConditionModelIdentityUnique = "ModelIdentityUnique"
 
 // findModelAliasConflicts returns the (sorted) names of other MaaSModelRefs in
-// the same namespace whose ResolvedModelAlias collides with this model's alias.
+// the same namespace whose ResolvedModelAlias collides with this model's alias
+// and that resolve to the same tenant. ModelRefs that resolve to different
+// tenants are the per-tenant modelRefs serving one shared model (each selects
+// its tenant's gateway attachment), so an alias shared across tenants is an
+// intentional selection, not a conflict.
 //
 // Body-based routing (BBR) selects a backend using the model identity carried
 // in the request (e.g. the "model" field or x-gateway-model-name header) —
 // it has no notion of which MaaSModelRef/subscription the caller intended.
-// When two MaaSModelRefs resolve to the same alias (most commonly because two
-// LLMInferenceServices in the same namespace declare the same spec.model.name),
-// a request can be matched against the wrong backend and/or evaluated against
-// the wrong subscription, causing spurious "subscription does not include
-// model" denials or, worse, silently serving the wrong model.
+// When two same-tenant MaaSModelRefs resolve to the same alias (most commonly
+// because two LLMInferenceServices in the same namespace declare the same
+// spec.model.name), a request can be matched against the wrong backend and/or
+// evaluated against the wrong subscription, causing spurious "subscription
+// does not include model" denials or, worse, silently serving the wrong
+// model.
 func (r *MaaSModelRefReconciler) findModelAliasConflicts(ctx context.Context, model *maasv1alpha1.MaaSModelRef) ([]string, error) {
 	if model.Status.ResolvedModelAlias == "" {
 		return nil, nil
@@ -63,9 +70,15 @@ func (r *MaaSModelRefReconciler) findModelAliasConflicts(ctx context.Context, mo
 		if other.Name == model.Name {
 			continue
 		}
-		if other.Status.ResolvedModelAlias == model.Status.ResolvedModelAlias {
-			conflicts = append(conflicts, other.Name)
+		if other.Status.ResolvedModelAlias != model.Status.ResolvedModelAlias {
+			continue
 		}
+		// Per-tenant modelRefs for one shared model resolve to different
+		// tenants; the shared alias is an intentional selection per tenant.
+		if other.Status.ResolvedTenantRef != model.Status.ResolvedTenantRef {
+			continue
+		}
+		conflicts = append(conflicts, other.Name)
 	}
 	sort.Strings(conflicts)
 	return conflicts, nil
@@ -152,7 +165,8 @@ func setModelIdentityCondition(model *maasv1alpha1.MaaSModelRef, conflicts []str
 			"Body-based routing selects a backend by model identity alone and cannot "+
 			"disambiguate MaaSModelRefs that resolve to the same identity — requests may be "+
 			"routed to the wrong backend or evaluated against the wrong subscription. "+
-			"Give each model a unique spec.model.name to resolve this.",
+			"Give each model a unique spec.model.name to resolve this, or serve the model "+
+			"per tenant via modelRefs with distinct spec.tenantRef.",
 		model.Status.ResolvedModelAlias, len(conflicts), pluralS(len(conflicts)), model.Namespace, strings.Join(conflicts, ", "),
 	)
 	if len(msg) > 1024 {

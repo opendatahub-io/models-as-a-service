@@ -38,6 +38,7 @@ from test_helper import (
     MODEL_NAMESPACE,
     MODEL_REF,
     PREMIUM_SIMULATOR_SUBSCRIPTION,
+    RATE_LIMIT_ENFORCEMENT_TIMEOUT,
     SIMULATOR_ACCESS_POLICY,
     SIMULATOR_SUBSCRIPTION,
     TIMEOUT,
@@ -96,10 +97,21 @@ def _worker_models_context(request):
     ensure_worker_models(
         context,
         (
+            # The baseline model is bootstrapped (and waited on) once per worker
+            # session; re-ensuring it here heals a backend that drifted Unhealthy
+            # during the run. gw3 hit exactly that: simulator-w3-78d5ff was
+            # Unhealthy when this class started, so setup_class failed whichever
+            # tests loadgroup had scheduled last on that worker.
+            context.model_ref,
             context.distinct_model_ref,
             context.distinct_model_2_ref,
         ),
     )
+    # setup_class hard-fails on an unready model, so wait here the way the rest
+    # of the suite does. Only the baseline is governed from the start; the
+    # distinct models become Ready inside the tests that pair them with a
+    # subscription, which is where those tests wait for them.
+    _wait_for_model_ready(context.model_ref, namespace=context.model_namespace)
     original_values = {
         name: globals()[name]
         for name in (
@@ -987,8 +999,9 @@ class TestModelsEndpoint:
             _wait_for_maas_auth_policy_phase(
                 auth_policy_name,
                 namespace=maas_ns,
-                timeout=120,
             )
+            # Two freshly created LLMIS backends share one subscription; allow extra
+            # time for both modelRefs to become discovery-ready under parallel load.
             _wait_for_subscription_discovery_ready(
                 subscription_name,
                 namespace=maas_ns,
@@ -1455,6 +1468,7 @@ class TestModelsEndpoint:
             _delete_cr("maassubscription", subscription_name, namespace=maas_ns)
             _delete_sa(sa_name, namespace=sa_ns)
 
+    @pytest.mark.smoke
     def test_response_schema_and_metadata(self):
         """
         Validate the OpenAPI response structure and preserve meaningful model metadata.
@@ -2197,6 +2211,7 @@ class TestModelsEndpoint:
             )
             _delete_sa(sa_name, namespace=sa_ns)
 
+    @pytest.mark.smoke
     def test_unauthenticated_request_401(self):
         """
         Test: Request to /v1/models without Authorization header gets 401.
@@ -2207,11 +2222,12 @@ class TestModelsEndpoint:
         # Expected: 401 Unauthorized
         log.info("Testing: GET /v1/models without Authorization header")
         url = f"{_maas_api_url()}/v1/models"
-        r = requests.get(
-            url,
-            timeout=TIMEOUT,
-            verify=TLS_VERIFY,
-        )
+        # A plain-text proxy 500 ("Internal Server Error.") is Envoy/router
+        # mid-reload, not a maas-api answer; retry it. A 401 carrying a body is
+        # not in the transient classifier, so the expected answer returns on the
+        # first attempt; only an empty-bodied 401 (AuthPolicy not yet loaded) is
+        # retried, and that settles on a 401 too.
+        r = _request_with_gateway_retry(requests.get, url)
 
         assert r.status_code == 401, f"Expected 401 for unauthenticated request, got {r.status_code}: {r.text}"
 
@@ -2248,7 +2264,7 @@ class TestModelsEndpoint:
                 model_refs=[model_ref],
                 groups=["system:authenticated"],
             )
-            _wait_for_maas_auth_policy_phase(auth_policy_name, timeout=90)
+            _wait_for_maas_auth_policy_phase(auth_policy_name)
             _wait_for_gateway_auth_enforced()
 
             _create_test_subscription(
@@ -2258,20 +2274,18 @@ class TestModelsEndpoint:
                 token_limit=token_limit,
                 window="1m",
             )
-            _wait_for_maas_subscription_phase(subscription_name, timeout=90)
+            _wait_for_maas_subscription_phase(subscription_name)
             _wait_for_token_rate_limit_policy(
                 model_ref,
                 model_namespace=MODEL_NAMESPACE,
-                timeout=180,
                 subscription_name=subscription_name,
             )
             _wait_for_subscription_trlp_status(
                 subscription_name,
                 model=model_ref,
                 expected_ready=True,
-                timeout=180,
             )
-            _wait_for_model_ready(model_ref, namespace=MODEL_NAMESPACE, timeout=90)
+            _wait_for_model_ready(model_ref, namespace=MODEL_NAMESPACE)
 
             sa_token = _create_sa_token(sa_name, namespace=_ns())
             api_key = _create_api_key(
@@ -2290,7 +2304,12 @@ class TestModelsEndpoint:
 
             success_count = 0
             rate_limited = False
-            for request_num in range(1, max_requests + 1):
+            # Past the planned count keep going until the enforcement deadline:
+            # the limiter can trail the policy status, and this asserts a 429.
+            deadline = time.time() + RATE_LIMIT_ENFORCEMENT_TIMEOUT
+            request_num = 0
+            while request_num < max_requests or time.time() < deadline:
+                request_num += 1
                 response = _inference(api_key, path=model_path, max_tokens=1)
                 log.info("Inference request %d: %d", request_num, response.status_code)
                 if response.status_code == 200:

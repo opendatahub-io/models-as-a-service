@@ -1587,7 +1587,9 @@ func (r *MaaSAuthPolicyReconciler) reconcileGatewayAuthPolicy(
 	if err != nil {
 		return false, err
 	}
-	return r.reconcileGatewayAuthPolicyWithHeaders(ctx, log, oidc, xAPIKeyEnabled, tenantID, gatewayNamespace, gatewayName, headers)
+	return r.reconcileGatewayAuthPolicyWithHeaders(
+		ctx, log, oidc, xAPIKeyEnabled, tenantNamespace, tenantID, gatewayNamespace, gatewayName, headers,
+	)
 }
 
 // reconcileGatewayAuthPolicyWithHeaders creates or updates the singleton Gateway-level
@@ -1595,17 +1597,32 @@ func (r *MaaSAuthPolicyReconciler) reconcileGatewayAuthPolicy(
 // default-deny policy pass no headers and do not depend on guardrail resolution.
 func (r *MaaSAuthPolicyReconciler) reconcileGatewayAuthPolicyWithHeaders(
 	ctx context.Context, log logr.Logger,
-	oidc *oidcConfig, xAPIKeyEnabled bool, tenantID, gatewayNamespace, gatewayName string, guardrailHeaders []guardrailHeader,
+	oidc *oidcConfig, xAPIKeyEnabled bool,
+	tenantNamespace, tenantID, gatewayNamespace, gatewayName string, guardrailHeaders []guardrailHeader,
 ) (bool, error) {
 	log.Info("reconcileGatewayAuthPolicy entered", "gatewayNamespace", gatewayNamespace, "gatewayName", gatewayName, "tenantID", tenantID, "xAPIKeyEnabled", xAPIKeyEnabled)
 
-	// Default tenant (tenantID="") uses "models-as-a-service", others use tenantID.
+	// tenantID is the resource-naming identifier; subscriptions live in the tenant namespace.
 	tenantName := "models-as-a-service"
 	if tenantID != "" {
 		tenantName = tenantID
 	}
+	subscriptionNamespace := tenantNamespace
+	if subscriptionNamespace == "" {
+		subscriptionNamespace = r.TenantNamespace
+	}
+	if subscriptionNamespace == "" {
+		subscriptionNamespace = "models-as-a-service"
+	}
 
 	spec := r.buildGatewayAuthPolicySpec(oidc, xAPIKeyEnabled, tenantID, tenantName, gatewayNamespace, gatewayName, guardrailHeaders)
+	subscriptionHeaders, headerErr := r.subscriptionHeaderNames(ctx, subscriptionNamespace)
+	if headerErr != nil {
+		return false, headerErr
+	}
+	if applyErr := applySubscriptionHeaders(spec, subscriptionHeaders); applyErr != nil {
+		return false, applyErr
+	}
 	authPolicyName := r.gatewayAuthPolicyName(gatewayNamespace, gatewayName)
 	isTenantGateway := gatewayNamespace != r.GatewayNamespace || gatewayName != r.GatewayName
 
@@ -1692,7 +1709,9 @@ func (r *MaaSAuthPolicyReconciler) reconcileGatewayAuthPolicyWithHeaders(
 	if gateway != nil {
 		setGatewayOwnerReference(gateway, existing)
 	}
-	if specMatchesDesired(spec, currentSpec) && (guardrailHeaders != nil || !basePolicyHasStaleGuardrailFields(currentSpec)) {
+	if specMatchesDesired(spec, currentSpec) &&
+		(guardrailHeaders != nil || !basePolicyHasStaleGuardrailFields(currentSpec)) &&
+		!basePolicyHasStaleSubscriptionHeaderFields(currentSpec, subscriptionHeaders) {
 		log.Info("gateway AuthPolicy unchanged, skipping update", "name", authPolicyName)
 		return false, nil
 	}
@@ -1921,7 +1940,9 @@ func (r *MaaSAuthPolicyReconciler) handleDeletion(ctx context.Context, log logr.
 			} else {
 				oidc := r.fetchOIDCConfig(ctx, log, policy.Namespace)
 				xAPIKeyEnabled := r.discoverXAPIKeyNeeded(ctx, log)
-				if _, err := r.reconcileGatewayAuthPolicyWithHeaders(ctx, log, oidc, xAPIKeyEnabled, tenantID, gatewayNs, gatewayName, nil); err != nil {
+				if _, err := r.reconcileGatewayAuthPolicyWithHeaders(
+					ctx, log, oidc, xAPIKeyEnabled, policy.Namespace, tenantID, gatewayNs, gatewayName, nil,
+				); err != nil {
 					log.Error(err, "failed to reset gateway auth to base version")
 					return ctrl.Result{}, err
 				}
@@ -1943,7 +1964,7 @@ func (r *MaaSAuthPolicyReconciler) handleDeletion(ctx context.Context, log logr.
 // over from pre-#912 clusters. Existing policies are left unchanged.
 func (r *MaaSAuthPolicyReconciler) ensureBaseGatewayAuthPolicy(
 	ctx context.Context, log logr.Logger,
-	oidc *oidcConfig, xAPIKeyEnabled bool, tenantID, gatewayNamespace, gatewayName string,
+	oidc *oidcConfig, xAPIKeyEnabled bool, tenantNamespace, tenantID, gatewayNamespace, gatewayName string,
 ) error {
 	authPolicyName := r.gatewayAuthPolicyName(gatewayNamespace, gatewayName)
 	if gatewayNamespace == r.GatewayNamespace && gatewayName == r.GatewayName {
@@ -1958,7 +1979,9 @@ func (r *MaaSAuthPolicyReconciler) ensureBaseGatewayAuthPolicy(
 		return fmt.Errorf("failed to check gateway AuthPolicy %s/%s: %w", gatewayNamespace, authPolicyName, err)
 	}
 
-	_, err := r.reconcileGatewayAuthPolicyWithHeaders(ctx, log, oidc, xAPIKeyEnabled, tenantID, gatewayNamespace, gatewayName, nil)
+	_, err := r.reconcileGatewayAuthPolicyWithHeaders(
+		ctx, log, oidc, xAPIKeyEnabled, tenantNamespace, tenantID, gatewayNamespace, gatewayName, nil,
+	)
 	return err
 }
 
@@ -2279,6 +2302,7 @@ func (r *MaaSAuthPolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			r.mapObjectNamespaceToMaaSAuthPolicies,
 		), builder.WithPredicates(predicate.Or(
 			predicate.GenerationChangedPredicate{},
+			predicate.AnnotationChangedPredicate{},
 			predicate.Funcs{UpdateFunc: deletionTimestampSet},
 		)))
 
@@ -2536,7 +2560,7 @@ func (r *MaaSAuthPolicyReconciler) syncDefaultGatewayAuthPolicyForXAPIKeyDiscove
 	// This fallback runs when no MaaSAuthPolicy exists, so there is no tenant
 	// catalog to resolve. Update only the base Gateway AuthPolicy.
 	_, err := r.reconcileGatewayAuthPolicyWithHeaders(
-		ctx, log, oidc, xAPIKeyEnabled, "", r.GatewayNamespace, r.GatewayName, nil,
+		ctx, log, oidc, xAPIKeyEnabled, r.TenantNamespace, "", r.GatewayNamespace, r.GatewayName, nil,
 	)
 	return err
 }

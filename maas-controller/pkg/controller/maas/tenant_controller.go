@@ -37,6 +37,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/controller-runtime/pkg/source"
+	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/oteljson"
@@ -334,6 +335,14 @@ func (r *TenantReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			&maasv1alpha1.AITenant{},
 			handler.EnqueueRequestsFromMapFunc(r.enqueueTenantForAITenant),
 		).
+		Watches(
+			&gatewayapiv1.Gateway{},
+			handler.EnqueueRequestsFromMapFunc(r.mapGatewayToMaasTenantConfigs),
+			builder.WithPredicates(predicate.Or(
+				predicate.GenerationChangedPredicate{},
+				predicate.AnnotationChangedPredicate{},
+			)),
+		).
 		WatchesMetadata(
 			crdPartialMetadata(),
 			handler.EnqueueRequestsFromMapFunc(r.enqueueDefaultTenant),
@@ -414,4 +423,44 @@ func (r *TenantReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	}
 
 	return nil
+}
+
+// mapGatewayToMaasTenantConfigs re-renders every tenant whose resolved Gateway
+// matches the changed Gateway. The configured default Gateway is always mapped
+// because legacy/default installations may not have an AITenant object yet.
+func (r *TenantReconciler) mapGatewayToMaasTenantConfigs(ctx context.Context, obj client.Object) []reconcile.Request {
+	gateway, ok := obj.(*gatewayapiv1.Gateway)
+	if !ok {
+		return nil
+	}
+	requests := map[types.NamespacedName]struct{}{}
+	if gateway.Namespace == r.GatewayNamespace && gateway.Name == r.GatewayName {
+		requests[types.NamespacedName{
+			Name:      maasv1alpha1.MaasTenantConfigInstanceName,
+			Namespace: r.TenantNamespace,
+		}] = struct{}{}
+	}
+	enqueueRequests := func() []reconcile.Request {
+		result := make([]reconcile.Request, 0, len(requests))
+		for key := range requests {
+			result = append(result, reconcile.Request{NamespacedName: key})
+		}
+		return result
+	}
+	var tenants maasv1alpha1.AITenantList
+	if err := r.List(ctx, &tenants); err != nil {
+		oteljson.FromContext(ctx).Error(err, "failed to list AITenants for Gateway annotation change")
+		return enqueueRequests()
+	}
+	for i := range tenants.Items {
+		ref := tenants.Items[i].Status.GatewayRef
+		if ref.Namespace != gateway.Namespace || ref.Name != gateway.Name {
+			continue
+		}
+		requests[types.NamespacedName{
+			Name:      maasv1alpha1.MaasTenantConfigInstanceName,
+			Namespace: tenantreconcile.TenantNamespaceForAITenant(tenants.Items[i].Name, r.TenantNamespace),
+		}] = struct{}{}
+	}
+	return enqueueRequests()
 }

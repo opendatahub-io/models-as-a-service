@@ -6,12 +6,12 @@
 
 | Metric | Type | Labels | Use For |
 |--------|------|--------|---------|
-| `authorized_hits` | Counter | `user`, `subscription`, `model` | **Billing/Cost** - Total tokens consumed (input + output) |
-| `authorized_calls` | Counter | `user`, `subscription` | **API Usage** - Number of API calls allowed |
-| `limited_calls` | Counter | `user`, `subscription` | **Rate Limiting** - Requests denied due to quotas |
+| `authorized_hits` | Counter | `user`, `tenant_name`, `tenant_namespace`, `subscription`, `model` | **Billing/Cost** - Total tokens consumed (input + output) |
+| `authorized_calls` | Counter | `user`, `tenant_name`, `tenant_namespace`, `subscription` | **API Usage** - Number of API calls allowed |
+| `limited_calls` | Counter | `limitador_namespace` | **Rate Limiting** - Requests denied due to quotas |
 
 !!! note "`model` label availability"
-    `model` label is only available on `authorized_hits`. `authorized_calls` and `limited_calls` carry `user` and `subscription` only.
+    `model` label is only available on `authorized_hits`. `limited_calls` does not carry MaaS producer-scope labels. Organization-specific queries must require nonempty `organization_id`, tenant, and subscription scope; empty values identify incomplete or unscopable series.
 
 !!! note "Total tokens only"
     Token consumption is reported as total tokens (prompt + completion) per request. Input/output split requires upstream Kuadrant wasm-shim changes.
@@ -20,14 +20,14 @@
 
 | Metric | Labels | Description |
 |--------|--------|-------------|
-| `istio_request_duration_milliseconds_bucket` | `destination_service_name`, `subscription` | Gateway-level latency (subscription-only to bound cardinality) |
+| `istio_request_duration_milliseconds_bucket` | `destination_service_name`, `tenant_name`, `tenant_namespace`, `subscription`, `organization_id` (optional) | Gateway-level latency (no model or user label) |
 | `vllm:e2e_request_latency_seconds` | `model_name` | Model inference end-to-end latency |
 | `vllm:time_to_first_token_seconds` | `model_name` | Time to First Token (TTFT) |
 | `vllm:inter_token_latency_seconds` | `model_name` | Inter-Token Latency (ITL) |
 
 #### Per-Subscription Latency Tracking
 
-Istio Telemetry adds a `subscription` dimension to gateway latency from the `X-MaaS-Subscription` header. See [Identity headers](../architecture-internals/authentication-internals.md#identity-headers-and-defense-in-depth) for when AuthPolicy injects or preserves this header.
+Istio Telemetry adds producer-scope and subscription dimensions to gateway latency from controller-resolved values and the `X-MaaS-Subscription` and `x-maas-organization-id` response headers. The organization dimension is controlled by `metrics.captureOrganization`. See [Identity headers](../architecture-internals/authentication-internals.md#identity-headers-and-defense-in-depth).
 
 ```yaml
 apiVersion: telemetry.istio.io/v1
@@ -149,8 +149,8 @@ sum(rate(vllm:request_success_total[5m])) /
 # Rate limit ratio (% rejected)
 (sum(limited_calls) / (sum(authorized_calls) + sum(limited_calls))) OR vector(0)
 
-# Rate limit violations per second by subscription
-sum by (subscription) (rate(limited_calls[5m]))
+# Rate limit violations per second by limitador namespace
+sum by (limitador_namespace) (rate(limited_calls[5m]))
 ```
 
 **Latency (per-subscription SLA):**

@@ -209,7 +209,7 @@ setup_test_tokens() {
             setup_test_user "tester-admin-user" "view" "$E2E_ADMIN_SA_NAMESPACE"
             _grant_maas_admin_rbac "system:serviceaccount:${E2E_ADMIN_SA_NAMESPACE}:tester-admin-user"
             _patch_auth_cr_for_sa_admin "$E2E_ADMIN_SA_NAMESPACE"
-            ADMIN_OC_TOKEN=$(oc create token tester-admin-user -n "$E2E_ADMIN_SA_NAMESPACE" --duration=1h)
+            ADMIN_OC_TOKEN=$(oc create token tester-admin-user -n "$E2E_ADMIN_SA_NAMESPACE" --duration=4h)
         fi
     fi
 
@@ -241,7 +241,7 @@ RBAC_EOF
     if [[ -z "$TOKEN" ]]; then
         echo "Creating separate SA token for regular user (required for IDOR tests)..."
         setup_test_user "tester-regular-user" "view" "default"
-        TOKEN=$(oc create token tester-regular-user -n default --duration=1h)
+        TOKEN=$(oc create token tester-regular-user -n default --duration=4h)
         echo "✅ Regular user token for tester-regular-user (SA-based, namespace: default)"
     fi
 

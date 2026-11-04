@@ -412,7 +412,11 @@ func (r *TenantReconciler) reconcilePlatform(
 	mcfg *maasv1alpha1.Config,
 ) (*tenantreconcile.RunResult, *ctrl.Result, error) {
 	appNs := r.appNamespaceForTenant()
-	runRes, err := tenantreconcile.RunPlatformWithReader(ctx, log, r.Client, r.APIReader, r.Scheme, tenant, platformContext, r.ManifestPath, appNs, r.ControllerNamespace, r.ClusterAudience, r.MonitoringNamespace, mcfg)
+	runRes, err := tenantreconcile.RunPlatformWithReader(
+		ctx, log, r.Client, r.APIReader, r.Scheme, tenant, platformContext,
+		r.ManifestPath, appNs, r.ControllerNamespace, r.ClusterAudience,
+		r.MonitoringNamespace, mcfg,
+	)
 	if err != nil {
 		log.Error(err, "Tenant platform reconcile failed")
 		setDeploymentsAvailableCondition(tenant, false, "PlatformReconcileFailed", err.Error())
@@ -943,6 +947,6 @@ func (r *TenantReconciler) ensureGatewayManagementAuth(ctx context.Context, log 
 		ctx, log,
 		authR.fetchOIDCConfig(ctx, log, tenant.Namespace),
 		authR.discoverXAPIKeyNeeded(ctx, log),
-		tenantID, gatewayNs, gatewayName,
+		tenant.Namespace, tenantID, gatewayNs, gatewayName,
 	)
 }
