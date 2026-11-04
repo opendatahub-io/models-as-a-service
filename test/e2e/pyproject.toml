@@ -5,6 +5,7 @@ markers = [
     "slow: long-running test (may wait for token expiry)",
     "xdist_group(name): pytest-xdist group marker for parallel test groups",
     "readonly: read-only smoke and validation tests (no cluster mutations)",
+    "smoke: PR/group-test subset — basic coverage with low AuthPolicy/CR churn (see E2E_SMOKE_ONLY)",
     "api_keys: API key CRUD, auth enforcement, subscription binding",
     "limitador: TokenRateLimitPolicy -> Limitador sync subset; triage a stalled limiter with -m limitador at varying -n",
     "models: /v1/models endpoint and gateway-scoped AuthPolicy",
