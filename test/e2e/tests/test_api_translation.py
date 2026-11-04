@@ -135,7 +135,10 @@ def _post(url: str, api_key: str, body: dict, *, stream: bool = False) -> reques
             verify=TLS_VERIFY,
             stream=stream,
         )
-        if response.status_code in (404, 503) and not stream and attempt < GATEWAY_RETRIES:
+        # Retry transient route-propagation/ExtProc-reload responses for streaming
+        # requests too: a just-enabled SSE route can 404 briefly, and a single-shot
+        # streaming check would otherwise fail on a slower/colder cluster.
+        if response.status_code in (404, 503) and attempt < GATEWAY_RETRIES:
             time.sleep(GATEWAY_RETRY_DELAY)
             continue
         return response
@@ -189,6 +192,32 @@ def _is_well_formed_anthropic(body: dict) -> bool:
         and bool(content)
         and content[0].get("type") == "text"
     )
+
+
+def _is_translated(response: requests.Response) -> bool:
+    """True when /v1/messages returned a well-formed Anthropic translation (200)."""
+    return response.status_code == 200 and _is_well_formed_anthropic(response.json() if response.ok else {})
+
+
+def _wait_until_gated(url: str, api_key: str, timeout: int = RENDER_TIMEOUT) -> requests.Response:
+    """Poll /v1/messages until translation is no longer served. Disabling is
+    eventually-consistent at the data plane (beyond the ConfigMap edit and ExtProc
+    rollout), so a single check can still catch a stale translated 200. Returns the
+    first non-translated response, or the last one seen on timeout."""
+    deadline = time.time() + timeout
+    last = None
+    while time.time() < deadline:
+        last = requests.post(
+            url,
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            json=_anthropic_body(),
+            timeout=60,
+            verify=TLS_VERIFY,
+        )
+        if not _is_translated(last):
+            return last
+        time.sleep(POLL)
+    return last
 
 
 @pytest.fixture(scope="module")
@@ -262,7 +291,8 @@ class TestApiTranslation:
             f"OpenAI passthrough failed after disabling: {passthrough.status_code} "
             f"{redact_sensitive(passthrough.text[:300])}"
         )
-        gated = _post(f"{gw}/v1/messages", api_key, _anthropic_body())
-        assert not (gated.status_code == 200 and _is_well_formed_anthropic(gated.json() if gated.ok else {})), (
-            "Anthropic /v1/messages was still translated after disabling apiTranslation"
+        gated = _wait_until_gated(f"{gw}/v1/messages", api_key)
+        assert not _is_translated(gated), (
+            f"Anthropic /v1/messages was still translated {RENDER_TIMEOUT}s after disabling "
+            f"apiTranslation (status {gated.status_code})"
         )
