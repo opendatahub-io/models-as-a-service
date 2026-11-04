@@ -44,7 +44,11 @@ See [Upgrade to 3.6](../migration/upgrade-to-3.6.md) for full guidance. Summary:
 
 ### Key Fixes
 
+<<<<<<< HEAD
 - **Tenant namespace admitted by its tenant Gateway:** maas-controller now applies the tenant Gateway's listener `matchLabels` (for example `maas.opendatahub.io/gateway-access-<tenant>=true`) to the tenant namespace, as it already did for the infrastructure namespace. The HTTPRoutes that ai-gateway-controller creates there for tenant-local ExternalModels were previously `NotAllowedByListeners`. Deleting the AITenant removes those labels. Other model namespaces still need manual labels; see [Gateway patterns](../configuration-and-management/gateway-patterns.md#automatic-infrastructure-and-tenant-namespace-labeling).
+=======
+- **Experimental Gateway buffer annotation for large inference responses:** MaaS applies a default `64 MB` Envoy listener buffer for large responses such as batched embeddings. Platform administrators can override it per Gateway with `maas.opendatahub.io/experimental-body-buffer-limit-mb`, using an integer value from `1` to `64`. This is experimental and may move into the supported tenant configuration API in a future release.
+>>>>>>> 8b5474d60ff85ea92fe48d33196feeb77561202f
 
 - **Short subscription rate-limit IDs in TokenRateLimitPolicy (new subscriptions only):** TRLP `when` predicates and counters for subscriptions created after upgrade use a stable 16-hex SHA-256 of `namespace/name@modelNs/model` (`selected_subscription_id`) so Kuadrant WASM / EnvoyFilter size no longer embeds long strings for those CRs. Pre-upgrade subscriptions keep `selected_subscription_key`. Limit map keys stay rate-grouped (`tokens-<limit>-per-<window>`). Human-readable `selected_subscription_key` remains for telemetry.
 

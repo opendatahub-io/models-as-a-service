@@ -113,6 +113,12 @@ func RunPlatformWithReader(
 	if err != nil {
 		return nil, fmt.Errorf("build params: %w", err)
 	}
+	bufferLimit, bufferWarning := ResolveGatewayBodyBufferLimitMB(gw)
+	params.GatewayBodyBufferLimitMB = bufferLimit
+	if bufferWarning != "" {
+		params.Warnings = append(params.Warnings, bufferWarning)
+		log.Info(bufferWarning)
+	}
 	applyMaaSAPIEgressConfig(&params, mcfg)
 
 	if !params.SkipIPP {
