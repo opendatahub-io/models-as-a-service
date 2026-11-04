@@ -39,6 +39,13 @@ test/e2e/
 
 Tests are organized into **xdist groups** for parallel execution. All tests in a group run on the same pytest-xdist worker, and a worker takes the next queued group when it finishes one. See [Parallel E2E](#parallel-e2e-pytest-xdist) for details on how groups work.
 
+### Smoke subset (`@pytest.mark.smoke`)
+
+`/group-test` sets **`E2E_SMOKE_ONLY=true`** (via `.tekton/maas-group-test.yaml` podTemplate env), so PR passes 1–2 only collect tests marked `smoke`. That subset prioritizes basic API/gateway coverage, a light cross-slice of tenant/security/network checks, and the AGC external-model happy paths (default-tenant implicit attachment + user-namespace `gatewayRefs` serving). Heavier multi-tenant lifecycle, shared-model/conflict/lifecycle external-model suites, and serial mutators stay off the smoke path. `prow_run_smoke_test.sh` defaults to the **full suite** when the env var is unset, so nightly and other callers still cover tests marked neither `smoke` nor `nightly`.
+
+- Local smoke subset: `./test/e2e/scripts/run_e2e_tests.sh --smoke-only` (or `E2E_SMOKE_ONLY=true`)
+- Add new PR-critical coverage by marking individual tests/classes/modules with `@pytest.mark.smoke` (prefer read-only or shared-fixture paths over new AuthPolicy/AITenant churn)
+
 | Group | Module | What it covers |
 |-------|--------|---------------|
 | `readonly` | `test_smoke.py` | Health checks, catalog shape, basic inference |
@@ -58,7 +65,7 @@ Tests are organized into **xdist groups** for parallel execution. All tests in a
 | `security` | `test_negative_security.py` | Header spoofing, expired keys, cross-model access |
 | `security` | `test_namespace_scoping.py` | Namespace isolation behavior |
 | `mt_lifecycle` | `test_aitenant_lifecycle.py` | AITenant create/migrate/delete |
-| `mt_lifecycle` | `test_multi_tenant_maas_api.py` | Per-tenant Deployment, Service, HTTPRoute; dual-listener AuthConfig/wasm checks are `@pytest.mark.nightly` |
+| `mt_lifecycle` | `test_multi_tenant_maas_api.py` | Per-tenant Deployment, Service, HTTPRoute; dual-listener AuthConfig/wasm checks are `@pytest.mark.serial` |
 | `mt_lifecycle` | `test_tenant_namespace_discovery.py` | Namespace-label discovery, webhook validation |
 | `mt_lifecycle` | `test_crd_watch_resilience.py` | Dynamic CRD watch registration (restarts controller) |
 | `tenant_isolation` | `test_tenant_auth_isolation.py` | Cross-tenant key rejection, OIDC scoping |
@@ -284,7 +291,7 @@ graph TB
 | **GitHub Actions** | `maas-controller/api/**` or `deployment/**` changes | `make verify-codegen`, kustomize manifest validation |
 | **Konflux** | Any non-docs PR or push to `main` | Builds multi-arch images, then runs full E2E on an ephemeral OpenShift cluster |
 
-Konflux provisions a fresh cluster, deploys ODH + MaaS with the PR's built images, and runs `test/e2e/scripts/prow_run_smoke_test.sh`. Nightly builds use the same script against the latest `main` images — there is no separate nightly test suite.
+Konflux provisions a fresh cluster, deploys ODH + MaaS with the PR's built images, and runs `test/e2e/scripts/prow_run_smoke_test.sh`. `/group-test` opts into the smoke-marked subset (`E2E_SMOKE_ONLY=true`; see [Smoke subset](#smoke-subset-pytestmarksmoke)). Nightly builds use the same script without that flag (full passes 1–2); extended `@pytest.mark.nightly` coverage still requires `MAAS_PYTEST_INCLUDE_NIGHTLY=true` / OIDC jobs.
 
 ### Deploy phase timings and fail-fast
 
@@ -368,7 +375,7 @@ func TestMyReconciler_Succeeds(t *testing.T) {
 
 5. **Add test resources if needed** — if your feature requires new MaaS CRs (models, subscriptions, auth policies), add a kustomize overlay under `test/e2e/fixtures/` and include it in the base `kustomization.yaml`.
 
-6. **Use pytest discovery for CI** — `run_e2e_tests.sh` collects every `test_*.py` module under `test/e2e/tests/`. New modules do not need a separate CI registration step. Give the module an appropriate `xdist_group` marker and mark cluster-wide mutations as `serial`.
+6. **Use pytest discovery for CI** — `run_e2e_tests.sh` collects every `test_*.py` module under `test/e2e/tests/`. New modules do not need a separate CI registration step. Give the module an appropriate `xdist_group` marker and mark cluster-wide mutations as `serial`. Mark PR-critical low-churn coverage with `@pytest.mark.smoke` so `/group-test` picks it up (`E2E_SMOKE_ONLY=true`).
 
 7. **Use skip markers for optional features** — if your test depends on optional infrastructure (e.g., external OIDC, IPP ExternalModel CRD), gate it with `pytest.mark.skipif` so the same module runs cleanly in all environments.
 
@@ -418,6 +425,7 @@ AI Gateway now spans three repos: [ai-gateway-operator](https://github.com/opend
 - [ ] **Unit test**: Add `*_test.go` alongside your source in `maas-api/` or `maas-controller/`; run `make test`
 - [ ] **E2E test**: Add to an existing `test_*.py` or create a new module in `test/e2e/tests/`
 - [ ] **xdist group**: Ensure the test file has a `pytestmark = pytest.mark.xdist_group("group_name")` marker (see [group assignment rules](#group-assignment-rules))
+- [ ] **Smoke marker**: Add `@pytest.mark.smoke` only for low-churn PR coverage that should run under `E2E_SMOKE_ONLY` (avoid AuthPolicy/AITenant create/delete storms)
 - [ ] **Serial marker**: Add `@pytest.mark.serial` if the test mutates shared fixtures or scales operators
 - [ ] **Test fixtures**: If new CRs are needed, add a kustomize overlay in `test/e2e/fixtures/`
 - [ ] **Pytest discovery**: Confirm the new module follows the `test_*.py` naming convention and is collected with `pytest tests/ --collect-only -q`
