@@ -188,6 +188,19 @@ func RunPlatformWithReader(
 	if err := syncMaaSParametersConfigMap(ctx, c, appNs, params, log); err != nil {
 		return nil, fmt.Errorf("sync maas-parameters ConfigMap: %w", err)
 	}
+	// Bootstrap apply does not prune the old controller-namespace monitor. Retire
+	// it only after the replacement and its token are present in the API server.
+	if hasRenderedControllerMetricsMonitor(resources, appNs) {
+		monitorPending, err := cleanupLegacyControllerMetricsMonitor(ctx, c, apiReader, mcfg.UID,
+			appNs, controllerNs, params.TenantIdentifier, log)
+		if err != nil {
+			return nil, fmt.Errorf("cleanup legacy controller metrics ServiceMonitor: %w", err)
+		}
+		if monitorPending != "" {
+			return &RunResult{DeploymentPending: true, Detail: monitorPending, Warnings: params.Warnings,
+				KuadrantDetectionWarning: params.KuadrantDetectionWarning}, nil
+		}
+	}
 
 	tenantID, err := TenantIdentifierFor(tenant)
 	if err != nil {
