@@ -73,6 +73,8 @@ pytest tests/<file>.py -v
 
 The shared CI runner and `smoke.sh` execute all tests under `tests/`. Individual modules can still be run directly, for example `pytest tests/test_subscription_list_endpoints.py -v`.
 
+**New tests:** PRs that add E2E tests must mark them `@pytest.mark.smoke`, `@pytest.mark.full_suite`, or `@pytest.mark.nightly`. The e2e-collect workflow runs `scripts/check_new_e2e_test_tiers.py` against the PR base; existing unmarked tests are grandfathered.
+
 **Skips:** `test_tenant.py` and `test_config_tenant.py` skip the whole module when the needed CRD or object is absent (partial cluster or older bundle). Neither module deletes Config or exercises DSC disable; that stays in operator or manual teardown.
 
 ## CI

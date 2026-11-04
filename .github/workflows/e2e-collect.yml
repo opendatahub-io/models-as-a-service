@@ -29,6 +29,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
         with:
           persist-credentials: false
+          # Need full history so the new-test tier gate can diff against the PR base.
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
@@ -55,3 +57,12 @@ jobs:
       - name: Collect e2e tests
         working-directory: test/e2e
         run: python -m pytest --collect-only -q tests/
+
+      - name: Require tier markers on new E2E tests
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          # New tests must declare smoke | full_suite | nightly (existing tests are
+          # grandfathered). See test/e2e/scripts/check_new_e2e_test_tiers.py.
+          python test/e2e/scripts/check_new_e2e_test_tiers.py --base "${BASE_SHA}"
