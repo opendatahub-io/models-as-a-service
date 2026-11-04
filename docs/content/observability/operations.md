@@ -98,8 +98,11 @@ The MaaS API and controller ServiceMonitors use a Secret reference for bearer
 authorization. The `maas-metrics-scraper-token` Secret and its ServiceAccount
 live in the MaaS application namespace, alongside both monitors. The
 controller monitor selects the `maas-controller-metrics` Service in the
-controller namespace. The dedicated scraper identity has only `GET /metrics`.
-The token is long lived. To rotate it, delete that Secret in the MaaS
+controller namespace. Each endpoint verifies the scraper ServiceAccount identity
+with a Kubernetes TokenReview; the scraper token has no Kubernetes API server
+`/metrics` grant. The credential Secret is in the shared infrastructure
+namespace, which must remain inaccessible to tenant principals. The token is
+long lived. To rotate it, delete that Secret in the MaaS
 application namespace and trigger a `MaasTenantConfig` reconcile; Kubernetes
 issues a replacement after the reconciler recreates the Secret. Check both
 MaaS jobs and `up` after rotation.
@@ -298,7 +301,7 @@ Watch: `authorized_hits_total{user!="",organization_id!="",tenant_name!="",tenan
 | **Input/output per user** | vLLM doesn't label with `user` | Total tokens per user via `authorized_hits_total{user!=""}`; vLLM prompt/gen metrics are per-model only |
 | **Rate-limited in Istio metrics** | WASM plugin `sendLocalReply()` short-circuits filter chain | Use `limited_calls_total` from Limitador (has correct labels) |
 | **Policy health metrics** | `kuadrant_policies_enforced`, `kuadrant_policies_total` not in RHCL 1.x | `limitador_up` and `datastore_partitioned` available now |
-| **MaaS metrics** | Requires HTTPS scrape, a discoverable token Secret, and `/metrics` get RBAC | Use the MaaS API and controller ServiceMonitors with the `maas-metrics-scraper-token` Secret in their namespace; confirm the collector can read that Secret |
+| **MaaS metrics** | Requires HTTPS scrape, a discoverable token Secret, and TokenReview access for the endpoints | Use the MaaS API and controller ServiceMonitors with the `maas-metrics-scraper-token` Secret in their namespace; confirm the collector can read that Secret |
 | **PromQL `_total` suffix** | OTel prometheus receiver stores Limitador counters as `authorized_hits_total` (and the same for `authorized_calls` / `limited_calls`) | Query the `_total` names; Grafana panels that omit `_total` return no data |
 | **MaaS labels on `limited_calls_total`** | Limitador emits only `limitador_namespace` for this family | Use `authorized_hits_total` or `authorized_calls_total` for tenant/subscription/organization attribution |
 

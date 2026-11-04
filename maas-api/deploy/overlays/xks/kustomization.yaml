@@ -103,24 +103,6 @@ patches:
       metadata:
         name: maas-metrics-scraper-token
   - target:
-      kind: ClusterRole
-      name: maas-metrics-scraper
-    patch: |-
-      $patch: delete
-      apiVersion: rbac.authorization.k8s.io/v1
-      kind: ClusterRole
-      metadata:
-        name: maas-metrics-scraper
-  - target:
-      kind: ClusterRoleBinding
-      name: maas-metrics-scraper
-    patch: |-
-      $patch: delete
-      apiVersion: rbac.authorization.k8s.io/v1
-      kind: ClusterRoleBinding
-      metadata:
-        name: maas-metrics-scraper
-  - target:
       kind: NetworkPolicy
       name: maas-api-allow-monitoring
     patch: |

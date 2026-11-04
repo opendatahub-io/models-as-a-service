@@ -10,6 +10,7 @@ import (
 	"github.com/go-logr/logr"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -199,6 +200,12 @@ func RunPlatformWithReader(
 		return &RunResult{DeploymentPending: true, Detail: withMigrationBlockedDetail(detail, switchOutcome.blockedReason), Warnings: params.Warnings,
 			KuadrantDetectionWarning: params.KuadrantDetectionWarning}, nil
 	}
+	// Previous releases bound the scraper token to a cluster-wide /metrics
+	// ClusterRole. Delete those Config-owned grants after the new API rollout is
+	// ready; omitting them from the rendered set would leave them on the cluster.
+	if err := cleanupLegacyMetricsScraperRBAC(ctx, c, apiReader, mcfg.UID, log); err != nil {
+		return nil, fmt.Errorf("cleanup legacy metrics scraper RBAC: %w", err)
+	}
 	// Shared EnvoyFilter shape check for both legacy IPP and praxis (AGC).
 	// Praxis tenants skip *applying* IPP resources (SkipIPP) but still wait on
 	// the same gateway-namespace EnvoyFilter AGC owns — do not gate this on
@@ -216,6 +223,55 @@ func RunPlatformWithReader(
 			KuadrantDetectionWarning: params.KuadrantDetectionWarning}, nil
 	}
 	return &RunResult{Warnings: params.Warnings, KuadrantDetectionWarning: params.KuadrantDetectionWarning}, nil
+}
+
+func cleanupLegacyMetricsScraperRBAC(ctx context.Context, c client.Client, reader client.Reader, configUID types.UID, log logr.Logger) error {
+	role := &rbacv1.ClusterRole{}
+	if err := reader.Get(ctx, client.ObjectKey{Name: "maas-metrics-scraper"}, role); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("get legacy metrics ClusterRole: %w", err)
+	}
+	var bindings rbacv1.ClusterRoleBindingList
+	if err := reader.List(ctx, &bindings); err != nil {
+		return fmt.Errorf("list legacy metrics ClusterRoleBindings: %w", err)
+	}
+	for i := range bindings.Items {
+		binding := &bindings.Items[i]
+		if binding.RoleRef.Kind != "ClusterRole" || binding.RoleRef.Name != "maas-metrics-scraper" ||
+			!isOwnedByConfigUID(binding, configUID) {
+			continue
+		}
+		options, err := validatedDeleteOptions(binding)
+		if err != nil {
+			return fmt.Errorf("prepare ClusterRoleBinding %s deletion: %w", binding.Name, err)
+		}
+		if err := c.Delete(ctx, binding, options...); err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("delete ClusterRoleBinding %s: %w", binding.Name, err)
+		}
+	}
+	if !isOwnedByConfigUID(role, configUID) {
+		log.V(1).Info("Skipping legacy metrics ClusterRole without Config ownership", "name", role.Name)
+		return nil
+	}
+	options, err := validatedDeleteOptions(role)
+	if err != nil {
+		return fmt.Errorf("prepare legacy metrics ClusterRole deletion: %w", err)
+	}
+	if err := c.Delete(ctx, role, options...); err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("delete legacy metrics ClusterRole: %w", err)
+	}
+	return nil
+}
+
+func isOwnedByConfigUID(obj client.Object, configUID types.UID) bool {
+	for _, owner := range obj.GetOwnerReferences() {
+		if owner.Kind == "Config" && owner.UID == configUID {
+			return true
+		}
+	}
+	return false
 }
 
 type payloadProcessingSwitchOutcome struct {

@@ -30,6 +30,8 @@ type ServerOptions struct {
 	RESTConfig *rest.Config
 	// HTTPClient is used by the authn/authz filter; optional (rest.HTTPClientFor used if nil).
 	HTTPClient *http.Client
+	// ScraperNamespace is the namespace of the dedicated metrics scraper ServiceAccount.
+	ScraperNamespace string
 	// Logger is passed to the metrics auth filter.
 	Logger logr.Logger
 
@@ -39,8 +41,8 @@ type ServerOptions struct {
 }
 
 // NewMetricsServer builds an http.Server that exposes /metrics.
-// When opts.Secure is true, the handler requires a bearer token authorized for
-// GET /metrics and TLS is configured from CertDir (plus optional cluster profile).
+// When opts.Secure is true, the handler requires the dedicated scraper identity
+// or a bearer token authorized for GET /metrics. TLS is configured from CertDir.
 func NewMetricsServer(opts ServerOptions) (*http.Server, error) {
 	if opts.Reg == nil {
 		return nil, errors.New("prometheus registry is required")
@@ -50,6 +52,7 @@ func NewMetricsServer(opts ServerOptions) (*http.Server, error) {
 	}
 
 	handler := promhttp.HandlerFor(opts.Reg, promhttp.HandlerOpts{})
+	baseHandler := handler
 
 	if opts.Secure {
 		if opts.RESTConfig == nil {
@@ -79,6 +82,12 @@ func NewMetricsServer(opts ServerOptions) (*http.Server, error) {
 		handler, err = filter(log, handler)
 		if err != nil {
 			return nil, fmt.Errorf("wrapping metrics handler with auth filter: %w", err)
+		}
+		if opts.ScraperNamespace != "" {
+			handler, err = withMetricsScraperIdentity(opts.RESTConfig, httpClient, opts.ScraperNamespace, baseHandler, handler)
+			if err != nil {
+				return nil, fmt.Errorf("wrapping metrics handler with scraper identity: %w", err)
+			}
 		}
 	}
 

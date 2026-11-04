@@ -1048,25 +1048,7 @@ func TestRenderKustomizeMetricsScraper(t *testing.T) {
 	require.True(t, found)
 	assert.Equal(t, map[string]string{"control-plane": "maas-controller", "app": "maas-controller"}, selector)
 
-	binding := requireResource(t, resources, GVKClusterRoleBinding, "maas-metrics-scraper")
-	require.NoError(t, patchResource(logr.Discard(), binding, PlatformParams{AppNamespace: appNamespace}))
-	subjects, found, err := unstructured.NestedSlice(binding.Object, "subjects")
-	require.NoError(t, err)
-	require.True(t, found)
-	require.Len(t, subjects, 1)
-	subject, ok := subjects[0].(map[string]any)
-	require.True(t, ok)
-	assert.Equal(t, appNamespace, subject["namespace"])
-
-	teamBinding := binding.DeepCopy()
-	require.NoError(t, patchResource(logr.Discard(), teamBinding, PlatformParams{AppNamespace: "ai-team", TenantIdentifier: "team"}))
-	assert.Equal(t, "maas-metrics-scraper-team", teamBinding.GetName())
-	teamSubjects, found, err := unstructured.NestedSlice(teamBinding.Object, "subjects")
-	require.NoError(t, err)
-	require.True(t, found)
-	teamSubject, ok := teamSubjects[0].(map[string]any)
-	require.True(t, ok)
-	assert.Equal(t, "ai-team", teamSubject["namespace"])
+	assert.Nil(t, findResource(resources, GVKClusterRoleBinding, "maas-metrics-scraper"))
 }
 
 func TestControllerMetricsMonitorTargetsControllerNamespace(t *testing.T) {
@@ -1111,7 +1093,6 @@ func TestXKSOverlayExcludesMetricsScraper(t *testing.T) {
 	assert.Nil(t, findResource(resources, GVKServiceMonitor, "maas-controller-metrics"))
 	assert.Nil(t, findResource(resources, GVKServiceAccount, "maas-metrics-scraper"))
 	assert.Nil(t, findResource(resources, schema.GroupVersionKind{Version: "v1", Kind: "Secret"}, "maas-metrics-scraper-token"))
-	assert.Nil(t, findResource(resources, GVKClusterRoleBinding, "maas-metrics-scraper"))
 }
 
 func renderOverlayResources(t *testing.T, appNamespace string) []unstructured.Unstructured {

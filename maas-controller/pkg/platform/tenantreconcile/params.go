@@ -592,36 +592,8 @@ func patchResource(log logr.Logger, r *unstructured.Unstructured, params Platfor
 	case gvk == GVKClusterRoleBinding && name == PayloadProcessingReaderClusterRoleBindingName:
 		r.SetName(PayloadProcessingReaderClusterRoleBindingNameForTenant(tenantID))
 		return patchPayloadProcessingClusterRoleBinding(r, params)
-	case gvk == GVKClusterRoleBinding && name == "maas-metrics-scraper":
-		if tenantID != "" {
-			r.SetName("maas-metrics-scraper-" + tenantID)
-		}
-		return patchMetricsScraperBinding(r, params.AppNamespace)
 	case gvk == GVKCertificate && name == baseMaaSAPIServingCertName:
 		return patchMaaSAPIServingCert(log, r, params)
-	}
-	return nil
-}
-
-func patchMetricsScraperBinding(r *unstructured.Unstructured, appNamespace string) error {
-	if appNamespace == "" {
-		return errors.New("application namespace is required for metrics scraper binding")
-	}
-	subjects, found, err := unstructured.NestedSlice(r.Object, "subjects")
-	if err != nil {
-		return fmt.Errorf("read metrics scraper subjects: %w", err)
-	}
-	if !found || len(subjects) != 1 {
-		return errors.New("metrics scraper binding requires one subject")
-	}
-	subject, ok := subjects[0].(map[string]any)
-	if !ok {
-		return errors.New("metrics scraper binding subject is not an object")
-	}
-	subject["namespace"] = appNamespace
-	subjects[0] = subject
-	if err := unstructured.SetNestedSlice(r.Object, subjects, "subjects"); err != nil {
-		return fmt.Errorf("set metrics scraper subjects: %w", err)
 	}
 	return nil
 }

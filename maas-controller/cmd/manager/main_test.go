@@ -169,7 +169,7 @@ func TestBuildMetricsServerOptions(t *testing.T) {
 	}
 
 	t.Run("secure enables HTTPS authn and profile TLSOpts", func(t *testing.T) {
-		opts := buildMetricsServerOptions(":8443", true, serverTLSOpt, nextProtosOpt)
+		opts := buildMetricsServerOptions(":8443", true, "infra-ns", serverTLSOpt, nextProtosOpt)
 		if opts.BindAddress != ":8443" {
 			t.Fatalf("BindAddress = %q, want :8443", opts.BindAddress)
 		}
@@ -199,7 +199,7 @@ func TestBuildMetricsServerOptions(t *testing.T) {
 	})
 
 	t.Run("insecure keeps HTTP without FilterProvider or CertDir", func(t *testing.T) {
-		opts := buildMetricsServerOptions(":8080", false, serverTLSOpt, nextProtosOpt)
+		opts := buildMetricsServerOptions(":8080", false, "infra-ns", serverTLSOpt, nextProtosOpt)
 		if opts.BindAddress != ":8080" {
 			t.Fatalf("BindAddress = %q, want :8080", opts.BindAddress)
 		}
