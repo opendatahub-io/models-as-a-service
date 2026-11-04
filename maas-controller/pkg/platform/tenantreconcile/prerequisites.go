@@ -45,9 +45,9 @@ type PrerequisiteReport struct {
 // DSCI monitoring and usage-log checks run only when telemetryEnabled is true.
 // usageMetricsDashboard gates the monitoring-stack check: a missing monitoring stack is a
 // warning (and therefore Degraded) only when the legacy metrics dashboard is enabled.
-// usageLogging selects which DSCInitialization usage-log conditions warn.
-// When it is false, LokiStackAvailable, UsageLogsCollectorAvailable, or PersesAvailable
-// not True is a warning. When it is true, only PersesAvailable not True is a warning.
+// usageLogging selects which platform usage-log conditions warn. When false,
+// Monitoring's UsageLogsLokiStackAvailable and DSCI's UsageLogsCollectorAvailable
+// and PersesAvailable must be True. When true, only DSCI's PersesAvailable is checked.
 func CollectPrerequisiteReport(ctx context.Context, c client.Client, appNamespace string, usageMetricsDashboard, usageLogging, telemetryEnabled bool) PrerequisiteReport {
 	log := oteljson.FromContext(ctx)
 	var rep PrerequisiteReport
@@ -76,6 +76,12 @@ func CollectPrerequisiteReport(ctx context.Context, c client.Client, appNamespac
 		if msg := dsciUsageLoggingWarning(fetchErr, condErr, conds, usageLogging); msg != "" {
 			rep.Warnings = append(rep.Warnings, msg)
 			log.V(1).Info("MaaS prerequisite warning", "check", "dsci-usage-logging", "message", msg)
+		}
+		if !usageLogging {
+			if msg := monitoringUsageLogsWarning(ctx, c); msg != "" {
+				rep.Warnings = append(rep.Warnings, msg)
+				log.V(1).Info("MaaS prerequisite warning", "check", "monitoring-usage-logs", "message", msg)
+			}
 		}
 	}
 
@@ -171,9 +177,10 @@ const (
 	dsciConditionMonitoringReady             = "MonitoringReady"
 	dsciConditionMonitoringStackAvailable    = "MonitoringStackAvailable"
 	dsciConditionPersesAvailable             = "PersesAvailable"
-	dsciConditionLokiStackAvailable          = "LokiStackAvailable"
 	dsciConditionUsageLogsCollectorAvailable = "UsageLogsCollectorAvailable"
 )
+
+const monitoringConditionUsageLogsLokiStackAvailable = "UsageLogsLokiStackAvailable"
 
 var (
 	errDSCICRDMissing   = errors.New("DSCInitialization CRD not found")
@@ -324,10 +331,10 @@ func monitoringConditionWarning(conditions map[string]dsciConditionStatus, name,
 }
 
 // dsciUsageLoggingWarning reports platform usage-log dependencies.
-// usageLogging true checks only PersesAvailable. false also checks LokiStackAvailable
-// and UsageLogsCollectorAvailable.
+// usageLogging true checks only PersesAvailable. false also checks
+// UsageLogsCollectorAvailable. The usage-logs LokiStack is checked on Monitoring.
 func dsciUsageLoggingWarning(fetchErr, condErr error, conditions map[string]dsciConditionStatus, usageLogging bool) string {
-	impact := "Logs-based usage views will not work until LokiStackAvailable, UsageLogsCollectorAvailable, and PersesAvailable are True"
+	impact := "Logs-based usage views will not work until UsageLogsLokiStackAvailable, UsageLogsCollectorAvailable, and PersesAvailable are True"
 	if usageLogging {
 		impact = "Logs-based usage views will not work until PersesAvailable is True"
 	}
@@ -345,7 +352,6 @@ func dsciUsageLoggingWarning(fetchErr, condErr error, conditions map[string]dsci
 	}
 
 	required := []string{
-		dsciConditionLokiStackAvailable,
 		dsciConditionUsageLogsCollectorAvailable,
 		dsciConditionPersesAvailable,
 	}
@@ -376,4 +382,46 @@ func dsciUsageLoggingWarning(fetchErr, condErr error, conditions map[string]dsci
 		failures = append(failures, msg)
 	}
 	return strings.Join(failures, "; ")
+}
+
+func monitoringUsageLogsWarning(ctx context.Context, c client.Client) string {
+	const impact = "Logs-based usage views will not work until Monitoring UsageLogsLokiStackAvailable is True"
+	monitoring := &unstructured.Unstructured{}
+	monitoring.SetGroupVersionKind(schema.GroupVersionKind{
+		Group: "services.platform.opendatahub.io", Version: "v1alpha1", Kind: "Monitoring",
+	})
+	err := c.Get(ctx, types.NamespacedName{Name: "default-monitoring"}, monitoring)
+	if err != nil {
+		if meta.IsNoMatchError(err) {
+			return "Monitoring usage logging not configured: Monitoring CRD not found. " + impact
+		}
+		if apierrors.IsNotFound(err) {
+			return "Monitoring usage logging not configured: default-monitoring not found. " + impact
+		}
+		oteljson.FromContext(ctx).Error(err, "unable to verify Monitoring usage-logs status")
+		return "unable to verify Monitoring usage-logs status due to a cluster API error. " + impact
+	}
+	conditions, found, err := unstructured.NestedSlice(monitoring.Object, "status", "conditions")
+	if err != nil {
+		oteljson.FromContext(ctx).Error(err, "unable to read Monitoring conditions")
+		return "unable to verify Monitoring usage-logs conditions due to a status read error. " + impact
+	}
+	if !found {
+		return "Monitoring usage-logs status not available: no conditions found. " + impact
+	}
+	for _, item := range conditions {
+		condition, ok := item.(map[string]any)
+		if !ok || condition["type"] != monitoringConditionUsageLogsLokiStackAvailable {
+			continue
+		}
+		status, _ := condition["status"].(string)
+		reason, _ := condition["reason"].(string)
+		message, _ := condition["message"].(string)
+		return monitoringConditionWarning(map[string]dsciConditionStatus{
+			monitoringConditionUsageLogsLokiStackAvailable: {status: status, reason: reason, message: message},
+		}, monitoringConditionUsageLogsLokiStackAvailable,
+			"Monitoring UsageLogsLokiStackAvailable condition not found in Monitoring status. "+impact,
+			"Monitoring usage-logs LokiStack is not available (UsageLogsLokiStackAvailable=%s", impact)
+	}
+	return "Monitoring UsageLogsLokiStackAvailable condition not found in Monitoring status. " + impact
 }

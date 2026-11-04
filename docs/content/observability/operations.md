@@ -222,10 +222,12 @@ curl -s -H "Authorization: Bearer $(oc whoami -t)" --get \
 ```bash
 # 1. Confirm Perses is available (ODH/RHOAI observability console).
 #    When tenant telemetry is enabled, MaasTenantConfig is Degraded unless PersesAvailable is True.
-#    When usageLogging is false, it is also Degraded unless LokiStackAvailable and
-#    UsageLogsCollectorAvailable are True. See Setup.
+#    When usageLogging is false, it is also Degraded unless UsageLogsLokiStackAvailable
+#    on Monitoring and UsageLogsCollectorAvailable on DSCI are True. See Setup.
 kubectl get dscinitialization default-dsci -o json | \
-  jq '.status.conditions[] | select(.type=="PersesAvailable" or .type=="LokiStackAvailable" or .type=="UsageLogsCollectorAvailable") | {type, status}'
+  jq '.status.conditions[] | select(.type=="PersesAvailable" or .type=="UsageLogsCollectorAvailable") | {type, status}'
+kubectl get monitoring default-monitoring -o json | \
+  jq '.status.conditions[] | select(.type=="UsageLogsLokiStackAvailable") | {type, status}'
 
 # 2. Confirm PersesDashboard CRs exist
 kubectl get persesdashboard -A | grep maas
