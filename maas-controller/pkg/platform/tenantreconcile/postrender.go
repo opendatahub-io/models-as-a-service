@@ -26,6 +26,12 @@ func PostRender(ctx context.Context, log logr.Logger, tenant client.Object, reso
 	var filteredResources []unstructured.Unstructured
 	for i := range resources {
 		resource := &resources[i]
+		if resource.GetKind() == "ServiceMonitor" && resource.GetName() == "maas-controller-metrics" &&
+			params.TenantIdentifier != "" {
+			// The controller is shared by all tenants. Scrape it once from the
+			// default tenant's admitted application namespace.
+			continue
+		}
 
 		if params.SkipIPP && isIPPResource(resource.GroupVersionKind(), resource.GetName()) {
 			log.V(1).Info("Skipping IPP resource for praxis tenant",
@@ -71,6 +77,10 @@ func PostRender(ctx context.Context, log logr.Logger, tenant client.Object, reso
 			if err := configureMaaSAPIHTTPRoute(log, resource, gatewayNamespace, gatewayName, params); err != nil {
 				return nil, err
 			}
+		case gvk == GVKServiceMonitor && resource.GetName() == "maas-controller-metrics":
+			if err := configureControllerMetricsServiceMonitor(resource, params.ControllerNamespace); err != nil {
+				return nil, err
+			}
 		}
 
 		filteredResources = append(filteredResources, *resource)
@@ -98,6 +108,36 @@ func PostRender(ctx context.Context, log logr.Logger, tenant client.Object, reso
 	}
 	_ = ctx
 	return filteredResources, nil
+}
+
+func configureControllerMetricsServiceMonitor(resource *unstructured.Unstructured, controllerNamespace string) error {
+	if controllerNamespace == "" {
+		return errors.New("controller namespace is required for metrics ServiceMonitor")
+	}
+	if err := unstructured.SetNestedStringSlice(resource.Object, []string{controllerNamespace},
+		"spec", "namespaceSelector", "matchNames"); err != nil {
+		return fmt.Errorf("set controller metrics namespace selector: %w", err)
+	}
+	endpoints, found, err := unstructured.NestedSlice(resource.Object, "spec", "endpoints")
+	if err != nil {
+		return fmt.Errorf("read controller metrics endpoint: %w", err)
+	}
+	if !found || len(endpoints) != 1 {
+		return errors.New("controller metrics ServiceMonitor requires one endpoint")
+	}
+	endpoint, ok := endpoints[0].(map[string]any)
+	if !ok {
+		return errors.New("controller metrics ServiceMonitor endpoint is not an object")
+	}
+	if err := unstructured.SetNestedField(endpoint,
+		fmt.Sprintf("maas-controller-metrics.%s.svc", controllerNamespace), "tlsConfig", "serverName"); err != nil {
+		return fmt.Errorf("set controller metrics TLS server name: %w", err)
+	}
+	endpoints[0] = endpoint
+	if err := unstructured.SetNestedSlice(resource.Object, endpoints, "spec", "endpoints"); err != nil {
+		return fmt.Errorf("set controller metrics endpoint: %w", err)
+	}
+	return nil
 }
 
 func configureTokenRateLimitPolicy(log logr.Logger, resource *unstructured.Unstructured, gatewayNamespace, gatewayName, tenantID string) error {

@@ -1,5 +1,5 @@
 # Insecure metrics scrape (METRICS_SECURE=false in base/dev).
-# overlays/tls patches scheme to https with tlsConfig and bearer token.
+# overlays/tls patches scheme to HTTPS with TLS and Secret-backed authorization.
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:

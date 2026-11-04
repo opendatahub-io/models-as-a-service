@@ -56,6 +56,25 @@ replacements:
           - spec.template.spec.containers.[name=manager].env.[name=GATEWAY_NAMESPACE].value
 
 patches:
+  # The xKS API overlay does not deploy authenticated MaaS monitors.
+  - target:
+      kind: ClusterRole
+      name: maas-controller-metrics-credential
+    patch: |-
+      $patch: delete
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: ClusterRole
+      metadata:
+        name: maas-controller-metrics-credential
+  - target:
+      kind: ClusterRoleBinding
+      name: maas-controller-metrics-credential
+    patch: |-
+      $patch: delete
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: ClusterRoleBinding
+      metadata:
+        name: maas-controller-metrics-credential
   # Remove OCP service-serving cert annotation (cert-manager handles TLS on xKS)
   - target:
       kind: Service

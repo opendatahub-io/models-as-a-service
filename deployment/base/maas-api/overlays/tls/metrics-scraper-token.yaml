@@ -1,0 +1,10 @@
+# The service-account token controller populates the token data. Deleting this
+# Secret makes the tenant reconciler recreate it and issue a replacement token.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: maas-metrics-scraper-token
+  namespace: maas-api
+  annotations:
+    kubernetes.io/service-account.name: maas-metrics-scraper
+type: kubernetes.io/service-account-token

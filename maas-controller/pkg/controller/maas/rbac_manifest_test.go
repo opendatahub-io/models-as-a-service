@@ -49,6 +49,34 @@ func TestControllerRBACCoversMaaSAPIClusterRoles(t *testing.T) {
 	}
 }
 
+func TestMetricsScraperRBAC(t *testing.T) {
+	g := NewWithT(t)
+
+	controllerRole := readClusterRoleManifest(t, "metrics_credential_clusterrole.yaml")
+	g.Expect(hasUnrestrictedRuleForGroup(controllerRole.Rules, "", "secrets", "create", "patch")).To(BeTrue())
+	g.Expect(hasNonResourceURLRule(controllerRole.Rules, "/metrics", "get")).To(BeTrue())
+
+	var scraperRole rbacv1.ClusterRole
+	readManifest(t, filepath.Join("deployment", "base", "maas-api", "overlays", "tls", "metrics-scraper-clusterrole.yaml"), &scraperRole)
+	g.Expect(hasNonResourceURLRule(scraperRole.Rules, "/metrics", "get")).To(BeTrue())
+	g.Expect(scraperRole.Rules).To(HaveLen(1), "the scraper identity must only read metrics")
+	var binding rbacv1.ClusterRoleBinding
+	readManifest(t, filepath.Join("deployment", "base", "maas-api", "overlays", "tls", "metrics-scraper-clusterrolebinding.yaml"), &binding)
+	g.Expect(binding.RoleRef.Name).To(Equal(scraperRole.Name))
+	g.Expect(binding.Subjects).To(HaveLen(1))
+	g.Expect(binding.Subjects[0].Kind).To(Equal("ServiceAccount"))
+	g.Expect(binding.Subjects[0].Name).To(Equal("maas-metrics-scraper"))
+}
+
+func hasNonResourceURLRule(rules []rbacv1.PolicyRule, path string, verbs ...string) bool {
+	for _, rule := range rules {
+		if slices.Contains(rule.NonResourceURLs, path) && containsAll(rule.Verbs, verbs) {
+			return true
+		}
+	}
+	return false
+}
+
 // coversPermission reports whether rules grant verb on group/resource for every
 // requested resource name (or unrestricted access when none are requested).
 func coversPermission(rules []rbacv1.PolicyRule, group, resource, verb string, resourceNames []string) bool {

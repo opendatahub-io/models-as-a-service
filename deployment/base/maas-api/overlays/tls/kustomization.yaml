@@ -4,6 +4,11 @@ kind: Kustomization
 resources:
   - ../../default
   - destinationrule.yaml
+  - metrics-scraper-serviceaccount.yaml
+  - metrics-scraper-token.yaml
+  - metrics-scraper-clusterrole.yaml
+  - metrics-scraper-clusterrolebinding.yaml
+  - controller-servicemonitor.yaml
   - maas-deployment-ns-networkpolicy.yaml
   - maas-gateway-networkpolicy.yaml
 

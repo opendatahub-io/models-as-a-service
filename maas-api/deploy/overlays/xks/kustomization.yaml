@@ -74,6 +74,53 @@ patches:
       metadata:
         name: maas-api-metrics
   - target:
+      group: monitoring.coreos.com
+      version: v1
+      kind: ServiceMonitor
+      name: maas-controller-metrics
+    patch: |-
+      $patch: delete
+      apiVersion: monitoring.coreos.com/v1
+      kind: ServiceMonitor
+      metadata:
+        name: maas-controller-metrics
+  - target:
+      kind: ServiceAccount
+      name: maas-metrics-scraper
+    patch: |-
+      $patch: delete
+      apiVersion: v1
+      kind: ServiceAccount
+      metadata:
+        name: maas-metrics-scraper
+  - target:
+      kind: Secret
+      name: maas-metrics-scraper-token
+    patch: |-
+      $patch: delete
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: maas-metrics-scraper-token
+  - target:
+      kind: ClusterRole
+      name: maas-metrics-scraper
+    patch: |-
+      $patch: delete
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: ClusterRole
+      metadata:
+        name: maas-metrics-scraper
+  - target:
+      kind: ClusterRoleBinding
+      name: maas-metrics-scraper
+    patch: |-
+      $patch: delete
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: ClusterRoleBinding
+      metadata:
+        name: maas-metrics-scraper
+  - target:
       kind: NetworkPolicy
       name: maas-api-allow-monitoring
     patch: |

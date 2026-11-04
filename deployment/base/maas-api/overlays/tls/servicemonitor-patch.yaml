@@ -9,7 +9,11 @@ spec:
       port: https
       scheme: https
       interval: 30s
-      bearerTokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
+      authorization:
+        type: Bearer
+        credentials:
+          name: maas-metrics-scraper-token
+          key: token
       tlsConfig:
         ca:
           configMap:

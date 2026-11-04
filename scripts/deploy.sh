@@ -723,22 +723,6 @@ $([ -n "$cm_discovery_enabled" ] && echo "      - maas-discovery-enabled=${cm_di
 $([ -n "$cm_discovery_replicas" ] && echo "      - maas-discovery-replicas=${cm_discovery_replicas}")
 generatorOptions:
   disableNameSuffixHash: true
-# Re-run the serverName replacement at the parent level so it picks up the
-# merged namespace value (child replacements run before parent merge).
-replacements:
-  - source:
-      kind: ConfigMap
-      name: maas-parameters
-      fieldPath: data.namespace
-    targets:
-      - select:
-          kind: ServiceMonitor
-          name: maas-controller-metrics
-        fieldPaths:
-          - spec.endpoints.0.tlsConfig.serverName
-        options:
-          delimiter: "."
-          index: 1
 EOF
     (
       cd "${controller_overlay_dir}" && \
