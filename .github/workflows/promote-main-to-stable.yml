@@ -26,7 +26,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      issues: write        # label operations go through the issues API
       pull-requests: write
 
     steps:

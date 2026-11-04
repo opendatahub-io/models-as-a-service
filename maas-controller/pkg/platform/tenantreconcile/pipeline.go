@@ -113,6 +113,12 @@ func RunPlatformWithReader(
 	if err != nil {
 		return nil, fmt.Errorf("build params: %w", err)
 	}
+	bufferLimit, bufferWarning := ResolveGatewayBodyBufferLimitMB(gw)
+	params.GatewayBodyBufferLimitMB = bufferLimit
+	if bufferWarning != "" {
+		params.Warnings = append(params.Warnings, bufferWarning)
+		log.Info(bufferWarning)
+	}
 	applyMaaSAPIEgressConfig(&params, mcfg)
 
 	if !params.SkipIPP {
@@ -276,7 +282,7 @@ func reconcilePayloadProcessingSwitch(
 			}
 			log.Info("plugins ConfigMap migration gate allow", "baseline", gate.Baseline, "reason", gate.Reason)
 			intent, err := persistAPITranslationMigrationIntent(
-				ctx, c, apiReader, tenant, gate.Baseline == "default+response-api-translation",
+				ctx, c, apiReader, tenant, ippBaselineTranslatesRequests(gate.Baseline),
 			)
 			if err != nil {
 				return payloadProcessingSwitchOutcome{}, fmt.Errorf("prepare API translation migration intent before IPP cleanup: %w", err)
@@ -538,6 +544,15 @@ const aiGatewayControllerFieldOwner = "ai-gateway-controller"
 
 const ippExternalModelManagedBy = "ipp-external-model-reconciler"
 
+// The IPP ExternalProvider reconciler labels the transport it creates for a
+// provider with these values.
+const (
+	ippExternalProviderManagedBy = "ipp-external-provider-reconciler"
+	ippExternalProviderLabel     = "inference.opendatahub.io/external-provider"
+)
+
+var inferenceExternalProviderOwnerGVK = schema.GroupVersionKind{Group: "inference.opendatahub.io", Version: "v1alpha1", Kind: "ExternalProvider"}
+
 const ippExternalModelLabel = "inference.opendatahub.io/external-model"
 
 var inferenceExternalModelRouteOwnerGVK = schema.GroupVersionKind{Group: "inference.opendatahub.io", Version: "v1alpha1", Kind: "ExternalModel"}
@@ -762,6 +777,9 @@ func cleanupIPPResources(ctx context.Context, c client.Client, params PlatformPa
 	if err := cleanupIPPExternalModelRoutes(ctx, c, params, log); err != nil {
 		return err
 	}
+	if err := cleanupIPPExternalProviderTransport(ctx, c, params, log); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -814,8 +832,11 @@ func ensureIPPWritersStopped(ctx context.Context, c client.Client, params Platfo
 
 // cleanupIPPExternalModelRoutes removes only routes created by the IPP ExternalModel
 // reconciler. Route names alone do not prove ownership. ModelNamespace is the
-// tenant namespace containing ExternalModels and their routes; AppNamespace may
-// be shared infrastructure and must not be searched by this cleanup. Foreground
+// tenant namespace containing ExternalModels and their routes. The default
+// tenant's IPP also served the namespaces of no tenant, whose models
+// ai-gateway-controller now attaches to the default tenant's Gateway (see
+// tenantNamespaces), so its cleanup searches those too. AppNamespace may be
+// shared infrastructure and must not be searched by this cleanup. Foreground
 // deletion of the IPP Deployments completes before this runs, ensuring their
 // in-process route writer has stopped.
 func cleanupIPPExternalModelRoutes(ctx context.Context, c client.Client, params PlatformParams, log logr.Logger) error {
@@ -824,16 +845,21 @@ func cleanupIPPExternalModelRoutes(ctx context.Context, c client.Client, params 
 	}
 	routes := &unstructured.UnstructuredList{}
 	routes.SetGroupVersionKind(GVKHTTPRoute.GroupVersion().WithKind("HTTPRouteList"))
-	if err := c.List(ctx, routes, client.InNamespace(params.ModelNamespace)); err != nil {
-		return fmt.Errorf("list existing IPP HTTPRoutes in %s: %w", params.ModelNamespace, err)
+	listOpts, inScope, scope, err := ippModelNamespaceScope(ctx, c, params)
+	if err != nil {
+		return fmt.Errorf("clean up IPP-owned HTTPRoutes: %w", err)
+	}
+	listOpts = append(listOpts, client.MatchingLabels{"app.kubernetes.io/managed-by": ippExternalModelManagedBy})
+	if err := c.List(ctx, routes, listOpts...); err != nil {
+		return fmt.Errorf("list existing IPP HTTPRoutes %s: %w", scope, err)
 	}
 	for i := range routes.Items {
 		route := &routes.Items[i]
-		labels := route.GetLabels()
-		if labels["app.kubernetes.io/managed-by"] != ippExternalModelManagedBy {
+		namespace := route.GetNamespace()
+		if !inScope(namespace) {
 			continue
 		}
-		modelName := labels[ippExternalModelLabel]
+		modelName := route.GetLabels()[ippExternalModelLabel]
 		if modelName == "" || hasSSAFieldManager(route, aiGatewayControllerFieldOwner) {
 			continue
 		}
@@ -844,11 +870,11 @@ func cleanupIPPExternalModelRoutes(ctx context.Context, c client.Client, params 
 		}
 		inference := &unstructured.Unstructured{}
 		inference.SetGroupVersionKind(inferenceExternalModelRouteOwnerGVK)
-		if err := c.Get(ctx, client.ObjectKey{Namespace: params.ModelNamespace, Name: modelName}, inference); err != nil {
+		if err := c.Get(ctx, client.ObjectKey{Namespace: namespace, Name: modelName}, inference); err != nil {
 			if apierrors.IsNotFound(err) {
 				continue
 			}
-			return fmt.Errorf("get inference ExternalModel %s/%s for IPP-owned route %s: %w", params.ModelNamespace, modelName, route.GetName(), err)
+			return fmt.Errorf("get inference ExternalModel %s/%s for IPP-owned route %s: %w", namespace, modelName, route.GetName(), err)
 		}
 		if inference.GetUID() != owner.UID {
 			continue
@@ -860,6 +886,84 @@ func cleanupIPPExternalModelRoutes(ctx context.Context, c client.Client, params 
 		}
 		if err := c.Delete(ctx, route, deleteOptions...); err != nil && !apierrors.IsNotFound(err) {
 			return fmt.Errorf("delete stale IPP HTTPRoute %s/%s: %w", route.GetNamespace(), route.GetName(), err)
+		}
+	}
+	return nil
+}
+
+// ippModelNamespaceScope returns where IPP served the tenant's models: its
+// model namespace or, for the default tenant, also every namespace of no
+// tenant (see cleanupIPPExternalModelRoutes).
+func ippModelNamespaceScope(ctx context.Context, c client.Client, params PlatformParams) (
+	listOpts []client.ListOption, inScope func(namespace string) bool, scope string, err error) {
+	if params.TenantIdentifier != "" {
+		return []client.ListOption{client.InNamespace(params.ModelNamespace)},
+			func(namespace string) bool { return namespace == params.ModelNamespace },
+			"in " + params.ModelNamespace, nil
+	}
+	tenantNS, err := tenantNamespaces(ctx, c)
+	if err != nil {
+		return nil, nil, "", err
+	}
+	return nil, func(namespace string) bool {
+		return namespace == params.ModelNamespace || namespace != params.AppNamespace && !tenantNS.Has(namespace)
+	}, "cluster-wide", nil
+}
+
+// cleanupIPPExternalProviderTransport removes the Service, ServiceEntry and
+// DestinationRule the IPP ExternalProvider reconciler created next to each
+// provider, in the namespaces cleanupIPPExternalModelRoutes searches.
+// ai-gateway-controller applies its own transport under other names, so these
+// would otherwise remain until their provider is deleted, with two
+// ServiceEntries and DestinationRules for each provider host. Only an object
+// whose controller is the ExternalProvider it names is deleted; the IPP
+// writers have stopped before this runs.
+func cleanupIPPExternalProviderTransport(ctx context.Context, c client.Client, params PlatformParams, log logr.Logger) error {
+	if params.ModelNamespace == "" {
+		return errors.New("model namespace is required for IPP-owned provider transport cleanup")
+	}
+	listOpts, inScope, scope, err := ippModelNamespaceScope(ctx, c, params)
+	if err != nil {
+		return fmt.Errorf("clean up IPP-owned provider transport: %w", err)
+	}
+	listOpts = append(listOpts, client.MatchingLabels{"app.kubernetes.io/managed-by": ippExternalProviderManagedBy})
+	for _, gvk := range []schema.GroupVersionKind{GVKService, GVKServiceEntry, GVKDestinationRule} {
+		objects := &unstructured.UnstructuredList{}
+		objects.SetGroupVersionKind(gvk.GroupVersion().WithKind(gvk.Kind + "List"))
+		if err := c.List(ctx, objects, listOpts...); err != nil {
+			return fmt.Errorf("list IPP provider %ss %s: %w", gvk.Kind, scope, err)
+		}
+		for i := range objects.Items {
+			obj := &objects.Items[i]
+			namespace := obj.GetNamespace()
+			providerName := obj.GetLabels()[ippExternalProviderLabel]
+			if !inScope(namespace) || providerName == "" || hasSSAFieldManager(obj, aiGatewayControllerFieldOwner) {
+				continue
+			}
+			owner := controllerOwner(obj, inferenceExternalProviderOwnerGVK, providerName)
+			if owner == nil || owner.UID == "" {
+				log.Info("Skipping ambiguous IPP provider transport cleanup", "kind", gvk.Kind, "name", obj.GetName(), "namespace", namespace)
+				continue
+			}
+			provider := &unstructured.Unstructured{}
+			provider.SetGroupVersionKind(inferenceExternalProviderOwnerGVK)
+			if err := c.Get(ctx, client.ObjectKey{Namespace: namespace, Name: providerName}, provider); err != nil {
+				if apierrors.IsNotFound(err) {
+					continue
+				}
+				return fmt.Errorf("get inference ExternalProvider %s/%s for IPP-owned %s %s: %w", namespace, providerName, gvk.Kind, obj.GetName(), err)
+			}
+			if provider.GetUID() != owner.UID {
+				continue
+			}
+			log.Info("Deleting IPP-owned provider transport while enabling Praxis", "kind", gvk.Kind, "name", obj.GetName(), "namespace", namespace, "provider", providerName)
+			deleteOptions, err := validatedDeleteOptions(obj)
+			if err != nil {
+				return fmt.Errorf("prepare IPP-owned %s %s/%s deletion: %w", gvk.Kind, namespace, obj.GetName(), err)
+			}
+			if err := c.Delete(ctx, obj, deleteOptions...); err != nil && !apierrors.IsNotFound(err) {
+				return fmt.Errorf("delete stale IPP %s %s/%s: %w", gvk.Kind, namespace, obj.GetName(), err)
+			}
 		}
 	}
 	return nil

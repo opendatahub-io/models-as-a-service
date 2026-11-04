@@ -29,6 +29,46 @@
             "claim.name": "groups",
             "userinfo.token.claim": "true"
           }
+            },
+            {
+              "name": "maas-api-audience",
+              "protocol": "openid-connect",
+              "protocolMapper": "oidc-audience-mapper",
+              "consentRequired": false,
+              "config": {
+                "included.custom.audience": "maas-api",
+                "id.token.claim": "false",
+                "access.token.claim": "true",
+                "userinfo.token.claim": "false"
+              }
+            },
+            {
+              "name": "maas-api-access-token-purpose",
+              "protocol": "openid-connect",
+              "protocolMapper": "oidc-hardcoded-claim-mapper",
+              "consentRequired": false,
+              "config": {
+                "claim.name": "token_use",
+                "claim.value": "access",
+                "jsonType.label": "String",
+                "id.token.claim": "false",
+                "access.token.claim": "true",
+                "userinfo.token.claim": "false"
+              }
+            },
+            {
+              "name": "maas-organizations",
+              "protocol": "openid-connect",
+              "protocolMapper": "oidc-usermodel-attribute-mapper",
+              "config": {
+                "user.attribute": "maasOrganizations",
+                "claim.name": "https://redhat\\.com/maas/orgs",
+                "jsonType.label": "JSON",
+                "id.token.claim": "true",
+                "access.token.claim": "true",
+                "userinfo.token.claim": "true",
+                "multivalued": "true"
+              }
         }
       ]
     },
@@ -47,7 +87,9 @@
     {"name": "Engineering"},
     {"name": "Site-Reliability"},
     {"name": "Project-Alpha"},
-    {"name": "unsafe;group"}
+    {"name": "unsafe;group"},
+    {"name": "42c3e46f-2477-44d7-a85b-d3b43f6b31fa/ai-grid-admins"},
+    {"name": "53d4f57e-3588-55e8-b96c-4ec54a7c42fa/ai-grid-users"}
   ],
   "users": [
     {
@@ -89,6 +131,31 @@
       "requiredActions": [],
       "credentials": [{"type": "password", "value": "letmein", "temporary": false}],
       "groups": ["Engineering", "unsafe;group"]
+    },
+    {
+      "username": "grid_admin",
+      "enabled": true,
+      "emailVerified": true,
+      "requiredActions": [],
+      "credentials": [{"type": "password", "value": "letmein", "temporary": false}],
+      "attributes": {
+        "maasOrganizations": [
+          "{\"organization_id\":\"42c3e46f-2477-44d7-a85b-d3b43f6b31fa\",\"roles\":[\"admins\"]}",
+          "{\"organization_id\":\"53d4f57e-3588-55e8-b96c-4ec54a7c42fa\",\"roles\":[\"users\"]}"
+        ]
+      },
+      "groups": [
+        "42c3e46f-2477-44d7-a85b-d3b43f6b31fa/ai-grid-admins",
+        "53d4f57e-3588-55e8-b96c-4ec54a7c42fa/ai-grid-users"
+      ]
+    },
+    {
+      "username": "grid_no_org",
+      "enabled": true,
+      "emailVerified": true,
+      "requiredActions": [],
+      "credentials": [{"type": "password", "value": "letmein", "temporary": false}],
+      "groups": []
     }
   ]
 }

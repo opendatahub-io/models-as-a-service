@@ -131,8 +131,15 @@ func (r *LifecycleReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
+	// Older versions left a finalizer on this controller's own Deployment. Remove it
+	// before any setup or teardown step can requeue or fail, so namespace deletion never
+	// waits for this controller to clean up its own workload.
+	if err := r.stripLegacyCleanupFinalizer(ctx, log, req.NamespacedName); err != nil {
+		return ctrl.Result{}, err
+	}
+
 	if dep.DeletionTimestamp.IsZero() {
-		// Strip before anything else so that, if teardown is requested below, Config
+		// Strip before any Config work below so that, if teardown is requested, Config
 		// deletion can never cascade-delete the Deployment via a stale ownerReference
 		// from a pre-self-teardown install.
 		if err := r.stripLegacyDeploymentConfigOwnerReference(ctx, log, req.NamespacedName); err != nil {
@@ -172,9 +179,6 @@ func (r *LifecycleReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		if err := r.ensureDiscoveryService(ctx, log); err != nil {
 			return ctrl.Result{}, err
 		}
-		if err := r.stripLegacyCleanupFinalizer(ctx, log, req.NamespacedName); err != nil {
-			return ctrl.Result{}, err
-		}
 		if cfg != nil {
 			if err := r.syncModuleStatus(ctx, cfg); err != nil {
 				return ctrl.Result{}, err
@@ -186,10 +190,7 @@ func (r *LifecycleReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		return ctrl.Result{}, nil
 	}
 
-	// Terminating: remove legacy finalizer only so deletion is not blocked.
-	if err := r.stripLegacyCleanupFinalizer(ctx, log, req.NamespacedName); err != nil {
-		return ctrl.Result{}, err
-	}
+	// Terminating: the legacy finalizer was already stripped above.
 	return ctrl.Result{}, nil
 }
 
@@ -396,6 +397,14 @@ func (r *LifecycleReconciler) ensureTenantReferencesConfig(ctx context.Context) 
 			return nil, nil
 		}
 		return nil, err
+	}
+	// Never link a terminating MaasTenantConfig to the current Config. Re-parenting it
+	// is wrong, and the patch fails when its namespace is already gone, which turns
+	// into a reconciler error loop during teardown.
+	if !tenant.DeletionTimestamp.IsZero() {
+		log.Info("default MaasTenantConfig is terminating; skipping Config owner reference link",
+			"namespace", r.TenantSubscriptionNamespace)
+		return nil, nil
 	}
 	if tenantReferencesConfig(&tenant, &cfg) {
 		return nil, nil

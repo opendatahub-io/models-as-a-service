@@ -69,6 +69,7 @@ pytestmark = pytest.mark.xdist_group("security")
 # P0: API Key Management Isolation
 # ============================================================================
 
+@pytest.mark.smoke
 class TestAPIKeyManagementIsolation:
     """Verify that inference API keys cannot act as management credentials."""
 
@@ -135,6 +136,7 @@ class TestAPIKeyManagementIsolation:
 # P0: Header Spoofing Tests
 # ============================================================================
 
+@pytest.mark.smoke
 class TestHeaderSpoofing:
     """Verify that client-supplied identity headers cannot forge authorization.
 
@@ -359,6 +361,7 @@ class TestHeaderSpoofing:
 # P1: Expired Key Rejection
 # ============================================================================
 
+@pytest.mark.smoke
 class TestExpiredKeyRejection:
     """Verify that expired API keys are rejected at the gateway."""
 
@@ -406,6 +409,7 @@ class TestExpiredKeyRejection:
 # P1: Cross-Model Access
 # ============================================================================
 
+@pytest.mark.smoke
 class TestCrossModelAccess:
     """Verify subscription-model binding is enforced at gateway.
 
@@ -535,7 +539,7 @@ class TestMissingModelRef:
                 groups=["system:authenticated"],
             )
 
-            _wait_for_maas_subscription_phase(sub_name, "Degraded", timeout=60)
+            _wait_for_maas_subscription_phase(sub_name, "Degraded")
 
             # No TRLP should exist for the ghost model
             ghost_trlp_name = f"maas-trlp-{ghost_model}"
@@ -575,7 +579,7 @@ class TestMissingModelRef:
                 groups=["system:authenticated"],
             )
 
-            _wait_for_maas_auth_policy_phase(policy_name, "Degraded", timeout=60, require_auth_policies=False)
+            _wait_for_maas_auth_policy_phase(policy_name, "Degraded", require_auth_policies=False)
 
             # No AuthPolicy should exist for the ghost model
             ghost_auth_name = f"maas-auth-{ghost_model}"
@@ -601,6 +605,7 @@ class TestMissingModelRef:
 # P2: Header Abuse
 # ============================================================================
 
+@pytest.mark.smoke
 class TestHeaderAbuse:
     """Verify malicious header values are handled safely."""
 
@@ -636,6 +641,7 @@ class TestHeaderAbuse:
 # P0: Internal Endpoint Isolation (FIND-004)
 # ============================================================================
 
+@pytest.mark.smoke
 class TestInternalEndpointIsolation:
     """Verify internal API endpoints are not reachable through the gateway.
 
