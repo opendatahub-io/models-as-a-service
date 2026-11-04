@@ -32,7 +32,7 @@ from tenant_external_model_helpers import (
     provision_external_model_stack,
     serve_external_model_in_tenant,
 )
-from test_helper import RECONCILE_WAIT, _delete_cr
+from test_helper import RECONCILE_WAIT, _delete_crs_and_wait
 
 log = logging.getLogger(__name__)
 
@@ -100,18 +100,23 @@ class TestLiveExternalModelUpdate:
         credential_b = served["credential_b"]
         assert credential_a != credential_b
 
-        def infer():
+        def infer(retries=1, readiness_timeout=None):
             return infer_external_chat(
                 tenant["gateway_url"],
                 model["namespace"],
                 model["name"],
                 served["api_key"],
                 path_tag=model["path_tag"],
-                retries=1,
+                retries=retries,
+                readiness_timeout=readiness_timeout,
             )
 
         log.info("Baseline: asserting %s serves provider A", model["name"])
-        assert_served_by_provider(infer(), model["path_tag"], credential=credential_a)
+        # Poll out route propagation (a fresh route can 404 / return a transient
+        # gateway response) before verifying the baseline, or we false-fail
+        # before the live update under test ever runs.
+        baseline = infer(retries=6, readiness_timeout=LIVE_UPDATE_TIMEOUT)
+        assert_served_by_provider(baseline, model["path_tag"], credential=credential_a)
 
         log.info("Re-pointing %s provider ref A->B in place", model["name"])
         apply_external_model(
@@ -122,21 +127,27 @@ class TestLiveExternalModelUpdate:
             path_tag=model["path_tag"],
         )
 
-        wait_until(
-            lambda: (r := infer()).status_code == 200 and credential_b in r.text,
+        # Reuse the response that satisfied the poll instead of re-inferring,
+        # so a transient gateway response on a fresh call can't fail the check.
+        rerouted = wait_until(
+            lambda: (r := infer()).status_code == 200 and credential_b in r.text and r,
             timeout=LIVE_UPDATE_TIMEOUT,
             what="re-pointed model serves provider B's credential",
         )
-        rerouted = infer()
         assert_served_by_provider(rerouted, model["path_tag"], credential=credential_b)
         assert credential_a not in rerouted.text, (
             f"stale provider A credential still injected: {redact_sensitive(rerouted.text)}"
         )
 
         log.info("Deleting %s; expecting it to stop serving live", model["name"])
-        _delete_cr(EXTERNAL_MODEL_KIND, model["name"], model["namespace"])
+        # Confirm the CR is actually gone (a bare delete only logs on failure),
+        # then require the route's missing-model verdict (404) rather than the
+        # first non-200 — a transient 5xx/empty-401 would false-pass removal.
+        _delete_crs_and_wait(
+            [(EXTERNAL_MODEL_KIND, model["name"], model["namespace"])]
+        )
         wait_until(
-            lambda: infer().status_code != 200,
+            lambda: infer().status_code == 404,
             timeout=LIVE_UPDATE_TIMEOUT,
-            what="deleted model stops serving (no stale 200)",
+            what="deleted model stops serving (404, no stale 200)",
         )
