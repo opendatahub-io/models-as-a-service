@@ -1323,6 +1323,64 @@ func TestCleanupIPPExternalModelRoutes_DefaultTenantCoversNamespacesOfNoTenant(t
 	}
 }
 
+// withParentGateway attaches the route to a Gateway.
+func withParentGateway(route *unstructured.Unstructured, namespace, name string) *unstructured.Unstructured {
+	route.Object["spec"] = map[string]any{"parentRefs": []any{map[string]any{
+		"group": "gateway.networking.k8s.io", "kind": "Gateway", "name": name, "namespace": namespace,
+	}}}
+	return route
+}
+
+// A tenant's IPP also routed models of other namespaces on the tenant's
+// Gateway, other tenants' included (RHOAIENG-102557). Those routes go with the
+// migration; routes on another Gateway, foreign-owned routes and the shared
+// infrastructure namespace are left alone.
+func TestCleanupIPPExternalModelRoutes_RemovesRoutesOnTenantGatewayElsewhere(t *testing.T) {
+	const (
+		tenantNS = "models-as-a-service"
+		infraNS  = "maas-system"
+		gwNS     = "openshift-ingress"
+	)
+	objects := tenantNamespaceObjects([]string{tenantNS, "tenant-b"}, nil)
+	route := func(namespace, name, gateway string, uid, ownerUID types.UID) {
+		objects = append(objects, withParentGateway(ippOwnedExternalModelRoute(namespace, name, ownerUID), gwNS, gateway), ippExternalModel(namespace, name, uid))
+	}
+	route("tenant-b", "on-default", "maas-default-gateway", "b-1", "b-1")
+	route("tenant-b", "on-own", "tenant-b", "b-2", "b-2")
+	route("tenant-b", "stale-owner", "maas-default-gateway", "b-3", "other-uid")
+	route(infraNS, "on-default", "maas-default-gateway", "i-1", "i-1")
+	route("llm", "on-tenant-b", "tenant-b", "l-1", "l-1")
+	routeExists := func(cl client.Client, namespace, name string) bool {
+		got := &unstructured.Unstructured{}
+		got.SetGroupVersionKind(GVKHTTPRoute)
+		err := cl.Get(context.Background(), client.ObjectKey{Namespace: namespace, Name: name}, got)
+		require.True(t, err == nil || apierrors.IsNotFound(err), "get route: %v", err)
+		return err == nil
+	}
+
+	cl := fake.NewClientBuilder().WithScheme(praxisTestScheme(t)).WithObjects(objects...).Build()
+	require.NoError(t, cleanupIPPExternalModelRoutes(context.Background(), cl, PlatformParams{
+		AppNamespace: infraNS, ModelNamespace: tenantNS, GatewayNamespace: gwNS, GatewayName: "maas-default-gateway",
+	}, logr.Discard()))
+	for key, kept := range map[string]bool{
+		"tenant-b/on-default": false, "tenant-b/on-own": true, "tenant-b/stale-owner": true,
+		infraNS + "/on-default": true,
+	} {
+		namespace, name, _ := strings.Cut(key, "/")
+		assert.Equal(t, kept, routeExists(cl, namespace, name), "route %s", key)
+	}
+
+	// Another tenant's migration removes its own Gateway's routes elsewhere.
+	cl = fake.NewClientBuilder().WithScheme(praxisTestScheme(t)).WithObjects(objects...).Build()
+	require.NoError(t, cleanupIPPExternalModelRoutes(context.Background(), cl, PlatformParams{
+		TenantIdentifier: "tenant-b", AppNamespace: infraNS, ModelNamespace: "tenant-b", GatewayNamespace: gwNS, GatewayName: "tenant-b",
+	}, logr.Discard()))
+	for key, kept := range map[string]bool{"llm/on-tenant-b": false, "tenant-b/on-own": false, "tenant-b/on-default": false, infraNS + "/on-default": true} {
+		namespace, name, _ := strings.Cut(key, "/")
+		assert.Equal(t, kept, routeExists(cl, namespace, name), "route %s", key)
+	}
+}
+
 func TestCleanupIPPExternalModelRoutesRequiresModelNamespace(t *testing.T) {
 	err := cleanupIPPExternalModelRoutes(context.Background(), fake.NewClientBuilder().WithScheme(praxisTestScheme(t)).Build(), PlatformParams{AppNamespace: "maas-system"}, logr.Discard())
 	assert.ErrorContains(t, err, "model namespace is required")
