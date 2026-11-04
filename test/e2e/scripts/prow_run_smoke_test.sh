@@ -52,6 +52,8 @@
 #   GATEWAY_NAMESPACE - Gateway namespace (default: openshift-ingress)
 #   MODEL_NAMESPACE - Namespace of models (default: llm)
 #   E2E_PARALLEL_WORKERS - pytest-xdist worker count (default: 5)
+#   E2E_SMOKE_ONLY - Restrict pytest to @pytest.mark.smoke (default: false).
+#                    /group-test sets true via Tekton podTemplate env.
 #   E2E_MAXFAIL - failures before a pass stops (default: 0 here, i.e. never;
 #                 run_e2e_tests.sh defaults to 5 when invoked directly)
 #   TENANT_EXTERNAL_MODEL_CROSSNS_E2E - Opt in to P1 cross-namespace external
@@ -468,6 +470,9 @@ print(f"azp={authorized_party}, audience={token_audience!r}, organizations={len(
     # Delegate pytest execution to run_e2e_tests.sh
     export ARTIFACTS_DIR
     export E2E_PARALLEL_WORKERS="${E2E_PARALLEL_WORKERS:-5}"
+    # Full suite by default (nightly / local / unmarked callers). /group-test opts
+    # into the low-churn subset via Tekton: E2E_SMOKE_ONLY=true.
+    export E2E_SMOKE_ONLY="${E2E_SMOKE_ONLY:-false}"
     # Run the whole parallel pass even when some tests fail. The cluster's
     # control plane (kuadrant-operator, maas-controller) is shared by all
     # workers and goes unhealthy in roughly one run in five; a low cap aborts
