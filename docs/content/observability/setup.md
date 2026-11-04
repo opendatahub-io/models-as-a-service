@@ -61,8 +61,8 @@ kubectl patch maastenantconfig default-tenant -n models-as-a-service --type=merg
 
 This creates:
 
-- **TelemetryPolicy** (`maas-telemetry`) - Adds `subscription`, `model`, `organization_id` labels to Limitador metrics (user and group labels disabled by default)
-- **Istio Telemetry** (`latency-per-subscription`) - Adds `subscription` label to gateway latency
+- **TelemetryPolicy** (`maas-telemetry`) - Adds canonical `tenant_name`, `tenant_namespace`, `subscription`, `organization_id`, and `model` labels to supported Limitador metrics (user and group labels disabled by default)
+- **Istio Telemetry** (`latency-per-subscription`) - Adds producer scope, subscription, and organization labels to gateway latency; organization is controlled by `metrics.captureOrganization` and defaults to enabled
 
 **Verify:**
 
@@ -74,7 +74,7 @@ kubectl get telemetry -n openshift-ingress latency-per-subscription
     Requires OpenShift Service Mesh 2.4+, Kuadrant/RHCL, and deployed Gateway.
 
 !!! warning "AuthPolicy Dependency"
-    Istio Telemetry reads `X-MaaS-Subscription`. If the header is absent, the `subscription` label is empty. See [Identity headers](../architecture-internals/authentication-internals.md#identity-headers-and-defense-in-depth) for its behavior with API keys and user tokens.
+    Istio Telemetry reads `X-MaaS-Subscription` and `x-maas-organization-id`. MaaS sets these response headers from resolved subscription data, using empty values when scope is unresolved. The organization label is emitted only when `metrics.captureOrganization` is enabled. See [Identity headers](../architecture-internals/authentication-internals.md#identity-headers-and-defense-in-depth).
 
 Additionally, a Perses dashboard for metrics-based usage is applied by the operator (`LifecycleReconciler.ensureUsageDashboard`) when `usageMetricsDashboard` is `true` on `Config` (defaults to `false`). It is **not** created by `install-observability.sh`. The dashboard shows data when `captureUser` and `captureModelUsage` are turned on.
 
@@ -93,19 +93,20 @@ kubectl patch configs.maas.opendatahub.io default --type=merge -p '{"spec":{"usa
 
 We have introduced usage dashboards that are based on structured access logs rather than on metrics for both administrators and non-admin users as a tech-preview feature. The data presented in these dashboards is more accurate and consistent, and a bit more enriched, compared to the data in the metrics-based dashboard.
 
-The controller deploys the tenancy proxy and usage-log dashboards whenever `Config/default` is present, from `deployment/components/observability/usage-logs/dsci-managed/`. When `Config.spec.usageLogging` is `true`, it renders `usage-logs/` instead, which also deploys the usage-logs collector. The per-tenant EnvoyFilter is removed when `MaasTenantConfig.spec.telemetry.enabled` is not `true`. When `usageLogging` is `true`, the EnvoyFilter sends logs to `usage-logs-collector`. When it is `false` or omitted, the EnvoyFilter sends logs to `data-science-usage-logs-collector`.
+The controller deploys the tenancy proxy and usage-log dashboards whenever `Config/default` is present, from `deployment/components/observability/usage-logs/dsci-managed/`. When `Config.spec.usageLogging` is `true`, it renders `usage-logs/` instead, which also deploys the usage-logs collector. The per-tenant EnvoyFilter is removed when `MaasTenantConfig.spec.telemetry.enabled` is not `true`. When `usageLogging` is `true`, the EnvoyFilter sends plaintext OTLP to `usage-logs-collector`. When it is `false` or omitted, the EnvoyFilter sends OTLP over TLS to the headless `data-science-usage-logs-collector-headless` Service, trusting the OpenShift service CA and verifying the headless-service DNS name as SNI with TLS 1.2 or newer.
 
 When tenant telemetry is enabled and `usageLogging` is `false` or omitted, `MaasTenantConfig` phase is `Degraded` if `LokiStackAvailable`, `UsageLogsCollectorAvailable`, or `PersesAvailable` is not `True` on `DSCInitialization`. When `usageLogging` is `true` and tenant telemetry is enabled, the phase is `Degraded` if `PersesAvailable` is not `True`. With telemetry disabled, `MaasTenantConfig` stays independent of those platform conditions.
 
 - **EnvoyFilter** (`maas-model-access-logs`) - emits OTLP structured access logs from the gateway
 - **OpenTelemetry Collector** (`usage-logs-collector`) - collects the logs and exports them to Loki; deployed only when `usageLogging` is `true`
-- **Tenancy Proxy** (`usage-logs-tenancy-proxy`) - filters user-scoped usage data for non-admin users
+- **Tenancy Proxy** (`usage-logs-tenancy-proxy`) - filters user-scoped usage data for non-admin users; serves TLS 1.3 only and negotiates the `X25519MLKEM768` hybrid post-quantum key-exchange group when the client offers it, with classical groups as fallback (OpenSSL configuration in the `usage-tenancy-proxy-source` ConfigMap, selected via `OPENSSL_CONF`)
 - **Perses Dashboard** (`dashboard-4-maas-usage-logs-admin`) - usage dashboard for administrators (shows information on all users)
 - **Perses Dashboard** (`dashboard-5-maas-usage-logs`) - user-scoped usage dashboard
 
 !!! warning "Privacy"
     Structured access logs record request attributes.
     User identity (`user_id`) is included only when `MaasTenantConfig.spec.telemetry.logs.captureUser` is `true`.
+    Tenant attribution (`tenant_name` and `service.namespace`) is always included from controller-resolved values. Cluster attribution is owned by the telemetry collector.
     Organization ID (`organization_id`) is included by default when the field is set on the `MaaSSubscription`. Set `MaasTenantConfig.spec.telemetry.logs.captureOrganization` to `false` to omit it. Independent of `metrics.captureOrganization`.
     Cost center is included when that field is set on the `MaaSSubscription`.
     Review GDPR/privacy requirements, retention, and dashboard access before enabling either setting.

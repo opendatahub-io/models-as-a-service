@@ -63,6 +63,16 @@ RHCL_NAMESPACE="${RHCL_NAMESPACE:-kuadrant-system}"
 
 CRD_WAIT_TIMEOUT="${CRD_WAIT_TIMEOUT:-600}"
 
+# CI opt-in. OLM never retries a failed bundle unpack unless the OperatorGroup
+# sets a minimum retry interval; the timeout replaces OLM's 10m default.
+OLM_BUNDLE_UNPACK_RETRY="${OLM_BUNDLE_UNPACK_RETRY:-false}"
+BUNDLE_UNPACK_TIMEOUT="${BUNDLE_UNPACK_TIMEOUT:-15m}"
+BUNDLE_UNPACK_RETRY_INTERVAL="${BUNDLE_UNPACK_RETRY_INTERVAL:-1m}"
+# Fits one failed attempt, the retry interval and a second full attempt with
+# the defaults above.
+BUNDLE_UNPACK_WAIT_TIMEOUT="${BUNDLE_UNPACK_WAIT_TIMEOUT:-2000}"
+_validate_timeout "BUNDLE_UNPACK_WAIT_TIMEOUT" "$BUNDLE_UNPACK_WAIT_TIMEOUT"
+
 _CLONE_TMP_DIR=""
 trap '[[ -n "$_CLONE_TMP_DIR" ]] && rm -rf "$_CLONE_TMP_DIR"' EXIT
 
@@ -320,6 +330,114 @@ run_helm_install() {
     --timeout 10m
 }
 
+# Reads a `kubectl get -o json` list on stdin and prints a JSON array of the
+# items that belong to this Helm release.
+filter_release_items() {
+  jq --arg release "$HELM_RELEASE_NAME" --arg ns "$HELM_NAMESPACE" '
+    [.items[]
+     | select(.metadata.annotations["meta.helm.sh/release-name"] == $release
+         and .metadata.annotations["meta.helm.sh/release-namespace"] == $ns)]'
+}
+
+# Prints how many objects of the given kind the Helm release renders, so a
+# selector that matches nothing on the cluster can't pass as done.
+count_release_manifest_kind() {
+  local kind="$1"
+  local manifest
+
+  manifest=$(helm get manifest "$HELM_RELEASE_NAME" -n "$HELM_NAMESPACE") || return 1
+  grep -c "^kind: ${kind}\$" <<<"$manifest" || true
+}
+
+annotate_release_operatorgroups() {
+  local expected
+  local selected
+  local count
+  local ns
+  local name
+
+  expected=$(count_release_manifest_kind OperatorGroup) || return 1
+  selected=$(kubectl get operatorgroups.operators.coreos.com -A -o json \
+    | filter_release_items \
+    | jq -r '.[] | "\(.metadata.namespace) \(.metadata.name)"')
+  count=$(grep -c . <<<"$selected" || true)
+
+  if [[ "$expected" -eq 0 || "$count" -ne "$expected" ]]; then
+    log_error "Helm release $HELM_RELEASE_NAME renders ${expected} OperatorGroups, found ${count} on the cluster"
+    return 1
+  fi
+
+  while read -r ns name; do
+    log_info "Enabling bundle unpack retry on OperatorGroup $ns/$name"
+    kubectl annotate operatorgroup "$name" -n "$ns" --overwrite \
+      "operatorframework.io/bundle-unpack-timeout=${BUNDLE_UNPACK_TIMEOUT}" \
+      "operatorframework.io/bundle-unpack-min-retry-interval=${BUNDLE_UNPACK_RETRY_INTERVAL}"
+  done <<<"$selected"
+}
+
+# A Subscription references an InstallPlan once its bundle is unpacked.
+# OLM on OpenShift 4.22 retries a failed unpack only on the next resolve of
+# the namespace, which without other events is an informer resync 12-18m
+# later. Any OperatorGroup update triggers a resolve, so bump an annotation
+# while a Subscription reports BundleUnpackFailed.
+wait_for_release_bundles_unpacked() {
+  local timeout="$BUNDLE_UNPACK_WAIT_TIMEOUT"
+  local interval=10
+  local nudge_interval=60
+  local end_time=$((SECONDS + timeout))
+  local last_nudge=""
+  local expected
+  local found
+  local subs=""
+  local pending=""
+  local failed_ns=""
+  local ns
+
+  expected=$(count_release_manifest_kind Subscription) || return 1
+  if [[ "$expected" -eq 0 ]]; then
+    log_error "Helm release $HELM_RELEASE_NAME renders no Subscriptions"
+    return 1
+  fi
+
+  # The deadline is the only failure path; a failed API call is retried.
+  while [[ $SECONDS -lt $end_time ]]; do
+    if ! subs=$(kubectl get subscriptions.operators.coreos.com -A -o json --request-timeout=30s | filter_release_items); then
+      log_warn "Listing Subscriptions failed, retrying"
+      sleep $interval
+      continue
+    fi
+    found=$(jq length <<<"$subs")
+    pending=$(jq -r '.[] | select(.status.installPlanRef == null)
+      | "\(.metadata.namespace)/\(.metadata.name)"' <<<"$subs")
+    if [[ -z "$pending" && "$found" -eq "$expected" ]]; then
+      log_info "Operator bundles unpacked"
+      return 0
+    fi
+
+    failed_ns=$(jq -r '.[] | select(.status.installPlanRef == null)
+      | select(any(.status.conditions[]?; .type == "BundleUnpackFailed" and .status == "True"))
+      | .metadata.namespace' <<<"$subs" | sort -u)
+    if [[ -n "$failed_ns" ]] && [[ -z "$last_nudge" || $((SECONDS - last_nudge)) -ge $nudge_interval ]]; then
+      for ns in $failed_ns; do
+        log_warn "Bundle unpack failed in $ns, requesting OLM retry"
+        kubectl annotate operatorgroups --all -n "$ns" --overwrite \
+          "maas.opendatahub.io/bundle-unpack-retry=$(date +%s)" \
+          || log_warn "Could not request OLM retry in $ns"
+      done
+      last_nudge=$SECONDS
+    fi
+
+    log_info "  Waiting for bundle unpack (${found}/${expected} Subscriptions found): $(tr '\n' ' ' <<<"$pending")(${timeout}s timeout)"
+    sleep $interval
+  done
+
+  log_error "Operator bundles not unpacked after ${timeout}s (${found:-0}/${expected} Subscriptions found):"
+  jq -r '.[] | select(.status.installPlanRef == null)
+    | "  \(.metadata.namespace)/\(.metadata.name): \([.status.conditions[]? | select(.status == "True")
+      | "\(.type) (\(.message // .reason // ""))"] | join("; "))"' <<<"$subs" >&2
+  return 1
+}
+
 post_helm_steps() {
   if [[ -n "$OPERATOR_IMAGE" ]]; then
     local operator_prefix
@@ -388,6 +506,13 @@ main() {
   log_info ""
   log_info "Phase 1: Installing operators via Helm chart..."
   run_helm_install
+
+  if [[ "$OLM_BUNDLE_UNPACK_RETRY" == "true" ]]; then
+    annotate_release_operatorgroups
+    log_info ""
+    log_info "Waiting for OLM to unpack operator bundles..."
+    wait_for_release_bundles_unpacked
+  fi
 
   log_info ""
   log_info "Waiting for operator CRDs to be established..."

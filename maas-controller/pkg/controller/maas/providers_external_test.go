@@ -802,3 +802,94 @@ func TestDetectConflictingAuthPolicies_SharedExternalModelUsesSelectedRoute(t *t
 		}
 	}
 }
+
+// ResolveModelAlias must return the client-facing model identity the gateway
+// serves (the inference ExternalModel's spec.modelName), not the ExternalModel
+// CR name: renamed and shared models have MaaSModelRefs whose CR name differs
+// from what clients send in requests.
+func TestExternalModel_ResolveModelAlias(t *testing.T) {
+	log := zap.New(zap.UseDevMode(true))
+	ctx := context.Background()
+
+	newHandler := func(objects ...client.Object) *externalModelHandler {
+		r, _ := newTestReconcilerWithMapper(objects...)
+		return &externalModelHandler{r: r}
+	}
+
+	t.Run("returns client-facing spec.modelName", func(t *testing.T) {
+		model := newMaaSModelRef("shared-a", "user-ns", "ExternalModel", "shared-model")
+		em := newInferenceExternalModelCR("shared-model", "user-ns", "openai-provider")
+		_ = unstructured.SetNestedField(em.Object, "client-facing-name", "spec", "modelName")
+
+		alias, err := newHandler(model, em).ResolveModelAlias(ctx, log, model)
+		if err != nil {
+			t.Fatalf("ResolveModelAlias: unexpected error: %v", err)
+		}
+		if alias != "client-facing-name" {
+			t.Errorf("alias = %q, want %q", alias, "client-facing-name")
+		}
+	})
+
+	t.Run("falls back to CR name without spec.modelName", func(t *testing.T) {
+		model := newMaaSModelRef("shared-a", "user-ns", "ExternalModel", "shared-model")
+		em := newInferenceExternalModelCR("shared-model", "user-ns", "openai-provider")
+
+		alias, err := newHandler(model, em).ResolveModelAlias(ctx, log, model)
+		if err != nil {
+			t.Fatalf("ResolveModelAlias: unexpected error: %v", err)
+		}
+		if alias != "shared-model" {
+			t.Errorf("alias = %q, want %q", alias, "shared-model")
+		}
+	})
+
+	t.Run("falls back to CR name when ExternalModel is missing", func(t *testing.T) {
+		model := newMaaSModelRef("shared-a", "user-ns", "ExternalModel", "shared-model")
+
+		alias, err := newHandler(model).ResolveModelAlias(ctx, log, model)
+		if err != nil {
+			t.Fatalf("ResolveModelAlias: unexpected error: %v", err)
+		}
+		if alias != "shared-model" {
+			t.Errorf("alias = %q, want %q", alias, "shared-model")
+		}
+	})
+
+	t.Run("falls back to CR name for legacy maas.opendatahub.io ExternalModel", func(t *testing.T) {
+		model := newMaaSModelRef("gpt-4o", "default", "ExternalModel", "gpt-4o")
+		legacyCR := newExternalModelCR("gpt-4o", "default", "openai", "api.openai.com")
+		r, _ := newTestReconciler(model, legacyCR)
+
+		alias, err := (&externalModelHandler{r: r}).ResolveModelAlias(ctx, log, model)
+		if err != nil {
+			t.Fatalf("ResolveModelAlias: unexpected error: %v", err)
+		}
+		if alias != "gpt-4o" {
+			t.Errorf("alias = %q, want %q", alias, "gpt-4o")
+		}
+	})
+
+	t.Run("returns error on read failure so the caller keeps the existing alias", func(t *testing.T) {
+		model := newMaaSModelRef("shared-a", "user-ns", "ExternalModel", "shared-model")
+		em := newInferenceExternalModelCR("shared-model", "user-ns", "openai-provider")
+		r, backing := newTestReconcilerWithMapper(model, em)
+		r.Client = &failingGetClient{Client: backing, err: errors.New("etcd unavailable")}
+
+		alias, err := (&externalModelHandler{r: r}).ResolveModelAlias(ctx, log, model)
+		if err == nil {
+			t.Fatalf("ResolveModelAlias error = nil, want read failure")
+		}
+		if alias != "" {
+			t.Errorf("alias = %q, want empty on error", alias)
+		}
+	})
+}
+
+type failingGetClient struct {
+	client.Client
+	err error
+}
+
+func (c *failingGetClient) Get(_ context.Context, _ client.ObjectKey, _ client.Object, _ ...client.GetOption) error {
+	return c.err
+}

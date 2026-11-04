@@ -21,6 +21,17 @@ const (
 	// other packages that need the same key must reference this constant.
 	AnnotationManaged = "opendatahub.io/managed"
 
+	// AnnotationGatewayBodyBufferLimitMB configures the experimental Envoy
+	// listener buffer limit for a MaaS Gateway. The value is expressed in MB.
+	AnnotationGatewayBodyBufferLimitMB = "maas.opendatahub.io/experimental-body-buffer-limit-mb"
+
+	// DefaultGatewayBodyBufferLimitMB is the large-response mitigation applied
+	// when the experimental Gateway annotation is absent.
+	DefaultGatewayBodyBufferLimitMB int64 = 64
+	// MaxGatewayBodyBufferLimitMB bounds the experimental setting.
+	MaxGatewayBodyBufferLimitMB               int64 = 64
+	GatewayBodyBufferLimitEnvoyFilterBaseName       = "maas-gateway-body-buffer-limit"
+
 	// AnnotationMaaSAPIReplicas overrides the maas-api Deployment replica count for a tenant.
 	// spec.maasApi.replicas takes precedence when both are set.
 	AnnotationMaaSAPIReplicas = "maas.opendatahub.io/maas-api-replicas"
@@ -205,6 +216,7 @@ var (
 	GVKAuthPolicy           = schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"}
 	GVKTokenRateLimitPolicy = schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1alpha1", Kind: "TokenRateLimitPolicy"}
 	GVKDestinationRule      = schema.GroupVersionKind{Group: "networking.istio.io", Version: "v1", Kind: "DestinationRule"}
+	GVKServiceEntry         = schema.GroupVersionKind{Group: "networking.istio.io", Version: "v1", Kind: "ServiceEntry"}
 	GVKTelemetryPolicy      = schema.GroupVersionKind{Group: "extensions.kuadrant.io", Version: "v1alpha1", Kind: "TelemetryPolicy"}
 	GVKEnvoyFilter          = schema.GroupVersionKind{Group: "networking.istio.io", Version: "v1alpha3", Kind: "EnvoyFilter"}
 	GVKIstioTelemetry       = schema.GroupVersionKind{Group: "telemetry.istio.io", Version: "v1", Kind: "Telemetry"}
@@ -245,6 +257,15 @@ func resourceNameForTenant(baseName, tenantID string) string {
 		return baseName
 	}
 	return baseName + "-" + tenantID
+}
+
+// GatewayBodyBufferLimitEnvoyFilterName returns a stable name for the filter
+// serving one tenant Gateway. The default tenant keeps the historical name.
+func GatewayBodyBufferLimitEnvoyFilterName(tenantID string) string {
+	if tenantID == "" {
+		return GatewayBodyBufferLimitEnvoyFilterBaseName
+	}
+	return resourceNameForTenant("maas-gateway-buffer", tenantID)
 }
 
 func GatewayTokenRateLimitDefaultDenyPolicyName(tenantID string) string {
