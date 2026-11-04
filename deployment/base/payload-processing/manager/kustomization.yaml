@@ -5,6 +5,7 @@ resources:
   - ../after
   - ../pre-processing
   - envoy-filter.yaml
+  - gateway-buffer-limit.yaml
   - plugins-configmap.yaml
 
 images:
