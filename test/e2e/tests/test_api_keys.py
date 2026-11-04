@@ -968,11 +968,12 @@ class TestAPIKeyModelInference:
             requests.get, f"{_maas_api_url()}/v1/models", headers={"Authorization": f"Bearer {key}"}
         )
         assert catalog.status_code == 200, f"Catalog precondition failed: {catalog.status_code}: {catalog.text[:500]}"
-        entry = next((item for item in catalog.json().get("data", []) if item.get("id") == inference_model_name), None)
-        assert entry, f"Catalog did not expose {inference_model_name} before revocation"
+        canonical_catalog_id = f"publishers/{MODEL_NAMESPACE}/models/{inference_model_name}"
+        entry = next((item for item in catalog.json().get("data", []) if item.get("id") == canonical_catalog_id), None)
+        assert entry, f"Catalog did not expose {canonical_catalog_id} before revocation"
         case = GovernedModelCase(
             inference_model_name, MODEL_REF, designated, model_completions_url,
-            inference_model_name, entry.get("kind"), entry.get("owned_by"), key, key_id,
+            canonical_catalog_id, entry.get("kind"), entry.get("owned_by"), key, key_id,
         )
         assert_key_works(
             case,
