@@ -1,0 +1,27 @@
+apiVersion: networking.istio.io/v1alpha3
+kind: EnvoyFilter
+metadata:
+  name: maas-gateway-body-buffer-limit
+  namespace: openshift-ingress
+  labels:
+    app.kubernetes.io/component: gateway
+    app.kubernetes.io/name: maas
+spec:
+  # Embedding responses contain one vector per input and can exceed Envoy's
+  # default response-buffer limit when Kuadrant extracts usage from the body.
+  # Keep the mitigation scoped to MaaS gateway workloads and make the bound
+  # explicit so it can be removed when non-buffering accounting is available.
+  # The tenant controller rewrites this filter's name, selector, and value for
+  # each resolved Gateway. The experimental Gateway annotation is expressed in
+  # MB; absent or invalid values fall back to 64 MB.
+  configPatches:
+    - applyTo: LISTENER
+      match:
+        context: GATEWAY
+      patch:
+        operation: MERGE
+        value:
+          per_connection_buffer_limit_bytes: 67108864
+  workloadSelector:
+    labels:
+      gateway.networking.k8s.io/gateway-name: maas-default-gateway
