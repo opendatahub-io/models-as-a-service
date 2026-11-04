@@ -3478,7 +3478,7 @@ maas-controller inspects the live <code>payload-processing-plugins</code> Config
 <tbody>
 <tr>
 <td>Exact product default</td>
-<td>IPP already translated requests, sending each provider its <code>targetModel</code> and <code>path</code>. Praxis applies those only with <code>spec.apiTranslation.enabled</code>, so before cleanup maas-controller durably writes <code>spec.apiTranslation.enabled: true</code>, unless an operator already set the field. Cleanup proceeds only when active ExternalModels use OpenAI Chat Completions passthrough.</td>
+<td>IPP already translated requests, sending each provider its <code>targetModel</code> and <code>path</code>. Praxis applies those only with <code>spec.apiTranslation.enabled</code>, so before cleanup maas-controller durably writes <code>spec.apiTranslation.enabled: true</code>, unless an operator already set the field. Cleanup proceeds only when every active ExternalModel binding passes the compatibility check below.</td>
 </tr>
 <tr>
 <td>Exact default plus response <code>api-translation</code></td>
@@ -3512,6 +3512,19 @@ keep IPP state until that binding is qualified or an operator explicitly
 accepts the compatibility risk. A passing shared <code>/v1/messages</code> request does
 not prove ExternalModel compatibility, and a recognized IPP ConfigMap
 fingerprint alone does not prove every historical provider direction.</p>
+<p>The compatibility check passes an active binding only when it is:</p>
+<ul>
+<li>an <code>openai</code> provider with <code>apiFormat: openai-chat</code> (pass-through), or</li>
+<li>an <code>anthropic</code> provider with <code>apiFormat: messages</code> while API translation is
+  enabled: an explicit <code>spec.apiTranslation.enabled: true</code>, or the <code>true</code> that
+  maas-controller writes for a recognized baseline before the check runs.
+  ai-gateway-controller serves it through Praxis translation. With
+  <code>spec.apiTranslation.enabled: false</code> it skips Anthropic <code>messages</code> bindings,
+  so they count as a compatibility loss.</li>
+</ul>
+<p>Any other active binding (Azure OpenAI, Vertex AI, Bedrock, a custom provider,
+or another format) blocks cleanup, and the blocked message names only those
+bindings.</p>
 <p>The pure-default IPP ConfigMap already enabled request-side <code>api-translation</code>;
 its response chain was empty. Baseline #2 added response-side processing.
 Recognizing any of these fingerprints preserves that migration intent, but does not
@@ -3519,13 +3532,19 @@ prove support for every provider or response mode. The recognized fingerprints
 and migration decisions are intentionally strict.</p>
 <p>For a recognized ConfigMap baseline, an explicit
 <code>spec.apiTranslation.enabled: false</code> accepts the compatibility loss for an
-unsupported active ExternalModel and lets cleanup proceed. It does not bypass
-the fingerprint check for a customized ConfigMap. The force annotation below
-can bypass that separate check. Both choices accept compatibility risk; they
-are overrides, not parity. Review and test affected model/provider bindings
-before using them. MaaS records an accepted risk on <code>MaasTenantConfig</code> and keeps
-it in the <code>Degraded</code> condition after the one-shot cleanup while affected
-provider bindings remain active. The warning clears when no active
+unsupported active ExternalModel and lets cleanup proceed. It also turns off
+<code>targetModel</code> and provider <code>path</code> rewriting for <strong>every</strong> ExternalModel, OpenAI
+included, and stops Anthropic <code>messages</code> bindings from being served. A model
+whose name differs from its <code>targetModel</code>, or whose provider uses a non-default
+<code>path</code>, stops working too. To keep translation on and lose IPP parity only for
+the listed bindings, use the force annotation below instead: the migration keeps
+the <code>spec.apiTranslation.enabled: true</code> it wrote for the recognized baseline.
+An explicit <code>false</code> does not bypass the fingerprint check for a customized
+ConfigMap; the force annotation can bypass that separate check. Both choices
+accept compatibility risk; they are overrides, not parity. Review and test
+affected model/provider bindings before using them. MaaS records an accepted
+risk on <code>MaasTenantConfig</code> and keeps it in the <code>Degraded</code> condition after the
+one-shot cleanup while affected provider bindings remain active. The warning clears when no active
 ExternalModel needs the unsupported legacy transform. Forced cleanup of a
 customized ConfigMap retains a warning that the migration does not establish
 IPP parity.</p>
@@ -3600,7 +3619,7 @@ it with <code>kubectl delete externalmodels.maas.opendatahub.io &lt;name&gt; -n 
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="October 31, 2026 00:32:27 UTC">October 31, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="November 4, 2026 22:40:05 UTC">November 4, 2026</span>
   </span>
 
     

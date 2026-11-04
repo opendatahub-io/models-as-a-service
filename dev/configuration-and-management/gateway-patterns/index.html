@@ -2038,15 +2038,15 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#automatic-infrastructure-namespace-labeling" class="md-nav__link">
+  <a href="#automatic-infrastructure-and-tenant-namespace-labeling" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Automatic infrastructure namespace labeling
+        Automatic infrastructure and tenant namespace labeling
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Automatic infrastructure namespace labeling">
+    <nav class="md-nav" aria-label="Automatic infrastructure and tenant namespace labeling">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
@@ -3636,15 +3636,15 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#automatic-infrastructure-namespace-labeling" class="md-nav__link">
+  <a href="#automatic-infrastructure-and-tenant-namespace-labeling" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Automatic infrastructure namespace labeling
+        Automatic infrastructure and tenant namespace labeling
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Automatic infrastructure namespace labeling">
+    <nav class="md-nav" aria-label="Automatic infrastructure and tenant namespace labeling">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
@@ -3976,8 +3976,9 @@ cluster domain with:</p>
 </div>
 <h4 id="5-httproute">5. HTTPRoute</h4>
 <p>Attach workloads to the Gateway. The Gateway <code>allowedRoutes</code> uses a label selector.
-The controller automatically labels the infrastructure namespace (see
-<a href="#automatic-infrastructure-namespace-labeling">Automatic infrastructure namespace labeling</a>).
+The controller automatically labels the infrastructure namespace and each tenant
+namespace (see
+<a href="#automatic-infrastructure-and-tenant-namespace-labeling">Automatic infrastructure and tenant namespace labeling</a>).
 Label any additional namespaces (e.g. model namespaces) manually:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="c1"># Label model namespaces that need to attach HTTPRoutes</span>
 <a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>oc<span class="w"> </span>label<span class="w"> </span>namespace<span class="w"> </span>&lt;model-namespace&gt;<span class="w"> </span>maas.opendatahub.io/gateway-access<span class="o">=</span><span class="nb">true</span><span class="w"> </span>--overwrite
@@ -4099,19 +4100,25 @@ maas-controller.</p>
 </tr>
 </tbody>
 </table>
-<h2 id="automatic-infrastructure-namespace-labeling">Automatic infrastructure namespace labeling</h2>
+<h2 id="automatic-infrastructure-and-tenant-namespace-labeling">Automatic infrastructure and tenant namespace labeling</h2>
 <p>When a Gateway uses <code>allowedRoutes.namespaces.from: Selector</code> with <code>matchLabels</code>,
-the MaaS controller automatically applies those labels to the infrastructure
-namespace (where <code>maas-api-route</code> HTTPRoutes live). This ensures the Gateway
-accepts MaaS API routes without manual labeling of the infra namespace.</p>
-<p>Model namespaces still require manual labeling — the controller only manages the
-infrastructure namespace.</p>
+the MaaS controller automatically applies those labels to:</p>
+<ul>
+<li>the infrastructure namespace, where the <code>maas-api-route</code> HTTPRoutes live;</li>
+<li>the namespace of the AITenant that uses the Gateway (<code>ai-tenant-&lt;name&gt;</code>, or
+  <code>models-as-a-service</code> for the default tenant), where ai-gateway-controller
+  creates the HTTPRoutes of tenant-local ExternalModels.</li>
+</ul>
+<p>This ensures the Gateway accepts these routes without manual labeling. Other
+model namespaces still require manual labeling.</p>
 <h3 id="how-it-works">How it works</h3>
 <p>Each time an AITenant is reconciled, the controller reads the Gateway's listener
-<code>matchLabels</code> and applies them to the infra namespace. An annotation
-(<code>maas.opendatahub.io/gateway-selector-labels</code>) tracks which gateway owns each
-label so that labels can be cleaned up when a tenant is deleted or a gateway's
-selector changes.</p>
+<code>matchLabels</code> and applies them to the infra namespace and to the tenant
+namespace. An annotation (<code>maas.opendatahub.io/gateway-selector-labels</code>) on
+each namespace tracks which gateway owns each label so that labels can be
+cleaned up when a tenant is deleted or a gateway's selector changes. Deleting an
+AITenant keeps its tenant namespace but removes the labels its Gateway owned
+there.</p>
 <p>When multiple gateways share the same label (e.g. both use
 <code>maas-gateway-access=true</code>), all are recorded as co-owners. Deleting one
 tenant does not remove a label that another tenant's gateway still requires.</p>
@@ -4119,7 +4126,8 @@ tenant does not remove a label that another tenant's gateway still requires.</p>
 affected AITenants automatically.</p>
 <h3 id="conflict-errors">Conflict errors</h3>
 <p>Two situations produce reconciliation errors visible in the AITenant status
-(condition <code>type: Degraded</code>, <code>reason: InfraNamespaceLabelFailed</code>):</p>
+(condition <code>type: Degraded</code>, <code>reason: InfraNamespaceLabelFailed</code>, or
+<code>reason: TenantNamespaceLabelFailed</code> when only the tenant namespace is affected):</p>
 <p><strong>Intra-gateway conflict:</strong> A single gateway has two listeners that disagree on a
 label value (e.g. listener <code>https</code> wants <code>env=prod</code> and listener <code>https-alt</code>
 wants <code>env=staging</code>). Fix the gateway so all listeners use the same value for
@@ -4136,15 +4144,15 @@ which gateway owns the contested label.</p>
 <li>Only <code>matchLabels</code> is supported. Gateways using <code>matchExpressions</code> require
   manual namespace configuration.</li>
 <li>The controller does not label model namespaces — only the infrastructure
-  namespace.</li>
+  namespace and the tenant namespace.</li>
 <li>Labels not selected by any managed Gateway are not tracked in the ownership
   annotation. The controller does not manage or clean up those labels. Remove
   them manually if they are no longer needed:
   <div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>oc<span class="w"> </span>label<span class="w"> </span>namespace<span class="w"> </span>&lt;infra-namespace&gt;<span class="w"> </span>&lt;label-key&gt;-
 </code></pre></div></li>
-<li>If an existing label on the infrastructure namespace conflicts with a
-  gateway's desired value, the controller rejects the reconciliation rather
-  than overwriting it. Resolve the conflict manually before retrying.</li>
+<li>If an existing label on the infrastructure or tenant namespace conflicts
+  with a gateway's desired value, the controller rejects the reconciliation
+  rather than overwriting it. Resolve the conflict manually before retrying.</li>
 </ul>
 <h2 id="maas-integration">MaaS integration</h2>
 <p>After deploying a gateway pattern, complete the MaaS-specific steps:</p>
@@ -4191,7 +4199,7 @@ which gateway owns the contested label.</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="September 10, 2026 22:50:35 UTC">September 10, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="November 4, 2026 22:40:05 UTC">November 4, 2026</span>
   </span>
 
     

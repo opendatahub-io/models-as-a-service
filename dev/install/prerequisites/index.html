@@ -3441,6 +3441,16 @@ unauthenticated. Upgrade to <strong>RHCL v1.4.1+</strong>. See
 <a href="../troubleshooting/#16-management-endpoints-return-auth_failure-on-rhcl-v140">Troubleshooting #16</a>
 for diagnosis.</p>
 </div>
+<div class="admonition warning">
+<p class="admonition-title">RHOAI 3.6 — use RHCL v1.5</p>
+<p>For RHOAI 3.6, use <strong>RHCL v1.5.0+</strong> (OLM channel <code>stable-1.5</code>). On RHCL 1.4.x,
+including the 1.4.3 that the default <code>stable</code> channel installs, a provider error
+response without token usage can hang for a caller with two or more
+MaaSSubscriptions while a TokenRateLimitPolicy is active
+(<a href="https://github.com/Kuadrant/wasm-shim/issues/425">Kuadrant/wasm-shim#425</a>).
+The 1.4 backport is not merged, and <code>stable-1.4</code> (1.4.4) is not a confirmed fix.
+When upgrading, switch the RHCL Subscription channel to <code>stable-1.5</code>.</p>
+</div>
 <div class="admonition note">
 <p class="admonition-title">Other Kubernetes flavors</p>
 <p>Other Kubernetes flavors (e.g., upstream Kubernetes, other distributions) are currently being validated.</p>
@@ -3542,7 +3552,7 @@ DSC and a Dashboard feature flag. See <a href="../maas-setup/#odhdashboardconfig
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="September 10, 2026 15:20:01 UTC">September 10, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="November 4, 2026 22:40:05 UTC">November 4, 2026</span>
   </span>
 
     

@@ -3786,7 +3786,7 @@
 <h2 id="multi-tenant-limitation">Multi-Tenant Limitation</h2>
 <div class="admonition warning">
 <p class="admonition-title">External models are only supported for the default tenant</p>
-<p>In multi-tenant deployments, external models work for the <strong>default tenant only</strong>. Non-default tenant IPP (Inference Payload Processor) instances have the ExternalModel controller disabled to prevent HTTPRoute conflicts between tenants.</p>
+<p>In multi-tenant deployments, external models work for the <strong>default tenant only</strong>. Non-default tenant IPP (Inference Payload Processor) instances have the ExternalModel controller disabled, in both the <code>payload-pre-processing</code> and <code>payload-processing</code> Deployments, to prevent HTTPRoute conflicts between tenants.</p>
 <p>External model support for non-default tenants is planned for a future release.</p>
 </div>
 <h2 id="prerequisites">Prerequisites</h2>
@@ -3858,7 +3858,7 @@
 </tr>
 </tbody>
 </table>
-<p>The RHOAI 3.5 Inference Payload Processor (IPP) component handled provider API key injection, model routing, and the formats registered by its <code>api-translation</code> plugin. Its default profile enabled request processing but left response processing empty. That legacy behavior is not proof that the 3.6 Praxis ExternalModel runtime preserves every provider direction or stream mode; see the <a href="../../migration/upgrade-to-3.6/#ipp--praxis-api-translation-migration">3.6 upgrade guide</a>.</p>
+<p>The RHOAI 3.5 Inference Payload Processor (IPP) component handled provider API key injection, model routing, and the formats registered by its <code>api-translation</code> plugin. Its default profile enabled request processing but left response processing empty. That legacy behavior is not proof that the 3.6 Praxis ExternalModel runtime preserves every provider direction or stream mode; see the <a href="../../migration/upgrade-to-3.6/#ipp-praxis-api-translation-migration">3.6 upgrade guide</a>.</p>
 <h2 id="step-1-deploy-inference-payload-processor-ipp">Step 1: Deploy Inference Payload Processor (IPP)</h2>
 <p>IPP is required for external models — it injects the provider API key and translates between OpenAI-compatible format and the provider's native API.</p>
 <p>MaaS deploys the payload-processing component from the <a href="https://github.com/opendatahub-io/ai-gateway-payload-processing"><code>ai-gateway-payload-processing</code></a> repository. For detailed configuration and usage, see that project's documentation.</p>
@@ -4100,7 +4100,7 @@ behavior. It is historical coverage, not a support matrix for the 3.6 Praxis
 ExternalModel dataplane. The Phase 1 Kind qualification proves the separate
 shared Anthropic Messages client → OpenAI-compatible backend path. It does not
 prove OpenAI-client → Anthropic-provider parity or Praxis support for Azure
-OpenAI, Vertex AI, or Bedrock. See the <a href="../../migration/upgrade-to-3.6/#ipp--praxis-api-translation-migration">3.6 upgrade guide</a>
+OpenAI, Vertex AI, or Bedrock. See the <a href="../../migration/upgrade-to-3.6/#ipp-praxis-api-translation-migration">3.6 upgrade guide</a>
 for the migration gate and currently supported ExternalModel formats.</p>
 <table>
 <thead>
@@ -4160,11 +4160,16 @@ for the migration gate and currently supported ExternalModel formats.</p>
 <li><code>stream</code> field forwarded for streaming support</li>
 <li><code>anthropic-version: 2023-06-01</code> header added automatically</li>
 <li>Response <code>stop_reason</code> mapped back to OpenAI <code>finish_reason</code></li>
-<li>Unsupported parameters silently dropped: <code>frequency_penalty</code>, <code>presence_penalty</code>, <code>logprobs</code>, <code>n</code>, <code>response_format</code>, <code>seed</code></li>
+<li>Unsupported parameters silently dropped by the 3.5 IPP: <code>frequency_penalty</code>, <code>presence_penalty</code>, <code>logprobs</code>, <code>n</code>, <code>response_format</code>, <code>seed</code> (3.6 Praxis rejects some of them; see below)</li>
 <li>Set <code>endpoint: api.anthropic.com</code></li>
 <li>Models: <code>claude-sonnet-4-20250514</code>, <code>claude-haiku-4-5-20251001</code>, <code>claude-opus-4-20250514</code></li>
 </ul>
 <p>See the <a href="https://github.com/opendatahub-io/ai-gateway-payload-processing/blob/main/docs/providers/anthropic.md">Anthropic provider guide</a>.</p>
+<div class="admonition note">
+<p class="admonition-title">RHOAI 3.6 (Praxis)</p>
+<p>An Anthropic ExternalModel binding (<code>spec.provider: anthropic</code> on the ExternalProvider, <code>apiFormat: messages</code> on the ExternalModel) is served only while the tenant's <code>MaasTenantConfig</code> has <code>spec.apiTranslation.enabled: true</code>; Praxis then translates OpenAI Chat Completions requests to Anthropic Messages. Such a binding does not block the IPP → Praxis migration while translation is enabled (see the <a href="../../migration/upgrade-to-3.6/#ipp-praxis-api-translation-migration">3.6 upgrade guide</a>).</p>
+<p>Unlike the 3.5 IPP, Praxis rejects a Chat Completions request that carries a field it cannot map to Anthropic Messages: <code>response_format</code>, <code>frequency_penalty</code>, <code>presence_penalty</code> and <code>logprobs</code> each return <code>400</code> with <code>unsupported Chat Completions field "&lt;name&gt;" cannot be preserved by Anthropic Messages</code>. <code>max_tokens</code>, <code>user</code>, <code>stop</code>, <code>temperature</code>, <code>top_p</code>, <code>tools</code>, <code>n</code> and <code>seed</code> are accepted.</p>
+</div>
 <h3 id="azure-openai">Azure OpenAI</h3>
 <p>Uses Azure's OpenAI-compatible endpoint with a different auth header and path. Auth uses <code>api-key</code> header (not <code>Authorization: Bearer</code>).</p>
 <ul>
@@ -4246,7 +4251,7 @@ for the migration gate and currently supported ExternalModel formats.</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="October 31, 2026 00:32:27 UTC">October 31, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="November 4, 2026 22:40:05 UTC">November 4, 2026</span>
   </span>
 
     
