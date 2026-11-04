@@ -6,12 +6,13 @@ import (
 	"regexp"
 )
 
-// Group-name validation for legacy identities at API-key mint time.
+// Group-name validation for all authenticated groups.
 //
 // The same rule is enforced by maas-controller in the AuthPolicies it
-// generates and by the deploy-time kustomize patch. Flat organization
-// groups use exact matching and do not use this allowlist. The copies live
-// in independent Go modules, so the mirrored
+// generates and by the deploy-time kustomize patch. MaaS applies the rule
+// to legacy and organization groups alike, so every authenticated group can
+// be stored in an API-key snapshot. The copies live in independent Go
+// modules, so the mirrored
 // sync tests (groupname_sync_test.go here, sync_test.go in
 // maas-controller) check them as text and fail when they drift.
 // Never edit one without the others:
@@ -27,7 +28,8 @@ import (
 // emit names like IAM#AccessGroupId-...), dots, underscores, hyphens,
 // spaces, and slashes. Slashes are common in IdP group claims
 // (Keycloak full-path groups, Entra ID, Okta, GitHub org/team).
-// Flat organization groups bypass this pattern and use safe JSON encoding.
+// Organization groups that do not match this pattern are rejected before
+// authentication completes.
 var validGroupNamePattern = regexp.MustCompile(`^[A-Za-z0-9:#._/ -]+$`)
 
 // ErrInvalidGroupName is returned by CreateAPIKey when one of the user's

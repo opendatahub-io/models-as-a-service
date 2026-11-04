@@ -254,16 +254,16 @@ func patchAuthPolicyWithOIDC(log logr.Logger, resource *unstructured.Unstructure
 	// TokenReview identities use only user.groups — Authorino overlays the
 	// decoded JWT payload into auth.identity, so a JWT could otherwise craft
 	// a "user" claim and reach the TokenReview branch. Both sources are
-	// gated on the canonical pattern because CEL builds the JSON by
-	// concatenation without escaping. Organization-bound OIDC groups are
-	// qualified with org_id; UUID-prefixed groups are reserved for that
-	// namespace and are rejected when org_id is absent.
+	// gated on the canonical pattern. Organization-bound OIDC groups are
+	// qualified with org_id and use the same pattern; UUID-prefixed groups
+	// are reserved for that namespace and are rejected when org_id is absent.
 	organizationIDPattern := `^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`
 	organizationQualifiedGroupPattern := `^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/`
 	organizationIDSafe := `type(auth.identity["org_id"]) == string && ` +
 		`auth.identity["org_id"].matches('` + organizationIDPattern + `')`
 	flatGroupsSafe := `type(auth.identity.groups) == list && ` +
 		`auth.identity.groups.all(g, type(g) == string && g.matches('` + groupname.Pattern + `') && ` +
+		`!g.matches('` + organizationQualifiedGroupPattern + `') && ` +
 		`auth.identity.groups.filter(other, other == g).size() == 1)`
 	legacyGroupsSafe := `auth.identity.groups.all(g, g.matches('` + groupname.Pattern + `') && ` +
 		`!g.matches('` + organizationQualifiedGroupPattern + `'))`
