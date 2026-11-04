@@ -14,8 +14,10 @@ func TestMetricsScraperOrFallback(t *testing.T) {
 	const namespace = "maas-infra"
 	for _, tc := range []struct {
 		name, method, path, header, username string
+
 		authenticated, reviewError bool
-		want                       int
+
+		want int
 	}{
 		{"dedicated scraper", "GET", "/metrics", "Bearer token", "system:serviceaccount:maas-infra:maas-metrics-scraper", true, false, http.StatusNoContent},
 		{"wrong namespace", "GET", "/metrics", "Bearer token", "system:serviceaccount:tenant:maas-metrics-scraper", true, false, http.StatusForbidden},

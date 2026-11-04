@@ -17,10 +17,26 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
+func fixtureMap(value any) map[string]any {
+	object, ok := value.(map[string]any)
+	if !ok {
+		panic("invalid ServiceMonitor test fixture: expected map")
+	}
+	return object
+}
+
+func fixtureEndpoint(m *unstructured.Unstructured) map[string]any {
+	endpoints, ok := fixtureMap(m.Object["spec"])["endpoints"].([]any)
+	if !ok || len(endpoints) != 1 {
+		panic("invalid ServiceMonitor test fixture: expected one endpoint")
+	}
+	return fixtureMap(endpoints[0])
+}
+
 func legacyControllerMonitor() *unstructured.Unstructured {
 	m := &unstructured.Unstructured{Object: map[string]any{
 		"spec": map[string]any{
-			"endpoints": []any{map[string]any{"port": "metrics", "bearerTokenFile": legacyMetricsBearerTokenFile}},
+			"endpoints": []any{map[string]any{"port": "metrics", "bearerTokenFile": legacyMetricsFilePath}},
 		},
 	}}
 	m.SetGroupVersionKind(GVKServiceMonitor)
@@ -47,11 +63,11 @@ func aigatewayOwnedLegacyControllerMonitor() *unstructured.Unstructured {
 		APIVersion: "components.platform.opendatahub.io/v1alpha1", Kind: "AIGateway",
 		Name: "default-aigateway", UID: "aigateway-uid",
 	}})
-	m.Object["spec"].(map[string]any)["selector"] = map[string]any{
+	fixtureMap(m.Object["spec"])["selector"] = map[string]any{
 		"matchLabels": map[string]any{"app": "maas-controller", "control-plane": "maas-controller"},
 	}
-	m.Object["spec"].(map[string]any)["endpoints"].([]any)[0].(map[string]any)["path"] = "/metrics"
-	m.Object["spec"].(map[string]any)["endpoints"].([]any)[0].(map[string]any)["scheme"] = "https"
+	fixtureEndpoint(m)["path"] = "/metrics"
+	fixtureEndpoint(m)["scheme"] = "https"
 	return m
 }
 
@@ -65,7 +81,7 @@ func replacementControllerMonitor() *unstructured.Unstructured {
 			"endpoints": []any{map[string]any{
 				"port": "metrics", "scheme": "https",
 				"authorization": map[string]any{
-					"type": "Bearer", "credentials": map[string]any{"name": metricsScraperTokenName, "key": "token"},
+					"type": "Bearer", "credentials": map[string]any{"name": metricsScraperResourceName, "key": "token"},
 				},
 			}},
 		},
@@ -112,7 +128,7 @@ func TestCleanupLegacyControllerMetricsMonitorWaitsForReplacementAndToken(t *tes
 	assert.NotEmpty(t, pending)
 
 	token := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{
-		Name: metricsScraperTokenName, Namespace: "app-ns", OwnerReferences: []metav1.OwnerReference{legacyMetricsOwner()},
+		Name: metricsScraperResourceName, Namespace: "app-ns", OwnerReferences: []metav1.OwnerReference{legacyMetricsOwner()},
 		Annotations: map[string]string{corev1.ServiceAccountNameKey: "maas-metrics-scraper"},
 	}, Type: corev1.SecretTypeServiceAccountToken}
 	require.NoError(t, c.Create(ctx, token))
@@ -140,7 +156,7 @@ func TestCleanupLegacyControllerMetricsMonitorPreservesUnownedOrChangedMonitor(t
 			m.SetLabels(labels)
 		},
 		"new credentials": func(m *unstructured.Unstructured) {
-			m.Object["spec"].(map[string]any)["endpoints"].([]any)[0].(map[string]any)["bearerTokenFile"] = "other"
+			fixtureEndpoint(m)["bearerTokenFile"] = "other"
 		},
 	}
 	for name, mutate := range cases {
@@ -161,7 +177,7 @@ func TestCleanupLegacyControllerMetricsMonitorRequiresOwnedReplacement(t *testin
 	replacement := replacementControllerMonitor()
 	replacement.SetOwnerReferences(nil)
 	token := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{
-		Name: metricsScraperTokenName, Namespace: "app-ns", OwnerReferences: []metav1.OwnerReference{legacyMetricsOwner()},
+		Name: metricsScraperResourceName, Namespace: "app-ns", OwnerReferences: []metav1.OwnerReference{legacyMetricsOwner()},
 		Annotations: map[string]string{corev1.ServiceAccountNameKey: "maas-metrics-scraper"},
 	}, Type: corev1.SecretTypeServiceAccountToken, Data: map[string][]byte{corev1.ServiceAccountTokenKey: []byte("issued-token")}}
 	c := monitorCleanupClient(t, old, replacement, token)
@@ -178,7 +194,7 @@ func TestCleanupLegacyControllerMetricsMonitorRequiresOwnedReplacement(t *testin
 func TestCleanupLegacyControllerMetricsMonitorRetiresAIGatewayOwnedMaaSScrape(t *testing.T) {
 	old := aigatewayOwnedLegacyControllerMonitor()
 	token := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{
-		Name: metricsScraperTokenName, Namespace: "app-ns", OwnerReferences: []metav1.OwnerReference{legacyMetricsOwner()},
+		Name: metricsScraperResourceName, Namespace: "app-ns", OwnerReferences: []metav1.OwnerReference{legacyMetricsOwner()},
 		Annotations: map[string]string{corev1.ServiceAccountNameKey: "maas-metrics-scraper"},
 	}, Type: corev1.SecretTypeServiceAccountToken, Data: map[string][]byte{corev1.ServiceAccountTokenKey: []byte("issued-token")}}
 	c := monitorCleanupClient(t, old)
@@ -221,16 +237,16 @@ func TestCleanupLegacyControllerMetricsMonitorPreservesOtherAIGatewayResources(t
 			m.SetOwnerReferences(append(m.GetOwnerReferences(), legacyMetricsOwner()))
 		},
 		"other service selector": func(m *unstructured.Unstructured) {
-			m.Object["spec"].(map[string]any)["selector"].(map[string]any)["matchLabels"].(map[string]any)["app"] = "other"
+			fixtureMap(fixtureMap(fixtureMap(m.Object["spec"])["selector"])["matchLabels"])["app"] = "other"
 		},
 		"other endpoint path": func(m *unstructured.Unstructured) {
-			m.Object["spec"].(map[string]any)["endpoints"].([]any)[0].(map[string]any)["path"] = "/other"
+			fixtureEndpoint(m)["path"] = "/other"
 		},
 		"other endpoint scheme": func(m *unstructured.Unstructured) {
-			m.Object["spec"].(map[string]any)["endpoints"].([]any)[0].(map[string]any)["scheme"] = "http"
+			fixtureEndpoint(m)["scheme"] = "http"
 		},
 		"new credentials": func(m *unstructured.Unstructured) {
-			delete(m.Object["spec"].(map[string]any)["endpoints"].([]any)[0].(map[string]any), "bearerTokenFile")
+			delete(fixtureEndpoint(m), "bearerTokenFile")
 		},
 	}
 	for name, mutate := range cases {

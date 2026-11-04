@@ -14,8 +14,8 @@ import (
 
 const (
 	controllerMetricsMonitorName = "maas-controller-metrics"
-	metricsScraperTokenName      = "maas-metrics-scraper-token"
-	legacyMetricsBearerTokenFile = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+	metricsScraperResourceName   = "maas-metrics-scraper-token"
+	legacyMetricsFilePath        = "/var/run/secrets/kubernetes.io/serviceaccount/token"
 )
 
 func hasRenderedControllerMetricsMonitor(resources []unstructured.Unstructured, appNamespace string) bool {
@@ -65,7 +65,7 @@ func cleanupLegacyControllerMetricsMonitor(ctx context.Context, c client.Client,
 		return pending, nil
 	}
 	token := &corev1.Secret{}
-	if err := reader.Get(ctx, client.ObjectKey{Namespace: appNamespace, Name: metricsScraperTokenName}, token); err != nil {
+	if err := reader.Get(ctx, client.ObjectKey{Namespace: appNamespace, Name: metricsScraperResourceName}, token); err != nil {
 		if apierrors.IsNotFound(err) {
 			return pending, nil
 		}
@@ -128,7 +128,7 @@ func isLegacyControllerMetricsMonitor(monitor *unstructured.Unstructured, config
 		return false
 	}
 	endpoint, ok := endpoints[0].(map[string]any)
-	if !ok || endpoint["bearerTokenFile"] != legacyMetricsBearerTokenFile || endpoint["port"] != "metrics" {
+	if !ok || endpoint["bearerTokenFile"] != legacyMetricsFilePath || endpoint["port"] != "metrics" {
 		return false
 	}
 	if labels["app.kubernetes.io/part-of"] == "aigateway" {
@@ -162,5 +162,5 @@ func isReadyControllerMetricsReplacement(monitor *unstructured.Unstructured, con
 		return false
 	}
 	credentials, found, err := unstructured.NestedStringMap(endpoint, "authorization", "credentials")
-	return err == nil && found && credentials["name"] == metricsScraperTokenName && credentials["key"] == corev1.ServiceAccountTokenKey
+	return err == nil && found && credentials["name"] == metricsScraperResourceName && credentials["key"] == corev1.ServiceAccountTokenKey
 }
