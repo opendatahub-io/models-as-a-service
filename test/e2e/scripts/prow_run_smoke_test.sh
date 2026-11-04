@@ -597,6 +597,15 @@ else
         phase_mark deploy_aigc start
         bash "${SCRIPT_DIR}/deploy-aigc-companion.sh"
         phase_mark deploy_aigc end
+
+        # After the companion: it just installed the AIGuardrail CRD, and
+        # maas-api discovers that API once at startup — a maas-api that
+        # predates the CRD fails every guarded selection closed. Restart it
+        # so the informer picks the new API up.
+        if [[ -n "${MAAS_API_DEPLOYMENT_NAMESPACE:-}" ]]; then
+            kubectl rollout restart deployment/maas-api -n "$MAAS_API_DEPLOYMENT_NAMESPACE"
+            kubectl rollout status deployment/maas-api -n "$MAAS_API_DEPLOYMENT_NAMESPACE" --timeout=180s
+        fi
     fi
 
     print_header "Deploying Models"

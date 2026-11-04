@@ -15,14 +15,15 @@ Environment:
   - E2E_GUARDRAIL_PROVIDER_TIMEOUT: how long a NeMo server may take to publish
     status.endpoint (default 300s).
 """
+import json
 import uuid
 
-import pytest
-
 import guardrail_helpers as gr
+import pytest
 
 pytestmark = [
     pytest.mark.xdist_group("guardrails"),
+    pytest.mark.smoke,
     pytest.mark.serial,
     pytest.mark.guardrails,
 ]
@@ -161,20 +162,32 @@ def test_selector_rule_follows_the_consumer_namespace_labels(
     )
 
 
-def test_unreadable_permission_rule_fails_closed(
-    requires_allowed_consumers, provider_namespace, namespace_factory, suffix,
-    reset_allowed_consumers,
+def test_unreadable_permission_rule_is_rejected_at_admission(
+    requires_allowed_consumers, provider_namespace,
 ):
-    """A rule the controller cannot read is not evidence that the bind is permitted."""
-    consumer = namespace_factory(f"e2e-guardrails-bad-{suffix}")
-    gr.apply(gr.provider_manifest(
-        provider_namespace, allowed_consumers={"namespaces": {"from": "Nope"}},
-    ))
-    gr.apply(gr.policy_manifest(consumer, provider_namespace=provider_namespace))
+    """A rule the cluster cannot read is never stored, so it can never permit a bind.
 
-    gr.assert_binding_withdrawn(
-        gr.wait_for_accepted_reason(consumer, "InvalidAllowedConsumers")
+    The CRD constrains spec.allowedConsumers.namespaces.from to Same, Selector
+    and All, so the fail-closed burden sits at the schema: the API server
+    rejects an unreadable rule before the controller ever sees it, rather than
+    the controller having to withdraw the binding over it.
+    """
+    result = gr.oc(
+        "apply", "-f", "-",
+        input_text=json.dumps(gr.provider_manifest(
+            provider_namespace, allowed_consumers={"namespaces": {"from": "Nope"}},
+        )),
+        check=False,
     )
+
+    assert result.returncode != 0, (
+        'an allowedConsumers rule with from: "Nope" was accepted; the CRD enum '
+        "that fail-closes unreadable rules is missing"
+    )
+    assert "Unsupported value" in result.stderr, (
+        f"unexpected rejection: {result.stderr}"
+    )
+    assert "Nope" in result.stderr, f"unexpected rejection: {result.stderr}"
 
 
 def test_check_selecting_an_undeclared_configuration_is_refused(provider_namespace):

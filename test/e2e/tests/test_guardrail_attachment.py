@@ -18,6 +18,7 @@ import guardrail_helpers as gr
 
 pytestmark = [
     pytest.mark.xdist_group("guardrails"),
+    pytest.mark.smoke,
     pytest.mark.guardrails,
 ]
 
