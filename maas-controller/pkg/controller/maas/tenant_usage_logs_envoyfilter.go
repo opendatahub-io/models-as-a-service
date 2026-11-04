@@ -42,8 +42,10 @@ const (
 
 	// usageLogsCollectorService is the collector used when Config.spec.usageLogging is true.
 	usageLogsCollectorService = "usage-logs-collector"
-	// dataScienceUsageLogsCollectorService is the collector used when usageLogging is false or omitted.
-	dataScienceUsageLogsCollectorService = "data-science-usage-logs-collector"
+	// dataScienceUsageLogsCollectorService is the headless collector service used when
+	// usageLogging is false or omitted. The headless Service lets Envoy load-balance
+	// OTLP/gRPC across collector pods; it serves TLS signed by the service CA.
+	dataScienceUsageLogsCollectorService = "data-science-usage-logs-collector-headless"
 )
 
 // usageLogsCollectorServiceName returns the collector Service name for the EnvoyFilter endpoint.
@@ -177,9 +179,18 @@ func (r *TenantReconciler) applyUsageLogsEnvoyFilter(
 		}
 	}
 
-	collectorAddress := fmt.Sprintf("%s.%s.svc", usageLogsCollectorServiceName(mcfg), r.MonitoringNamespace)
+	collectorService := usageLogsCollectorServiceName(mcfg)
+	collectorAddress := fmt.Sprintf("%s.%s.svc.cluster.local", collectorService, r.MonitoringNamespace)
 	if err := tenantreconcile.PatchUsageLogsClusterAddress(ef, collectorAddress); err != nil {
 		return false, fmt.Errorf("patch collector address in EnvoyFilter: %w", err)
+	}
+	if collectorService == usageLogsCollectorService {
+		// The self-hosted collector serves plaintext OTLP. The data-science
+		// collector keeps the manifest's TLS transport socket, which trusts
+		// the service CA and verifies the headless-service SNI.
+		if err := tenantreconcile.DisableUsageLogsClusterTLS(ef); err != nil {
+			return false, fmt.Errorf("disable collector TLS in EnvoyFilter: %w", err)
+		}
 	}
 
 	if err := tenantreconcile.PatchUsageLogsEnvoyFilterWorkloadSelector(ef, gatewayName); err != nil {
