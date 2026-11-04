@@ -234,6 +234,7 @@ def _validate_subscription_info_schema(sub):
 class TestListSubscriptions:
     """E2E tests for GET /v1/subscriptions."""
 
+    @pytest.mark.smoke
     def test_returns_accessible_subscriptions(self):
         """Authenticated user gets their accessible subscriptions."""
         sa_name = "e2e-list-subs-sa"
@@ -272,6 +273,7 @@ class TestListSubscriptions:
         finally:
             _delete_sa(sa_name, namespace=sa_ns)
 
+    @pytest.mark.smoke
     @pytest.mark.parametrize(
         "endpoint",
         [
