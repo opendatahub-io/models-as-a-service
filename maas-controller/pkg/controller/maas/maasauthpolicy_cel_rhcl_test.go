@@ -232,8 +232,8 @@ func TestCELGroupsQualifyFlatOIDCGroups(t *testing.T) {
 			want:     []any{organizationA + "/" + strings.Repeat("a", 256)},
 		},
 		{
-			name:     "flat group above 256 UTF-8 bytes is rejected",
-			identity: map[string]any{"iss": "https://issuer.example.com", "org_id": organizationA, "groups": []any{strings.Repeat("é", 129)}},
+			name:     "flat group outside the group-name allowlist is rejected",
+			identity: map[string]any{"iss": "https://issuer.example.com", "org_id": organizationA, "groups": []any{"équipe"}},
 			want:     []any{},
 		},
 		{
@@ -313,7 +313,7 @@ func TestCELGroupsQualifyFlatOIDCGroups(t *testing.T) {
 	}
 }
 
-func TestGatewayAuthPolicyFlatGroupsAllowOpaqueValues(t *testing.T) {
+func TestGatewayAuthPolicyFlatGroupsAllowAllowlistedValues(t *testing.T) {
 	const organizationID = "42c3e46f-2477-44d7-a85b-d3b43f6b31fa"
 	groups := []any{"users", "team/devs", "system:authenticated", "role#admin", "app.example", "test_group", "dash-name", "with space"}
 	auth := map[string]any{"identity": map[string]any{

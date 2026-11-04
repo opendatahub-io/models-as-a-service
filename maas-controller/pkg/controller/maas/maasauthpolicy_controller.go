@@ -1090,6 +1090,14 @@ unsafe_group[g] {
 }
 
 unsafe_group[g] {
+	org_id := input.auth.identity.org_id
+	is_string(org_id)
+	g := input.auth.identity.groups[_]
+	is_string(g)
+	not regex.match("` + safeGroupNamePattern + `", g)
+}
+
+unsafe_group[g] {
 	g := input.auth.identity.groups[_]
 	is_string(g)
 	not input.auth.identity.org_id

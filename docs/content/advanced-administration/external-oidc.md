@@ -117,16 +117,15 @@ A token without `org_id` cannot use those names.
 The `/v1/me` endpoint returns the raw token groups.
 Flat group values must not be empty, and each value must be unique.
 The gateway accepts up to 128 groups. Each group can contain up to 256 bytes.
-Flat groups can include quotes, backslashes, commas, pipes, and Unicode.
+Flat groups use the allowlist `[A-Za-z0-9:#._/ -]`.
 The gateway carries flat groups in the identity envelope.
 MaaS stores the qualified groups with an API key created from a flat identity.
+MaaS stores the qualified groups as PostgreSQL `TEXT[]` values.
 MaaS reuses those saved values and does not add the organization prefix again.
-MaaS stores qualified API key groups as Base64, a text form that preserves UTF-8 bytes.
-This keeps U+0000 safe in Postgres.
 The public API key response does not include the flag for exact matching.
-OIDC groups without organization claims and OpenShift groups keep the allowlist `[A-Za-z0-9:#._/ -]`.
+OIDC groups without organization claims and OpenShift groups also keep the allowlist `[A-Za-z0-9:#._/ -]`.
 MaaS still reserves names that start with a canonical lowercase UUID and `/`.
-MaaS uses the same allowlist when it creates an API key for these identities.
+MaaS uses the same allowlist for every authenticated group, so every group that can authenticate can also mint an API key.
 
 ## Authentication evaluation order
 
@@ -214,7 +213,7 @@ This table covers the non-functional security requirements (NFRs) raised during 
 | **Client secret handling** | Not applicable | MaaS external OIDC uses **JWT bearer validation only**. Tokens are validated against the IdP's public JWKS. No `client_secret` is required or stored at runtime. The `clientId` field is configuration, not a credential. |
 | **Issuer and OAuth client binding (`iss`/`azp` claims)** | MaaS controller (gateway AuthPolicy) | The generated `maas-gateway-auth` AuthPolicy requires `auth.identity.iss == issuerUrl` and `auth.identity.azp == clientId` for external JWTs. Tokens from another issuer or OAuth client are rejected with 403. OpenShift TokenReview identities use their existing user-object path and are not selected by this rule. |
 | **Audience and token purpose (`aud`/purpose claim)** | MaaS controller (gateway AuthPolicy) | When configured, the same rule requires the intended `aud` value and configured access-token purpose. Delegated Grid administration requires both checks. Legacy OIDC deployments can omit these optional fields during migration. |
-| **OIDC group claim handling** | MaaS controller (gateway AuthPolicy) + maas-api | The gateway sends flat organization groups in the verified identity envelope. MaaS compares the qualified values without changing them. MaaS maps each group to `<org_id>/<group>`. `/v1/me` returns the raw groups. The gateway rejects empty or duplicate flat groups and groups longer than 256 bytes. OIDC groups without organization claims and OpenShift groups keep the allowlist `[A-Za-z0-9:#._/ -]`. MaaS reserves names that start with a canonical lowercase UUID and `/` for organization-qualified groups. MaaS uses the allowlist when it creates API keys for non-organization identities. The gateway rejects client copies of `X-MaaS-Exact-Groups`. |
+| **OIDC group claim handling** | MaaS controller (gateway AuthPolicy) + maas-api | The gateway sends flat organization groups in the verified identity envelope. MaaS compares the qualified values without changing them. MaaS maps each group to `<org_id>/<group>`. `/v1/me` returns the raw groups. The gateway rejects empty or duplicate flat groups and groups longer than 256 bytes. OIDC groups without organization claims and OpenShift groups keep the allowlist `[A-Za-z0-9:#._/ -]`. MaaS reserves names that start with a canonical lowercase UUID and `/` for organization-qualified groups. MaaS uses the same allowlist for every authenticated group, so every group that can authenticate can also mint an API key. The gateway rejects client copies of `X-MaaS-Exact-Groups`. |
 | **SSRF on issuer URL** | CRD validation + Authorino HTTP client | The CRD enforces `^https://\S+$` on `issuerUrl`, blocking plain HTTP and empty URLs at admission time. Blocking of private IPs and loopback addresses in JWKS fetch is the responsibility of the Authorino HTTP client (outside MaaS). Operators in restricted environments should use network policies to constrain Authorino's egress. |
 | **Rate limiting on auth paths** | Kuadrant TokenRateLimitPolicy (model inference only) | The `gateway-default-deny` TRLP enforces a 0-token default on model inference routes and **explicitly excludes** `/maas-api` management paths. Authorino's internal JWKS refresh is not exposed as an external endpoint and is not subject to per-request rate limiting. If high-volume IdP calls are a concern, increase `ttl` to reduce refresh frequency. |
 | **Authentication audit trail** | Authorino metrics + PrometheusRule alerts | `auth_server_authconfig_response_status` provides aggregate counts by status (`OK`, `UNAUTHENTICATED`, `UNAUTHORIZED`). The `MaaSAuthorinoAuthenticationHighFailureRate` alert fires on sustained failure rates above 10%. Per-request auth decision logging requires capturing Authorino's structured log output at debug/info level outside MaaS. |

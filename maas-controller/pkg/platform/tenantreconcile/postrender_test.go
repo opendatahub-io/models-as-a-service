@@ -102,6 +102,15 @@ func TestPatchAuthPolicyWithOIDCReservesOrganizationQualifiedGroups(t *testing.T
 			want: `["system:authenticated","` + organizationID + `/ai-grid-admins"]`,
 		},
 		{
+			name: "organization-bound OIDC group outside the allowlist is rejected",
+			identity: map[string]any{
+				"iss":    "https://idp.example.com/realms/test",
+				"org_id": organizationID,
+				"groups": []any{"équipe"},
+			},
+			want: `["system:authenticated"]`,
+		},
+		{
 			name: "legacy OIDC group with slash stays plain",
 			identity: map[string]any{
 				"iss":    "https://idp.example.com/realms/test",

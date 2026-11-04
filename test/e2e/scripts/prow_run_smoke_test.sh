@@ -280,7 +280,7 @@ _request_oidc_token() {
         if token_response=$(curl -sk -m 10 \
             -d "grant_type=password&client_id=${OIDC_CLIENT_ID}&username=${username}&password=${password}&scope=openid" \
             "${OIDC_TOKEN_URL}" 2>/dev/null); then
-            access_token=$(printf '%s' "$token_response" | uv run --no-project python -c \
+            access_token=$(printf '%s' "$token_response" | python3 -c \
                 "import sys,json; print(json.load(sys.stdin).get('access_token',''))" 2>/dev/null || true)
             if [[ -n "$access_token" ]]; then
                 printf '%s' "$access_token"
@@ -386,7 +386,7 @@ run_e2e_tests() {
                     OIDC_AUDIENCE="${OIDC_AUDIENCE:-}" \
                     OIDC_ACCESS_TOKEN_PURPOSE_CLAIM="${OIDC_ACCESS_TOKEN_PURPOSE_CLAIM:-}" \
                     OIDC_ACCESS_TOKEN_PURPOSE="${OIDC_ACCESS_TOKEN_PURPOSE:-}" \
-                    uv run --no-project python -c '
+                    python3 -c '
 import base64
 import json
 import os
