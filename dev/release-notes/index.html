@@ -3885,6 +3885,9 @@
 <h3 id="key-fixes">Key Fixes</h3>
 <ul>
 <li>
+<p><strong>Experimental Gateway buffer annotation for large inference responses:</strong> MaaS applies a default <code>64 MB</code> Envoy listener buffer for large responses such as batched embeddings. Platform administrators can override it per Gateway with <code>maas.opendatahub.io/experimental-body-buffer-limit-mb</code>, using an integer value from <code>1</code> to <code>64</code>. This is experimental and may move into the supported tenant configuration API in a future release.</p>
+</li>
+<li>
 <p><strong>Short subscription rate-limit IDs in TokenRateLimitPolicy (new subscriptions only):</strong> TRLP <code>when</code> predicates and counters for subscriptions created after upgrade use a stable 16-hex SHA-256 of <code>namespace/name@modelNs/model</code> (<code>selected_subscription_id</code>) so Kuadrant WASM / EnvoyFilter size no longer embeds long strings for those CRs. Pre-upgrade subscriptions keep <code>selected_subscription_key</code>. Limit map keys stay rate-grouped (<code>tokens-&lt;limit&gt;-per-&lt;window&gt;</code>). Human-readable <code>selected_subscription_key</code> remains for telemetry.</p>
 </li>
 <li>
@@ -4141,7 +4144,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="October 21, 2026 11:39:46 UTC">October 21, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="November 4, 2026 03:18:27 UTC">November 4, 2026</span>
   </span>
 
     
