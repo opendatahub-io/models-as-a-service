@@ -57,6 +57,13 @@ func TestPostgresStoreFromURL(t *testing.T) {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "invalid database URL")
 	})
+	t.Run("InvalidReadURL", func(t *testing.T) {
+		_, err := api_keys.NewPostgresStoreFromURLs(
+			ctx, testLogger, "postgresql://localhost/test", "mysql://localhost/test", "test-tenant")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid database URL")
+		assert.Contains(t, err.Error(), "read-only database")
+	})
 }
 
 func TestAPIKeyOperations(t *testing.T) {

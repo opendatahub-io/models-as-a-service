@@ -88,10 +88,10 @@ func serve() error {
 		return fmt.Errorf("failed to create cluster config: %w", err)
 	}
 
-	// Load database connection URL from Kubernetes secret
-	log.Info("Loading database connection URL from secret...")
-	if err := cfg.LoadDatabaseURL(ctx, cluster.ClientSet); err != nil {
-		return fmt.Errorf("failed to load database URL: %w", err)
+	// Load database connection URLs from Kubernetes secret
+	log.Info("Loading database connection URLs from secret...")
+	if err := cfg.LoadDatabaseURLs(ctx, cluster.ClientSet); err != nil {
+		return fmt.Errorf("failed to load database URLs: %w", err)
 	}
 
 	if err := cfg.Validate(); err != nil {
@@ -179,6 +179,14 @@ func serve() error {
 			log.Error("Failed to close token store", "error", err)
 		}
 	}()
+	// The store implements a custom Prometheus collector so database metrics share the
+	// lifecycle of the pools they measure. Registering it after successful construction
+	// avoids exposing counters for a store whose startup validation has already failed.
+	if collector, ok := store.(prometheus.Collector); ok {
+		if err := metricsRegistry.Register(collector); err != nil {
+			return fmt.Errorf("failed to register database metrics: %w", err)
+		}
+	}
 
 	if err = registerHandlers(ctx, log, router, cfg, cluster, store, metricsRecorder, profileMinVersion, profileCipherSuites); err != nil {
 		return fmt.Errorf("failed to register handlers: %w", err)
@@ -233,7 +241,11 @@ func serve() error {
 // DBConnectionURL is validated in cfg.Validate() before this is called.
 func initStore(ctx context.Context, log *logger.Logger, cfg *config.Config) (api_keys.MetadataStore, error) { //nolint:ireturn // Returns MetadataStore interface by design.
 	log.Info("Connecting to PostgreSQL database...", "tenant", cfg.TenantName)
-	return api_keys.NewPostgresStoreFromURL(ctx, log, cfg.DBConnectionURL, cfg.TenantName)
+	if cfg.DBReadConnectionURL == "" {
+		return api_keys.NewPostgresStoreFromURL(ctx, log, cfg.DBConnectionURL, cfg.TenantName)
+	}
+	log.Info("Using PostgreSQL read replica for local read-only queries")
+	return api_keys.NewPostgresStoreFromURLs(ctx, log, cfg.DBConnectionURL, cfg.DBReadConnectionURL, cfg.TenantName)
 }
 
 func registerHandlers(
@@ -247,7 +259,11 @@ func registerHandlers(
 	profileMinVersion uint16,
 	profileCipherSuites []uint16,
 ) error {
-	router.GET("/health", handlers.NewHealthHandler().HealthCheck)
+	healthHandler := handlers.NewHealthHandler()
+	if reporter, ok := store.(handlers.DatabaseHealthReporter); ok {
+		healthHandler = healthHandler.WithDatabaseHealth(reporter)
+	}
+	router.GET("/health", healthHandler.HealthCheck)
 
 	log.Info("Starting informers and waiting for cache sync...")
 	if !cluster.StartAndWaitForSync(ctx.Done()) {
@@ -314,10 +330,6 @@ func registerHandlers(
 	)
 	v1Routes.GET("/models", append(modelAuthMiddleware, modelsHandler.ListLLMs)...)
 
-	// /v1/me is intentionally SSO-only. Legacy username/group headers and API
-	// keys cannot reconstruct the verified OIDC identity response.
-	v1Routes.GET("/me", tokenHandler.ExtractVerifiedIdentity(), tokenHandler.GetMe)
-
 	// Management routes may receive the new verified-identity envelope. Keeping
 	// it optional here preserves older gateways and deployments with no
 	// LLMInferenceService; malformed or duplicate envelopes still fail closed.
@@ -326,6 +338,11 @@ func registerHandlers(
 		tokenHandler.ExtractUserInfoOptional(),
 		middleware.TenantLogger(log, tenantLogCfg),
 	}
+
+	// Non-OIDC authentication methods reach maas-api through the gateway's
+	// trusted username/group headers. GetMe prefers the verified OIDC envelope
+	// when it is available.
+	v1Routes.GET("/me", append(optionalAuthMiddleware, tokenHandler.GetMe)...)
 
 	// Subscription listing routes use optional auth so they can return an empty
 	// list when no LLMInferenceService is deployed (same rationale as /v1/models).

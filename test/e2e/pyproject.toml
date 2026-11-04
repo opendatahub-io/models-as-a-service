@@ -5,7 +5,9 @@ markers = [
     "slow: long-running test (may wait for token expiry)",
     "xdist_group(name): pytest-xdist group marker for parallel test groups",
     "readonly: read-only smoke and validation tests (no cluster mutations)",
+    "smoke: PR/group-test subset — basic coverage with low AuthPolicy/CR churn (see E2E_SMOKE_ONLY)",
     "api_keys: API key CRUD, auth enforcement, subscription binding",
+    "limitador: TokenRateLimitPolicy -> Limitador sync subset; triage a stalled limiter with -m limitador at varying -n",
     "models: /v1/models endpoint and gateway-scoped AuthPolicy",
     "security: negative security paths and namespace scoping",
     "mt_lifecycle: multi-tenant AITenant lifecycle and discovery",
@@ -18,6 +20,7 @@ markers = [
     "legacy_ipp: legacy maas-controller IPP dataplane; excluded from default e2e passes (run with -m legacy_ipp)",
     "external: external OIDC and ExternalModel integrations",
     "nightly: extended E2E (external OIDC, slow paths); excluded from PR /group-test; run on scheduled nightly only",
+    "grid_oidc: Grid organization OIDC governance tests; collected before legacy external OIDC tests",
 ]
 addopts = "--strict-markers"
 

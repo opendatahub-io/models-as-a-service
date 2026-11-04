@@ -328,7 +328,8 @@ maas-api uses PostgreSQL for persistent storage of API key metadata. The databas
 !!! note "Automatic Setup"
     When using `scripts/deploy.sh` for development, PostgreSQL is deployed automatically with the secret created.
 
-For production deployments, see the [Database Setup](../docs/content/install/maas-setup.md#database-setup) guide.
+For production deployments, see the [Database Setup](../docs/content/install/maas-setup.md#database-setup)
+guide, including the optional [PostgreSQL read replica](../docs/content/install/maas-setup.md#optional-postgresql-read-replica).
 
 #### Listing models with subscription filtering
 

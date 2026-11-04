@@ -7,6 +7,7 @@ import (
 	goruntime "runtime"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -132,6 +133,60 @@ func TestLifecycleReconciler_CreatesConfigWhenMissing(t *testing.T) {
 
 	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: maasv1alpha1.ConfigInstanceName}, &cfg)).To(Succeed())
 	g.Expect(cfg.Name).To(Equal(maasv1alpha1.ConfigInstanceName))
+}
+
+func TestLifecycleReconciler_StripsLegacyFinalizerBeforeConfigRequeue(t *testing.T) {
+	g := NewWithT(t)
+	s := lifecycleTestScheme(t)
+	dep := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{
+		Name:       "maas-controller",
+		Namespace:  "opendatahub",
+		Finalizers: []string{CleanupFinalizer, "example.com/other"},
+	}}
+	// A Config without a UID makes normal reconciliation requeue before module
+	// setup. Legacy finalizers still need to be cleared on this first pass.
+	cfg := &maasv1alpha1.Config{ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName}}
+	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(dep, cfg).Build()
+	r := &LifecycleReconciler{Client: cl, Scheme: s}
+	key := client.ObjectKeyFromObject(dep)
+
+	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key})
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(res.RequeueAfter).To(Equal(2 * time.Second))
+
+	var updated appsv1.Deployment
+	g.Expect(cl.Get(context.Background(), key, &updated)).To(Succeed())
+	g.Expect(updated.Finalizers).To(Equal([]string{"example.com/other"}))
+}
+
+func TestLifecycleReconciler_SkipsOwnerReferenceOnTerminatingTenantConfig(t *testing.T) {
+	g := NewWithT(t)
+	s := lifecycleTestScheme(t)
+	const tenantNS = "models-as-a-service"
+
+	cfg := &maasv1alpha1.Config{ObjectMeta: metav1.ObjectMeta{
+		Name: maasv1alpha1.ConfigInstanceName,
+		UID:  types.UID("cfg-new"),
+	}}
+	// A terminating MaasTenantConfig must not be re-parented to the current Config:
+	// the patch both mis-links a deleting object and fails when its namespace is gone.
+	deletion := metav1.NewTime(time.Date(2026, 10, 28, 1, 46, 41, 0, time.UTC))
+	tenant := &maasv1alpha1.MaasTenantConfig{ObjectMeta: metav1.ObjectMeta{
+		Name:              maasv1alpha1.MaasTenantConfigInstanceName,
+		Namespace:         tenantNS,
+		DeletionTimestamp: &deletion,
+		Finalizers:        []string{tenantFinalizer},
+	}}
+	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cfg, tenant).Build()
+	r := &LifecycleReconciler{Client: cl, Scheme: s, TenantSubscriptionNamespace: tenantNS}
+
+	res, err := r.ensureTenantReferencesConfig(context.Background())
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(res).To(BeNil())
+
+	var updated maasv1alpha1.MaasTenantConfig
+	g.Expect(cl.Get(context.Background(), client.ObjectKeyFromObject(tenant), &updated)).To(Succeed())
+	g.Expect(updated.OwnerReferences).To(BeEmpty())
 }
 
 func TestLifecycleReconciler_DoesNotRecreateConfigWhenTeardownRequested(t *testing.T) {

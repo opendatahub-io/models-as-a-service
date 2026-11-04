@@ -23,11 +23,13 @@ Complete [Operator Setup](platform-setup.md) before proceeding.
     [Infrastructure Namespace Separation](../configuration-and-management/infra-namespace-migration.md)
     for details.
 
-Create the `maas-db-config` Secret in your ODH/RHOAI namespace (typically `opendatahub` for ODH or `redhat-ods-applications` for RHOAI):
+Create the `maas-db-config` Secret in your infrastructure namespace. The default is
+`odh-ai-gateway-infra` for ODH or `redhat-ai-gateway-infra` for RHOAI:
 
 ```bash
+INFRA_NAMESPACE=odh-ai-gateway-infra
 kubectl create secret generic maas-db-config \
-  -n opendatahub \
+  -n "$INFRA_NAMESPACE" \
   --from-literal=DB_CONNECTION_URL='postgresql://username:password@hostname:5432/database?sslmode=require'
 ```
 
@@ -35,6 +37,50 @@ kubectl create secret generic maas-db-config \
 ```
 postgresql://USERNAME:PASSWORD@HOSTNAME:PORT/DATABASE?sslmode=require
 ```
+
+### Optional PostgreSQL read replica
+
+`DB_CONNECTION_URL` always identifies the writable primary. To use a cluster-local
+read replica for API-key validation and administrative reads, add
+`DB_READ_CONNECTION_URL` to the same Secret:
+
+```bash
+INFRA_NAMESPACE=odh-ai-gateway-infra
+kubectl patch secret maas-db-config \
+  -n "$INFRA_NAMESPACE" \
+  --type merge \
+  -p '{"stringData":{"DB_READ_CONNECTION_URL":"postgresql://username:password@maas-read-ro.maas-db.svc.cluster.local:5432/database?sslmode=require"}}'
+```
+
+Use `redhat-ai-gateway-infra` for the default RHOAI infrastructure namespace, or set
+`INFRA_NAMESPACE` to your configured custom infrastructure namespace. If namespace
+separation is disabled, use the controller namespace where `maas-api` runs instead.
+
+`DB_READ_CONNECTION_URL` is optional. When it is absent or empty, `maas-api` uses only
+the writable pool and existing behavior is unchanged. When it is present, the URL must
+use `postgresql://` or `postgres://` and the replica must be reachable when `maas-api`
+starts; an invalid or unreachable read URL is a startup error rather than a silent
+fallback.
+
+Migrations and writes always use the writable primary. API-key hash validation and key
+search, get, and list queries use the read replica and fall back to the primary once if
+the replica fails. A not-found result is a completed read and is not retried on the
+primary. Secret changes continue to require a `maas-api` pod restart. The
+`DB_READ_REPLICA_LAG_WARNING_SECONDS` and `DB_READ_REPLICA_LAG_CRITICAL_SECONDS`
+environment variables configure the lag thresholds exposed as metrics.
+
+When the read URL is configured, primary commits—including newly created keys and
+revocations—become visible to API-key validation after PostgreSQL replication lag plus
+any brief Authorino cache delay. A new key may therefore be rejected until its local
+replica catches up. Omit `DB_READ_CONNECTION_URL` if strict read-your-writes behavior is
+required. The asynchronous, debounced `last_used_at` write continues to use the writable
+primary and does not block validation.
+
+During rollout, monitor `maas_api_database_queries_total` to confirm local reads select the
+`read` pool, `maas_api_database_read_fallbacks_total` for unexpected primary traffic, and
+`maas_api_database_replication_lag_seconds` for replica lag. The `/health` endpoint
+reports whether the optional read pool is degraded, but it remains healthy because the
+writable primary can continue serving writes and API-key validation.
 
 !!! note "Development"
     For development, you can deploy a PostgreSQL instance and Secret using the setup script:
