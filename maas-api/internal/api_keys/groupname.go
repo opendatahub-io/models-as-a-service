@@ -20,7 +20,6 @@ import (
 //
 //   - maas-controller/pkg/groupname/groupname.go (controller canonical)
 //   - maas-controller/pkg/controller/maas/maasauthpolicy_controller.go
-//   - maas-controller/pkg/platform/tenantreconcile/postrender.go
 //   - scripts/data/maas-api-authpolicy-external-oidc-patch.yaml
 //   - docs/content/advanced-administration/external-oidc.md
 

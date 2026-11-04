@@ -2,15 +2,14 @@
 // maas-controller.
 //
 // The active gateway AuthPolicy and API-key path use this pattern for legacy
-// groups. Flat organization groups use exact matching. A retired route-level
-// helper in tenantreconcile still contains the legacy pattern. The copies live in
-// independent Go modules, so the mirrored sync tests (sync_test.go here,
-// groupname_sync_test.go in maas-api) check them as text and fail when
-// they drift. Never edit one without the others:
+// and organization groups. Subscription and model-policy matching remains
+// exact after MaaS qualifies an organization group with its organization ID.
+// The copies live in independent Go modules, so the mirrored sync tests
+// (sync_test.go here, groupname_sync_test.go in maas-api) check them as text
+// and fail when they drift. Never edit one without the others:
 //
 //   - maas-api/internal/api_keys/groupname.go (maas-api canonical)
 //   - maas-controller/pkg/controller/maas/maasauthpolicy_controller.go
-//   - maas-controller/pkg/platform/tenantreconcile/postrender.go
 //   - scripts/data/maas-api-authpolicy-external-oidc-patch.yaml
 //   - docs/content/advanced-administration/external-oidc.md
 package groupname
@@ -26,9 +25,6 @@ import "regexp"
 // OpenShift Group objects can never contain '/', ':' or '%' (their names are
 // validated as path segments by openshift-apiserver), so this rule sees
 // slashes only from OIDC group claims.
-//
-// Flat organization groups do not use this allowlist. The gateway encodes
-// cache-key values with lengths, so separators remain unambiguous.
 const Pattern = `^[A-Za-z0-9:#._/ -]+$`
 
 var pattern = regexp.MustCompile(Pattern)

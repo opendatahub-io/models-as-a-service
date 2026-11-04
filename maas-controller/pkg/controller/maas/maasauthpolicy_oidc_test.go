@@ -391,13 +391,13 @@ func TestCELExpressions_SupportOIDC(t *testing.T) {
 	// TokenReview branch — and both sources are gated on the pattern.
 	assert.Contains(t, celTokenGroupsHeaderJSON, "has(auth.identity.iss)",
 		"X-MaaS-Group expression must select the group source by identity type (iss), not claim presence")
-	assert.Contains(t, celTokenGroupsHeaderJSON, "auth.identity.user.groups.all(g, g.matches(",
+	assert.Contains(t, celTokenGroupsHeaderJSON, "auth.identity.user.groups.all(g, type(g) == string && g.matches(",
 		"X-MaaS-Group expression must validate TokenReview groups before JSON string construction")
 	assert.Contains(t, celGroups, "has(auth.identity.iss)",
 		"celGroups must select the group source by identity type (iss), not claim presence")
 	assert.Contains(t, celGroups, celOIDCGroupsSafe,
 		"celGroups must gate JWT groups on the safe group-name pattern")
-	assert.Contains(t, celGroups, "auth.identity.user.groups.all(g, g.matches(",
+	assert.Contains(t, celGroups, "auth.identity.user.groups.all(g, type(g) == string && g.matches(",
 		"celGroups must validate TokenReview groups before subscription selection")
 }
 

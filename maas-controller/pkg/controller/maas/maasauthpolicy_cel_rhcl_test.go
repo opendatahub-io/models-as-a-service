@@ -237,6 +237,11 @@ func TestCELGroupsQualifyFlatOIDCGroups(t *testing.T) {
 			want:     []any{},
 		},
 		{
+			name:     "non-string flat group is rejected",
+			identity: map[string]any{"iss": "https://issuer.example.com", "org_id": organizationA, "groups": []any{42}},
+			want:     []any{},
+		},
+		{
 			name:     "empty flat group list",
 			identity: map[string]any{"iss": "https://issuer.example.com", "org_id": organizationA, "groups": []any{}},
 			want:     []any{},
@@ -265,6 +270,11 @@ func TestCELGroupsQualifyFlatOIDCGroups(t *testing.T) {
 			name:     "non-organization OIDC groups stay plain",
 			identity: map[string]any{"iss": "https://issuer.example.com", "groups": []any{"users"}},
 			want:     []any{"users"},
+		},
+		{
+			name:     "non-string legacy OIDC group is rejected",
+			identity: map[string]any{"iss": "https://issuer.example.com", "groups": []any{42}},
+			want:     []any{},
 		},
 		{
 			name:     "legacy OIDC group with slash stays plain",
@@ -334,6 +344,40 @@ func TestGatewayAuthPolicyFlatGroupsAllowAllowlistedValues(t *testing.T) {
 	got := evaluateGatewayCELList(t, celGroups, auth)
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("celGroups = %#v, want %#v", got, want)
+	}
+}
+
+func TestCELAPIKeyGroupsHeaderJSONFallsBackToGroups(t *testing.T) {
+	tests := []struct {
+		name     string
+		metadata map[string]any
+		want     string
+	}{
+		{
+			name:     "groupsJSON is preferred",
+			metadata: map[string]any{"apiKeyValidation": map[string]any{"groupsJSON": `["saved"]`, "groups": []any{"ignored"}}},
+			want:     `["saved"]`,
+		},
+		{
+			name:     "groups list is used when groupsJSON is absent",
+			metadata: map[string]any{"apiKeyValidation": map[string]any{"groups": []any{"users", "admins"}}},
+			want:     `["users","admins"]`,
+		},
+		{
+			name:     "empty groups list is encoded",
+			metadata: map[string]any{"apiKeyValidation": map[string]any{"groups": []any{}}},
+			want:     `[]`,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			auth := map[string]any{"metadata": test.metadata}
+			got := evaluateGatewayCELString(t, celAPIKeyGroupsHeaderJSON, auth)
+			if got != test.want {
+				t.Fatalf("celAPIKeyGroupsHeaderJSON = %s, want %s", got, test.want)
+			}
+		})
 	}
 }
 
