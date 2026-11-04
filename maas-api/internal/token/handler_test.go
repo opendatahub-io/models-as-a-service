@@ -178,6 +178,23 @@ func TestExtractUserInfoOptional(t *testing.T) {
 		assert.Equal(t, []string{}, body.Groups)
 	})
 
+	t.Run("trims group values from header", func(t *testing.T) {
+		router := setupOptionalRouter(t)
+		req := httptest.NewRequest(http.MethodGet, "/test", nil)
+		req.Header.Set(constant.HeaderUsername, "testuser")
+		req.Header.Set(constant.HeaderGroup, `[" org/users ","quote\\\"comma,pipe|"]`)
+
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		require.Equal(t, http.StatusOK, w.Code)
+		var body struct {
+			Groups []string `json:"groups"`
+		}
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+		assert.Equal(t, []string{"org/users", `quote\"comma,pipe|`}, body.Groups)
+	})
+
 	t.Run("aborts when group header is malformed", func(t *testing.T) {
 		router := setupOptionalRouter(t)
 		req := httptest.NewRequest(http.MethodGet, "/test", nil)
@@ -205,7 +222,12 @@ func TestExtractUserInfoOptional(t *testing.T) {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": "user context missing"})
 				return
 			}
-			c.JSON(http.StatusOK, user)
+			userContext, ok := user.(*token.UserContext)
+			if !ok {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "invalid user context"})
+				return
+			}
+			c.JSON(http.StatusOK, gin.H{"user": userContext})
 		})
 
 		request := httptest.NewRequest(http.MethodGet, "/test", nil)
@@ -214,11 +236,13 @@ func TestExtractUserInfoOptional(t *testing.T) {
 		router.ServeHTTP(recorder, request)
 
 		require.Equal(t, http.StatusOK, recorder.Code)
-		var user token.UserContext
-		require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &user))
+		var response struct {
+			User token.UserContext `json:"user"`
+		}
+		require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &response))
+		user := response.User
 		assert.Equal(t, "alex", user.Username)
 		assert.Equal(t, []string{
-			"system:authenticated",
 			"42c3e46f-2477-44d7-a85b-d3b43f6b31fa/users",
 		}, user.Groups)
 		assert.Equal(t, "test", user.Tenant)

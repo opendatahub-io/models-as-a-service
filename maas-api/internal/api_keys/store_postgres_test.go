@@ -124,6 +124,30 @@ func TestPostgresStore_BackwardCompatibility_NullLabels(t *testing.T) {
 	assert.Nil(t, key.Labels) // Important: should be nil, not empty map
 }
 
+func TestAddKeyAndGetByHashStorePlainGroups(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+	if os.Getenv("TEST_DATABASE_URL") == "" {
+		t.Skip("Skipping integration test (TEST_DATABASE_URL not set)")
+	}
+
+	ctx := context.Background()
+	tenant := "plain-groups-" + uuid.NewString()
+	store := setupTestPostgresStoreForTenant(t, tenant)
+	defer store.Close()
+
+	userGroups := []string{"team-a", uuid.NewString() + "/admins"}
+	keyID := uuid.NewString()
+	keyHash := uuid.NewString()
+	require.NoError(t, store.AddKey(ctx, "plain-user", keyID, keyHash,
+		"plain groups key", "", userGroups, "plain-subscription", tenant, nil, false, nil))
+
+	key, err := store.GetByHash(ctx, keyHash)
+	require.NoError(t, err)
+	assert.Equal(t, userGroups, key.Groups)
+}
+
 // TestPostgresStore_LifecycleInvalidation verifies that lifecycle cleanup
 // soft-deletes keys, prevents validation, and preserves subscription scope.
 func TestPostgresStore_LifecycleInvalidation(t *testing.T) {

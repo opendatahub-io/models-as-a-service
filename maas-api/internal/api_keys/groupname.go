@@ -10,10 +10,11 @@ import (
 // Group-name validation errors for API-key mint time. The canonical maas-api
 // rule in internal/groupname is also applied to verified OIDC group claims.
 //
-// The SAME rule is enforced by maas-controller in the AuthPolicies it
-// generates (the oidc-groups-safe Rego rule and the CEL expressions that
-// build the X-MaaS-Group header JSON) and by the deploy-time kustomize
-// patch. Those copies live in independent Go modules, so the mirrored
+// The same rule is enforced by maas-controller in the AuthPolicies it
+// generates and by the deploy-time kustomize patch. Flat organization
+// groups use exact matching and are checked against this rule before
+// authentication completes. The copies live in independent Go modules, so the
+// mirrored
 // sync tests (groupname_sync_test.go here, sync_test.go in
 // maas-controller) check them as text and fail when they drift.
 // Never edit one without the others:

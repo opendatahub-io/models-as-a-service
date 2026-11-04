@@ -12,6 +12,7 @@ import (
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/constant"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/subscription"
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/token"
 )
 
 const (
@@ -409,6 +410,45 @@ func TestGetAllAccessible(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestGetAllAccessibleExactGroupsPreserveTrailingSpaces(t *testing.T) {
+	subscriptionObject := createSubscription("literal-group", []string{"org/users "}, nil, 10, defaultTestTokenRateLimit, "", "")
+	selector := subscription.NewSelector(logger.New(false), &fakeLister{subscriptions: []*unstructured.Unstructured{subscriptionObject}}, nil, nil)
+
+	accessible, err := selector.GetAllAccessible([]string{"org/users "}, "")
+	if err != nil {
+		t.Fatalf("GetAllAccessible() error = %v", err)
+	}
+	if len(accessible) != 1 || accessible[0].Name != "literal-group" {
+		t.Fatalf("GetAllAccessible() = %#v, want literal-group", accessible)
+	}
+}
+
+func TestListInventorySeparatesQualifiedGroupsByOrganization(t *testing.T) {
+	orgA := "42c3e46f-2477-44d7-a85b-d3b43f6b31fa"
+	orgB := "6a9f6e3e-0c4c-4d14-9a9b-2a26c1ebeea1"
+	selector := subscription.NewSelector(logger.New(false), &fakeLister{subscriptions: []*unstructured.Unstructured{
+		createSubscription("org-a-sub", []string{orgA + "/users"}, nil, 10, defaultTestTokenRateLimit, "", ""),
+		createSubscription("org-b-sub", []string{orgB + "/users"}, nil, 10, defaultTestTokenRateLimit, "", ""),
+	}}, nil, nil)
+
+	for _, test := range []struct {
+		organizationID string
+		wantName       string
+	}{
+		{organizationID: orgA, wantName: "org-a-sub"},
+		{organizationID: orgB, wantName: "org-b-sub"},
+	} {
+		identity := &token.VerifiedIdentity{Source: "oidc", Claims: token.VerifiedClaims{OrgID: test.organizationID}}
+		inventory, err := selector.ListInventory([]string{test.organizationID + "/users"}, "alex", identity)
+		if err != nil {
+			t.Fatalf("ListInventory() error = %v", err)
+		}
+		if len(inventory) != 1 || inventory[0].SubscriptionIDHeader != test.wantName {
+			t.Fatalf("ListInventory() = %#v, want only %q", inventory, test.wantName)
+		}
 	}
 }
 
@@ -2564,5 +2604,48 @@ func TestSelect_FlowControlObjectiveMissing(t *testing.T) {
 				t.Errorf("Objective = %q, FairnessID = %q; want both empty", resp.Objective, resp.FairnessID)
 			}
 		})
+	}
+}
+
+func TestUserHasAccessIsExactAcrossOrganizations(t *testing.T) {
+	log := logger.New(false)
+
+	orgA := "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+	orgB := "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+
+	subscriptions := []*unstructured.Unstructured{
+		createSubscription("sub-org-a", []string{orgA + "/team"}, nil, 10, defaultTestTokenRateLimit, "", ""),
+		createSubscription("sub-org-b", []string{orgB + "/team"}, nil, 10, defaultTestTokenRateLimit, "", ""),
+	}
+
+	lister := &fakeLister{subscriptions: subscriptions}
+	selector := subscription.NewSelector(log, lister, nil, nil)
+
+	// User in org A should only access org A subscription
+	userGroupsOrgA := []string{orgA + "/team"}
+	accessible, err := selector.GetAllAccessible(userGroupsOrgA, "alice")
+	if err != nil {
+		t.Fatalf("GetAllAccessible failed: %v", err)
+	}
+
+	if len(accessible) != 1 {
+		t.Fatalf("Expected 1 accessible subscription for org A, got %d", len(accessible))
+	}
+	if accessible[0].Name != "sub-org-a" {
+		t.Errorf("Expected sub-org-a, got %s", accessible[0].Name)
+	}
+
+	// User in org B should only access org B subscription
+	userGroupsOrgB := []string{orgB + "/team"}
+	accessible, err = selector.GetAllAccessible(userGroupsOrgB, "bob")
+	if err != nil {
+		t.Fatalf("GetAllAccessible failed: %v", err)
+	}
+
+	if len(accessible) != 1 {
+		t.Fatalf("Expected 1 accessible subscription for org B, got %d", len(accessible))
+	}
+	if accessible[0].Name != "sub-org-b" {
+		t.Errorf("Expected sub-org-b, got %s", accessible[0].Name)
 	}
 }

@@ -375,14 +375,12 @@ func TestCELExpressions_SupportOIDC(t *testing.T) {
 		"celGroups should check for OIDC groups claim")
 	assert.Contains(t, celGroups, "auth.identity.user.groups",
 		"celGroups should fall back to K8s user.groups")
-	assert.Contains(t, celTokenGroupsHeaderJSON, "size(auth.identity.groups) > 0",
-		"X-MaaS-Group expression should handle empty OIDC groups claim")
+	assert.Contains(t, celTokenGroupsHeaderJSON, "size("+celNonAPIKeyGroups+") > 0",
+		"X-MaaS-Group expression should handle empty token groups")
 	assert.Contains(t, celTokenGroupsHeaderJSON, `'["system:authenticated"]'`,
 		"X-MaaS-Group expression should preserve default subscription access for OIDC tokens with no groups")
-	assert.Contains(t, celTokenGroupsHeaderJSON, "size(auth.identity.user.groups) > 0",
-		"X-MaaS-Group expression should avoid empty JSON group values for K8s tokens")
-	assert.Contains(t, celTokenGroupsHeaderJSON, `'["system:authenticated","' + auth.identity.user.groups.join('","') + '"]'`,
-		"X-MaaS-Group expression should preserve default subscription access for K8s user.groups tokens")
+	assert.Contains(t, celTokenGroupsHeaderJSON, celNonAPIKeyGroups+`.join('","')`,
+		"X-MaaS-Group expression should serialize the same groups used for subscription selection")
 	assert.Contains(t, celTokenGroupsHeaderJSON, "auth.identity.groups.all",
 		"X-MaaS-Group expression should validate OIDC groups before JSON string construction")
 	assert.Contains(t, celTokenGroupsHeaderJSON, safeGroupNamePattern,

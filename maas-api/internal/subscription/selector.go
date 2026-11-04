@@ -1180,11 +1180,8 @@ func userHasAccess(sub *subscription, username string, groups []string) bool {
 
 	// Check group match
 	for _, subGroup := range sub.Groups {
-		for _, userGroup := range groups {
-			userGroup = strings.TrimSpace(userGroup)
-			if userGroup == subGroup {
-				return true
-			}
+		if slices.Contains(groups, subGroup) {
+			return true
 		}
 	}
 
