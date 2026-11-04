@@ -260,10 +260,13 @@ func registerHandlers(
 	profileCipherSuites []uint16,
 ) error {
 	healthHandler := handlers.NewHealthHandler()
+	// /health is the stable process contract. Register the separate database
+	// component endpoint only when the configured store can report it.
+	router.GET("/health", healthHandler.HealthCheck)
 	if reporter, ok := store.(handlers.DatabaseHealthReporter); ok {
 		healthHandler = healthHandler.WithDatabaseHealth(reporter)
+		router.GET("/health/database", healthHandler.DatabaseHealthCheck)
 	}
-	router.GET("/health", healthHandler.HealthCheck)
 
 	log.Info("Starting informers and waiting for cache sync...")
 	if !cluster.StartAndWaitForSync(ctx.Done()) {

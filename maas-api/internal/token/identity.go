@@ -376,6 +376,11 @@ func (h *Handler) ExtractVerifiedIdentity() gin.HandlerFunc {
 // gateway-authenticated callers receive the same response shape using the
 // trusted username/group identity headers.
 func (h *Handler) GetMe(c *gin.Context) {
+	if hasInferenceAPIKeyCredential(c.Request.Header) {
+		h.rejectIdentity(c, errors.New("inference API keys are not accepted"))
+		return
+	}
+
 	if value, exists := c.Get("verified_identity"); exists {
 		identity, ok := value.(*VerifiedIdentity)
 		if !ok || identity == nil {
@@ -412,6 +417,23 @@ func (h *Handler) GetMe(c *gin.Context) {
 		PreferredUsername: user.Username,
 		Groups:            user.Groups,
 	})
+}
+
+func hasInferenceAPIKeyCredential(header http.Header) bool {
+	for _, authorization := range header.Values("Authorization") {
+		authorizationFields := strings.Fields(authorization)
+		if len(authorizationFields) > 1 &&
+			strings.EqualFold(authorizationFields[0], "Bearer") &&
+			strings.HasPrefix(strings.Join(authorizationFields[1:], " "), constant.APIKeyPrefix) {
+			return true
+		}
+	}
+	for _, apiKey := range header.Values("X-Api-Key") {
+		if strings.HasPrefix(strings.TrimSpace(apiKey), constant.APIKeyPrefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // RejectTrustedIdentityHeaders prevents direct callers from injecting the new
