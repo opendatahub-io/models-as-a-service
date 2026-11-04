@@ -391,6 +391,7 @@ def _infer(
 # ─── Serving through the default Gateway ────────────────────────────────────
 
 
+@pytest.mark.smoke
 class TestDefaultTenantServesModelWithoutGatewayRefs:
     """A 3.5-shaped model in a namespace of no tenant is served through the
     default tenant's Gateway."""
