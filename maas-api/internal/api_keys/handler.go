@@ -922,7 +922,7 @@ func (h *Handler) SearchAPIKeys(c *gin.Context) {
 	delegatedAdmin := false
 	var delegatedAudit *delegatedAdminAuditEvent
 	if identity != nil && requestedSubscription != "" {
-		scope, _, resolveErr := h.resolveSubscriptionAdmin(identity, requestedSubscription, user)
+		scope, adminErr, resolveErr := h.resolveSubscriptionAdmin(identity, requestedSubscription, user)
 		if resolveErr != nil {
 			h.logger.Error("Failed to resolve subscription administration", "error", resolveErr)
 			h.emitDelegatedAdminAudit(c, &delegatedAdminAuditEvent{
@@ -958,6 +958,9 @@ func (h *Handler) SearchAPIKeys(c *gin.Context) {
 				Identity:           identity,
 				TargetUsername:     targetUsername,
 				TargetSubscription: requestedSubscription,
+			}
+			if adminErr != nil {
+				delegatedAudit.Reason = adminErr.Code
 			}
 		}
 	}
@@ -995,7 +998,7 @@ func (h *Handler) SearchAPIKeys(c *gin.Context) {
 		}
 		if adminErr != nil {
 			if !isAdmin {
-				h.emitDelegatedAdminAuditResult(c, delegatedAudit, "denied", "subscription_canonicalization_failed")
+				h.emitDelegatedAdminAudit(c, delegatedAudit)
 				c.JSON(http.StatusOK, SearchAPIKeysResponse{
 					Object: "list",
 					Data:   []ApiKey{},
