@@ -237,6 +237,7 @@ def inference_model_name(_worker_api_keys_context) -> str:
     return os.environ.get("INFERENCE_MODEL_NAME", MODEL_NAME)
 
 
+@pytest.mark.smoke
 class TestAPIKeyCRUD:
     """Tests 1-3: Create, list, and revoke API keys."""
 
@@ -340,6 +341,7 @@ class TestAPIKeyCRUD:
         print(f"[revoke] Key {key_id} successfully revoked")
 
 
+@pytest.mark.smoke
 class TestAPIKeyAuthorization:
     """Tests 4-5: Admin and non-admin access control."""
 
@@ -842,6 +844,7 @@ class TestAPIKeyExpiration:
 class TestAPIKeyModelInference:
     """Tests 11-15: Using API keys for model inference via gateway."""
 
+    @pytest.mark.smoke
     def test_api_key_model_access_success(
         self,
         model_completions_url: str,
@@ -874,6 +877,7 @@ class TestAPIKeyModelInference:
 
         print(f"[inference] Model access succeeded: {data.get('model')}, tokens={data.get('usage', {}).get('total_tokens')}")
 
+    @pytest.mark.smoke
     def test_invalid_api_key_rejected(
         self,
         model_completions_url: str,
@@ -900,6 +904,7 @@ class TestAPIKeyModelInference:
         assert r.status_code == 403, f"Expected 403 for invalid key, got {r.status_code}: {r.text}"
         print("[inference] Invalid API key correctly rejected with 403")
 
+    @pytest.mark.smoke
     def test_no_auth_header_rejected(
         self,
         model_completions_url: str,
@@ -923,6 +928,7 @@ class TestAPIKeyModelInference:
         assert r.status_code == 401, f"Expected 401 for missing auth, got {r.status_code}: {r.text}"
         print("[inference] Missing auth header correctly rejected with 401")
 
+    @pytest.mark.smoke
     def test_revoked_api_key_rejected(
         self,
         api_keys_base_url: str,
@@ -1236,6 +1242,7 @@ class TestEphemeralKeyCleanup:
         from test_helper import MAAS_API_DEPLOYMENT_NAMESPACE
         return MAAS_API_DEPLOYMENT_NAMESPACE
 
+    @pytest.mark.smoke
     def test_cronjob_exists_and_configured(
         self, deployment_namespace: str, _worker_api_keys_context,
     ):
