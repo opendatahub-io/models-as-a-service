@@ -13,7 +13,7 @@ from test_helper import (
 
 log = logging.getLogger(__name__)
 
-pytestmark = pytest.mark.xdist_group("readonly")
+pytestmark = [pytest.mark.xdist_group("readonly"), pytest.mark.smoke]
 
 def _pp(obj) -> str:
     try:

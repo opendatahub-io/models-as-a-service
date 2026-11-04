@@ -42,6 +42,10 @@ spec:
         key: konflux-ci.dev/workload
         operator: Equal
         value: konflux-tenants
+      env:
+      # Low-churn PR subset; prow_run_smoke_test.sh defaults to full suite otherwise.
+      - name: E2E_SMOKE_ONLY
+        value: "true"
     serviceAccountName: konflux-integration-runner
   timeouts:
     pipeline: 4h0m0s
