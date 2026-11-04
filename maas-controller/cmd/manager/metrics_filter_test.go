@@ -7,15 +7,15 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	authenticationv1 "k8s.io/api/authentication/v1"
+	authv1 "k8s.io/api/authentication/v1"
 )
 
 func TestMetricsScraperOrFallback(t *testing.T) {
 	const namespace = "maas-infra"
 	for _, tc := range []struct {
 		name, method, path, header, username string
-		authenticated, reviewError	bool
-		want	int
+		authenticated, reviewError bool
+		want                       int
 	}{
 		{"dedicated scraper", "GET", "/metrics", "Bearer token", "system:serviceaccount:maas-infra:maas-metrics-scraper", true, false, http.StatusNoContent},
 		{"wrong namespace", "GET", "/metrics", "Bearer token", "system:serviceaccount:tenant:maas-metrics-scraper", true, false, http.StatusForbidden},
@@ -28,16 +28,16 @@ func TestMetricsScraperOrFallback(t *testing.T) {
 		{"wrong path", "GET", "/other", "Bearer token", "system:serviceaccount:maas-infra:maas-metrics-scraper", true, false, http.StatusForbidden},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			review := func(_ context.Context, token string) (authenticationv1.TokenReviewStatus, error) {
+			review := func(_ context.Context, token string) (authv1.TokenReviewStatus, error) {
 				if token != "token" && token != "legacy" {
 					t.Fatalf("unexpected token review input")
 				}
 				if tc.reviewError {
-					return authenticationv1.TokenReviewStatus{}, errors.New("review unavailable")
+					return authv1.TokenReviewStatus{}, errors.New("review unavailable")
 				}
-				return authenticationv1.TokenReviewStatus{
+				return authv1.TokenReviewStatus{
 					Authenticated: tc.authenticated,
-					User:          authenticationv1.UserInfo{Username: tc.username},
+					User:          authv1.UserInfo{Username: tc.username},
 				}, nil
 			}
 			handler := metricsScraperOrFallback(
@@ -51,7 +51,7 @@ func TestMetricsScraperOrFallback(t *testing.T) {
 				}),
 				namespace, review,
 			)
-			req := httptest.NewRequest(tc.method, tc.path, nil)
+			req := httptest.NewRequestWithContext(context.Background(), tc.method, tc.path, nil)
 			req.Header.Set("Authorization", tc.header)
 			resp := httptest.NewRecorder()
 			handler.ServeHTTP(resp, req)

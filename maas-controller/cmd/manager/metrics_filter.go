@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	"github.com/go-logr/logr"
-	authenticationv1 "k8s.io/api/authentication/v1"
+	authv1 "k8s.io/api/authentication/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	authenticationclient "k8s.io/client-go/kubernetes/typed/authentication/v1"
 	"k8s.io/client-go/rest"
@@ -33,12 +33,12 @@ func metricsFilterProvider(scraperNamespace string) func(*rest.Config, *http.Cli
 		if err != nil {
 			return nil, fmt.Errorf("create metrics TokenReview client: %w", err)
 		}
-		review := func(ctx context.Context, token string) (authenticationv1.TokenReviewStatus, error) {
-			result, err := client.TokenReviews().Create(ctx, &authenticationv1.TokenReview{
-				Spec: authenticationv1.TokenReviewSpec{Token: token},
+		review := func(ctx context.Context, token string) (authv1.TokenReviewStatus, error) {
+			result, err := client.TokenReviews().Create(ctx, &authv1.TokenReview{
+				Spec: authv1.TokenReviewSpec{Token: token},
 			}, metav1.CreateOptions{})
 			if err != nil {
-				return authenticationv1.TokenReviewStatus{}, err
+				return authv1.TokenReviewStatus{}, err
 			}
 			return result.Status, nil
 		}
@@ -52,7 +52,7 @@ func metricsFilterProvider(scraperNamespace string) func(*rest.Config, *http.Cli
 	}
 }
 
-type metricsTokenReviewer func(context.Context, string) (authenticationv1.TokenReviewStatus, error)
+type metricsTokenReviewer func(context.Context, string) (authv1.TokenReviewStatus, error)
 
 func metricsScraperOrFallback(handler, fallback http.Handler, namespace string, review metricsTokenReviewer) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {

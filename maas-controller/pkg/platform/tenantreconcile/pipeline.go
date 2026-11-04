@@ -323,8 +323,7 @@ func legacyMetricsBindingTenantID(bindingName string) (string, bool) {
 	if bindingName == base {
 		return "", true
 	}
-	if strings.HasPrefix(bindingName, base+"-") {
-		id := strings.TrimPrefix(bindingName, base+"-")
+	if id, ok := strings.CutPrefix(bindingName, base+"-"); ok {
 		return id, id != ""
 	}
 	return "", false
