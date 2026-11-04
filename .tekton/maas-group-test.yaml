@@ -46,6 +46,9 @@ spec:
       # Low-churn PR subset; prow_run_smoke_test.sh defaults to full suite otherwise.
       - name: E2E_SMOKE_ONLY
         value: "true"
+      # Also run tests added in this PR once (dynamic pr_new), without marking them smoke.
+      - name: E2E_INCLUDE_NEW_FROM_DIFF
+        value: "true"
     serviceAccountName: konflux-integration-runner
   timeouts:
     pipeline: 4h0m0s

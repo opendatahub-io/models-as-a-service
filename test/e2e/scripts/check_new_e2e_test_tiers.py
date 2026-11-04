@@ -9,9 +9,14 @@ New tests under test/e2e/tests/ must carry one of:
 Existing unmarked tests are grandfathered: only tests added relative to --base
 are checked. Class/module-level markers count for nested methods.
 
+Also used by run_e2e_tests.sh (--list-new): print pytest node ids for newly
+added tests so smoke-only CI can run curated smoke ∪ PR-new (via the dynamic
+pr_new marker) without rewriting source to add @pytest.mark.smoke.
+
 Usage:
   python test/e2e/scripts/check_new_e2e_test_tiers.py --base origin/main
   python test/e2e/scripts/check_new_e2e_test_tiers.py --base "$BASE_SHA"
+  python test/e2e/scripts/check_new_e2e_test_tiers.py --base "$BASE_SHA" --list-new
 """
 
 from __future__ import annotations
@@ -24,6 +29,8 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 TESTS_DIR = REPO_ROOT / "test" / "e2e" / "tests"
+# Pytest is invoked from test/e2e/, so node ids use tests/<file>.py::...
+PYTEST_TESTS_PREFIX = "tests"
 
 # Markers that satisfy the new-test gate (any one is enough).
 TIER_MARKERS = frozenset({"smoke", "full_suite", "nightly"})
@@ -149,12 +156,39 @@ def _changed_test_files(base: str) -> list[Path]:
     return files
 
 
+def _pytest_node_id(path: Path, qual: str) -> str:
+    """Node id as pytest reports it when cwd is test/e2e/."""
+    return f"{PYTEST_TESTS_PREFIX}/{path.name}::{qual}"
+
+
+def iter_new_tests(base: str) -> list[tuple[str, set[str]]]:
+    """Return (pytest_node_id, tier_markers) for tests added since base."""
+    changed = _changed_test_files(base)
+    new: list[tuple[str, set[str]]] = []
+    for path in sorted(changed):
+        rel = path.relative_to(REPO_ROOT).as_posix()
+        head_src = path.read_text(encoding="utf-8")
+        head_tests = _collect_tests(head_src, path)
+        base_src = _git_show(base, rel)
+        base_tests = _collect_tests(base_src, path) if base_src is not None else {}
+        for qual, tiers in sorted(head_tests.items()):
+            if qual in base_tests:
+                continue
+            new.append((_pytest_node_id(path, qual), tiers))
+    return new
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--base",
         required=True,
         help="Git ref/SHA to diff against (merge base parent, e.g. origin/main or $BASE_SHA)",
+    )
+    parser.add_argument(
+        "--list-new",
+        action="store_true",
+        help="Print pytest node ids for newly added tests (one per line) and exit 0",
     )
     args = parser.parse_args()
     base = args.base
@@ -165,29 +199,29 @@ def main() -> int:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
 
+    try:
+        new_tests = iter_new_tests(base)
+    except RuntimeError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+
+    if args.list_new:
+        for node_id, _tiers in new_tests:
+            print(node_id)
+        return 0
+
     changed = _changed_test_files(base)
-    if not changed:
+    if not changed and not new_tests:
         print("No changed test_*.py files under test/e2e/tests/; tier gate OK.")
         return 0
 
     violations: list[str] = []
-    checked = 0
-    for path in sorted(changed):
-        rel = path.relative_to(REPO_ROOT).as_posix()
-        head_src = path.read_text(encoding="utf-8")
-        head_tests = _collect_tests(head_src, path)
-        base_src = _git_show(base, rel)
-        base_tests = _collect_tests(base_src, path) if base_src is not None else {}
+    for node_id, tiers in new_tests:
+        if tiers:
+            continue
+        violations.append(f"  {node_id}")
 
-        for qual, tiers in sorted(head_tests.items()):
-            if qual in base_tests:
-                continue  # grandfathered / pre-existing
-            checked += 1
-            if tiers:
-                continue
-            violations.append(f"  {rel}::{qual}")
-
-    print(f"Checked {checked} newly added E2E test function(s) across {len(changed)} file(s).")
+    print(f"Checked {len(new_tests)} newly added E2E test function(s) across {len(changed)} file(s).")
     if not violations:
         print("All new E2E tests declare a coverage tier (smoke | full_suite | nightly).")
         return 0
@@ -198,7 +232,9 @@ def main() -> int:
     print(
         "\nMark PR-critical low-churn coverage with @pytest.mark.smoke.\n"
         "Mark everything else new with @pytest.mark.full_suite (or @pytest.mark.nightly).\n"
-        "Module- or class-level markers apply to nested test methods.",
+        "Module- or class-level markers apply to nested test methods.\n"
+        "Smoke-only CI also runs new tests once via the dynamic pr_new marker "
+        "(no need to temporarily mark them smoke).",
         file=sys.stderr,
     )
     return 1

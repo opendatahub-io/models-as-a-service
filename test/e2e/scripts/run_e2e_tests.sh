@@ -37,6 +37,9 @@
 #   ARTIFACTS_DIR                 output directory for JUnit/HTML (default: test/e2e/reports)
 #   E2E_SMOKE_ONLY                When true, restrict passes 1–2 to @pytest.mark.smoke
 #                                 (/group-test sets true; unset/false = full suite)
+#   E2E_INCLUDE_NEW_FROM_DIFF     When true with E2E_SMOKE_ONLY, also select tests added
+#                                 since E2E_DIFF_BASE (dynamic pr_new marker; no source edit)
+#   E2E_DIFF_BASE                 Git ref/SHA for the PR base (or PULL_BASE_SHA / BASE_SHA)
 #   MAAS_PYTEST_INCLUDE_NIGHTLY   When true, run pass 3 (-m nightly) after serial pass
 #   E2E_RUN_ONLY_OIDC_TESTS       When true, skip passes 1–2 and run only pass 3 (external
 #                                 OIDC tests); requires EXTERNAL_OIDC=true
@@ -191,9 +194,40 @@ if [[ "$smoke_only" == "true" && "$limitador_triage" == "true" ]]; then
 fi
 # OIDC-only jobs skip passes 1–2 entirely; smoke filtering does not apply there.
 _smoke_require=""
+_include_new_from_diff=false
+case "${E2E_INCLUDE_NEW_FROM_DIFF:-false}" in
+    1 | true | TRUE | yes | YES) _include_new_from_diff=true ;;
+esac
 if [[ "$smoke_only" == "true" && "$_run_only_oidc_tests" != true ]]; then
-    _smoke_require="smoke and "
-    echo "E2E smoke-only mode: restricting passes 1–2 to @pytest.mark.smoke"
+    if [[ "$_include_new_from_diff" == true ]]; then
+        _diff_base="${E2E_DIFF_BASE:-${PULL_BASE_SHA:-${BASE_SHA:-}}}"
+        if [[ -z "${_diff_base}" ]]; then
+            if git -C "$PROJECT_ROOT" rev-parse --verify origin/main >/dev/null 2>&1; then
+                _diff_base="$(git -C "$PROJECT_ROOT" merge-base HEAD origin/main)"
+            elif git -C "$PROJECT_ROOT" rev-parse --verify main >/dev/null 2>&1; then
+                _diff_base="$(git -C "$PROJECT_ROOT" merge-base HEAD main)"
+            fi
+        fi
+        if [[ -z "${_diff_base}" ]]; then
+            echo "WARNING: E2E_INCLUDE_NEW_FROM_DIFF=true but no E2E_DIFF_BASE/PULL_BASE_SHA/BASE_SHA or origin/main; smoke-only without pr_new" >&2
+            _smoke_require="smoke and "
+            echo "E2E smoke-only mode: restricting passes 1–2 to @pytest.mark.smoke"
+        else
+            _new_ids_file="${ARTIFACTS_DIR}/new-e2e-test-ids.txt"
+            if ! python "$SCRIPT_DIR/check_new_e2e_test_tiers.py" --base "${_diff_base}" --list-new \
+                >"${_new_ids_file}"; then
+                echo "ERROR: failed to list new E2E tests against ${_diff_base}" >&2
+                exit 1
+            fi
+            _new_count="$(grep -cve '^[[:space:]]*$' "${_new_ids_file}" || true)"
+            export E2E_NEW_TEST_IDS_FILE="${_new_ids_file}"
+            _smoke_require="(smoke or pr_new) and "
+            echo "E2E smoke-only + PR-new: -m '(smoke or pr_new) …' (base=${_diff_base}, new_tests=${_new_count}, ids=${_new_ids_file})"
+        fi
+    else
+        _smoke_require="smoke and "
+        echo "E2E smoke-only mode: restricting passes 1–2 to @pytest.mark.smoke"
+    fi
 fi
 _parallel_marker="${_smoke_require}not serial and not legacy_ipp${_nightly_exclude}"
 _serial_marker="${_smoke_require}serial and not legacy_ipp${_nightly_exclude}"
