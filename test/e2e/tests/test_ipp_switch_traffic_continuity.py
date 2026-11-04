@@ -14,6 +14,7 @@ import time
 import pytest
 import requests
 from multitenancy_helpers import (
+    AUTH_REASON_HEADER,
     GATEWAY_NAMESPACE,
     PAYLOAD_PROCESSING_TYPE_IPP,
     PAYLOAD_PROCESSING_TYPE_PRAXIS,
@@ -23,6 +24,7 @@ from multitenancy_helpers import (
     cleanup_discovery_case,
     ensure_payload_processing_type_on_tenant_config,
     extproc_deployment_uses_praxis,
+    is_gateway_auth_denial,
     make_tenant_model_accessible,
     new_named_tenant_case,
     per_tenant_ipp_names,
@@ -96,12 +98,28 @@ def _post_hybrid_chat(gateway_url: str, model_path: str, api_key: str, *, model_
     )
 
 
+def _wait_rollout_complete(deployment_name, *, timeout=SWITCH_RECONCILE_TIMEOUT):
+    # extproc_deployment_uses_praxis reads the Deployment template, which flips to
+    # praxis before the new pods are serving; block on the rollout so continuity
+    # probes hit praxis pods, not the old IPP ReplicaSet mid-switch.
+    result = _oc_run(
+        ["rollout", "status", f"deployment/{deployment_name}", "-n", GATEWAY_NAMESPACE, f"--timeout={timeout}s"],
+        timeout=timeout + 30,
+    )
+    if result.returncode != 0:
+        raise AssertionError(
+            f"{deployment_name} rollout to praxis-extproc did not complete within {timeout}s: "
+            f"{result.stderr.strip() or result.stdout.strip()}"
+        )
+
+
 def _wait_until_praxis(deployment_name, *, timeout=SWITCH_RECONCILE_TIMEOUT):
     deadline = time.time() + timeout
     last = None
     while time.time() < deadline:
         last = extproc_deployment_uses_praxis(deployment_name)
         if last:
+            _wait_rollout_complete(deployment_name)
             return
         time.sleep(POLL_INTERVAL)
     raise AssertionError(f"{deployment_name} did not become praxis-extproc within {timeout}s (last={last!r})")
@@ -125,18 +143,23 @@ def switch_case():
             )
 
         model_name = f"ipp-cont-{case['suffix']}"
+        # Point cleanup at the AuthPolicy/Subscription names this fixture actually
+        # creates below, before provisioning, so teardown targets real resources
+        # even if provisioning fails partway.
+        case["policy_name"] = f"{model_name}-auth"
+        case["subscription_name"] = f"{model_name}-sub"
         provision_tenant_model(model_name, case["tenant_ns"], case["gateway_name"])
         make_tenant_model_accessible(
             model_name,
             case["tenant_ns"],
-            f"{model_name}-auth",
-            f"{model_name}-sub",
+            case["policy_name"],
+            case["subscription_name"],
             gateway_name=case["gateway_name"],
         )
         case["model_name"] = model_name
         case["model_path"] = f"/{case['tenant_ns']}/{model_name}"
         case["gateway_url"] = _tenant_gateway_url(case["gateway_name"])
-        case["api_key"] = _create_tenant_api_key(case["gateway_url"], case, f"{model_name}-sub")
+        case["api_key"] = _create_tenant_api_key(case["gateway_url"], case, case["subscription_name"])
         yield case
     finally:
         cleanup_discovery_case(case)
@@ -153,8 +176,9 @@ class TestIppSwitchTrafficContinuity:
 
     def _assert_auth_enforced(self, case, phase: str):
         response = _post_hybrid_chat(case["gateway_url"], case["model_path"], "sk-bogus-not-a-real-key")
-        assert response.status_code in (401, 403), (
-            f"[{phase}] expected 401/403 for a bogus key, got {response.status_code}"
+        assert is_gateway_auth_denial(response), (
+            f"[{phase}] expected a gateway AuthPolicy denial for a bogus key, got "
+            f"{response.status_code} (no {AUTH_REASON_HEADER})"
         )
 
     def test_switch_preserves_inference_and_auth(self, switch_case):
