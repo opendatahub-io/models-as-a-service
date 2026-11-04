@@ -4,6 +4,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/cert"
@@ -61,7 +62,7 @@ func buildTLSConfig(cfg *config.Config, profileMinVersion uint16, profileCipherS
 	tlsCfg := &tls.Config{
 		Certificates: []tls.Certificate{tlsCert},
 		MinVersion:   minVersion,
-		NextProtos:   []string{"h2", "http/1.1"},
+		NextProtos:   tlsNextProtos(minVersion, profileCipherSuites),
 	}
 
 	if len(profileCipherSuites) > 0 {
@@ -69,6 +70,23 @@ func buildTLSConfig(cfg *config.Config, profileMinVersion uint16, profileCipherS
 	}
 
 	return tlsCfg, nil
+}
+
+func tlsNextProtos(minVersion uint16, cipherSuites []uint16) []string {
+	if minVersion < tls.VersionTLS12 {
+		return []string{"http/1.1"}
+	}
+	for _, suite := range append(tls.CipherSuites(), tls.InsecureCipherSuites()...) {
+		if !strings.Contains(suite.Name, "_AES_128_GCM_") {
+			continue
+		}
+		for _, id := range cipherSuites {
+			if id == suite.ID {
+				return []string{"h2", "http/1.1"}
+			}
+		}
+	}
+	return []string{"http/1.1"}
 }
 
 func listenAndServe(srv *http.Server) error {

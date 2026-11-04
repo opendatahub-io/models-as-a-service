@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
@@ -224,13 +225,30 @@ func buildTLSConfig(certFile, keyFile string, selfSigned bool, profileMinVersion
 	cfg := &tls.Config{
 		Certificates: []tls.Certificate{tlsCert},
 		MinVersion:   minVersion,
-		NextProtos:   []string{"h2", "http/1.1"},
+		NextProtos:   tlsNextProtos(minVersion, profileCipherSuites),
 	}
 	if len(profileCipherSuites) > 0 {
 		cfg.CipherSuites = profileCipherSuites
 	}
 
 	return cfg, nil
+}
+
+func tlsNextProtos(minVersion uint16, cipherSuites []uint16) []string {
+	if minVersion < tls.VersionTLS12 {
+		return []string{"http/1.1"}
+	}
+	for _, suite := range append(tls.CipherSuites(), tls.InsecureCipherSuites()...) {
+		if !strings.Contains(suite.Name, "_AES_128_GCM_") {
+			continue
+		}
+		for _, id := range cipherSuites {
+			if id == suite.ID {
+				return []string{"h2", "http/1.1"}
+			}
+		}
+	}
+	return []string{"http/1.1"}
 }
 
 func setupTLSProfile(ctx context.Context, log *slog.Logger, restConfig *rest.Config, cancel context.CancelFunc) (uint16, []uint16, error) {
@@ -250,13 +268,13 @@ func setupTLSProfile(ctx context.Context, log *slog.Logger, restConfig *rest.Con
 		"minTLSVersion", profile.MinTLSVersion,
 		"tlsAdherence", settings.Adherence)
 
-	profileMinVersion, profileCipherSuites, unsupported := tlsprofile.TLSConfigFromProfile(profile)
+	profileMinVersion, profileCipherSuites, unsupported, err := tlsprofile.TLSConfigFromProfile(profile)
+	if err != nil {
+		return 0, nil, fmt.Errorf("applying cluster TLS profile: %w", err)
+	}
 	if len(unsupported) > 0 {
 		log.Warn("TLS profile contains ciphers not supported by this Go version (ignored)",
 			"unsupportedCiphers", unsupported)
-	}
-	if len(profileCipherSuites) == 0 && profileMinVersion < tls.VersionTLS13 {
-		log.Warn("TLS profile produced no TLS 1.2 cipher suites; Go defaults will be used for TLS 1.2 negotiation")
 	}
 
 	if watchSettings {
@@ -292,6 +310,14 @@ func fetchTLSSettingsWithRetry(ctx context.Context, log *slog.Logger, restConfig
 			log.Info("config.openshift.io API not available, using default Intermediate TLS profile "+
 				"(expected on non-OpenShift clusters)", "error", err)
 			return tlsprofile.DefaultSettings(), false, nil
+		}
+
+		if apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err) {
+			return tlsprofile.DefaultSettings(), false, fmt.Errorf(
+				"cluster TLS profile is not readable (check the maas-discovery RBAC): %w", err)
+		}
+		if tlsprofile.IsProfileValidationError(err) {
+			return tlsprofile.DefaultSettings(), false, fmt.Errorf("invalid cluster TLS profile: %w", err)
 		}
 
 		lastErr = err
