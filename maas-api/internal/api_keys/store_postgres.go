@@ -665,7 +665,6 @@ func (s *PostgresStore) GetByHash(ctx context.Context, keyHash string) (*ApiKey,
 		if description.Valid {
 			k.Description = description.String
 		}
-		// user_groups is now directly scanned as []string - no JSON parsing needed
 		k.Groups = userGroups
 
 		if lastUsedAt.Valid {

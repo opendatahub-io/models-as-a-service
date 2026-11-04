@@ -9,25 +9,23 @@ import os
 
 import pytest
 import requests
-
+from grid_cross_tenant_fixtures import (
+    GridCrossTenantContext,
+    grid_cross_tenant_context,  # noqa: F401 - pytest fixture
+)
 from grid_governance_fixtures import (
     GridGovernanceContext,
+    grid_governance_context,  # noqa: F401 - pytest fixture
 )
-from grid_governance_fixtures import grid_governance_context  # noqa: F401 - pytest fixture
-from grid_cross_tenant_fixtures import GridCrossTenantContext
-from grid_cross_tenant_fixtures import (
-    grid_cross_tenant_context,  # noqa: F401 - pytest fixture
-)  # noqa: F401 - pytest fixture
-from grid_inventory_fixtures import ORGANIZATION_A
+from grid_inventory_fixtures import ORGANIZATION_A, ORGANIZATION_B
 from grid_oidc_helpers import request_grid_token, request_tenant_b_token
 from test_helper import (
     MODEL_NAMESPACE,
     _decode_jwt_payload,
-    _request_with_gateway_retry,
     _ns,
+    _request_with_gateway_retry,
     kubectl_curl,
 )
-
 
 pytestmark = [
     pytest.mark.nightly,
@@ -56,8 +54,8 @@ def _post_internal_json(
     return status_code, json.loads(body)
 
 
-def _grid_admin_identity_envelope() -> dict:
-    token = request_grid_token("grid_admin")
+def _grid_identity_envelope(username: str = "grid_admin") -> dict:
+    token = request_grid_token(username)
     claims = _decode_jwt_payload(token)
     assert claims is not None
 
@@ -69,7 +67,9 @@ def _grid_admin_identity_envelope() -> dict:
             "aud": claims["aud"],
             "azp": claims["azp"],
             "groups": claims["groups"],
-            "https://redhat.com/maas/orgs": claims["https://redhat.com/maas/orgs"],
+            "org_id": claims["org_id"],
+            "org_name": claims["org_name"],
+            "roles": claims["roles"],
         },
     }
 
@@ -221,7 +221,7 @@ class TestGridInternalSubscriptionCallback:
             {
                 "purpose": "subscription-admin",
                 "requestedSubscription": resources.governance_subscription,
-                "identity": _grid_admin_identity_envelope(),
+                "identity": _grid_identity_envelope(),
             },
         )
 
@@ -235,6 +235,51 @@ class TestGridInternalSubscriptionCallback:
         assert scope["namespace"] == _ns()
         assert scope["subscription"] == resources.governance_subscription
         assert scope["organizationId"] == ORGANIZATION_A
+
+    def test_grid_admin_cannot_administer_another_flat_organization(
+        self,
+        maas_api_internal_url: str,
+        grid_governance_context: GridGovernanceContext,
+    ):
+        resources = grid_governance_context.resources
+        _, denied = _post_internal_json(
+            f"{maas_api_internal_url}/internal/v1/subscriptions/select",
+            {
+                "purpose": "subscription-admin",
+                "requestedSubscription": (
+                    resources.other_organization_governance_subscription
+                ),
+                "identity": _grid_identity_envelope(),
+            },
+        )
+
+        assert denied["purpose"] == "subscription-admin"
+        assert denied["admin"]["allowed"] is False
+        assert "scope" not in denied["admin"]
+
+        _, allowed = _post_internal_json(
+            f"{maas_api_internal_url}/internal/v1/subscriptions/select",
+            {
+                "purpose": "subscription-admin",
+                "requestedSubscription": (
+                    resources.other_organization_governance_subscription
+                ),
+                "identity": _grid_identity_envelope("grid_admin_b"),
+            },
+        )
+        assert allowed["admin"]["allowed"] is True
+        assert allowed["admin"]["scope"]["organizationId"] == ORGANIZATION_B
+
+        _, non_admin = _post_internal_json(
+            f"{maas_api_internal_url}/internal/v1/subscriptions/select",
+            {
+                "purpose": "subscription-admin",
+                "requestedSubscription": resources.governance_subscription,
+                "identity": _grid_identity_envelope("grid_non_admin"),
+            },
+        )
+        assert non_admin["admin"]["allowed"] is False
+        assert "scope" not in non_admin["admin"]
 
 
 class TestGridCrossTenantQualifiedSubscription:
@@ -336,7 +381,7 @@ class TestGridCrossTenantQualifiedSubscription:
             {
                 "purpose": "subscription-admin",
                 "requestedSubscription": qualified_subscription,
-                "identity": _grid_admin_identity_envelope(),
+                "identity": _grid_identity_envelope(),
             },
         )
         admin = selection["admin"]

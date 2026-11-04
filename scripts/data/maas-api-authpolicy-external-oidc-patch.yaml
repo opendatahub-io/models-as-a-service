@@ -69,6 +69,103 @@ spec:
               operator: eq
               value: __OIDC_CLIENT_ID__
         priority: 1
+      oidc-groups-safe:
+        when:
+          - predicate: '!request.headers.authorization.startsWith("Bearer sk-oai-") && has(auth.identity.iss) && ("org_id" in auth.identity || (has(auth.identity.groups) && size(auth.identity.groups) > 0))'
+        opa:
+          rego: |
+            unsafe_group["invalid_type"] {
+              g := input.auth.identity.groups[_]
+              not is_string(g)
+            }
+
+            unsafe_group[g] {
+              org_id := input.auth.identity.org_id
+              is_string(org_id)
+              g := input.auth.identity.groups[_]
+              is_string(g)
+              g == ""
+            }
+
+            unsafe_group[g] {
+              org_id := input.auth.identity.org_id
+              is_string(org_id)
+              g := input.auth.identity.groups[_]
+              is_string(g)
+              encoded := base64.encode(g)
+              count(encoded) > 344
+            }
+
+            unsafe_group[g] {
+              org_id := input.auth.identity.org_id
+              is_string(org_id)
+              g := input.auth.identity.groups[_]
+              is_string(g)
+              encoded := base64.encode(g)
+              count(encoded) == 344
+              not regex.match("==$", encoded)
+            }
+
+            unsafe_group[g] {
+              g := input.auth.identity.groups[_]
+              is_string(g)
+              not input.auth.identity.org_id
+              not regex.match("^[A-Za-z0-9:#._/ -]+$", g)
+            }
+
+            unsafe_group[g] {
+              g := input.auth.identity.groups[_]
+              is_string(g)
+              not input.auth.identity.org_id
+              regex.match("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/", g)
+            }
+
+            invalid_org_id {
+              org_id := input.auth.identity.org_id
+              not is_string(org_id)
+            }
+
+            invalid_org_id {
+              org_id := input.auth.identity.org_id
+              is_string(org_id)
+              not regex.match("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", org_id)
+            }
+
+            invalid_group_list {
+              object.keys(input.auth.identity)[_] == "groups"
+              not is_array(input.auth.identity.groups)
+            }
+
+            invalid_group_list {
+              groups := input.auth.identity.groups
+              is_array(groups)
+              count(groups) > 128
+            }
+
+            duplicate_group {
+              org_id := input.auth.identity.org_id
+              is_string(org_id)
+              groups := input.auth.identity.groups
+              is_array(groups)
+              some i
+              some j
+              i < j
+              groups[i] == groups[j]
+            }
+
+            allow {
+              count(unsafe_group) == 0
+              not invalid_org_id
+              not invalid_group_list
+              not duplicate_group
+            }
+      deny-client-identity-headers:
+        metrics: false
+        priority: 0
+        patternMatching:
+          patterns:
+            - predicate: '!("x-maas-identity" in request.headers)'
+            - predicate: '!("x-maas-exact-groups" in request.headers)'
     response:
       success:
         headers:
@@ -85,30 +182,51 @@ spec:
                 (has(auth.identity.sub) ? auth.identity.sub : auth.identity.user.username))
           X-MaaS-Group:
             plain:
-              # The group source is selected by identity type (auth.identity.iss
-              # set = JWT identity; otherwise OpenShift TokenReview), never by
-              # claim presence: Authorino overlays the decoded JWT payload into
-              # auth.identity, so a JWT could otherwise craft a "user" claim and
-              # reach the TokenReview branch. Both sources are gated on the
-              # canonical group-name pattern — the same rule enforced at API-key
-              # mint time by maas-api (internal/api_keys/groupname.go) and in
-              # the controller-generated AuthPolicies (pkg/groupname/groupname.go).
-              # Keep the copies identical.
+              # Flat OIDC groups travel in X-MaaS-Identity.
+              # Keep this header as a JSON array for legacy callers.
               expression: >-
                 (has(auth.metadata) && has(auth.metadata.apiKeyValidation)) ?
-                (size(auth.metadata.apiKeyValidation.groups) > 0 ?
-                '["' + auth.metadata.apiKeyValidation.groups.join('","') + '"]' :
-                '["system:authenticated"]') :
+                auth.metadata.apiKeyValidation.groupsJSON :
+                (has(auth.identity.iss) && "org_id" in auth.identity ? '[]' :
+                '["system:authenticated"' +
                 (has(auth.identity.iss) ?
-                (has(auth.identity.groups) && size(auth.identity.groups) > 0 &&
-                auth.identity.groups.all(g, g.matches('^[A-Za-z0-9:#._/ -]+$')) ?
-                '["system:authenticated","' + auth.identity.groups.join('","') + '"]' :
-                '["system:authenticated"]') :
+                ("org_id" in auth.identity ? [] :
+                (has(auth.identity.groups) &&
+                type(auth.identity.groups) == list &&
+                auth.identity.groups.all(g, g.matches('^[A-Za-z0-9:#._/ -]+$') &&
+                !g.matches('^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/')) ?
+                auth.identity.groups : [])) :
                 (has(auth.identity.user) && has(auth.identity.user.groups) &&
-                size(auth.identity.user.groups) > 0 &&
-                auth.identity.user.groups.all(g, g.matches('^[A-Za-z0-9:#._/ -]+$')) ?
-                '["system:authenticated","' + auth.identity.user.groups.join('","') + '"]' :
-                '["system:authenticated"]'))
+                auth.identity.user.groups.all(g, g.matches('^[A-Za-z0-9:#._/ -]+$') &&
+                !g.matches('^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/')) ?
+                auth.identity.user.groups : [])).map(g, ',"' + g + '"').join('') + ']')
+          X-MaaS-Identity:
+            when:
+              - predicate: '!request.headers.authorization.startsWith("Bearer sk-oai-") && has(auth.identity.azp) && (request.path == "/v1/me" || request.path == "/maas-api/v1/me" || request.path == "/v1/subscriptions" || request.path.startsWith("/v1/subscriptions/") || request.path == "/v1/models" || request.path.startsWith("/v1/model/") && request.path.endsWith("/subscriptions") || request.path.startsWith("/v1/api-keys") || request.path.startsWith("/maas-api/v1/subscriptions") || request.path == "/maas-api/v1/models" || request.path.startsWith("/maas-api/v1/model/") && request.path.endsWith("/subscriptions") || request.path.startsWith("/maas-api/v1/api-keys"))'
+            json:
+              properties:
+                source:
+                  value: oidc
+                claims:
+                  expression: >-
+                    "org_id" in auth.identity ?
+                    {"iss": auth.identity.iss, "sub": auth.identity.sub, "aud": auth.identity.aud, "azp": auth.identity.azp,
+                    "name": has(auth.identity.name) ? auth.identity.name : "",
+                    "given_name": has(auth.identity.given_name) ? auth.identity.given_name : "",
+                    "family_name": has(auth.identity.family_name) ? auth.identity.family_name : "",
+                    "preferred_username": has(auth.identity.preferred_username) ? auth.identity.preferred_username : "",
+                    "email": has(auth.identity.email) ? auth.identity.email : "",
+                    "groups": has(auth.identity.groups) ? auth.identity.groups : [],
+                    "org_id": auth.identity["org_id"],
+                    "org_name": "org_name" in auth.identity ? auth.identity["org_name"] : "",
+                    "roles": "roles" in auth.identity ? auth.identity["roles"] : []} :
+                    {"iss": auth.identity.iss, "sub": auth.identity.sub, "aud": auth.identity.aud, "azp": auth.identity.azp,
+                    "name": has(auth.identity.name) ? auth.identity.name : "",
+                    "given_name": has(auth.identity.given_name) ? auth.identity.given_name : "",
+                    "family_name": has(auth.identity.family_name) ? auth.identity.family_name : "",
+                    "preferred_username": has(auth.identity.preferred_username) ? auth.identity.preferred_username : "",
+                    "email": has(auth.identity.email) ? auth.identity.email : "",
+                    "groups": has(auth.identity.groups) ? auth.identity.groups : []}
           X-MaaS-Subscription:
             when:
               - selector: request.headers.authorization

@@ -1,6 +1,7 @@
 package token_test
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -52,4 +53,22 @@ func TestParseGroupsHeader_EmptyAuthorinoBrackets(t *testing.T) {
 func TestParseGroupsHeader_WhitespaceOnlyJSON(t *testing.T) {
 	_, err := token.ParseGroupsHeader(`["  ", ""]`)
 	assert.Error(t, err)
+}
+
+func TestParseGroupsHeaderTrimsOpaqueValues(t *testing.T) {
+	input := []string{" users ", `quote"slash\`, "é漢字", "zero\x00byte", "comma,pipe|"} //nolint:gosmopolitan // Testing Unicode handling
+	header, err := json.Marshal(input)
+	require.NoError(t, err)
+
+	groups, err := token.ParseGroupsHeader(string(header))
+	require.NoError(t, err)
+	// Now trimming is always applied
+	expected := []string{"users", `quote"slash\`, "é漢字", "zero\x00byte", "comma,pipe|"} //nolint:gosmopolitan // Testing Unicode handling
+	assert.Equal(t, expected, groups)
+}
+
+func TestParseGroupsHeaderTrimsLegacyTokens(t *testing.T) {
+	groups, err := token.ParseGroupsHeader("[ team-a  team-b ]")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"team-a", "team-b"}, groups)
 }

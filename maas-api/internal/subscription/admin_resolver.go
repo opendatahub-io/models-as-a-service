@@ -182,13 +182,8 @@ func canonicalOrganizationID(organizationID string) (string, error) {
 }
 
 func identityHasOrganizationAdmin(identity *token.VerifiedIdentity, organizationID string) bool {
-	if identity == nil || identity.Source != "oidc" {
-		return false
-	}
-	for _, membership := range identity.Claims.Organizations {
-		if membership.OrganizationID == organizationID && slices.Contains(membership.Roles, organizationAdminRole) {
-			return true
-		}
-	}
-	return false
+	return identity != nil &&
+		identity.Source == "oidc" &&
+		identity.Claims.OrgID == organizationID &&
+		slices.Contains(identity.Claims.Roles, organizationAdminRole)
 }

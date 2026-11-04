@@ -193,6 +193,8 @@ func configureExternalOIDC(log logr.Logger, params PlatformParams) error {
 	return nil
 }
 
+// patchAuthPolicyWithOIDC is retained for the retired route-level policy.
+// PostRender does not call it because the gateway policy handles OIDC.
 func patchAuthPolicyWithOIDC(log logr.Logger, resource *unstructured.Unstructured, oidc *maasv1alpha1.TenantExternalOIDCConfig) error {
 	if (oidc.AccessTokenPurposeClaim == "") != (oidc.AccessTokenPurpose == "") {
 		return errors.New("external OIDC access-token purpose claim and value must be configured together")
@@ -253,16 +255,29 @@ func patchAuthPolicyWithOIDC(log logr.Logger, resource *unstructured.Unstructure
 	// decoded JWT payload into auth.identity, so a JWT could otherwise craft
 	// a "user" claim and reach the TokenReview branch. Both sources are
 	// gated on the canonical pattern because CEL builds the JSON by
-	// concatenation without escaping.
-	groupsExpr := `has(auth.identity.iss) ? ` +
-		`(has(auth.identity.groups) && size(auth.identity.groups) > 0 && ` +
-		`auth.identity.groups.all(g, g.matches('` + groupname.Pattern + `')) ? ` +
-		`'["system:authenticated","' + auth.identity.groups.join('","') + '"]' : ` +
-		`'["system:authenticated"]') : ` +
-		`(has(auth.identity.user.groups) && size(auth.identity.user.groups) > 0 && ` +
-		`auth.identity.user.groups.all(g, g.matches('` + groupname.Pattern + `')) ? ` +
-		`'["system:authenticated","' + auth.identity.user.groups.join('","') + '"]' : ` +
-		`'["system:authenticated"]')`
+	// concatenation without escaping. Organization-bound OIDC groups are
+	// qualified with org_id; UUID-prefixed groups are reserved for that
+	// namespace and are rejected when org_id is absent.
+	organizationIDPattern := `^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`
+	organizationQualifiedGroupPattern := `^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/`
+	organizationIDSafe := `type(auth.identity["org_id"]) == string && ` +
+		`auth.identity["org_id"].matches('` + organizationIDPattern + `')`
+	flatGroupsSafe := `type(auth.identity.groups) == list && ` +
+		`auth.identity.groups.all(g, type(g) == string && g.matches('` + groupname.Pattern + `') && ` +
+		`auth.identity.groups.filter(other, other == g).size() == 1)`
+	legacyGroupsSafe := `auth.identity.groups.all(g, g.matches('` + groupname.Pattern + `') && ` +
+		`!g.matches('` + organizationQualifiedGroupPattern + `'))`
+	oidcGroups := `("org_id" in auth.identity ? ` +
+		`(` + organizationIDSafe + ` && (!has(auth.identity.groups) || ` + flatGroupsSafe + `) ` +
+		`? (has(auth.identity.groups) ? auth.identity.groups.map(g, auth.identity["org_id"] + "/" + g) : []) : []) ` +
+		`: (has(auth.identity.groups) && ` + legacyGroupsSafe + ` ? auth.identity.groups : []))`
+	tokenReviewGroups := `(has(auth.identity.user.groups) && ` +
+		`auth.identity.user.groups.all(g, g.matches('` + groupname.Pattern + `') && ` +
+		`!g.matches('` + organizationQualifiedGroupPattern + `')) ? auth.identity.user.groups : [])`
+	nonAPIKeyGroups := `(has(auth.identity.iss) ? ` + oidcGroups + ` : ` + tokenReviewGroups + `)`
+	groupsExpr := `size(` + nonAPIKeyGroups + `) > 0 ? ` +
+		`'["system:authenticated","' + ` + nonAPIKeyGroups + `.join('","') + '"]' : ` +
+		`'["system:authenticated"]'`
 	if err := unstructured.SetNestedField(resource.Object, map[string]any{
 		"expression": groupsExpr,
 	}, "spec", "rules", "response", "success", "headers", "X-MaaS-Group-OC", "plain"); err != nil {

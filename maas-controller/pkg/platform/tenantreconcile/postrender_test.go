@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	"github.com/go-logr/logr"
+	"github.com/google/cel-go/cel"
+	"github.com/google/cel-go/ext"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -43,7 +45,7 @@ func TestPatchAuthPolicyWithOIDC_GroupsExprUsesCanonicalPattern(t *testing.T) {
 	require.True(t, found, "X-MaaS-Group-OC expression should be set")
 	assert.Contains(t, expr, "g.matches('"+groupname.Pattern+"')",
 		"OIDC groups must be gated on the canonical group-name pattern")
-	assert.Contains(t, expr, `'["system:authenticated","' + auth.identity.groups.join('","') + '"]'`,
+	assert.Contains(t, expr, `.join('","') + '"]'`,
 		"safe groups must be joined with the implicit system:authenticated prefix")
 	// The pattern must accept slash groups (IdP full-path claims) while the
 	// expression still falls back for unsafe ones.
@@ -58,6 +60,100 @@ func TestPatchAuthPolicyWithOIDC_GroupsExprUsesCanonicalPattern(t *testing.T) {
 		"JWT identities must be selected by iss, not by groups-claim presence")
 	assert.Contains(t, expr, "auth.identity.user.groups.all(g, g.matches('"+groupname.Pattern+"')",
 		"TokenReview groups must be gated on the canonical group-name pattern")
+}
+
+func TestPatchAuthPolicyWithOIDCReservesOrganizationQualifiedGroups(t *testing.T) {
+	resource := &unstructured.Unstructured{Object: map[string]any{}}
+	for _, path := range [][]string{
+		{"spec", "rules", "authentication"},
+		{"spec", "rules", "authentication", "openshift-identities"},
+		{"spec", "rules", "authorization"},
+		{"spec", "rules", "response", "success", "headers"},
+	} {
+		require.NoError(t, unstructured.SetNestedField(resource.Object, map[string]any{}, path...))
+	}
+
+	oidc := &maasv1alpha1.TenantExternalOIDCConfig{
+		IssuerURL: "https://idp.example.com/realms/test",
+		ClientID:  "maas",
+	}
+	require.NoError(t, patchAuthPolicyWithOIDC(logr.Discard(), resource, oidc))
+
+	expr, found, err := unstructured.NestedString(
+		resource.Object,
+		"spec", "rules", "response", "success", "headers", "X-MaaS-Group-OC", "plain", "expression",
+	)
+	require.NoError(t, err)
+	require.True(t, found)
+
+	const organizationID = "42c3e46f-2477-44d7-a85b-d3b43f6b31fa"
+	tests := []struct {
+		name     string
+		identity map[string]any
+		want     string
+	}{
+		{
+			name: "organization-bound OIDC group is qualified",
+			identity: map[string]any{
+				"iss":    "https://idp.example.com/realms/test",
+				"org_id": organizationID,
+				"groups": []any{"ai-grid-admins"},
+			},
+			want: `["system:authenticated","` + organizationID + `/ai-grid-admins"]`,
+		},
+		{
+			name: "legacy OIDC group with slash stays plain",
+			identity: map[string]any{
+				"iss":    "https://idp.example.com/realms/test",
+				"groups": []any{"users/team"},
+			},
+			want: `["system:authenticated","users/team"]`,
+		},
+		{
+			name: "unbound OIDC qualified group is rejected",
+			identity: map[string]any{
+				"iss":    "https://idp.example.com/realms/test",
+				"groups": []any{organizationID + "/reserved-ai-grid-admins"},
+			},
+			want: `["system:authenticated"]`,
+		},
+		{
+			name: "legacy Kubernetes group with slash stays plain",
+			identity: map[string]any{
+				"user": map[string]any{"groups": []any{"users/team"}},
+			},
+			want: `["system:authenticated","users/team"]`,
+		},
+		{
+			name: "unbound Kubernetes qualified group is rejected",
+			identity: map[string]any{
+				"user": map[string]any{"groups": []any{organizationID + "/reserved-ai-grid-admins"}},
+			},
+			want: `["system:authenticated"]`,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := evaluateOIDCGroupExpression(t, expr, test.identity)
+			assert.Equal(t, test.want, got)
+		})
+	}
+}
+
+func evaluateOIDCGroupExpression(t *testing.T, expression string, identity map[string]any) string {
+	t.Helper()
+	env, err := cel.NewEnv(cel.Variable("auth", cel.DynType), ext.Strings())
+	require.NoError(t, err)
+	ast, issues := env.Compile(expression)
+	require.NoError(t, issues.Err())
+	program, err := env.Program(ast)
+	require.NoError(t, err)
+	value, _, err := program.Eval(map[string]any{"auth": map[string]any{"identity": identity}})
+	require.NoError(t, err)
+	result, ok := value.Value().(string)
+	require.True(t, ok, "group expression result = %#v, want string", value.Value())
+	return result
 }
 
 func TestPatchAuthPolicyWithOIDCRequiresPurposePair(t *testing.T) {
