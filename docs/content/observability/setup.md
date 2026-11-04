@@ -20,6 +20,39 @@ For MaaS dashboards to appear in the ODH console, verify that the status of the 
 kubectl get dscinitialization default-dsci -o json | jq '.status.conditions[] | select(.type=="PersesAvailable") | {type, status}'
 ```
 
+### MaaS Consumer Portal
+
+The MaaS consumer portal component exposes the RHOAI Dashboard MaaS UI and the
+Perses API and proxy paths through the MaaS Gateway. It is a cross-namespace
+bundle: the `HTTPRoute` is in `redhat-ods-applications`, while its Perses
+backend, `ReferenceGrant`, and `NetworkPolicy` are in `redhat-ods-monitoring`.
+
+Apply it only after the RHOAI Dashboard, Perses, and `maas-default-gateway` are
+available:
+
+```bash
+kustomize build deployment/components/odh/maas-consumer-portal | kubectl apply -f -
+```
+
+Before applying the bundle:
+
+- Configure the Gateway listener with the hostname for the target environment.
+  The HTTPRoute intentionally leaves `spec.hostnames` unset so it can match the
+  listener hostname without a cluster-specific value in this repository.
+- Configure the Gateway to accept routes from `redhat-ods-applications`. When
+  using `scripts/setup-gateway.sh`, set
+  `ALLOWED_ROUTE_NAMESPACES=redhat-ods-applications` or use a namespace-label
+  selector that includes that namespace. The script otherwise defaults to
+  same-namespace routes.
+- Deploy the separate OIDC/AuthPolicy configuration that authenticates portal
+  requests and injects the trusted MaaS identity headers, including
+  `x-maas-orgid`. This component preserves that header for requests to Perses;
+  it does not configure authentication or create the header.
+- Verify the RHOAI services `odh-dashboard-maas-ui` in
+  `redhat-ods-applications` and `data-science-perses` in
+  `redhat-ods-monitoring` are available. The bundle includes the
+  cross-namespace `ReferenceGrant` and the Perses ingress `NetworkPolicy`.
+
 ### Loki for Access Logs
 
 If you plan to store access logs for logs-based showback or for auditing, ensure LokiStack named `usage` is ready in monitoring namespace configured in DSCI `spec.monitoring.namespace` by verifying that the status of its `Ready` condition is `True`:

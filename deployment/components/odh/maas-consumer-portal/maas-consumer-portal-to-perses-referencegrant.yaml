@@ -1,0 +1,16 @@
+apiVersion: gateway.networking.k8s.io/v1beta1
+kind: ReferenceGrant
+metadata:
+  name: maas-consumer-portal-to-perses
+  namespace: redhat-ods-monitoring
+  labels:
+    app.kubernetes.io/part-of: maas-consumer-deploy
+spec:
+  from:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      namespace: redhat-ods-applications
+  to:
+    - group: ""
+      kind: Service
+      name: data-science-perses
