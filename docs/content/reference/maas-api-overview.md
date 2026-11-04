@@ -4,7 +4,7 @@ This page provides a high-level overview of the MaaS API endpoints. For full req
 
 ## Authentication
 
-All endpoints except `/health` require authentication via the `Authorization: Bearer <token>` header. Use either:
+All Gateway-exposed endpoints except `/health` require authentication via the `Authorization: Bearer <token>` header. Use either:
 
 - **OpenShift token** — from `oc whoami -t` for interactive use
 - **API key** — created via `POST /v1/api-keys` for programmatic access
@@ -18,6 +18,7 @@ All endpoints except `/health` require authentication via the `Authorization: Be
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/health` | Health check. No authentication required. Used by load balancers and monitoring. |
+| GET | `/health/database` | Database component diagnostics. Cluster-only; not exposed through the Gateway. |
 
 ### Models
 
