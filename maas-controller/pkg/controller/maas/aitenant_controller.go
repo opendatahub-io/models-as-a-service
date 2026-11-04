@@ -232,10 +232,12 @@ func (r *AITenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	}
 
 	// Namespaces are not watched, so a failed label patch is retried by a requeue.
-	namespaceLabelsFailed := false
+	// Degraded is cleared only once both label patches succeed, so a retry that
+	// fails again keeps its LastTransitionTime.
+	infraLabelsFailed := false
 	if err := r.ensureInfraNamespaceGatewayLabels(ctx, gw); err != nil {
 		oteljson.FromContext(ctx).Error(err, "infra namespace gateway label reconciliation failed, continuing")
-		namespaceLabelsFailed = true
+		infraLabelsFailed = true
 		apimeta.SetStatusCondition(&aitenant.Status.Conditions, metav1.Condition{
 			Type:               tenantreconcile.ConditionTypeDegraded,
 			Status:             metav1.ConditionTrue,
@@ -244,8 +246,6 @@ func (r *AITenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 			ObservedGeneration: aitenant.Generation,
 			LastTransitionTime: metav1.Now(),
 		})
-	} else {
-		apimeta.RemoveStatusCondition(&aitenant.Status.Conditions, tenantreconcile.ConditionTypeDegraded)
 	}
 
 	if err := r.ensureGatewayClaim(ctx, &aitenant, gatewayRef); err != nil {
@@ -264,11 +264,12 @@ func (r *AITenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 
 	// The tenant namespace exists now. Without the Gateway's labels, HTTPRoutes
 	// created in it (e.g. for tenant-local ExternalModels) are not admitted.
+	namespaceLabelsFailed := infraLabelsFailed
 	if err := r.ensureTenantNamespaceGatewayLabels(ctx, &aitenant, gw); err != nil {
 		oteljson.FromContext(ctx).Error(err, "tenant namespace gateway label reconciliation failed, continuing")
 		namespaceLabelsFailed = true
 		// An infra namespace label failure set above takes precedence.
-		if !apimeta.IsStatusConditionTrue(aitenant.Status.Conditions, tenantreconcile.ConditionTypeDegraded) {
+		if !infraLabelsFailed {
 			apimeta.SetStatusCondition(&aitenant.Status.Conditions, metav1.Condition{
 				Type:               tenantreconcile.ConditionTypeDegraded,
 				Status:             metav1.ConditionTrue,
@@ -278,6 +279,9 @@ func (r *AITenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 				LastTransitionTime: metav1.Now(),
 			})
 		}
+	}
+	if !namespaceLabelsFailed {
+		apimeta.RemoveStatusCondition(&aitenant.Status.Conditions, tenantreconcile.ConditionTypeDegraded)
 	}
 
 	if err := r.ensureTenantAdminRBAC(ctx, &aitenant); err != nil {
@@ -495,7 +499,7 @@ func (r *AITenantReconciler) ensureInfraNamespaceGatewayLabels(ctx context.Conte
 	if err != nil {
 		return err
 	}
-	return r.ensureNamespaceGatewayLabels(ctx, r.AppNamespace, gw.Name, desiredLabels)
+	return r.ensureNamespaceGatewayLabels(ctx, r.AppNamespace, gw.Name, desiredLabels, false)
 }
 
 // ensureTenantNamespaceGatewayLabels applies the gateway's listener matchLabels
@@ -516,20 +520,35 @@ func (r *AITenantReconciler) ensureTenantNamespaceGatewayLabels(ctx context.Cont
 	if desiredLabels[tenantreconcile.LabelGatewayAccess] == "true" {
 		delete(desiredLabels, tenantreconcile.LabelGatewayAccess)
 	}
-	return r.ensureNamespaceGatewayLabels(ctx, namespace, gw.Name, desiredLabels)
+	// The tenant namespace belongs to this AITenant alone, so the labels of a
+	// Gateway it was retargeted from are released.
+	return r.ensureNamespaceGatewayLabels(ctx, namespace, gw.Name, desiredLabels, true)
 }
 
 // ensureNamespaceGatewayLabels applies desiredLabels, the matchLabels of
 // gateway gatewayName, to the namespace. It tracks label ownership via an
 // annotation to detect cross-gateway conflicts and remove stale labels when a
-// gateway's selector changes.
-func (r *AITenantReconciler) ensureNamespaceGatewayLabels(ctx context.Context, namespace, gatewayName string, desiredLabels map[string]string) error {
+// gateway's selector changes. When exclusive, the namespace serves gatewayName
+// alone and every other gateway in the annotation is released first.
+func (r *AITenantReconciler) ensureNamespaceGatewayLabels(ctx context.Context, namespace, gatewayName string, desiredLabels map[string]string, exclusive bool) error {
 	var ns corev1.Namespace
 	if err := r.get(ctx, client.ObjectKey{Name: namespace}, &ns); err != nil {
 		if isNotFoundError(err) && len(desiredLabels) == 0 {
 			return nil
 		}
 		return fmt.Errorf("read namespace %s: %w", namespace, err)
+	}
+
+	// Use optimistic locking so concurrent reconciles for different tenants
+	// get a 409 Conflict instead of silently overwriting each other's ownership.
+	// The base is taken before other gateways are released below.
+	patch := client.MergeFromWithOptions(ns.DeepCopy(), client.MergeFromWithOptimisticLock{})
+	var releasedGateways []string
+	if exclusive {
+		var err error
+		if releasedGateways, err = releaseGatewayLabelsExcept(&ns, gatewayName); err != nil {
+			return err
+		}
 	}
 
 	ownership, err := parseOwnershipAnnotation(ns.Annotations[gatewayLabelsAnnotation])
@@ -572,7 +591,7 @@ func (r *AITenantReconciler) ensureNamespaceGatewayLabels(ctx context.Context, n
 	}
 
 	// Check whether a patch is needed.
-	needsPatch := len(staleKeys) > 0
+	needsPatch := len(staleKeys) > 0 || len(releasedGateways) > 0
 	if !needsPatch {
 		for k, v := range desiredLabels {
 			if ns.Labels[k] != v {
@@ -596,9 +615,6 @@ func (r *AITenantReconciler) ensureNamespaceGatewayLabels(ctx context.Context, n
 	}
 
 	// Build the patch: add desired labels, remove stale labels, update annotation.
-	// Use optimistic locking so concurrent reconciles for different tenants
-	// get a 409 Conflict instead of silently overwriting each other's ownership.
-	patch := client.MergeFromWithOptions(ns.DeepCopy(), client.MergeFromWithOptimisticLock{})
 	if ns.Labels == nil {
 		ns.Labels = make(map[string]string)
 	}
@@ -637,7 +653,7 @@ func (r *AITenantReconciler) ensureNamespaceGatewayLabels(ctx context.Context, n
 	log := oteljson.FromContext(ctx)
 	log.Info("applied gateway namespace-selector labels to namespace",
 		"namespace", namespace, "gateway", gatewayName,
-		"applied", desiredLabels, "removed", staleKeys)
+		"applied", desiredLabels, "removed", staleKeys, "releasedGateways", releasedGateways)
 	return nil
 }
 
@@ -740,6 +756,31 @@ func releaseGatewayLabels(ns *corev1.Namespace, gatewayName string) (removed, un
 		ns.Annotations[gatewayLabelsAnnotation] = string(ownershipJSON)
 	}
 	return removed, unowned, nil
+}
+
+// releaseGatewayLabelsExcept releases, as releaseGatewayLabels does, every
+// gateway in the label ownership annotation on ns other than keep. An empty
+// keep releases them all. It returns the released gateways.
+func releaseGatewayLabelsExcept(ns *corev1.Namespace, keep string) ([]string, error) {
+	ownership, err := parseOwnershipAnnotation(ns.Annotations[gatewayLabelsAnnotation])
+	if err != nil {
+		return nil, fmt.Errorf("unmarshal %s annotation on namespace %s: %w", gatewayLabelsAnnotation, ns.Name, err)
+	}
+	var released []string
+	for _, owners := range ownership {
+		for _, owner := range owners {
+			if owner != keep && !slices.Contains(released, owner) {
+				released = append(released, owner)
+			}
+		}
+	}
+	slices.Sort(released)
+	for _, gatewayName := range released {
+		if _, _, err := releaseGatewayLabels(ns, gatewayName); err != nil {
+			return nil, err
+		}
+	}
+	return released, nil
 }
 
 // enqueueAITenantForGateway maps Gateway events back to the AITenants that
@@ -1283,9 +1324,17 @@ func (r *AITenantReconciler) releaseTenantNamespace(ctx context.Context, aitenan
 	labels := ns.GetLabels()
 	removeMapValueIfEqual(&labels, "opendatahub.io/generated-namespace", "true")
 	ns.SetLabels(labels)
-	// Also drop the tenant Gateway's namespace-selector labels so routes in the
-	// released namespace no longer attach to it.
-	if _, _, err := releaseGatewayLabels(&ns, r.gatewayRefFor(aitenant).Name); err != nil {
+	// Also drop the Gateway namespace-selector labels so routes in the released
+	// namespace no longer attach to the tenant Gateway, or to one the AITenant
+	// was retargeted from. The shared infrastructure namespace keeps the labels
+	// of other tenants' Gateways.
+	var err error
+	if key.Name == r.AppNamespace {
+		_, _, err = releaseGatewayLabels(&ns, r.gatewayRefFor(aitenant).Name)
+	} else {
+		_, err = releaseGatewayLabelsExcept(&ns, "")
+	}
+	if err != nil {
 		oteljson.FromContext(ctx).Error(err, "failed to release gateway labels from tenant namespace, skipping",
 			"namespace", key.Name)
 	}
