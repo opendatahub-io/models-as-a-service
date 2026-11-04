@@ -31,6 +31,11 @@ jobs:
           persist-credentials: false
           # Need full history so the new-test tier gate can diff against the PR base.
           fetch-depth: 0
+          # PRs: check out the head commit, not refs/pull/*/merge. The merge ref
+          # parents onto current main tip while pull_request.base.sha can lag, so
+          # a three-dot diff against base.sha would flag tests that already landed
+          # on main as "new" on this PR.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Set up Python
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
