@@ -169,12 +169,30 @@ func TestMaaSAuthPolicyReconciler_ReconcilesTenantNamespace(t *testing.T) {
 			Labels: map[string]string{tenantreconcile.LabelManagedByAITenant: "true"},
 		},
 	}
-	tenant := &maasv1alpha1.Tenant{
-		ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.TenantInstanceName, Namespace: namespace},
-		Spec: maasv1alpha1.TenantSpec{GatewayRef: maasv1alpha1.TenantGatewayRef{
-			Name:      "team-a-gateway",
-			Namespace: "team-a-gateway-ns",
-		}},
+	aitenant := &maasv1alpha1.AITenant{
+		ObjectMeta: metav1.ObjectMeta{Name: "team-a", Namespace: "ai-tenants"},
+		Status: maasv1alpha1.AITenantStatus{
+			TenantNamespace: namespace,
+			GatewayRef: maasv1alpha1.TenantGatewayRef{
+				Name:      "team-a-gateway",
+				Namespace: "team-a-gateway-ns",
+			},
+		},
+	}
+	tenantConfig := &maasv1alpha1.MaasTenantConfig{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      maasv1alpha1.MaasTenantConfigInstanceName,
+			Namespace: namespace,
+			Labels: map[string]string{
+				tenantreconcile.LabelManagedByAITenant: "true",
+				tenantreconcile.LabelTenantName:        "team-a",
+				tenantreconcile.LabelTenantNamespace:   namespace,
+			},
+			Annotations: map[string]string{
+				tenantreconcile.AnnotationAITenantName:      "team-a",
+				tenantreconcile.AnnotationAITenantNamespace: "ai-tenants",
+			},
+		},
 	}
 	model := newMaaSModelRef(modelName, namespace, "ExternalModel", modelName)
 	route := newHTTPRouteWithGateway(modelName, namespace, "team-a-gateway", "team-a-gateway-ns")
@@ -197,7 +215,7 @@ func TestMaaSAuthPolicyReconciler_ReconcilesTenantNamespace(t *testing.T) {
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithRESTMapper(testRESTMapper()).
-		WithObjects(ns, tenant, model, route, policy, gateway).
+		WithObjects(ns, aitenant, tenantConfig, model, route, policy, gateway).
 		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
 		Build()
 
@@ -224,7 +242,7 @@ func TestMaaSAuthPolicyReconciler_ReconcilesTenantNamespace(t *testing.T) {
 	// Gateway AuthPolicy name is now dynamic: {gatewayName}-maas-auth
 	expectedAuthPolicyName := "team-a-gateway-maas-auth"
 	if err := c.Get(context.Background(), types.NamespacedName{Name: expectedAuthPolicyName, Namespace: gwNamespace}, gatewayAP); err != nil {
-		t.Errorf("Gateway AuthPolicy should be created for AITenant-labeled tenant namespace: %v", err)
+		t.Errorf("Gateway AuthPolicy should be created for AITenant-managed tenant namespace: %v", err)
 	}
 }
 

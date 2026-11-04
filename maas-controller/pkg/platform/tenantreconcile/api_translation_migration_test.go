@@ -29,8 +29,8 @@ func TestPersistAPITranslationMigrationIntent(t *testing.T) {
 		wantExplicit   bool
 		wantEnabled    bool
 	}{
-		{name: "pure default stays omitted", persistDefault: false},
-		{name: "response baseline persists true", persistDefault: true, wantEnabled: true},
+		{name: "baseline without request translation stays omitted", persistDefault: false},
+		{name: "request-translating baseline persists true", persistDefault: true, wantEnabled: true},
 		{name: "explicit false wins", persistDefault: true, setting: migrationBoolPtr(false), wantExplicit: true},
 		{name: "explicit true remains true", persistDefault: false, setting: migrationBoolPtr(true), wantExplicit: true, wantEnabled: true},
 	}

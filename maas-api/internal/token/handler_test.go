@@ -123,7 +123,7 @@ func TestExtractUserInfoOptional(t *testing.T) {
 		assert.Equal(t, false, body["user_present"])
 	})
 
-	t.Run("aborts when only username header present", func(t *testing.T) {
+	t.Run("continues without user context when only username header present", func(t *testing.T) {
 		router := setupOptionalRouter(t)
 		req := httptest.NewRequest(http.MethodGet, "/test", nil)
 		req.Header.Set(constant.HeaderUsername, "testuser")
@@ -132,14 +132,14 @@ func TestExtractUserInfoOptional(t *testing.T) {
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
 
-		assert.Equal(t, http.StatusInternalServerError, w.Code)
+		assert.Equal(t, http.StatusOK, w.Code)
 
 		var body map[string]any
 		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
-		assert.Equal(t, "AUTH_FAILURE", body["exceptionCode"])
+		assert.Equal(t, false, body["user_present"])
 	})
 
-	t.Run("aborts when only group header present", func(t *testing.T) {
+	t.Run("continues without user context when only group header present", func(t *testing.T) {
 		router := setupOptionalRouter(t)
 		req := httptest.NewRequest(http.MethodGet, "/test", nil)
 		req.Header.Set(constant.HeaderGroup, `["group1"]`)
@@ -148,11 +148,33 @@ func TestExtractUserInfoOptional(t *testing.T) {
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
 
-		assert.Equal(t, http.StatusInternalServerError, w.Code)
+		assert.Equal(t, http.StatusOK, w.Code)
 
 		var body map[string]any
 		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
-		assert.Equal(t, "AUTH_FAILURE", body["exceptionCode"])
+		assert.Equal(t, false, body["user_present"])
+	})
+
+	t.Run("sets an empty group list for an empty array header", func(t *testing.T) {
+		router := setupOptionalRouter(t)
+		req := httptest.NewRequest(http.MethodGet, "/test", nil)
+		req.Header.Set(constant.HeaderUsername, "testuser")
+		req.Header.Set(constant.HeaderGroup, "[]")
+
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+
+		var body struct {
+			UserPresent bool     `json:"user_present"`
+			Username    string   `json:"username"`
+			Groups      []string `json:"groups"`
+		}
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+		assert.True(t, body.UserPresent)
+		assert.Equal(t, "testuser", body.Username)
+		assert.Equal(t, []string{}, body.Groups)
 	})
 
 	t.Run("aborts when group header is malformed", func(t *testing.T) {
@@ -169,5 +191,35 @@ func TestExtractUserInfoOptional(t *testing.T) {
 		var body map[string]any
 		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
 		assert.Equal(t, "AUTH_FAILURE", body["exceptionCode"])
+	})
+
+	t.Run("derives user context from verified identity", func(t *testing.T) {
+		gin.SetMode(gin.TestMode)
+		handler := token.NewHandler(logger.Development(), "test")
+		router := gin.New()
+		router.Use(handler.ExtractVerifiedIdentityOptional(), handler.ExtractUserInfoOptional())
+		router.GET("/test", func(c *gin.Context) {
+			user, exists := c.Get("user")
+			if !exists {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "user context missing"})
+				return
+			}
+			c.JSON(http.StatusOK, user)
+		})
+
+		request := httptest.NewRequest(http.MethodGet, "/test", nil)
+		request.Header.Set(constant.HeaderIdentity, validIdentityEnvelope)
+		recorder := httptest.NewRecorder()
+		router.ServeHTTP(recorder, request)
+
+		require.Equal(t, http.StatusOK, recorder.Code)
+		var user token.UserContext
+		require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &user))
+		assert.Equal(t, "alex", user.Username)
+		assert.Equal(t, []string{
+			"system:authenticated",
+			"42c3e46f-2477-44d7-a85b-d3b43f6b31fa/users",
+		}, user.Groups)
+		assert.Equal(t, "test", user.Tenant)
 	})
 }

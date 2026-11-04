@@ -31,6 +31,7 @@ import (
 
 	kservev1alpha2 "github.com/kserve/kserve/pkg/apis/serving/v1alpha2"
 	llmdv1alpha2 "github.com/llm-d/llm-d-router/apix/v1alpha2"
+	aigatewayv1alpha1 "github.com/opendatahub-io/ai-gateway-controller/api/aigateway/v1alpha1"
 	confv1 "github.com/openshift/api/config/v1"
 	utiltls "github.com/openshift/controller-runtime-common/pkg/tls"
 	appsv1 "k8s.io/api/apps/v1"
@@ -93,6 +94,7 @@ func init() {
 	utilruntime.Must(extv1.AddToScheme(scheme))
 	utilruntime.Must(kservev1alpha2.AddToScheme(scheme))
 	utilruntime.Must(gatewayapiv1.Install(scheme))
+	utilruntime.Must(aigatewayv1alpha1.AddToScheme(scheme))
 	utilruntime.Must(maasv1alpha1.AddToScheme(scheme))
 	utilruntime.Must(llmdv1alpha2.Install(scheme))
 	utilruntime.Must(confv1.Install(scheme))

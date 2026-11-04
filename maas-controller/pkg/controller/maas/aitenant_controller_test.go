@@ -453,6 +453,82 @@ func TestAITenantReconcile_PersistsGatewayStatusBeforeTenantCreate(t *testing.T)
 	reconcileAITenantToActive(t, r, key)
 }
 
+// TestAITenantReconcile_StatusUpdateRetriesOnConflict reproduces a concurrent
+// writer bumping the AITenant resourceVersion between the reconciler's read and
+// its status write. The status update must re-read the live object and retry
+// instead of failing the reconcile into backoff: a dropped phase/Ready stamp
+// here leaves the ai-gateway-controller reporting "AITenant is not DeployReady
+// yet" and re-applying per-tenant payloads in a loop.
+func TestAITenantReconcile_StatusUpdateRetriesOnConflict(t *testing.T) {
+	g := NewWithT(t)
+	s := aitenantTestScheme(t)
+
+	aitenant := &maasv1alpha1.AITenant{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "team-a",
+			Namespace: tenantreconcile.DefaultAITenantNamespace,
+		},
+	}
+	key := types.NamespacedName{Name: aitenant.Name, Namespace: aitenant.Namespace}
+	gateway := existingAITenantGateway("team-a")
+
+	raced := false
+	cl := fake.NewClientBuilder().
+		WithScheme(s).
+		WithStatusSubresource(&maasv1alpha1.AITenant{}).
+		WithObjects(aitenant, gateway).
+		WithInterceptorFuncs(interceptor.Funcs{
+			SubResourceUpdate: func(ctx context.Context, c client.Client, subResourceName string, obj client.Object, opts ...client.SubResourceUpdateOption) error {
+				if subResourceName != "status" {
+					return c.SubResource(subResourceName).Update(ctx, obj, opts...)
+				}
+				if at, ok := obj.(*maasv1alpha1.AITenant); ok && at.Name == key.Name && !raced {
+					raced = true
+					// Simulate a concurrent writer on the AITenant (e.g. the
+					// ai-gateway-controller) winning the race: bump the stored
+					// object's resourceVersion so the reconciler's stale-copy
+					// status update conflicts, exactly like a production 409.
+					live := &maasv1alpha1.AITenant{}
+					if err := c.Get(ctx, key, live); err != nil {
+						return err
+					}
+					annotations := live.GetAnnotations()
+					if annotations == nil {
+						annotations = map[string]string{}
+					}
+					annotations["test.opendatahub.io/concurrent-writer"] = "true"
+					live.SetAnnotations(annotations)
+					if err := c.Update(ctx, live); err != nil {
+						return err
+					}
+				}
+				return c.SubResource(subResourceName).Update(ctx, obj, opts...)
+			},
+		}).
+		Build()
+	r := &AITenantReconciler{
+		Client:           cl,
+		Scheme:           s,
+		APIReader:        cl,
+		AppNamespace:     "opendatahub",
+		TenantNamespace:  "models-as-a-service",
+		GatewayNamespace: "openshift-ingress",
+	}
+
+	reconcileAITenantToActive(t, r, key)
+	g.Expect(raced).To(BeTrue(), "interceptor never simulated a concurrent AITenant write; test did not exercise the retry path")
+
+	var updated maasv1alpha1.AITenant
+	g.Expect(cl.Get(context.Background(), key, &updated)).To(Succeed())
+	g.Expect(updated.Status.Phase).To(Equal("Active"))
+	ready := apimeta.FindStatusCondition(updated.Status.Conditions, maasv1alpha1.AITenantConditionReady)
+	g.Expect(ready).NotTo(BeNil())
+	g.Expect(ready.Status).To(Equal(metav1.ConditionTrue))
+	g.Expect(ready.Reason).To(Equal("Reconciled"))
+	// The retry re-reads the live object, so the concurrent writer's change
+	// must survive the status update.
+	g.Expect(updated.Annotations).To(HaveKeyWithValue("test.opendatahub.io/concurrent-writer", "true"))
+}
 func TestAITenantReconcile_DefaultTenantCreatesConfigBeforeGatewayReady(t *testing.T) {
 	g := NewWithT(t)
 	s := aitenantTestScheme(t)

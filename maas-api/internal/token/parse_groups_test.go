@@ -39,8 +39,9 @@ func TestParseGroupsHeader_Empty(t *testing.T) {
 }
 
 func TestParseGroupsHeader_EmptyBrackets(t *testing.T) {
-	_, err := token.ParseGroupsHeader("[]")
-	assert.Error(t, err)
+	groups, err := token.ParseGroupsHeader("[]")
+	require.NoError(t, err)
+	assert.Equal(t, []string{}, groups)
 }
 
 func TestParseGroupsHeader_EmptyAuthorinoBrackets(t *testing.T) {
