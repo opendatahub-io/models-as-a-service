@@ -55,3 +55,13 @@ jobs:
       - name: Collect e2e tests
         working-directory: test/e2e
         run: python -m pytest --collect-only -q tests/
+
+      - name: Collect smoke subset (CI default)
+        working-directory: test/e2e
+        run: |
+          # /group-test sets E2E_SMOKE_ONLY=true; keep the marked subset
+          # non-empty so group-test cannot silently run zero tests.
+          out=$(python -m pytest --collect-only -q tests/ -m "smoke and not serial and not legacy_ipp and not nightly")
+          echo "$out"
+          # Matches "70 tests collected" and "70/454 tests collected (384 deselected)".
+          echo "$out" | grep -Eq '[1-9][0-9]*(/[0-9]+)? tests? collected'
