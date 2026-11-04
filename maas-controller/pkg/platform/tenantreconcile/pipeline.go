@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/go-logr/logr"
 	appsv1 "k8s.io/api/apps/v1"
@@ -201,10 +202,15 @@ func RunPlatformWithReader(
 			KuadrantDetectionWarning: params.KuadrantDetectionWarning}, nil
 	}
 	// Previous releases bound the scraper token to a cluster-wide /metrics
-	// ClusterRole. Delete those Config-owned grants after the new API rollout is
-	// ready; omitting them from the rendered set would leave them on the cluster.
-	if err := cleanupLegacyMetricsScraperRBAC(ctx, c, apiReader, mcfg.UID, log); err != nil {
+	// ClusterRole. Retire each Config-owned binding only after its tenant's API
+	// rollout has finished; omitting it from the rendered set does not prune it.
+	metricsRolloutPending, err := cleanupLegacyMetricsScraperRBAC(ctx, c, apiReader, mcfg.UID, appNs, tenantID, log)
+	if err != nil {
 		return nil, fmt.Errorf("cleanup legacy metrics scraper RBAC: %w", err)
+	}
+	if metricsRolloutPending != "" {
+		return &RunResult{DeploymentPending: true, Detail: metricsRolloutPending, Warnings: params.Warnings,
+			KuadrantDetectionWarning: params.KuadrantDetectionWarning}, nil
 	}
 	// Shared EnvoyFilter shape check for both legacy IPP and praxis (AGC).
 	// Praxis tenants skip *applying* IPP resources (SkipIPP) but still wait on
@@ -225,44 +231,118 @@ func RunPlatformWithReader(
 	return &RunResult{Warnings: params.Warnings, KuadrantDetectionWarning: params.KuadrantDetectionWarning}, nil
 }
 
-func cleanupLegacyMetricsScraperRBAC(ctx context.Context, c client.Client, reader client.Reader, configUID types.UID, log logr.Logger) error {
-	role := &rbacv1.ClusterRole{}
-	if err := reader.Get(ctx, client.ObjectKey{Name: "maas-metrics-scraper"}, role); err != nil {
-		if apierrors.IsNotFound(err) {
-			return nil
-		}
-		return fmt.Errorf("get legacy metrics ClusterRole: %w", err)
-	}
+func cleanupLegacyMetricsScraperRBAC(ctx context.Context, c client.Client, reader client.Reader, configUID types.UID, appNamespace, currentTenantID string, log logr.Logger) (string, error) {
 	var bindings rbacv1.ClusterRoleBindingList
 	if err := reader.List(ctx, &bindings); err != nil {
-		return fmt.Errorf("list legacy metrics ClusterRoleBindings: %w", err)
+		return "", fmt.Errorf("list legacy metrics ClusterRoleBindings: %w", err)
 	}
+	var currentPending string
+	remainingBindings := false
 	for i := range bindings.Items {
 		binding := &bindings.Items[i]
-		if binding.RoleRef.Kind != "ClusterRole" || binding.RoleRef.Name != "maas-metrics-scraper" ||
-			!isOwnedByConfigUID(binding, configUID) {
+		if binding.RoleRef.Kind != "ClusterRole" || binding.RoleRef.Name != "maas-metrics-scraper" {
+			continue
+		}
+		if !isOwnedByConfigUID(binding, configUID) {
+			remainingBindings = true
+			continue
+		}
+		bindingTenantID, known := legacyMetricsBindingTenantID(binding.Name)
+		if !known {
+			remainingBindings = true
+			log.V(1).Info("Skipping legacy metrics binding with unknown tenant name", "name", binding.Name)
+			continue
+		}
+		ready, detail, err := maasAPIMetricsRolloutComplete(ctx, reader, appNamespace, bindingTenantID)
+		if err != nil {
+			return "", fmt.Errorf("check API rollout for ClusterRoleBinding %s: %w", binding.Name, err)
+		}
+		if !ready {
+			remainingBindings = true
+			if bindingTenantID == currentTenantID {
+				currentPending = detail
+			}
 			continue
 		}
 		options, err := validatedDeleteOptions(binding)
 		if err != nil {
-			return fmt.Errorf("prepare ClusterRoleBinding %s deletion: %w", binding.Name, err)
+			return "", fmt.Errorf("prepare ClusterRoleBinding %s deletion: %w", binding.Name, err)
 		}
 		if err := c.Delete(ctx, binding, options...); err != nil && !apierrors.IsNotFound(err) {
-			return fmt.Errorf("delete ClusterRoleBinding %s: %w", binding.Name, err)
+			return "", fmt.Errorf("delete ClusterRoleBinding %s: %w", binding.Name, err)
+		}
+	}
+	// The role may have been removed independently. Bindings still need cleanup
+	// so they cannot become active if another role with this name is created.
+	role := &rbacv1.ClusterRole{}
+	if err := reader.Get(ctx, client.ObjectKey{Name: "maas-metrics-scraper"}, role); err != nil {
+		if apierrors.IsNotFound(err) {
+			return currentPending, nil
+		}
+		return "", fmt.Errorf("get legacy metrics ClusterRole: %w", err)
+	}
+	if remainingBindings {
+		return currentPending, nil
+	}
+	// Re-read after deletes: a binding with a finalizer or a concurrent new
+	// binding must keep the shared role until that dependency is gone.
+	var remaining rbacv1.ClusterRoleBindingList
+	if err := reader.List(ctx, &remaining); err != nil {
+		return "", fmt.Errorf("verify legacy metrics ClusterRoleBindings retired: %w", err)
+	}
+	for i := range remaining.Items {
+		binding := &remaining.Items[i]
+		if binding.RoleRef.Kind == "ClusterRole" && binding.RoleRef.Name == role.Name {
+			return currentPending, nil
 		}
 	}
 	if !isOwnedByConfigUID(role, configUID) {
 		log.V(1).Info("Skipping legacy metrics ClusterRole without Config ownership", "name", role.Name)
-		return nil
+		return currentPending, nil
 	}
 	options, err := validatedDeleteOptions(role)
 	if err != nil {
-		return fmt.Errorf("prepare legacy metrics ClusterRole deletion: %w", err)
+		return "", fmt.Errorf("prepare legacy metrics ClusterRole deletion: %w", err)
 	}
 	if err := c.Delete(ctx, role, options...); err != nil && !apierrors.IsNotFound(err) {
-		return fmt.Errorf("delete legacy metrics ClusterRole: %w", err)
+		return "", fmt.Errorf("delete legacy metrics ClusterRole: %w", err)
 	}
-	return nil
+	return currentPending, nil
+}
+
+func legacyMetricsBindingTenantID(bindingName string) (string, bool) {
+	const base = "maas-metrics-scraper"
+	if bindingName == base {
+		return "", true
+	}
+	if strings.HasPrefix(bindingName, base+"-") {
+		id := strings.TrimPrefix(bindingName, base+"-")
+		return id, id != ""
+	}
+	return "", false
+}
+
+// maasAPIMetricsRolloutComplete is stricter than MaaSAPIDeploymentReady: the
+// latter can count old pods as available while replacement pods are updating.
+func maasAPIMetricsRolloutComplete(ctx context.Context, reader client.Reader, appNamespace, tenantID string) (bool, string, error) {
+	dep := &appsv1.Deployment{}
+	name := MaaSAPIDeploymentName(tenantID)
+	if err := reader.Get(ctx, types.NamespacedName{Namespace: appNamespace, Name: name}, dep); err != nil {
+		if apierrors.IsNotFound(err) {
+			return false, fmt.Sprintf("waiting for deployment %s/%s", appNamespace, name), nil
+		}
+		return false, "", err
+	}
+	desired := int32(1)
+	if dep.Spec.Replicas != nil {
+		desired = *dep.Spec.Replicas
+	}
+	if dep.Status.ObservedGeneration < dep.Generation ||
+		dep.Status.Replicas != desired || dep.Status.UpdatedReplicas != desired ||
+		dep.Status.ReadyReplicas != desired || dep.Status.AvailableReplicas != desired {
+		return false, fmt.Sprintf("waiting for %s/%s rollout to finish before retiring legacy metrics RBAC", appNamespace, name), nil
+	}
+	return true, "", nil
 }
 
 func isOwnedByConfigUID(obj client.Object, configUID types.UID) bool {
