@@ -150,14 +150,23 @@ def _is_pytest_test_module(path: Path) -> bool:
     )
 
 
-def _changed_test_files(base: str) -> list[Path]:
-    # -z avoids Git quoting non-ASCII paths in --name-only output.
+def _decode_git_path(raw: bytes) -> str:
+    return raw.decode("utf-8", errors="surrogateescape").strip()
+
+
+def _changed_test_modules(base: str) -> list[tuple[Path, str]]:
+    """Return (head_path, base_rel_path) for changed pytest modules.
+
+    Renames/copies use the pre-image path for the base lookup so existing tests
+    are not treated as newly added after a file move.
+    """
+    # -z avoids Git quoting; --name-status exposes rename source paths.
     result = subprocess.run(
         [
             "git",
             "diff",
             "-z",
-            "--name-only",
+            "--name-status",
             "--diff-filter=ACMR",
             f"{base}...HEAD",
             "--",
@@ -169,16 +178,35 @@ def _changed_test_files(base: str) -> list[Path]:
     )
     if result.returncode != 0:
         err = (result.stderr or result.stdout or b"").decode("utf-8", errors="replace").strip()
-        raise RuntimeError(f"git diff -z --name-only failed: {err}")
-    files: list[Path] = []
-    for raw in result.stdout.split(b"\0"):
-        if not raw:
+        raise RuntimeError(f"git diff -z --name-status failed: {err}")
+
+    entries = [part for part in result.stdout.split(b"\0") if part]
+    changed: list[tuple[Path, str]] = []
+    i = 0
+    while i < len(entries):
+        status = _decode_git_path(entries[i])
+        if not status:
+            i += 1
             continue
-        rel = raw.decode("utf-8", errors="surrogateescape").strip()
-        path = REPO_ROOT / rel
-        if _is_pytest_test_module(path):
-            files.append(path)
-    return files
+        kind = status[0]
+        if kind in {"R", "C"}:
+            if i + 2 >= len(entries):
+                raise RuntimeError(f"truncated git name-status rename/copy record: {status!r}")
+            old_rel = _decode_git_path(entries[i + 1])
+            new_rel = _decode_git_path(entries[i + 2])
+            i += 3
+            head_path = REPO_ROOT / new_rel
+            if _is_pytest_test_module(head_path):
+                changed.append((head_path, old_rel))
+            continue
+        if i + 1 >= len(entries):
+            raise RuntimeError(f"truncated git name-status record: {status!r}")
+        rel = _decode_git_path(entries[i + 1])
+        i += 2
+        head_path = REPO_ROOT / rel
+        if _is_pytest_test_module(head_path):
+            changed.append((head_path, rel))
+    return changed
 
 
 def _pytest_node_id(path: Path, qual: str) -> str:
@@ -189,13 +217,12 @@ def _pytest_node_id(path: Path, qual: str) -> str:
 
 def iter_new_tests(base: str) -> list[tuple[str, set[str]]]:
     """Return (pytest_node_id, tier_markers) for tests added since base."""
-    changed = _changed_test_files(base)
+    changed = _changed_test_modules(base)
     new: list[tuple[str, set[str]]] = []
-    for path in sorted(changed):
-        rel = path.relative_to(REPO_ROOT).as_posix()
+    for path, base_rel in sorted(changed, key=lambda item: item[0].as_posix()):
         head_src = path.read_text(encoding="utf-8")
         head_tests = _collect_tests(head_src, path)
-        base_src = _git_show(base, rel)
+        base_src = _git_show(base, base_rel)
         base_tests = _collect_tests(base_src, path) if base_src is not None else {}
         for qual, tiers in sorted(head_tests.items()):
             if qual in base_tests:
@@ -236,7 +263,7 @@ def main() -> int:
             print(node_id)
         return 0
 
-    changed = _changed_test_files(base)
+    changed = _changed_test_modules(base)
     if not changed and not new_tests:
         print("No changed pytest test modules under test/e2e/tests/; tier gate OK.")
         return 0
@@ -247,7 +274,10 @@ def main() -> int:
             continue
         violations.append(f"  {node_id}")
 
-    print(f"Checked {len(new_tests)} newly added E2E test function(s) across {len(changed)} file(s).")
+    print(
+        f"Checked {len(new_tests)} newly added E2E test function(s) "
+        f"across {len(changed)} file(s)."
+    )
     if not violations:
         print("All new E2E tests declare a coverage tier (smoke | full_suite | nightly).")
         return 0

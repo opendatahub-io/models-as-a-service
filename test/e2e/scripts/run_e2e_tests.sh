@@ -216,6 +216,9 @@ _resolve_e2e_diff_base() {
     local target_branch="${E2E_DIFF_TARGET_BRANCH:-main}"
     local mb=""
     if [[ -n "${upstream_url}" ]]; then
+        # When CI configures an upstream URL, do not fall back to origin/* —
+        # that may be a stale fork tip and would mis-classify upstream tests
+        # as PR-new. Fail closed so the caller uses smoke-only.
         local ref="refs/e2e-diff-base/${target_branch}"
         if git -C "$PROJECT_ROOT" fetch --depth=50 "${upstream_url}" \
             "+refs/heads/${target_branch}:${ref}" >/dev/null 2>&1; then
@@ -225,6 +228,7 @@ _resolve_e2e_diff_base() {
                 return 0
             fi
         fi
+        return 1
     fi
     local cand
     for cand in "origin/${target_branch}" "origin/main" main; do
