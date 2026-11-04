@@ -41,6 +41,10 @@ jobs:
       - name: Install e2e requirements
         run: pip install --require-hashes --no-deps -r test/e2e/requirements-lock.txt
 
+      - name: Test e2e fixture helpers
+        working-directory: test/e2e
+        run: PYTHONPATH=tests python -m pytest -q unit/
+
       - name: Install oc
         env:
           # Collection only needs oc to exist; without a cluster "oc get crd" fails and the

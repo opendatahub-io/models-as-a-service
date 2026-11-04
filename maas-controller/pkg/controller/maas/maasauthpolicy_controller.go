@@ -461,22 +461,11 @@ const (
 // routing. selected_subscription_key prefers subscription-info.resolvedModel
 // (MaaSModelRef namespace/name from /subscriptions/select) when present.
 const (
-	celPathParts                  = `request.path.split("/").filter(x, x != "")`
-	celPathModelIdentityAvailable = `size(` + celPathParts + `) >= 2 && ` +
-		celPathParts + `[0] != "v1" && ` +
-		celPathParts + `[0] != "maas-api"`
-	celModelIdentityAvailable = `(` + celPathModelIdentityAvailable + ` || "x-gateway-model-name" in request.headers)`
-	celModelIdentity          = `(` + celPathModelIdentityAvailable +
-		` ? ` + celPathParts + `[0] + "/" + ` + celPathParts + `[1]` +
-		` : ("x-gateway-model-name" in request.headers` +
-		`   ? request.headers["x-gateway-model-name"]` +
-		`   : ""))`
+	celModelIdentityAvailable = tenantreconcile.CELModelIdentityAvailable
+	celModelIdentity          = tenantreconcile.CELModelIdentity
 	// Prefer MaaSModelRef identity resolved by subscription select (handles BBR
 	// publisher IDs). Fall back to path/header identity for path-based routing.
-	celResolvedModelIdentity = `(has(auth.metadata["subscription-info"].resolvedModel) && ` +
-		`auth.metadata["subscription-info"].resolvedModel != "" ` +
-		`? auth.metadata["subscription-info"].resolvedModel ` +
-		`: ` + celModelIdentity + `)`
+	celResolvedModelIdentity = tenantreconcile.CELAuthResolvedModelIdentity
 )
 
 // maasGatewayAuthPolicyName is the singleton AuthPolicy that targets the Gateway.
@@ -565,7 +554,6 @@ func (r *MaaSAuthPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	// Track missing models to include in status even when reconciliation skips them
 	missingModels := r.findMissingModelRefs(ctx, policy)
 
-	oidc := r.fetchOIDCConfig(ctx, log, req.Namespace)
 	tenantID, err := r.fetchTenantIdentifier(ctx, log, req.Namespace)
 	if err != nil {
 		return r.reconcileFailed(ctx, log, policy, fmt.Sprintf("Failed to resolve tenant identifier: %v", err), statusSnapshot, err)
@@ -620,7 +608,9 @@ func (r *MaaSAuthPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		}
 	}
 
-	gwChanged, reconcileErr := r.reconcileGatewayAuthPolicy(ctx, log, oidc, xAPIKeyEnabled, req.Namespace, tenantID, gatewayNs, gatewayName)
+	servingNamespace := r.gatewayServingNamespace(req.Namespace, tenantID, gatewayNs, gatewayName)
+	oidc := r.fetchOIDCConfig(ctx, log, servingNamespace)
+	gwChanged, reconcileErr := r.reconcileGatewayAuthPolicy(ctx, log, oidc, xAPIKeyEnabled, servingNamespace, tenantID, gatewayNs, gatewayName)
 	if reconcileErr != nil {
 		log.Error(reconcileErr, "failed to reconcile gateway AuthPolicy")
 		return r.reconcileFailed(ctx, log, policy, fmt.Sprintf("Failed to reconcile gateway AuthPolicy: %v", reconcileErr), statusSnapshot, reconcileErr)
@@ -1583,9 +1573,18 @@ func (r *MaaSAuthPolicyReconciler) reconcileGatewayAuthPolicy(
 	ctx context.Context, log logr.Logger,
 	oidc *oidcConfig, xAPIKeyEnabled bool, tenantNamespace, tenantID, gatewayNamespace, gatewayName string,
 ) (bool, error) {
-	headers, err := r.guardrailHeaders(ctx, tenantNamespace)
+	namespaces, unresolved, err := r.gatewayCatalogNamespaces(ctx, log, tenantNamespace, tenantID, gatewayNamespace, gatewayName)
 	if err != nil {
 		return false, err
+	}
+	headers, err := r.gatewayGuardrailHeaders(ctx, namespaces)
+	if err != nil {
+		return false, err
+	}
+	if unresolved && headers == nil {
+		// Excluded tenant configuration must not disable validation of selected
+		// checks when every remaining catalog is legacy/nil.
+		headers = []guardrailHeader{}
 	}
 	return r.reconcileGatewayAuthPolicyWithHeaders(
 		ctx, log, oidc, xAPIKeyEnabled, tenantNamespace, tenantID, gatewayNamespace, gatewayName, headers,
@@ -1615,8 +1614,15 @@ func (r *MaaSAuthPolicyReconciler) reconcileGatewayAuthPolicyWithHeaders(
 		subscriptionNamespace = "models-as-a-service"
 	}
 
+	namespaces, unresolved, headerErr := r.gatewayCatalogNamespaces(ctx, log, subscriptionNamespace, tenantID, gatewayNamespace, gatewayName)
+	if headerErr != nil {
+		return false, headerErr
+	}
+	if unresolved && guardrailHeaders == nil {
+		guardrailHeaders = []guardrailHeader{}
+	}
 	spec := r.buildGatewayAuthPolicySpec(oidc, xAPIKeyEnabled, tenantID, tenantName, gatewayNamespace, gatewayName, guardrailHeaders)
-	subscriptionHeaders, headerErr := r.subscriptionHeaderNames(ctx, subscriptionNamespace)
+	subscriptionHeaders, headerErr := r.gatewaySubscriptionHeaderNames(ctx, namespaces)
 	if headerErr != nil {
 		return false, headerErr
 	}
@@ -1938,15 +1944,26 @@ func (r *MaaSAuthPolicyReconciler) handleDeletion(ctx context.Context, log logr.
 					"gatewayNamespace", gatewayNs,
 					"gatewayName", gatewayName)
 			} else {
-				oidc := r.fetchOIDCConfig(ctx, log, policy.Namespace)
+				servingNamespace := r.gatewayServingNamespace(policy.Namespace, tenantID, gatewayNs, gatewayName)
+				oidc := r.fetchOIDCConfig(ctx, log, servingNamespace)
 				xAPIKeyEnabled := r.discoverXAPIKeyNeeded(ctx, log)
-				if _, err := r.reconcileGatewayAuthPolicyWithHeaders(
-					ctx, log, oidc, xAPIKeyEnabled, policy.Namespace, tenantID, gatewayNs, gatewayName, nil,
-				); err != nil {
-					log.Error(err, "failed to reset gateway auth to base version")
-					return ctrl.Result{}, err
+				namespaces, unresolved, catalogErr := r.gatewayCatalogNamespaces(ctx, log, servingNamespace, tenantID, gatewayNs, gatewayName)
+				if catalogErr != nil {
+					return ctrl.Result{}, catalogErr
 				}
-				log.Info("reset maas-gateway-auth to base version",
+				var resetErr error
+				if isDefaultGateway && (len(namespaces) > 1 || unresolved) {
+					// Other namespaces still serve through this policy. Recompute
+					// their validated catalog instead of dropping the guardrail rule.
+					_, resetErr = r.reconcileGatewayAuthPolicy(ctx, log, oidc, xAPIKeyEnabled, servingNamespace, tenantID, gatewayNs, gatewayName)
+				} else {
+					_, resetErr = r.reconcileGatewayAuthPolicyWithHeaders(ctx, log, oidc, xAPIKeyEnabled, servingNamespace, tenantID, gatewayNs, gatewayName, nil)
+				}
+				if resetErr != nil {
+					log.Error(resetErr, "failed to reconcile gateway auth after policy deletion")
+					return ctrl.Result{}, resetErr
+				}
+				log.Info("reconciled maas-gateway-auth after policy deletion",
 					"gatewayNamespace", gatewayNs, "gatewayName", gatewayName)
 			}
 		}
@@ -2470,13 +2487,23 @@ func (r *MaaSAuthPolicyReconciler) mapTenantToMaaSAuthPolicies(ctx context.Conte
 // mapNamespaceToMaaSAuthPolicies enqueues all MaaSAuthPolicy resources in a
 // namespace when that namespace's labels change (e.g. AITenant label added or removed).
 func (r *MaaSAuthPolicyReconciler) mapNamespaceToMaaSAuthPolicies(ctx context.Context, obj client.Object) []reconcile.Request {
-	return r.mapMaaSAuthPoliciesInNamespace(ctx, obj.GetName())
+	return r.mapGatewayCatalogPolicies(ctx, obj.GetName())
 }
 
 // mapObjectNamespaceToMaaSAuthPolicies enqueues policies in the namespace of a
 // catalog object such as MaasTenantConfig or MaaSSubscription.
 func (r *MaaSAuthPolicyReconciler) mapObjectNamespaceToMaaSAuthPolicies(ctx context.Context, obj client.Object) []reconcile.Request {
-	return r.mapMaaSAuthPoliciesInNamespace(ctx, obj.GetNamespace())
+	return r.mapGatewayCatalogPolicies(ctx, obj.GetNamespace())
+}
+
+func (r *MaaSAuthPolicyReconciler) mapGatewayCatalogPolicies(ctx context.Context, namespace string) []reconcile.Request {
+	requests := r.mapMaaSAuthPoliciesInNamespace(ctx, namespace)
+	if r.TenantNamespaceDiscoveryEnabled && r.TenantNamespace != "" && namespace != r.TenantNamespace {
+		// A removed discovery label or a namespace with subscriptions but no
+		// remaining policy must still refresh the shared gateway's catalog.
+		requests = append(requests, r.mapMaaSAuthPoliciesInNamespace(ctx, r.TenantNamespace)...)
+	}
+	return requests
 }
 
 func (r *MaaSAuthPolicyReconciler) mapMaaSAuthPoliciesInNamespace(ctx context.Context, ns string) []reconcile.Request {

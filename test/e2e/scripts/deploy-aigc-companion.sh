@@ -4,13 +4,13 @@
 # =============================================================================
 # Clone the AIGC checkout and run deploy-ai-gateway-controller.sh so praxis can own
 # payload-processing. Intended for direct invocation or from prow_run_smoke_test.sh when
-# AI_GATEWAY_CONTROLLER_IMAGE is non-empty (prow defaults to AIGC :latest).
+# AI_GATEWAY_CONTROLLER_IMAGE is non-empty (prow uses the draft qualification digest).
 #
 # Env:
 #   AI_GATEWAY_CONTROLLER_IMAGE  Manager image (required; e.g. quay.io/.../odh-ai-gateway-controller:odh-stable)
 #   AIGC_GIT_URL                 Default: opendatahub-io/ai-gateway-controller
-#   AIGC_GIT_REF                 Default: main
-#   PRAXIS_EXTPROC_IMAGE         Optional; AIGC script defaults to odh-stable
+#   AIGC_GIT_REF                 Default: draft qualification source, paired with prow's image
+#   PRAXIS_EXTPROC_IMAGE         Optional; defaults to the qualified runtime digest
 #   GATEWAY_NAMESPACE, GATEWAY_NAME, DEPLOYMENT_NAMESPACE
 # =============================================================================
 
@@ -28,8 +28,10 @@ if [[ -z "${AI_GATEWAY_CONTROLLER_IMAGE:-}" ]]; then
 fi
 export AI_GATEWAY_CONTROLLER_IMAGE
 AIGC_GIT_URL="${AIGC_GIT_URL:-https://github.com/opendatahub-io/ai-gateway-controller.git}"
-AIGC_GIT_REF="${AIGC_GIT_REF:-main}"
-export PRAXIS_EXTPROC_IMAGE="${PRAXIS_EXTPROC_IMAGE:-quay.io/opendatahub/odh-praxis-extproc:odh-stable}"
+# Temporary qualification dependency on ai-gateway-controller#210. Keep this PR
+# in draft until that fix merges; replace source and manager image pins together.
+AIGC_GIT_REF="${AIGC_GIT_REF:-146b599361c3aa32dad2b252bfd3af37e51d748b}"
+export PRAXIS_EXTPROC_IMAGE="${PRAXIS_EXTPROC_IMAGE:-quay.io/opendatahub/odh-praxis-extproc@sha256:8b7084478cc266b2373bbfb04190ed3ca6fe759428663bddbab63b9c3ad8f130}"
 export GATEWAY_NAMESPACE="${GATEWAY_NAMESPACE:-openshift-ingress}"
 export GATEWAY_NAME="${GATEWAY_NAME:-maas-default-gateway}"
 export DEPLOYMENT_NAMESPACE="${DEPLOYMENT_NAMESPACE:-opendatahub}"

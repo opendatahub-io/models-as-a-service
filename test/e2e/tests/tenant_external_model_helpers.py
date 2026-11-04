@@ -107,6 +107,7 @@ from external_model_helpers import (  # noqa: F401 - re-exported contract
     patch_external_model_gateway_refs,
     patch_external_model_provider_refs,
     provider_external_name_service,
+    wait_for_external_processor_ready,
 )
 from multitenancy_helpers import (
     ANNOTATION_PAYLOAD_PROCESSING_TYPE,
@@ -1262,6 +1263,7 @@ def serve_external_model_in_tenant(
             require_model_ready=wait_model_ready,
             model_ready_timeout=timeout,
         )
+        wait_for_external_processor_ready(tenant_namespace, case["tenant_label_name"])
         api_key = mint_tenant_api_key(
             case,
             key_name or f"e2e-extmod-{uuid.uuid4().hex[:8]}",

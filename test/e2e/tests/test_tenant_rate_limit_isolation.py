@@ -29,6 +29,7 @@ from test_helper import (
     _get_cluster_token,
     _delete_cr,
     _poll_status,
+    _request_with_gateway_retry,
     _wait_for_subscription_trlp_status,
 )
 
@@ -174,14 +175,21 @@ def _gateway_base_from_api_url(api_base_url: str) -> str:
     return stripped
 
 
-def _inference_at(api_base_url: str, api_key: str, model_path: str, backend_model_name: str) -> requests.Response:
+def _inference_at(
+    api_base_url: str, api_key: str, model_path: str, backend_model_name: str,
+    *, deadline: float | None = None,
+) -> requests.Response:
     url = f"{_gateway_base_from_api_url(api_base_url)}{model_path}/v1/completions"
-    return requests.post(
+    return _request_with_gateway_retry(
+        requests.post,
         url,
         headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
         json={"model": backend_model_name, "prompt": "Hello", "max_tokens": 1},
         timeout=TIMEOUT,
         verify=TLS_VERIFY,
+        deadline=deadline,
+        auth_denial_is_transient=False,
+        wait_for_default_gateway_enforcement=False,
     )
 
 
@@ -204,7 +212,9 @@ def _exhaust_until_429(
     last = None
     deadline = time.time() + timeout
     while time.time() < deadline:
-        last = _inference_at(api_base_url, api_key, model_path, backend_model_name)
+        # Proxy reloads must not abort quota measurement. Keep retries inside
+        # this existing budget; only a 429 after successful serving is exhaustion.
+        last = _inference_at(api_base_url, api_key, model_path, backend_model_name, deadline=deadline)
         if last.status_code == 200:
             successes += 1
         elif last.status_code == 429:

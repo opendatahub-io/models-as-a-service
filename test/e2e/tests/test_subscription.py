@@ -633,8 +633,9 @@ class TestSubscriptionEnforcement:
         model_path = UNCONFIGURED_MODEL_PATH
 
         # Create unique subscription and auth policy names
-        auth_policy_name = "e2e-rate-limit-test-auth"
-        subscription_name = "e2e-rate-limit-test-subscription"
+        suffix = uuid.uuid4().hex[:8]
+        auth_policy_name = f"e2e-rate-limit-test-auth-{suffix}"
+        subscription_name = f"e2e-rate-limit-test-subscription-{suffix}"
 
         # Low limit so we exhaust it quickly. Actual tokens consumed per
         # response are non-deterministic (max_tokens is a ceiling, not exact),
@@ -675,14 +676,22 @@ class TestSubscriptionEnforcement:
                 subscription=subscription_name,
             )
 
+            # Policy status can precede replacement of the gateway's zero-token
+            # default deny. Establish serving first, with the same one-token
+            # request used below, and count that success toward exhaustion.
+            _poll_status(
+                api_key, 200, path=model_path,
+                inference_fn=lambda key, **kwargs: _inference(key, max_tokens=1, **kwargs),
+            )
+
             # 4. Send requests to exhaust the limit. Past the planned count keep
             # going until the enforcement deadline: the limiter can trail the
             # policy status, and this test asserts a 429, not a status field.
             rate_limited = False
-            success_count = 0
+            success_count = 1
             deadline = time.time() + RATE_LIMIT_ENFORCEMENT_TIMEOUT
 
-            request_num = 0
+            request_num = 1
             while request_num < total_requests or time.time() < deadline:
                 request_num += 1
                 r = _inference(api_key, path=model_path, max_tokens=1)

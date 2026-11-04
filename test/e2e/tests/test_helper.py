@@ -50,6 +50,7 @@ Environment variables (all optional unless noted):
   - E2E_GATEWAY_ENFORCED_MISSING_GRACE: Fail early if AuthPolicy CR absent this long (default: 30)
   - E2E_AUTHPOLICY_PHASE_TIMEOUT: MaaSAuthPolicy phase wait (default: 120)
   - E2E_MAAS_SUBSCRIPTION_PHASE_TIMEOUT: MaaSSubscription phase wait (default: 120)
+  - E2E_AITENANT_BOOTSTRAP_TIMEOUT: New tenant platform bootstrap wait (default: 300)
   - E2E_SUBSCRIPTION_INFERENCE_READY_TIMEOUT: Discovery + direct/mirrored TRLP wait (default: 300)
   - E2E_SUBSCRIPTION_TRLP_TIMEOUT: MaaSSubscription mirrored TRLP ready wait (default: 180)
   - E2E_REQUIRE_TRLP_ENFORCED: Gate TRLP waits on Kuadrant Enforced=True (default: false;
@@ -104,6 +105,7 @@ GATEWAY_ENFORCED_MISSING_GRACE = int(os.environ.get("E2E_GATEWAY_ENFORCED_MISSIN
 # Controller reconcile under pytest-xdist load; 120s matches parallel CI (run_e2e_tests.sh).
 AUTHPOLICY_PHASE_TIMEOUT = int(os.environ.get("E2E_AUTHPOLICY_PHASE_TIMEOUT", "120"))
 MAAS_SUBSCRIPTION_PHASE_TIMEOUT = int(os.environ.get("E2E_MAAS_SUBSCRIPTION_PHASE_TIMEOUT", "120"))
+AITENANT_BOOTSTRAP_TIMEOUT = int(os.environ.get("E2E_AITENANT_BOOTSTRAP_TIMEOUT", "300"))
 # Parallel group-test can backlog Kuadrant TRLP reconciliation; 180s flaked on worker tenants.
 SUBSCRIPTION_INFERENCE_READY_TIMEOUT = int(
     os.environ.get("E2E_SUBSCRIPTION_INFERENCE_READY_TIMEOUT", "300")
@@ -702,7 +704,10 @@ def _is_connect_failure(exc: requests.exceptions.ConnectionError) -> bool:
     return isinstance(reason, NewConnectionError)
 
 
-def _request_with_gateway_retry(method, url, retries=None, delay=None, deadline=None, **kwargs):
+def _request_with_gateway_retry(
+    method, url, retries=None, delay=None, deadline=None,
+    *, wait_for_default_gateway_enforcement=True, **kwargs,
+):
     """Make an HTTP request, retrying transient gateway/auth propagation errors.
 
     See ``_is_transient_gateway_response`` for retryable status/body patterns.
@@ -715,6 +720,9 @@ def _request_with_gateway_retry(method, url, retries=None, delay=None, deadline=
     When ``deadline`` is set (Unix timestamp), each request timeout, retry delay,
     and gateway-enforcement wait is clamped to the remaining time so polling loops
     cannot exceed their outer deadline.
+
+    Tenant-local probes can disable the default gateway's enforcement wait;
+    their readiness is scoped to their own gateway and response assertions.
 
     Returns the last response — callers' assertions surface a permanent failure.
     Raises:
@@ -773,7 +781,7 @@ def _request_with_gateway_retry(method, url, retries=None, delay=None, deadline=
             )
             # After the first proxy-style 500/503, re-check AuthPolicy Enforced
             # so remaining attempts are less likely to hit a mid-reload window.
-            if r.status_code in (500, 502, 503) and attempt == 1:
+            if wait_for_default_gateway_enforcement and r.status_code in (500, 502, 503) and attempt == 1:
                 enforcement_timeout = min(60, GATEWAY_ENFORCED_TIMEOUT)
                 if deadline is not None:
                     enforcement_timeout = min(

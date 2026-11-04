@@ -46,6 +46,7 @@ from test_helper import (
     _delete_governance_and_wait,
     _gateway_url,
     _ns,
+    _request_with_gateway_retry,
     _sa_to_user,
     _wait_for_gateway_auth_enforced,
     _wait_for_model_ready,
@@ -81,7 +82,10 @@ def _echo_completion(api_key: str, prompt: str, max_tokens: int = 16) -> request
     Chat rather than text completions: echo mode mirrors the last *user message*,
     which only exists on the chat endpoint.
     """
-    return requests.post(
+    # Use the existing bounded gateway propagation handling. The caller still
+    # requires HTTP 200 and byte-exact echo content after any proxy retry.
+    return _request_with_gateway_retry(
+        requests.post,
         f"{_gateway_url()}{ECHO_MODEL_PATH}/v1/chat/completions",
         headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
         json={
@@ -91,6 +95,7 @@ def _echo_completion(api_key: str, prompt: str, max_tokens: int = 16) -> request
         },
         timeout=TIMEOUT,
         verify=TLS_VERIFY,
+        auth_denial_is_transient=False,
     )
 
 
