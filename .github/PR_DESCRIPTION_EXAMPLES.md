@@ -61,7 +61,7 @@ The odh-dashboard BFF drops `unlimited` when it rewrites a subscription, so it n
 - Rating: 4
 - Why: new rate-less TRLP shape whose data-plane behaviour only e2e exercises, plus a dashboard dependency.
 
-/area subscriptions api-contract
+/area subscriptions
 ~~~
 
 ## Feature with an example

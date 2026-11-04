@@ -4,6 +4,7 @@
 # caps it at 100 characters.
 #
 # Set an area/* label with `/area <name>` in the PR description or a comment.
+# Prow sets changes/* labels from the `labels` in OWNERS files.
 #
 # Prow labels (approved, lgtm, needs-*, do-not-merge/*, tide/*, jira/*, lifecycle/*)
 # are not listed because Prow owns them. The sync runs with skip-delete, so a label
@@ -50,13 +51,16 @@
   color: "bfdadc"
   description: "Only when no feature area fits: maas-api plumbing such as server, middleware, health"
 
-# Review flags
-- name: area/api-contract
+# Review flags, set by Prow from OWNERS files
+- name: changes/api-contract
   color: "d93f0b"
   description: "Changes CRD types or the OpenAPI spec"
-- name: area/rbac
+- name: changes/rbac
   color: "d93f0b"
   description: "Changes RBAC manifests. Controller RBAC needs parent operator PRs, see AGENTS.md"
+- name: needs-area
+  color: "fbca04"
+  description: "No area/* label yet. Add one with an /area <name> comment"
 
 # Delivery
 - name: area/deployment
