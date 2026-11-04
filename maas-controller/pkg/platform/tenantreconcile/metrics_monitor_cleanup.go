@@ -30,8 +30,9 @@ func hasRenderedControllerMetricsMonitor(resources []unstructured.Unstructured, 
 
 // cleanupLegacyControllerMetricsMonitor removes the old bootstrap monitor only
 // after the default tenant has established its replacement and token Secret.
-// Bootstrap kubectl apply gave the old monitor no owner reference, so its legacy
-// labels and scrape configuration are the ownership evidence in that case.
+// Bootstrap kubectl apply gave the old monitor no owner reference. Older ODH
+// installs may instead attach their AIGateway owner. In either case, verify the
+// legacy scrape configuration before deleting the controller's old monitor.
 func cleanupLegacyControllerMetricsMonitor(ctx context.Context, c client.Client, reader client.Reader,
 	configUID types.UID, appNamespace, controllerNamespace, tenantID string, log logr.Logger) (string, error) {
 	if tenantID != "" || appNamespace == controllerNamespace || controllerNamespace == "" {
@@ -46,7 +47,7 @@ func cleanupLegacyControllerMetricsMonitor(ctx context.Context, c client.Client,
 		return "", fmt.Errorf("get old ServiceMonitor: %w", err)
 	}
 	if !isLegacyControllerMetricsMonitor(old, configUID) {
-		log.V(1).Info("Preserving controller-namespace ServiceMonitor without legacy MaaS ownership",
+		log.V(1).Info("Preserving controller-namespace ServiceMonitor without known legacy MaaS scrape configuration",
 			"namespace", controllerNamespace, "name", old.GetName())
 		return "", nil
 	}
@@ -88,24 +89,52 @@ func cleanupLegacyControllerMetricsMonitor(ctx context.Context, c client.Client,
 }
 
 func isLegacyControllerMetricsMonitor(monitor *unstructured.Unstructured, configUID types.UID) bool {
-	labels := monitor.GetLabels()
-	if labels["app"] != "maas-controller" || labels["monitoring.opendatahub.io/scrape"] != "true" ||
-		labels["app.kubernetes.io/name"] != "maas-controller" ||
-		labels["app.kubernetes.io/component"] != "models-as-a-service" ||
-		labels["app.kubernetes.io/part-of"] != "models-as-a-service" {
+	if monitor.GetName() != controllerMetricsMonitorName {
 		return false
 	}
-	for _, owner := range monitor.GetOwnerReferences() {
-		if owner.Kind != "Config" || owner.UID != configUID {
+	labels := monitor.GetLabels()
+	if labels["app"] != "maas-controller" || labels["monitoring.opendatahub.io/scrape"] != "true" {
+		return false
+	}
+	owners := monitor.GetOwnerReferences()
+	switch labels["app.kubernetes.io/part-of"] {
+	case "models-as-a-service":
+		if labels["app.kubernetes.io/name"] != "maas-controller" ||
+			labels["app.kubernetes.io/component"] != "models-as-a-service" {
 			return false
 		}
+		for _, owner := range owners {
+			if owner.Kind != "Config" || owner.UID != configUID {
+				return false
+			}
+		}
+	case "aigateway":
+		if len(owners) != 1 || owners[0].Kind != "AIGateway" || owners[0].Name != "default-aigateway" ||
+			owners[0].UID == "" || owners[0].APIVersion != "components.platform.opendatahub.io/v1alpha1" {
+			return false
+		}
+		// AIGateway owns other monitors too. Only retire its old MaaS controller
+		// scrape, identified by the service selector and HTTPS endpoint below.
+		selector, found, err := unstructured.NestedStringMap(monitor.Object, "spec", "selector", "matchLabels")
+		if err != nil || !found || len(selector) != 2 || selector["app"] != "maas-controller" ||
+			selector["control-plane"] != "maas-controller" {
+			return false
+		}
+	default:
+		return false
 	}
 	endpoints, found, err := unstructured.NestedSlice(monitor.Object, "spec", "endpoints")
 	if err != nil || !found || len(endpoints) != 1 {
 		return false
 	}
 	endpoint, ok := endpoints[0].(map[string]any)
-	return ok && endpoint["bearerTokenFile"] == legacyMetricsBearerTokenFile && endpoint["port"] == "metrics"
+	if !ok || endpoint["bearerTokenFile"] != legacyMetricsBearerTokenFile || endpoint["port"] != "metrics" {
+		return false
+	}
+	if labels["app.kubernetes.io/part-of"] == "aigateway" {
+		return endpoint["path"] == "/metrics" && endpoint["scheme"] == "https"
+	}
+	return true
 }
 
 func isReadyControllerMetricsReplacement(monitor *unstructured.Unstructured, configUID types.UID, controllerNamespace string) bool {

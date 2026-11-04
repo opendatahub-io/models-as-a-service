@@ -36,6 +36,25 @@ func legacyControllerMonitor() *unstructured.Unstructured {
 	return m
 }
 
+func aigatewayOwnedLegacyControllerMonitor() *unstructured.Unstructured {
+	m := legacyControllerMonitor()
+	labels := m.GetLabels()
+	labels["app.kubernetes.io/part-of"] = "aigateway"
+	delete(labels, "app.kubernetes.io/name")
+	delete(labels, "app.kubernetes.io/component")
+	m.SetLabels(labels)
+	m.SetOwnerReferences([]metav1.OwnerReference{{
+		APIVersion: "components.platform.opendatahub.io/v1alpha1", Kind: "AIGateway",
+		Name: "default-aigateway", UID: "aigateway-uid",
+	}})
+	m.Object["spec"].(map[string]any)["selector"] = map[string]any{
+		"matchLabels": map[string]any{"app": "maas-controller", "control-plane": "maas-controller"},
+	}
+	m.Object["spec"].(map[string]any)["endpoints"].([]any)[0].(map[string]any)["path"] = "/metrics"
+	m.Object["spec"].(map[string]any)["endpoints"].([]any)[0].(map[string]any)["scheme"] = "https"
+	return m
+}
+
 func replacementControllerMonitor() *unstructured.Unstructured {
 	m := &unstructured.Unstructured{Object: map[string]any{
 		"spec": map[string]any{
@@ -154,4 +173,76 @@ func TestCleanupLegacyControllerMetricsMonitorRequiresOwnedReplacement(t *testin
 	pending, err = runMonitorCleanup(c, "team")
 	require.NoError(t, err)
 	assert.Empty(t, pending, "other tenants cannot retire the shared monitor")
+}
+
+func TestCleanupLegacyControllerMetricsMonitorRetiresAIGatewayOwnedMaaSScrape(t *testing.T) {
+	old := aigatewayOwnedLegacyControllerMonitor()
+	token := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{
+		Name: metricsScraperTokenName, Namespace: "app-ns", OwnerReferences: []metav1.OwnerReference{legacyMetricsOwner()},
+		Annotations: map[string]string{corev1.ServiceAccountNameKey: "maas-metrics-scraper"},
+	}, Type: corev1.SecretTypeServiceAccountToken, Data: map[string][]byte{corev1.ServiceAccountTokenKey: []byte("issued-token")}}
+	c := monitorCleanupClient(t, old)
+	pending, err := runMonitorCleanup(c, "")
+	require.NoError(t, err)
+	assert.NotEmpty(t, pending, "wait for the replacement before deleting an AIGateway-owned monitor")
+	require.NoError(t, c.Get(context.Background(), client.ObjectKeyFromObject(old), legacyControllerMonitor()))
+	require.NoError(t, c.Create(context.Background(), replacementControllerMonitor()))
+	require.NoError(t, c.Create(context.Background(), token))
+	pending, err = runMonitorCleanup(c, "")
+	require.NoError(t, err)
+	assert.Empty(t, pending)
+	err = c.Get(context.Background(), client.ObjectKeyFromObject(old), legacyControllerMonitor())
+	assert.True(t, apierrors.IsNotFound(err), "legacy AIGateway-owned monitor should be deleted: %v", err)
+}
+
+func TestCleanupLegacyControllerMetricsMonitorPreservesOtherAIGatewayResources(t *testing.T) {
+	cases := map[string]func(*unstructured.Unstructured){
+		"scrape label absent": func(m *unstructured.Unstructured) {
+			labels := m.GetLabels()
+			delete(labels, "monitoring.opendatahub.io/scrape")
+			m.SetLabels(labels)
+		},
+		"other owner": func(m *unstructured.Unstructured) {
+			owners := m.GetOwnerReferences()
+			owners[0].Name = "other-aigateway"
+			m.SetOwnerReferences(owners)
+		},
+		"other owner group": func(m *unstructured.Unstructured) {
+			owners := m.GetOwnerReferences()
+			owners[0].APIVersion = "other.example.com/v1alpha1"
+			m.SetOwnerReferences(owners)
+		},
+		"missing owner UID": func(m *unstructured.Unstructured) {
+			owners := m.GetOwnerReferences()
+			owners[0].UID = ""
+			m.SetOwnerReferences(owners)
+		},
+		"additional owner": func(m *unstructured.Unstructured) {
+			m.SetOwnerReferences(append(m.GetOwnerReferences(), legacyMetricsOwner()))
+		},
+		"other service selector": func(m *unstructured.Unstructured) {
+			m.Object["spec"].(map[string]any)["selector"].(map[string]any)["matchLabels"].(map[string]any)["app"] = "other"
+		},
+		"other endpoint path": func(m *unstructured.Unstructured) {
+			m.Object["spec"].(map[string]any)["endpoints"].([]any)[0].(map[string]any)["path"] = "/other"
+		},
+		"other endpoint scheme": func(m *unstructured.Unstructured) {
+			m.Object["spec"].(map[string]any)["endpoints"].([]any)[0].(map[string]any)["scheme"] = "http"
+		},
+		"new credentials": func(m *unstructured.Unstructured) {
+			delete(m.Object["spec"].(map[string]any)["endpoints"].([]any)[0].(map[string]any), "bearerTokenFile")
+		},
+	}
+	for name, mutate := range cases {
+		t.Run(name, func(t *testing.T) {
+			old := aigatewayOwnedLegacyControllerMonitor()
+			mutate(old)
+			assert.False(t, isLegacyControllerMetricsMonitor(old, metricsTestConfigUID))
+			c := monitorCleanupClient(t, old, replacementControllerMonitor())
+			pending, err := runMonitorCleanup(c, "")
+			require.NoError(t, err)
+			assert.Empty(t, pending)
+			require.NoError(t, c.Get(context.Background(), client.ObjectKeyFromObject(old), legacyControllerMonitor()))
+		})
+	}
 }
