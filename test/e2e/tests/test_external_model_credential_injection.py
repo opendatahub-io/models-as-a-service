@@ -192,6 +192,7 @@ class TestAzureCredentialInjection:
             azure_model["api_key"],
             path_tag=azure_model["path_tag"],
             content="azure credential injection e2e",
+            readiness_timeout=READY_TIMEOUT,
         )
         assert response.status_code == 200, (
             f"expected 200 from the echo upstream, got {response.status_code}: {redact_sensitive(response.text)}"
