@@ -2821,6 +2821,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#smoke-subset-pytestmarksmoke" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Smoke subset (@pytest.mark.smoke)
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -3535,6 +3546,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#smoke-subset-pytestmarksmoke" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Smoke subset (@pytest.mark.smoke)
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -3882,6 +3904,12 @@
 </code></pre></div>
 <h3 id="e2e-test-modules-and-groups">E2E Test Modules and Groups</h3>
 <p>Tests are organized into <strong>xdist groups</strong> for parallel execution. All tests in a group run on the same pytest-xdist worker, and a worker takes the next queued group when it finishes one. See <a href="#parallel-e2e-pytest-xdist">Parallel E2E</a> for details on how groups work.</p>
+<h3 id="smoke-subset-pytestmarksmoke">Smoke subset (<code>@pytest.mark.smoke</code>)</h3>
+<p><code>/group-test</code> sets <strong><code>E2E_SMOKE_ONLY=true</code></strong> (via <code>.tekton/maas-group-test.yaml</code> podTemplate env), so PR passes 1–2 only collect tests marked <code>smoke</code>. That subset prioritizes basic API/gateway coverage, a light cross-slice of tenant/security/network checks, and the AGC external-model happy paths (default-tenant implicit attachment + user-namespace <code>gatewayRefs</code> serving). Heavier multi-tenant lifecycle, shared-model/conflict/lifecycle external-model suites, and serial mutators stay off the smoke path. <code>prow_run_smoke_test.sh</code> defaults to the <strong>full suite</strong> when the env var is unset, so nightly and other callers still cover tests marked neither <code>smoke</code> nor <code>nightly</code>.</p>
+<ul>
+<li>Local smoke subset: <code>./test/e2e/scripts/run_e2e_tests.sh --smoke-only</code> (or <code>E2E_SMOKE_ONLY=true</code>)</li>
+<li>Add new PR-critical coverage by marking individual tests/classes/modules with <code>@pytest.mark.smoke</code> (prefer read-only or shared-fixture paths over new AuthPolicy/AITenant churn)</li>
+</ul>
 <table>
 <thead>
 <tr>
@@ -4307,7 +4335,7 @@ does not identify the model route. SSE parsing is centralized in
 </tr>
 </tbody>
 </table>
-<p>Konflux provisions a fresh cluster, deploys ODH + MaaS with the PR's built images, and runs <code>test/e2e/scripts/prow_run_smoke_test.sh</code>. Nightly builds use the same script against the latest <code>main</code> images — there is no separate nightly test suite.</p>
+<p>Konflux provisions a fresh cluster, deploys ODH + MaaS with the PR's built images, and runs <code>test/e2e/scripts/prow_run_smoke_test.sh</code>. <code>/group-test</code> opts into the smoke-marked subset (<code>E2E_SMOKE_ONLY=true</code>; see <a href="#smoke-subset-pytestmarksmoke">Smoke subset</a>). Nightly builds use the same script without that flag (full passes 1–2); extended <code>@pytest.mark.nightly</code> coverage still requires <code>MAAS_PYTEST_INCLUDE_NIGHTLY=true</code> / OIDC jobs.</p>
 <h3 id="deploy-phase-timings-and-fail-fast">Deploy phase timings and fail-fast</h3>
 <p><code>/group-test</code> is sequential: cluster provision → <strong>deploy + validate</strong> → pytest. <code>prow_run_smoke_test.sh</code> writes UTC start/end stamps for <code>deploy_platform</code>, <code>deploy_models</code>, <code>validate</code>, <code>pytest_pass1</code>, and <code>pytest_pass2</code> to <strong><code>phase-timings.txt</code></strong>.</p>
 <table>
@@ -4398,7 +4426,7 @@ does not identify the model route. SSE parsing is centralized in
 <p><strong>Add test resources if needed</strong> — if your feature requires new MaaS CRs (models, subscriptions, auth policies), add a kustomize overlay under <code>test/e2e/fixtures/</code> and include it in the base <code>kustomization.yaml</code>.</p>
 </li>
 <li>
-<p><strong>Use pytest discovery for CI</strong> — <code>run_e2e_tests.sh</code> collects every <code>test_*.py</code> module under <code>test/e2e/tests/</code>. New modules do not need a separate CI registration step. Give the module an appropriate <code>xdist_group</code> marker and mark cluster-wide mutations as <code>serial</code>.</p>
+<p><strong>Use pytest discovery for CI</strong> — <code>run_e2e_tests.sh</code> collects every <code>test_*.py</code> module under <code>test/e2e/tests/</code>. New modules do not need a separate CI registration step. Give the module an appropriate <code>xdist_group</code> marker and mark cluster-wide mutations as <code>serial</code>. Mark PR-critical low-churn coverage with <code>@pytest.mark.smoke</code> so <code>/group-test</code> picks it up (<code>E2E_SMOKE_ONLY=true</code>).</p>
 </li>
 <li>
 <p><strong>Use skip markers for optional features</strong> — if your test depends on optional infrastructure (e.g., external OIDC, IPP ExternalModel CRD), gate it with <code>pytest.mark.skipif</code> so the same module runs cleanly in all environments.</p>
@@ -4489,6 +4517,7 @@ does not identify the model route. SSE parsing is centralized in
 <li class="task-list-item"><input type="checkbox"/> <strong>Unit test</strong>: Add <code>*_test.go</code> alongside your source in <code>maas-api/</code> or <code>maas-controller/</code>; run <code>make test</code></li>
 <li class="task-list-item"><input type="checkbox"/> <strong>E2E test</strong>: Add to an existing <code>test_*.py</code> or create a new module in <code>test/e2e/tests/</code></li>
 <li class="task-list-item"><input type="checkbox"/> <strong>xdist group</strong>: Ensure the test file has a <code>pytestmark = pytest.mark.xdist_group("group_name")</code> marker (see <a href="#group-assignment-rules">group assignment rules</a>)</li>
+<li class="task-list-item"><input type="checkbox"/> <strong>Smoke marker</strong>: Add <code>@pytest.mark.smoke</code> only for low-churn PR coverage that should run under <code>E2E_SMOKE_ONLY</code> (avoid AuthPolicy/AITenant create/delete storms)</li>
 <li class="task-list-item"><input type="checkbox"/> <strong>Serial marker</strong>: Add <code>@pytest.mark.serial</code> if the test mutates shared fixtures or scales operators</li>
 <li class="task-list-item"><input type="checkbox"/> <strong>Test fixtures</strong>: If new CRs are needed, add a kustomize overlay in <code>test/e2e/fixtures/</code></li>
 <li class="task-list-item"><input type="checkbox"/> <strong>Pytest discovery</strong>: Confirm the new module follows the <code>test_*.py</code> naming convention and is collected with <code>pytest tests/ --collect-only -q</code></li>
@@ -4518,7 +4547,7 @@ does not identify the model route. SSE parsing is centralized in
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="October 31, 2026 02:39:08 UTC">October 31, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="November 4, 2026 00:20:44 UTC">November 4, 2026</span>
   </span>
 
     
