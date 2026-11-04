@@ -202,8 +202,8 @@ func RunPlatformWithReader(
 			KuadrantDetectionWarning: params.KuadrantDetectionWarning}, nil
 	}
 	// Previous releases bound the scraper token to a cluster-wide /metrics
-	// ClusterRole. Retire each Config-owned binding only after its tenant's API
-	// rollout has finished; omitting it from the rendered set does not prune it.
+	// ClusterRole. Retire this tenant's binding after its API rollout, and stale
+	// bindings for tenants that no longer exist. Apply does not prune them.
 	metricsRolloutPending, err := cleanupLegacyMetricsScraperRBAC(ctx, c, apiReader, mcfg.UID, appNs, tenantID, log)
 	if err != nil {
 		return nil, fmt.Errorf("cleanup legacy metrics scraper RBAC: %w", err)
@@ -237,28 +237,34 @@ func cleanupLegacyMetricsScraperRBAC(ctx context.Context, c client.Client, reade
 		return "", fmt.Errorf("list legacy metrics ClusterRoleBindings: %w", err)
 	}
 	var currentPending string
-	remainingBindings := false
+	remainingOwnedBindings := false
 	for i := range bindings.Items {
 		binding := &bindings.Items[i]
 		if binding.RoleRef.Kind != "ClusterRole" || binding.RoleRef.Name != "maas-metrics-scraper" {
 			continue
 		}
 		if !isOwnedByConfigUID(binding, configUID) {
-			remainingBindings = true
 			continue
 		}
 		bindingTenantID, known := legacyMetricsBindingTenantID(binding.Name)
 		if !known {
-			remainingBindings = true
 			log.V(1).Info("Skipping legacy metrics binding with unknown tenant name", "name", binding.Name)
 			continue
 		}
-		ready, detail, err := maasAPIMetricsRolloutComplete(ctx, reader, appNamespace, bindingTenantID)
+		ready, absent, detail, err := maasAPIMetricsRolloutComplete(ctx, reader, appNamespace, bindingTenantID)
 		if err != nil {
 			return "", fmt.Errorf("check API rollout for ClusterRoleBinding %s: %w", binding.Name, err)
 		}
-		if !ready {
-			remainingBindings = true
+		retire := bindingTenantID == currentTenantID && ready
+		if !retire && absent && bindingTenantID != currentTenantID {
+			exists, err := legacyMetricsTenantExists(ctx, reader, bindingTenantID)
+			if err != nil {
+				return "", fmt.Errorf("check tenant for ClusterRoleBinding %s: %w", binding.Name, err)
+			}
+			retire = !exists
+		}
+		if !retire {
+			remainingOwnedBindings = true
 			if bindingTenantID == currentTenantID {
 				currentPending = detail
 			}
@@ -281,18 +287,20 @@ func cleanupLegacyMetricsScraperRBAC(ctx context.Context, c client.Client, reade
 		}
 		return "", fmt.Errorf("get legacy metrics ClusterRole: %w", err)
 	}
-	if remainingBindings {
+	if remainingOwnedBindings {
 		return currentPending, nil
 	}
-	// Re-read after deletes: a binding with a finalizer or a concurrent new
-	// binding must keep the shared role until that dependency is gone.
+	// A foreign binding cannot keep the obsolete Config-owned grant alive. Re-read
+	// after deletes so a still-terminating MaaS binding keeps the role until gone.
 	var remaining rbacv1.ClusterRoleBindingList
 	if err := reader.List(ctx, &remaining); err != nil {
 		return "", fmt.Errorf("verify legacy metrics ClusterRoleBindings retired: %w", err)
 	}
 	for i := range remaining.Items {
 		binding := &remaining.Items[i]
-		if binding.RoleRef.Kind == "ClusterRole" && binding.RoleRef.Name == role.Name {
+		_, known := legacyMetricsBindingTenantID(binding.Name)
+		if binding.RoleRef.Kind == "ClusterRole" && binding.RoleRef.Name == role.Name &&
+			isOwnedByConfigUID(binding, configUID) && known {
 			return currentPending, nil
 		}
 	}
@@ -324,14 +332,14 @@ func legacyMetricsBindingTenantID(bindingName string) (string, bool) {
 
 // maasAPIMetricsRolloutComplete is stricter than MaaSAPIDeploymentReady: the
 // latter can count old pods as available while replacement pods are updating.
-func maasAPIMetricsRolloutComplete(ctx context.Context, reader client.Reader, appNamespace, tenantID string) (bool, string, error) {
+func maasAPIMetricsRolloutComplete(ctx context.Context, reader client.Reader, appNamespace, tenantID string) (bool, bool, string, error) {
 	dep := &appsv1.Deployment{}
 	name := MaaSAPIDeploymentName(tenantID)
 	if err := reader.Get(ctx, types.NamespacedName{Namespace: appNamespace, Name: name}, dep); err != nil {
 		if apierrors.IsNotFound(err) {
-			return false, fmt.Sprintf("waiting for deployment %s/%s", appNamespace, name), nil
+			return false, true, fmt.Sprintf("waiting for deployment %s/%s", appNamespace, name), nil
 		}
-		return false, "", err
+		return false, false, "", err
 	}
 	desired := int32(1)
 	if dep.Spec.Replicas != nil {
@@ -340,9 +348,45 @@ func maasAPIMetricsRolloutComplete(ctx context.Context, reader client.Reader, ap
 	if dep.Status.ObservedGeneration < dep.Generation ||
 		dep.Status.Replicas != desired || dep.Status.UpdatedReplicas != desired ||
 		dep.Status.ReadyReplicas != desired || dep.Status.AvailableReplicas != desired {
-		return false, fmt.Sprintf("waiting for %s/%s rollout to finish before retiring legacy metrics RBAC", appNamespace, name), nil
+		return false, false, fmt.Sprintf("waiting for %s/%s rollout to finish before retiring legacy metrics RBAC", appNamespace, name), nil
 	}
-	return true, "", nil
+	return true, false, "", nil
+}
+
+// legacyMetricsTenantExists guards deletion of an orphaned binding when its
+// Deployment is absent. An active tenant can recreate that Deployment later.
+func legacyMetricsTenantExists(ctx context.Context, reader client.Reader, tenantID string) (bool, error) {
+	var aitenants maasv1alpha1.AITenantList
+	if err := reader.List(ctx, &aitenants); err != nil {
+		return false, fmt.Errorf("list AITenants: %w", err)
+	}
+	for i := range aitenants.Items {
+		name := aitenants.Items[i].Name
+		if name == tenantID || (tenantID == "" && name == DefaultAITenantName) {
+			return true, nil
+		}
+	}
+	var configs maasv1alpha1.MaasTenantConfigList
+	if err := reader.List(ctx, &configs); err != nil {
+		return false, fmt.Errorf("list MaasTenantConfigs: %w", err)
+	}
+	for i := range configs.Items {
+		id, err := TenantIdentifierFor(&configs.Items[i])
+		if err != nil {
+			return false, fmt.Errorf("resolve MaasTenantConfig %s/%s: %w", configs.Items[i].Namespace, configs.Items[i].Name, err)
+		}
+		if id == tenantID {
+			return true, nil
+		}
+	}
+	if tenantID == "" {
+		var tenants maasv1alpha1.TenantList
+		if err := reader.List(ctx, &tenants); err != nil {
+			return false, fmt.Errorf("list legacy Tenants: %w", err)
+		}
+		return len(tenants.Items) > 0, nil
+	}
+	return false, nil
 }
 
 func isOwnedByConfigUID(obj client.Object, configUID types.UID) bool {

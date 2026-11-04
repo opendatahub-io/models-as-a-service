@@ -15,6 +15,8 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+
+	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 )
 
 const metricsTestConfigUID = types.UID("config-uid")
@@ -56,6 +58,7 @@ func metricsRBACClient(t *testing.T, objects ...client.Object) client.Client {
 	scheme := runtime.NewScheme()
 	require.NoError(t, appsv1.AddToScheme(scheme))
 	require.NoError(t, rbacv1.AddToScheme(scheme))
+	require.NoError(t, maasv1alpha1.AddToScheme(scheme))
 	return fake.NewClientBuilder().WithScheme(scheme).WithObjects(objects...).Build()
 }
 
@@ -73,7 +76,7 @@ func TestCleanupLegacyMetricsScraperRBACWaitsForEachTenantRollout(t *testing.T) 
 	// The ordinary readiness check would pass here: updated and available each
 	// equal desired, but an old pod still exists and the new pod is not ready.
 	rolling := appsv1.DeploymentStatus{ObservedGeneration: 2, Replicas: 2, UpdatedReplicas: 1, ReadyReplicas: 1, AvailableReplicas: 1}
-	teamDeployment := metricsAPIDeployment("team", rolling)
+	teamDeployment := metricsAPIDeployment("team", ready)
 	c := metricsRBACClient(t, legacyMetricsRole(), defaultBinding, teamBinding,
 		metricsAPIDeployment("", ready), teamDeployment)
 
@@ -84,6 +87,11 @@ func TestCleanupLegacyMetricsScraperRBACWaitsForEachTenantRollout(t *testing.T) 
 	require.NoError(t, c.Get(ctx, client.ObjectKey{Name: teamBinding.Name}, &rbacv1.ClusterRoleBinding{}))
 	require.NoError(t, c.Get(ctx, client.ObjectKey{Name: "maas-metrics-scraper"}, &rbacv1.ClusterRole{}))
 
+	// The other tenant's old Deployment was fully rolled out, but its new pod
+	// template had not been applied during the default tenant's reconcile.
+	require.NoError(t, c.Get(ctx, client.ObjectKeyFromObject(teamDeployment), teamDeployment))
+	teamDeployment.Status = rolling
+	require.NoError(t, c.Status().Update(ctx, teamDeployment))
 	pending, err = cleanupLegacyMetricsScraperRBAC(ctx, c, c, metricsTestConfigUID, "maas-infra", "team", logr.Discard())
 	require.NoError(t, err)
 	assert.NotEmpty(t, pending, "the current tenant must requeue until old pods are gone")
@@ -102,16 +110,49 @@ func TestCleanupLegacyMetricsScraperRBACWaitsForEachTenantRollout(t *testing.T) 
 func TestCleanupLegacyMetricsScraperRBACWithoutRole(t *testing.T) {
 	ctx := context.Background()
 	binding := legacyMetricsBinding("maas-metrics-scraper", true)
+	orphan := legacyMetricsBinding("maas-metrics-scraper-team", true)
 	ready := appsv1.DeploymentStatus{ObservedGeneration: 2, Replicas: 1, UpdatedReplicas: 1, ReadyReplicas: 1, AvailableReplicas: 1}
-	c := metricsRBACClient(t, binding, metricsAPIDeployment("", ready))
+	c := metricsRBACClient(t, binding, orphan, metricsAPIDeployment("", ready))
 
 	pending, err := cleanupLegacyMetricsScraperRBAC(ctx, c, c, metricsTestConfigUID, "maas-infra", "", logr.Discard())
 	require.NoError(t, err)
 	assert.Empty(t, pending)
 	assertMetricsBindingMissing(t, c, binding.Name)
+	assertMetricsBindingMissing(t, c, orphan.Name)
 }
 
-func TestCleanupLegacyMetricsScraperRBACKeepsForeignBinding(t *testing.T) {
+func TestCleanupLegacyMetricsScraperRBACRetiresDeletedTenantBinding(t *testing.T) {
+	ctx := context.Background()
+	defaultBinding := legacyMetricsBinding("maas-metrics-scraper", true)
+	orphan := legacyMetricsBinding("maas-metrics-scraper-team", true)
+	ready := appsv1.DeploymentStatus{ObservedGeneration: 2, Replicas: 1, UpdatedReplicas: 1, ReadyReplicas: 1, AvailableReplicas: 1}
+	c := metricsRBACClient(t, legacyMetricsRole(), defaultBinding, orphan, metricsAPIDeployment("", ready))
+
+	pending, err := cleanupLegacyMetricsScraperRBAC(ctx, c, c, metricsTestConfigUID, "maas-infra", "", logr.Discard())
+	require.NoError(t, err)
+	assert.Empty(t, pending)
+	assertMetricsBindingMissing(t, c, defaultBinding.Name)
+	assertMetricsBindingMissing(t, c, orphan.Name)
+	assert.True(t, apierrors.IsNotFound(c.Get(ctx, client.ObjectKey{Name: "maas-metrics-scraper"}, &rbacv1.ClusterRole{})))
+}
+
+func TestCleanupLegacyMetricsScraperRBACWaitsForMissingActiveTenantDeployment(t *testing.T) {
+	ctx := context.Background()
+	defaultBinding := legacyMetricsBinding("maas-metrics-scraper", true)
+	teamBinding := legacyMetricsBinding("maas-metrics-scraper-team", true)
+	ready := appsv1.DeploymentStatus{ObservedGeneration: 2, Replicas: 1, UpdatedReplicas: 1, ReadyReplicas: 1, AvailableReplicas: 1}
+	team := &maasv1alpha1.AITenant{ObjectMeta: metav1.ObjectMeta{Name: "team", Namespace: DefaultAITenantNamespace}}
+	c := metricsRBACClient(t, legacyMetricsRole(), defaultBinding, teamBinding, metricsAPIDeployment("", ready), team)
+
+	pending, err := cleanupLegacyMetricsScraperRBAC(ctx, c, c, metricsTestConfigUID, "maas-infra", "", logr.Discard())
+	require.NoError(t, err)
+	assert.Empty(t, pending)
+	assertMetricsBindingMissing(t, c, defaultBinding.Name)
+	require.NoError(t, c.Get(ctx, client.ObjectKey{Name: teamBinding.Name}, &rbacv1.ClusterRoleBinding{}))
+	require.NoError(t, c.Get(ctx, client.ObjectKey{Name: "maas-metrics-scraper"}, &rbacv1.ClusterRole{}))
+}
+
+func TestCleanupLegacyMetricsScraperRBACPreservesForeignBindingButDeletesRole(t *testing.T) {
 	ctx := context.Background()
 	owned := legacyMetricsBinding("maas-metrics-scraper", true)
 	foreign := legacyMetricsBinding("external-metrics-binding", false)
@@ -123,5 +164,5 @@ func TestCleanupLegacyMetricsScraperRBACKeepsForeignBinding(t *testing.T) {
 	assert.Empty(t, pending)
 	assertMetricsBindingMissing(t, c, owned.Name)
 	require.NoError(t, c.Get(ctx, client.ObjectKey{Name: foreign.Name}, &rbacv1.ClusterRoleBinding{}))
-	require.NoError(t, c.Get(ctx, client.ObjectKey{Name: "maas-metrics-scraper"}, &rbacv1.ClusterRole{}))
+	assert.True(t, apierrors.IsNotFound(c.Get(ctx, client.ObjectKey{Name: "maas-metrics-scraper"}, &rbacv1.ClusterRole{})))
 }
