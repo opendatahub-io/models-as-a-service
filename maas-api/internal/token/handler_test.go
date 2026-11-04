@@ -192,4 +192,34 @@ func TestExtractUserInfoOptional(t *testing.T) {
 		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
 		assert.Equal(t, "AUTH_FAILURE", body["exceptionCode"])
 	})
+
+	t.Run("derives user context from verified identity", func(t *testing.T) {
+		gin.SetMode(gin.TestMode)
+		handler := token.NewHandler(logger.Development(), "test")
+		router := gin.New()
+		router.Use(handler.ExtractVerifiedIdentityOptional(), handler.ExtractUserInfoOptional())
+		router.GET("/test", func(c *gin.Context) {
+			user, exists := c.Get("user")
+			if !exists {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "user context missing"})
+				return
+			}
+			c.JSON(http.StatusOK, user)
+		})
+
+		request := httptest.NewRequest(http.MethodGet, "/test", nil)
+		request.Header.Set(constant.HeaderIdentity, validIdentityEnvelope)
+		recorder := httptest.NewRecorder()
+		router.ServeHTTP(recorder, request)
+
+		require.Equal(t, http.StatusOK, recorder.Code)
+		var user token.UserContext
+		require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &user))
+		assert.Equal(t, "alex", user.Username)
+		assert.Equal(t, []string{
+			"system:authenticated",
+			"42c3e46f-2477-44d7-a85b-d3b43f6b31fa/users",
+		}, user.Groups)
+		assert.Equal(t, "test", user.Tenant)
+	})
 }

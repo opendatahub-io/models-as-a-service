@@ -9,13 +9,15 @@ import (
 	"fmt"
 	"math/big"
 	"strings"
+
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/constant"
 )
 
 const (
 	// KeyPrefix is the prefix for all OpenShift AI API keys.
 	// Per Feature Refinement: "Simple Opaque Key Format" - keys must be short, opaque strings
 	// with a recognizable prefix matching industry standards (OpenAI, Stripe, GitHub).
-	KeyPrefix = "sk-oai-"
+	KeyPrefix = constant.APIKeyPrefix
 
 	// KeyIDSeparator separates the key_id from the secret in the API key.
 	KeyIDSeparator = "_"

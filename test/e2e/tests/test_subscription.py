@@ -416,6 +416,7 @@ def _trlp_uses_short_id(limits, subscription_name, model_ref=None):
 # Tests
 # ---------------------------------------------------------------------------
 
+@pytest.mark.smoke
 class TestAuthEnforcement:
     """Tests that MaaSAuthPolicy correctly enforces access using API keys."""
 
@@ -562,6 +563,7 @@ class TestAPIKeySubscriptionBinding:
 class TestSubscriptionEnforcement:
     """Tests that MaaSSubscription correctly enforces rate limits using API keys."""
 
+    @pytest.mark.smoke
     def test_subscribed_user_gets_200(self):
         """API key with matching group should access the model. Polls for AuthPolicy enforcement."""
         _wait_for_gateway_auth_enforced()
