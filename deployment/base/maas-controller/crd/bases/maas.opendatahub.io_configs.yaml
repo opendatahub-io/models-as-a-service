@@ -470,7 +470,8 @@ spec:
                 description: |-
                   UsageLogging is retained for compatibility and does not gate deployment.
                   When true, the gateway EnvoyFilter exports usage logs to usage-logs-collector.
-                  When false or unset, it exports to data-science-usage-logs-collector.
+                  When false or unset, it exports over TLS to the headless
+                  data-science-usage-logs-collector-headless Service.
                   When MaasTenantConfig telemetry is enabled and usageLogging is false or unset,
                   MaasTenantConfig is Degraded unless DSCInitialization reports LokiStackAvailable,
                   UsageLogsCollectorAvailable, and PersesAvailable as True.
