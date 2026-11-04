@@ -336,6 +336,19 @@ def _wait_for_subscription_header_policy() -> dict:
     )
 
 
+def _provider_header_values(response: requests.Response, name: str) -> list[str]:
+    """Values the provider saw for ``name``, always as a list.
+
+    Echo endpoints report each header as a list of values, so the Gateway's
+    comma-joined injection arrives as ``["region1, region2"]``, not as a bare
+    string.
+    """
+    value = echo_headers(response).get(name)
+    if value is None:
+        return []
+    return [value] if isinstance(value, str) else list(value)
+
+
 def _wait_for_subscription_header(gateway_url: str, model: dict, api_key: str) -> None:
     def _check() -> bool:
         response = _infer(
@@ -348,9 +361,9 @@ def _wait_for_subscription_header(gateway_url: str, model: dict, api_key: str) -
             f"expected 200 through {DEFAULT_GATEWAY_NAME}, got {response.status_code}: "
             f"{redact_sensitive(response.text)}"
         )
-        assert echo_headers(response).get(SUBSCRIPTION_HEADER_NAME) == SUBSCRIPTION_HEADER_VALUE, (
-            f"provider headers: {redact_sensitive(echo_headers(response))}"
-        )
+        assert _provider_header_values(response, SUBSCRIPTION_HEADER_NAME) == [
+            SUBSCRIPTION_HEADER_VALUE
+        ], f"provider headers: {redact_sensitive(echo_headers(response))}"
         return True
 
     wait_until(
@@ -378,6 +391,7 @@ def _infer(
 # ─── Serving through the default Gateway ────────────────────────────────────
 
 
+@pytest.mark.smoke
 class TestDefaultTenantServesModelWithoutGatewayRefs:
     """A 3.5-shaped model in a namespace of no tenant is served through the
     default tenant's Gateway."""
@@ -466,10 +480,9 @@ class TestDefaultTenantServesModelWithoutGatewayRefs:
             f"expected 200 through {DEFAULT_GATEWAY_NAME}, got {response.status_code}: "
             f"{redact_sensitive(response.text)}"
         )
-        assert (
-            echo_headers(response).get(SUBSCRIPTION_HEADER_NAME)
-            == SUBSCRIPTION_HEADER_VALUE
-        ), f"provider headers: {redact_sensitive(echo_headers(response))}"
+        assert _provider_header_values(response, SUBSCRIPTION_HEADER_NAME) == [
+            SUBSCRIPTION_HEADER_VALUE
+        ], f"provider headers: {redact_sensitive(echo_headers(response))}"
 
 
 # ─── Implicit attachment lifecycle ──────────────────────────────────────────

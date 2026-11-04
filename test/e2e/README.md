@@ -72,7 +72,7 @@ pytest tests/<file>.py -v
 | `test_tenant_external_model_default_tenant.py` | 3.5-shaped external models (no `gatewayRefs`, `auth.type: simple`) in a namespace of no tenant (`llm`) served through the default tenant's Gateway by ai-gateway-controller; subscription-injected Gateway headers reach the provider and replace client values, `gatewayRefs` replace the implicit attachment, deleting the model removes its objects (RHOAIENG-101754; skips without the AGC or when the default tenant is on IPP) |
 | `test_non_default_maastenantconfig.py` | Per-tenant `MaasTenantConfig` behaviour: `spec.apiKeys.maxExpirationDays` is enforced by that tenant's own `maas-api` (over-cap mint rejected with `exceeds maximum allowed`, under-cap mint accepted) and is not inherited by a sibling tenant (RHOAIENG-100759) |
 
-The shared CI runner and `smoke.sh` execute all tests under `tests/`. Individual modules can still be run directly, for example `pytest tests/test_subscription_list_endpoints.py -v`.
+`/group-test` sets **`E2E_SMOKE_ONLY=true`** (only `@pytest.mark.smoke`). `prow_run_smoke_test.sh` itself defaults to the full suite so nightly and unmarked callers keep coverage of tests that are neither `smoke` nor `nightly`. Locally: `./scripts/run_e2e_tests.sh --smoke-only` (or `E2E_SMOKE_ONLY=true`). Individual modules can still be run directly, for example `pytest tests/test_subscription_list_endpoints.py -v`.
 
 **Skips:** `test_tenant.py` and `test_config_tenant.py` skip the whole module when the needed CRD or object is absent (partial cluster or older bundle). Neither module deletes Config or exercises DSC disable; that stays in operator or manual teardown.
 
@@ -169,6 +169,7 @@ SKIP_DEPLOYMENT=true ./test/e2e/run-tests-quick.sh
 | `E2E_MULTITENANCY_PHASE_TIMEOUT` | `180` (parallel) / `120` (serial) | Tenant discovery phase wait |
 | `E2E_SUBSCRIPTION_INFERENCE_READY_TIMEOUT` | `300` | Subscription discovery + direct/mirrored TRLP enforcement |
 | `E2E_SUBSCRIPTION_TRLP_TIMEOUT` | `180` | Mirrored TRLP ready wait on tenant subscriptions |
+| `E2E_REQUIRE_TRLP_ENFORCED` | `false` | Gate TRLP waits on Kuadrant `Enforced=True`. Off because Limitador can leave it `False` long after the limit is programmed (known issue). |
 | `E2E_MODEL_BACKEND_READY_TIMEOUT` | `300` | LLMInferenceService backend ready (tenant model provisioning) |
 | `E2E_USE_WORKER_TENANT` | `true` | When `true`, xdist workers bootstrap a dedicated AITenant for Bucket C pilots (`test_subscription.py` first). Set `false` to keep using `models-as-a-service`. |
 

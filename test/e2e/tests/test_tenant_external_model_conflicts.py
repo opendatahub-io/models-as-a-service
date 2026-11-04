@@ -171,6 +171,9 @@ class TestModelNameConflict:
             tenant_own["client_name"],
             access["api_key"],
             path_tag=tenant_own["path_tag"],
+            # First inference after the route is created: the tenant dataplane
+            # is still programming, so wait for the effect rather than sample it.
+            readiness_timeout=120,
         )
         assert_served_by_provider(
             response, tenant_own["path_tag"], credential=tenant_own["credential"]
@@ -233,6 +236,7 @@ class TestModelNameConflict:
             oldest["client_name"],
             access["api_key"],
             path_tag=oldest["path_tag"],
+            readiness_timeout=120,
         )
         assert_served_by_provider(response, oldest["path_tag"], credential=oldest["credential"])
         # Defense in depth only: this key is bound to the winner's
@@ -364,6 +368,7 @@ class TestSameNamedObjectsTwoNamespaces:
             model_1["client_name"],
             access_1["api_key"],
             path_tag=model_1["path_tag"],
+            readiness_timeout=120,
         )
         assert_served_by_provider(
             response, model_1["path_tag"], credential=model_1["credential"]
@@ -382,6 +387,7 @@ class TestSameNamedObjectsTwoNamespaces:
             model_2["client_name"],
             access_2["api_key"],
             path_tag=model_2["path_tag"],
+            readiness_timeout=120,
         )
         assert_served_by_provider(
             response, model_2["path_tag"], credential=model_2["credential"]
