@@ -29,9 +29,6 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 TESTS_DIR = REPO_ROOT / "test" / "e2e" / "tests"
-# Pytest is invoked from test/e2e/, so node ids use tests/<file>.py::...
-PYTEST_TESTS_PREFIX = "tests"
-
 # Markers that satisfy the new-test gate (any one is enough).
 TIER_MARKERS = frozenset({"smoke", "full_suite", "nightly"})
 
@@ -146,19 +143,48 @@ def _git_show(ref: str, rel_path: str) -> str | None:
     return result.stdout
 
 
+def _is_pytest_test_module(path: Path) -> bool:
+    """Match pytest default python_files (test_*.py / *_test.py)."""
+    return path.suffix == ".py" and (
+        path.name.startswith("test_") or path.name.endswith("_test.py")
+    )
+
+
 def _changed_test_files(base: str) -> list[Path]:
-    out = _run_git("diff", "--name-only", "--diff-filter=ACMR", f"{base}...HEAD", "--", str(TESTS_DIR))
+    # -z avoids Git quoting non-ASCII paths in --name-only output.
+    result = subprocess.run(
+        [
+            "git",
+            "diff",
+            "-z",
+            "--name-only",
+            "--diff-filter=ACMR",
+            f"{base}...HEAD",
+            "--",
+            str(TESTS_DIR),
+        ],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        err = (result.stderr or result.stdout or b"").decode("utf-8", errors="replace").strip()
+        raise RuntimeError(f"git diff -z --name-only failed: {err}")
     files: list[Path] = []
-    for line in out.splitlines():
-        path = REPO_ROOT / line.strip()
-        if path.suffix == ".py" and path.name.startswith("test_"):
+    for raw in result.stdout.split(b"\0"):
+        if not raw:
+            continue
+        rel = raw.decode("utf-8", errors="surrogateescape").strip()
+        path = REPO_ROOT / rel
+        if _is_pytest_test_module(path):
             files.append(path)
     return files
 
 
 def _pytest_node_id(path: Path, qual: str) -> str:
     """Node id as pytest reports it when cwd is test/e2e/."""
-    return f"{PYTEST_TESTS_PREFIX}/{path.name}::{qual}"
+    rel = path.resolve().relative_to((REPO_ROOT / "test" / "e2e").resolve()).as_posix()
+    return f"{rel}::{qual}"
 
 
 def iter_new_tests(base: str) -> list[tuple[str, set[str]]]:
@@ -212,7 +238,7 @@ def main() -> int:
 
     changed = _changed_test_files(base)
     if not changed and not new_tests:
-        print("No changed test_*.py files under test/e2e/tests/; tier gate OK.")
+        print("No changed pytest test modules under test/e2e/tests/; tier gate OK.")
         return 0
 
     violations: list[str] = []

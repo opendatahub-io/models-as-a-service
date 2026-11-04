@@ -49,6 +49,11 @@ spec:
       # Also run tests added in this PR once (dynamic pr_new), without marking them smoke.
       - name: E2E_INCLUDE_NEW_FROM_DIFF
         value: "true"
+      # Clone is the PR fork (depth 50); fetch the *upstream* target for merge-base.
+      - name: E2E_DIFF_UPSTREAM_URL
+        value: "https://github.com/opendatahub-io/models-as-a-service.git"
+      - name: E2E_DIFF_TARGET_BRANCH
+        value: "{{target_branch}}"
     serviceAccountName: konflux-integration-runner
   timeouts:
     pipeline: 4h0m0s
