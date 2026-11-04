@@ -11,6 +11,8 @@
 #   Pass 3 (optional): -m nightly when MAAS_PYTEST_INCLUDE_NIGHTLY=true (e.g. EXTERNAL_OIDC deploys)
 #
 # Passes 1–2 always exclude @pytest.mark.nightly; the flag below only gates pass 3.
+# When E2E_SMOKE_ONLY=true (/group-test sets this), passes 1–2 additionally require
+# @pytest.mark.smoke so PR CI runs a low-churn subset instead of the full suite.
 #
 # Called by:
 #   - prow_run_smoke_test.sh (CI: deploy → validate → THIS)
@@ -33,6 +35,8 @@
 #   E2E_MULTITENANCY_PHASE_TIMEOUT seconds (default: 180, parallel only)
 #   E2E_RECONCILE_WAIT            seconds between reconcile polls (default: 4)
 #   ARTIFACTS_DIR                 output directory for JUnit/HTML (default: test/e2e/reports)
+#   E2E_SMOKE_ONLY                When true, restrict passes 1–2 to @pytest.mark.smoke
+#                                 (/group-test sets true; unset/false = full suite)
 #   MAAS_PYTEST_INCLUDE_NIGHTLY   When true, run pass 3 (-m nightly) after serial pass
 #   E2E_RUN_ONLY_OIDC_TESTS       When true, skip passes 1–2 and run only pass 3 (external
 #                                 OIDC tests); requires EXTERNAL_OIDC=true
@@ -45,7 +49,8 @@
 #
 # Usage:
 #   export GATEWAY_HOST=maas.apps.cluster.example.com TOKEN=$(oc whoami -t) ...
-#   ./run_e2e_tests.sh                       # run all tests
+#   ./run_e2e_tests.sh                       # run all tests (unless E2E_SMOKE_ONLY=true)
+#   ./run_e2e_tests.sh --smoke-only          # only @pytest.mark.smoke
 #   ./run_e2e_tests.sh -- -k test_api_keys   # pass extra pytest args
 #   ./run_e2e_tests.sh --serial-only         # skip parallel pass
 #   ./run_e2e_tests.sh --limitador-triage    # only -m limitador + serial pass
@@ -60,14 +65,19 @@ TEST_DIR="$PROJECT_ROOT/test/e2e"
 # ── Parse script flags (before --) vs pytest args (after --) ─────────────
 serial_only=false
 limitador_triage=false
+smoke_only=false
 case "${E2E_LIMITADOR_TRIAGE:-false}" in
     1 | true | TRUE | yes | YES) limitador_triage=true ;;
+esac
+case "${E2E_SMOKE_ONLY:-false}" in
+    1 | true | TRUE | yes | YES) smoke_only=true ;;
 esac
 extra_pytest_args=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --serial-only) serial_only=true; shift ;;
         --limitador-triage) limitador_triage=true; shift ;;
+        --smoke-only) smoke_only=true; shift ;;
         --) shift; extra_pytest_args=("$@"); break ;;
         *) extra_pytest_args+=("$1"); shift ;;
     esac
@@ -175,8 +185,18 @@ if [[ "$limitador_triage" == "true" && "$serial_only" == "true" ]]; then
     echo "ERROR: --limitador-triage already runs the serial pass; drop --serial-only" >&2
     exit 1
 fi
-_parallel_marker="not serial and not legacy_ipp${_nightly_exclude}"
-_serial_marker="serial and not legacy_ipp${_nightly_exclude}"
+if [[ "$smoke_only" == "true" && "$limitador_triage" == "true" ]]; then
+    echo "ERROR: --smoke-only / E2E_SMOKE_ONLY cannot be combined with --limitador-triage" >&2
+    exit 1
+fi
+# OIDC-only jobs skip passes 1–2 entirely; smoke filtering does not apply there.
+_smoke_require=""
+if [[ "$smoke_only" == "true" && "$_run_only_oidc_tests" != true ]]; then
+    _smoke_require="smoke and "
+    echo "E2E smoke-only mode: restricting passes 1–2 to @pytest.mark.smoke"
+fi
+_parallel_marker="${_smoke_require}not serial and not legacy_ipp${_nightly_exclude}"
+_serial_marker="${_smoke_require}serial and not legacy_ipp${_nightly_exclude}"
 # The Limitador sync subset: tests that wait on a TokenRateLimitPolicy reaching
 # Enforced=True. Only they can see a stalled limiter, and because an unapplied
 # token limit still admits every request, the rest of the suite passes either way.
