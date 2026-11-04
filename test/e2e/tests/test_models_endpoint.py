@@ -1468,6 +1468,7 @@ class TestModelsEndpoint:
             _delete_cr("maassubscription", subscription_name, namespace=maas_ns)
             _delete_sa(sa_name, namespace=sa_ns)
 
+    @pytest.mark.smoke
     def test_response_schema_and_metadata(self):
         """
         Validate the OpenAPI response structure and preserve meaningful model metadata.
@@ -2210,6 +2211,7 @@ class TestModelsEndpoint:
             )
             _delete_sa(sa_name, namespace=sa_ns)
 
+    @pytest.mark.smoke
     def test_unauthenticated_request_401(self):
         """
         Test: Request to /v1/models without Authorization header gets 401.
