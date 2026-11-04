@@ -231,8 +231,11 @@ func (r *AITenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 
+	// Namespaces are not watched, so a failed label patch is retried by a requeue.
+	namespaceLabelsFailed := false
 	if err := r.ensureInfraNamespaceGatewayLabels(ctx, gw); err != nil {
 		oteljson.FromContext(ctx).Error(err, "infra namespace gateway label reconciliation failed, continuing")
+		namespaceLabelsFailed = true
 		apimeta.SetStatusCondition(&aitenant.Status.Conditions, metav1.Condition{
 			Type:               tenantreconcile.ConditionTypeDegraded,
 			Status:             metav1.ConditionTrue,
@@ -263,6 +266,7 @@ func (r *AITenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	// created in it (e.g. for tenant-local ExternalModels) are not admitted.
 	if err := r.ensureTenantNamespaceGatewayLabels(ctx, &aitenant, gw); err != nil {
 		oteljson.FromContext(ctx).Error(err, "tenant namespace gateway label reconciliation failed, continuing")
+		namespaceLabelsFailed = true
 		// An infra namespace label failure set above takes precedence.
 		if !apimeta.IsStatusConditionTrue(aitenant.Status.Conditions, tenantreconcile.ConditionTypeDegraded) {
 			apimeta.SetStatusCondition(&aitenant.Status.Conditions, metav1.Condition{
@@ -295,6 +299,9 @@ func (r *AITenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	setAITenantPhase(&aitenant, "Active", "Reconciled", "AITenant bootstrap resources are reconciled")
 	if err := r.updateAITenantStatus(ctx, &aitenant, statusSnapshot); err != nil {
 		return ctrl.Result{}, err
+	}
+	if namespaceLabelsFailed {
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 	return ctrl.Result{}, nil
 }

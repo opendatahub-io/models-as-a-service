@@ -4,6 +4,7 @@ package maas
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -280,6 +281,16 @@ func reconcileAITenantTwice(t *testing.T, r *AITenantReconciler, key types.Names
 func reconcileAITenantToActive(t *testing.T, r *AITenantReconciler, key types.NamespacedName) {
 	t.Helper()
 	g := NewWithT(t)
+
+	res := reconcileAITenantWithReadyTenantConfig(t, r, key)
+	g.Expect(res).To(Equal(ctrl.Result{}))
+}
+
+// reconcileAITenantWithReadyTenantConfig bootstraps the AITenant, marks its
+// MaasTenantConfig Ready and returns the result of the reconcile after that.
+func reconcileAITenantWithReadyTenantConfig(t *testing.T, r *AITenantReconciler, key types.NamespacedName) ctrl.Result {
+	t.Helper()
+	g := NewWithT(t)
 	ctx := context.Background()
 
 	reconcileAITenantTwice(t, r, key)
@@ -304,7 +315,7 @@ func reconcileAITenantToActive(t *testing.T, r *AITenantReconciler, key types.Na
 
 	res, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key})
 	g.Expect(err).NotTo(HaveOccurred())
-	g.Expect(res).To(Equal(ctrl.Result{}))
+	return res
 }
 
 func TestAITenantReconcile_ValidatesExistingGatewayAndCreatesBootstrapResources(t *testing.T) {
@@ -4288,7 +4299,8 @@ func TestAITenantReconcile_TenantNamespaceLabelConflictSetsDegraded(t *testing.T
 	}
 
 	key := types.NamespacedName{Name: aitenant.Name, Namespace: aitenant.Namespace}
-	reconcileAITenantToActive(t, r, key)
+	res := reconcileAITenantWithReadyTenantConfig(t, r, key)
+	g.Expect(res.RequeueAfter).To(Equal(30*time.Second), "a label failure must be retried")
 
 	var updated maasv1alpha1.AITenant
 	g.Expect(cl.Get(ctx, key, &updated)).To(Succeed())
@@ -4301,6 +4313,62 @@ func TestAITenantReconcile_TenantNamespaceLabelConflictSetsDegraded(t *testing.T
 	var ns corev1.Namespace
 	g.Expect(cl.Get(ctx, client.ObjectKey{Name: "ai-tenant-team-a"}, &ns)).To(Succeed())
 	g.Expect(ns.Labels).To(HaveKeyWithValue("maas.opendatahub.io/gateway-access-team-a", "false"))
+}
+
+func TestAITenantReconcile_RetriesFailedTenantNamespaceLabelPatch(t *testing.T) {
+	g := NewWithT(t)
+	s := aitenantTestScheme(t)
+	ctx := context.Background()
+
+	aitenant := &maasv1alpha1.AITenant{ObjectMeta: metav1.ObjectMeta{Name: "team-a", Namespace: tenantreconcile.DefaultAITenantNamespace}}
+	infraNs := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "opendatahub"}}
+	gw := gatewayWithMatchLabels("team-a", map[string]string{"maas.opendatahub.io/gateway-access-team-a": "true"})
+	failLabelPatch := true
+	cl := fake.NewClientBuilder().
+		WithScheme(s).
+		WithStatusSubresource(&maasv1alpha1.AITenant{}).
+		WithObjects(aitenant, infraNs, gw).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+				// Fail the gateway label patch on the tenant namespace like a
+				// 409 from a concurrent writer.
+				if _, labeling := obj.GetAnnotations()[gatewayLabelsAnnotation]; failLabelPatch && labeling && obj.GetName() == "ai-tenant-team-a" {
+					return apierrors.NewConflict(schema.GroupResource{Resource: "namespaces"}, obj.GetName(), errors.New("the object has been modified"))
+				}
+				return c.Patch(ctx, obj, patch, opts...)
+			},
+		}).
+		Build()
+	r := &AITenantReconciler{
+		Client:           cl,
+		Scheme:           s,
+		APIReader:        cl,
+		AppNamespace:     "opendatahub",
+		TenantNamespace:  "models-as-a-service",
+		GatewayNamespace: "openshift-ingress",
+	}
+
+	key := types.NamespacedName{Name: aitenant.Name, Namespace: aitenant.Namespace}
+	res := reconcileAITenantWithReadyTenantConfig(t, r, key)
+	g.Expect(res.RequeueAfter).To(Equal(30*time.Second), "no watch fires for the namespace, so the reconcile must requeue")
+
+	var updated maasv1alpha1.AITenant
+	g.Expect(cl.Get(ctx, key, &updated)).To(Succeed())
+	g.Expect(updated.Status.Phase).To(Equal("Active"))
+	degraded := apimeta.FindStatusCondition(updated.Status.Conditions, tenantreconcile.ConditionTypeDegraded)
+	g.Expect(degraded).NotTo(BeNil())
+	g.Expect(degraded.Reason).To(Equal("TenantNamespaceLabelFailed"))
+
+	failLabelPatch = false
+	res, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key})
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(res).To(Equal(ctrl.Result{}))
+
+	var ns corev1.Namespace
+	g.Expect(cl.Get(ctx, client.ObjectKey{Name: "ai-tenant-team-a"}, &ns)).To(Succeed())
+	g.Expect(ns.Labels).To(HaveKeyWithValue("maas.opendatahub.io/gateway-access-team-a", "true"))
+	g.Expect(cl.Get(ctx, key, &updated)).To(Succeed())
+	g.Expect(apimeta.FindStatusCondition(updated.Status.Conditions, tenantreconcile.ConditionTypeDegraded)).To(BeNil())
 }
 
 func TestReleaseTenantNamespaceRemovesGatewayLabels(t *testing.T) {
