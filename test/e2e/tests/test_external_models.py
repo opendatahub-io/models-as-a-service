@@ -31,6 +31,7 @@ import requests
 
 from test_helper import (
     MODEL_NAMESPACE,
+    RATE_LIMIT_ENFORCEMENT_TIMEOUT,
     TLS_VERIFY,
     _apply_cr,
     _check_ipp_pods_deployed,
@@ -323,6 +324,7 @@ def external_token_limit_resources():
     token_limit, window = 10, "10m"
     api_key_id = None
     oc_token = None
+    sub_ns = _subscription_ns()
     try:
         # The fixture is deployed by the aggregate kustomization; do not
         # create a second simulator deployment or service.
@@ -384,9 +386,22 @@ def external_token_limit_resources():
             "metadata": {"name": model_name, "namespace": MODEL_NAMESPACE},
             "spec": {"modelRef": {"kind": "ExternalModel", "name": model_name}},
         })
-        _create_test_auth_policy(auth_name, [model_name], groups=["system:authenticated"], model_namespace=MODEL_NAMESPACE)
-        _create_test_subscription(subscription_name, [model_name], groups=["system:authenticated"],
-                                  token_limit=token_limit, window=window, model_namespace=MODEL_NAMESPACE)
+        _create_test_auth_policy(
+            auth_name,
+            [model_name],
+            groups=["system:authenticated"],
+            namespace=sub_ns,
+            model_namespace=MODEL_NAMESPACE,
+        )
+        _create_test_subscription(
+            subscription_name,
+            [model_name],
+            groups=["system:authenticated"],
+            token_limit=token_limit,
+            window=window,
+            namespace=sub_ns,
+            model_namespace=MODEL_NAMESPACE,
+        )
         _wait_for_model_ready(model_name, namespace=MODEL_NAMESPACE, timeout=180)
         external_model = _get_cr(EXTERNAL_MODEL_KIND, model_name, MODEL_NAMESPACE)
         external_http_route_name = ((external_model or {}).get("status") or {}).get("httpRouteName")
@@ -396,8 +411,14 @@ def external_token_limit_resources():
                 f"{json.dumps((external_model or {}).get('status', {}))[:1000]}"
             )
         _wait_for_httproute_accepted(external_http_route_name, namespace=MODEL_NAMESPACE, timeout=180)
-        _wait_for_maas_subscription_phase(subscription_name, timeout=180)
-        _wait_for_subscription_inference_ready(subscription_name, model_name, model_namespace=MODEL_NAMESPACE, timeout=300)
+        _wait_for_maas_subscription_phase(subscription_name, namespace=sub_ns, timeout=180)
+        _wait_for_subscription_inference_ready(
+            subscription_name,
+            model_name,
+            namespace=sub_ns,
+            model_namespace=MODEL_NAMESPACE,
+            timeout=300,
+        )
 
         trlp = _get_cr("tokenratelimitpolicy", f"maas-trlp-{model_name}", MODEL_NAMESPACE)
         assert trlp, f"Generated token policy maas-trlp-{model_name} was not found"
@@ -454,8 +475,8 @@ def external_token_limit_resources():
         # key is deliberately never logged.
         if api_key_id and oc_token:
             _revoke_api_key(oc_token, api_key_id)
-        _delete_cr("maassubscription", subscription_name, _subscription_ns())
-        _delete_cr("maasauthpolicy", auth_name, _subscription_ns())
+        _delete_cr("maassubscription", subscription_name, sub_ns)
+        _delete_cr("maasauthpolicy", auth_name, sub_ns)
         _delete_cr("maasmodelref", model_name, MODEL_NAMESPACE)
         _delete_cr(EXTERNAL_MODEL_KIND, model_name, MODEL_NAMESPACE)
         _delete_cr(EXTERNAL_PROVIDER_KIND, provider_name, MODEL_NAMESPACE)
@@ -802,7 +823,10 @@ class TestExternalModelTokenRateLimit:
             )
 
         result = exercise_until_token_limited(
-            infer, max_attempts=15, interval_seconds=0.1,
+            infer,
+            max_attempts=15,
+            interval_seconds=0.1,
+            enforcement_timeout_seconds=RATE_LIMIT_ENFORCEMENT_TIMEOUT,
         )
         log.info(
             "External token limit subscription=%s statuses=%s usage=%s",
