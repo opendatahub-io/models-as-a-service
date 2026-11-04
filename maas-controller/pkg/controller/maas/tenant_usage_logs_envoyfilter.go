@@ -191,6 +191,13 @@ func (r *TenantReconciler) applyUsageLogsEnvoyFilter(
 	if err := tenantreconcile.PatchUsageLogsServiceNamespace(ef, tenant.GetNamespace()); err != nil {
 		return false, fmt.Errorf("patch service.namespace in EnvoyFilter: %w", err)
 	}
+	tenantName, err := tenantreconcile.TenantNameFor(tenant)
+	if err != nil {
+		return false, fmt.Errorf("resolve tenant name for usage logs: %w", err)
+	}
+	if err := tenantreconcile.PatchUsageLogsProducerScope(ef, tenantName); err != nil {
+		return false, fmt.Errorf("patch producer scope in EnvoyFilter: %w", err)
+	}
 
 	ef.SetName(efName)
 	ef.SetNamespace(r.GatewayNamespace)

@@ -61,6 +61,18 @@ The `MaasTenantConfig/default-tenant` object in each tenant namespace owns MaaS-
 
 The Gateway namespace is controller configuration, not an `AITenant` spec field. The Gateway must already exist, normally after network or cluster administrator approval. The controller only reads the Gateway and reports the resolved reference in `status.gatewayRef`; it does not create, label, annotate, reconcile, adopt, or delete Gateway resources.
 
+### Experimental large-response buffer
+
+For large inference responses such as batched embeddings, MaaS applies a default `64 MB` Envoy listener buffer to the tenant Gateway. Platform administrators may override the experimental value with a Gateway annotation:
+
+```yaml
+metadata:
+  annotations:
+    maas.opendatahub.io/experimental-body-buffer-limit-mb: "64"
+```
+
+The value is an integer number of megabytes. Values from `1` through `64` are accepted; invalid or out-of-range values use the `64 MB` default. This annotation is experimental and may later move into the supported tenant configuration API.
+
 ---
 
 ## Tenant Administration

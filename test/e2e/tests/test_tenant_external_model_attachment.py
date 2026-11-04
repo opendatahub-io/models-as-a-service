@@ -141,6 +141,7 @@ def _assert_not_served(response) -> None:
 # ─── P0 #1: user-namespace model on a non-default tenant gateway ────────────
 
 
+@pytest.mark.smoke
 class TestUserNamespaceAttachmentServing:
     """A user-ns model attached to tenant B's gateway serves through it only."""
 

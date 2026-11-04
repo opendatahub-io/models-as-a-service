@@ -273,6 +273,76 @@ func TestGetMeUsesGatewayIdentityForOtherAuthenticationMethods(t *testing.T) {
 	assert.NotContains(t, response, "https://redhat.com/maas/orgs")
 }
 
+func TestGetMeRejectsInferenceAPIKeys(t *testing.T) {
+	tests := []struct {
+		name   string
+		header func(http.Header)
+	}{
+		{
+			name: "bearer",
+			header: func(header http.Header) {
+				header.Set("Authorization", "Bearer sk-oai-key-id-secret")
+			},
+		},
+		{
+			name: "x-api-key",
+			header: func(header http.Header) {
+				header.Set("X-Api-Key", "sk-oai-key-id-secret")
+			},
+		},
+		{
+			name: "repeated authorization",
+			header: func(header http.Header) {
+				header.Set("Authorization", "Bearer user-token")
+				header.Add("Authorization", "Bearer sk-oai-key-id-secret")
+			},
+		},
+		{
+			name: "repeated x-api-key",
+			header: func(header http.Header) {
+				header.Set("X-Api-Key", "user-token")
+				header.Add("X-Api-Key", "sk-oai-key-id-secret")
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			gin.SetMode(gin.TestMode)
+			handler := token.NewHandler(logger.New(false), "tenant")
+			router := gin.New()
+			router.GET("/v1/me", handler.ExtractVerifiedIdentityOptional(), handler.ExtractUserInfoOptional(), handler.GetMe)
+
+			request := httptest.NewRequest(http.MethodGet, "/v1/me", nil)
+			request.Header.Set(constant.HeaderUsername, "alice")
+			request.Header.Set(constant.HeaderGroup, `["team-a"]`)
+			test.header(request.Header)
+			recorder := httptest.NewRecorder()
+			router.ServeHTTP(recorder, request)
+
+			assert.Equal(t, http.StatusUnauthorized, recorder.Code)
+			assert.NotContains(t, recorder.Body.String(), "alice")
+		})
+	}
+}
+
+func TestGetMeRejectsInferenceAPIKeysWithVerifiedIdentity(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	handler := token.NewHandler(logger.New(false), "tenant")
+	router := gin.New()
+	router.GET("/v1/me", handler.ExtractVerifiedIdentityOptional(), handler.ExtractUserInfoOptional(), handler.GetMe)
+
+	request := httptest.NewRequest(http.MethodGet, "/v1/me", nil)
+	request.Header.Set(constant.HeaderIdentity, validIdentityEnvelope)
+	request.Header.Set("X-Api-Key", "sk-oai-key-id-secret")
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusUnauthorized, recorder.Code)
+	assert.NotContains(t, recorder.Body.String(), "user-1")
+	assert.NotContains(t, recorder.Body.String(), "alex")
+}
+
 func TestGetMePrefersVerifiedSSOIdentityOverGatewayIdentity(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	handler := token.NewHandler(logger.New(false), "tenant")
