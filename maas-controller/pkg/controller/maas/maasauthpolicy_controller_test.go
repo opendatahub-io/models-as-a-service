@@ -1603,8 +1603,9 @@ func TestBuildGatewayAuthPolicySpecUsesSafeAPIKeyGroupTransport(t *testing.T) {
 		t.Fatalf("X-MaaS-Group header has type %T", headers["X-MaaS-Group"])
 	}
 	plain, ok := groupHeader["plain"].(map[string]any)
-	if !ok || plain["selector"] != "auth.metadata.apiKeyValidation.groupsJSON" {
-		t.Fatalf("API key group header plain config = %#v, want groupsJSON selector", groupHeader["plain"])
+	expression, expressionOK := plain["expression"].(string)
+	if !ok || !expressionOK || !strings.Contains(expression, "has(auth.metadata.apiKeyValidation.groupsJSON)") {
+		t.Fatalf("API key group header plain config = %#v, want guarded groupsJSON expression", groupHeader["plain"])
 	}
 }
 

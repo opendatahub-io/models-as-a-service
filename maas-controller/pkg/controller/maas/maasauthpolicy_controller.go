@@ -424,9 +424,15 @@ const (
 	celNonAPIKeyGroups = `(has(auth.identity.iss) ? ` + celOIDCTransportGroups + ` : ` + celTokenReviewGroups + `)`
 	celGroups          = `(has(auth.metadata) && has(auth.metadata.apiKeyValidation)) ` +
 		`? auth.metadata.apiKeyValidation.groups : ` + celNonAPIKeyGroups
+	celAPIKeyGroupsHeaderJSON = `(has(auth.metadata.apiKeyValidation.groupsJSON) ` +
+		`? auth.metadata.apiKeyValidation.groupsJSON ` +
+		`: (has(auth.metadata.apiKeyValidation.groups) ` +
+		`? (size(auth.metadata.apiKeyValidation.groups) > 0 ` +
+		`? '["' + auth.metadata.apiKeyValidation.groups.join('","') + '"]' : '[]') ` +
+		`: '[]'))`
 
 	safeGroupNamePattern              = groupname.Pattern
-	celOIDCGroupsSafe                 = `auth.identity.groups.all(g, g.matches('` + safeGroupNamePattern + `'))`
+	celOIDCGroupsSafe                 = `auth.identity.groups.all(g, type(g) == string && g.matches('` + safeGroupNamePattern + `'))`
 	celCanonicalOrganizationID        = `^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`
 	celCanonicalOrganizationIDPattern = celCanonicalOrganizationID + `$`
 	celOrganizationQualifiedGroup     = celCanonicalOrganizationID + `/`
@@ -435,9 +441,11 @@ const (
 	celOIDCLegacyGroupsSafe = celOIDCGroupsSafe + ` && ` +
 		`auth.identity.groups.all(g, !g.matches('` + celOrganizationQualifiedGroup + `'))`
 	celTokenReviewGroupsSafe = `auth.identity.user.groups.all(g, ` +
-		`g.matches('` + safeGroupNamePattern + `') && !g.matches('` + celOrganizationQualifiedGroup + `'))`
+		`type(g) == string && g.matches('` + safeGroupNamePattern + `') && ` +
+		`!g.matches('` + celOrganizationQualifiedGroup + `'))`
 	celOIDCFlatGroupsSafe = `auth.identity.groups.all(g, ` +
-		`g.matches('` + safeGroupNamePattern + `') && !g.matches('` + celOrganizationQualifiedGroup + `'))`
+		`type(g) == string && g.matches('` + safeGroupNamePattern + `') && ` +
+		`!g.matches('` + celOrganizationQualifiedGroup + `'))`
 	celIdentityOrganizationID = `(has(auth.metadata) && has(auth.metadata.apiKeyValidation)) ? "" : ` +
 		`("org_id" in auth.identity && ` + celOIDCOrganizationIDSafe + ` ? auth.identity["org_id"] : "")`
 
@@ -1264,7 +1272,7 @@ allow {
 							},
 						},
 						"plain": map[string]any{
-							"selector": "auth.metadata.apiKeyValidation.groupsJSON",
+							"expression": celAPIKeyGroupsHeaderJSON,
 						},
 						"metrics":  false,
 						"priority": int64(0),
