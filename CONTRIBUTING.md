@@ -40,7 +40,7 @@ Thanks for your interest in contributing. This guide explains how to work with t
 ## Pull request process
 
 1. **Push** your branch to your fork and open a **pull request** against `main`.
-2. **Use semantic PR titles** so CI can accept the PR. Format: `type: subject` (subject not starting with a capital).
+2. **Use semantic PR titles** so CI can accept the PR. Format: `type: subject` or `type(scope): subject` (subject not starting with a capital, at most 60 characters in total).
    - Allowed **types:** `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, `revert`.
    - Examples: `feat: add TLS option for deploy script`, `fix: correct sourceNamespace for Kuadrant subscription`, `docs: update quickstart`.
    - Draft/WIP PRs can use the `draft` or `wip` label to skip title validation.

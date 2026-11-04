@@ -81,10 +81,7 @@
   color: "0366d6"
   description: "Pull requests that update a dependency file"
 
-# Read by .github/workflows/approval-policy.yml
-- name: override-approval-policy
-  color: "b60205"
-  description: "Maintainers only: a standard PR needs one approving review, see CONTRIBUTING.md"
+# Set by .github/workflows/approval-policy.yml
 - name: maas/policy-lightweight
   color: "ededed"
   description: "Set by approval-policy: docs, CI or tests only, one approving review"

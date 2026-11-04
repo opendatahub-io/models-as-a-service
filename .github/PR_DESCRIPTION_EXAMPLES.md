@@ -66,7 +66,7 @@ The odh-dashboard BFF drops `unlimited` when it rewrites a subscription, so it n
 
 ## Feature with an example
 
-From [#1778](https://github.com/opendatahub-io/models-as-a-service/pull/1778). The change in two short paragraphs, then what someone sets to use it. The original has no risk rating, but yours still needs one.
+From [#1778](https://github.com/opendatahub-io/models-as-a-service/pull/1778). The change in two short paragraphs, then what someone sets to use it. The original has no risk rating, so this one is ours.
 
 ~~~markdown
 feat(grid): inform routing with geo fencing requirements
@@ -88,6 +88,11 @@ metadata:
 ## How Has This Been Tested?
 
 E2E proves the provider receives the joined values and cannot be spoofed.
+
+## Risk analysis
+
+- Rating: 3
+- Why: changes the generated AuthPolicy (Kuadrant contract) and what maas-api returns, behind an experimental annotation and with e2e on the path.
 
 /area grid
 ~~~

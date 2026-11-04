@@ -6,10 +6,6 @@ on:
     paths:
       - .github/labels.yml
       - .github/workflows/sync-labels.yml
-  pull_request:
-    paths:
-      - .github/labels.yml
-      - .github/workflows/sync-labels.yml
 
 permissions:
   contents: read
@@ -30,4 +26,3 @@ jobs:
           # Prow labels are not in the file. Without this the sync would delete
           # approved and lgtm from every PR.
           skip-delete: true
-          dry-run: ${{ github.event_name == 'pull_request' }}
