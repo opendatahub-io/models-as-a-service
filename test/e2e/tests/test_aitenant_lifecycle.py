@@ -349,6 +349,7 @@ def _namespace_released_from_aitenant(obj):
 class TestAITenantLifecycle:
     # TODO: Add e2e coverage that Policies, Subscriptions, Models, and inference requests
     # work end-to-end in a newly created AITenant tenant namespace.
+    @pytest.mark.smoke
     def test_default_aitenant_bootstraps_maas_tenant_config_without_gateway_mutation(self):
         aitenant = _wait_for_json(
             AITENANT_KIND,
@@ -426,6 +427,7 @@ class TestAITenantLifecycle:
                 timeout=180,
             )
 
+    @pytest.mark.smoke
     def test_aitenant_rejected_outside_ai_tenants_namespace(self):
         suffix = uuid.uuid4().hex[:8]
         wrong_ns = f"e2e-ait-wrong-{suffix}"
