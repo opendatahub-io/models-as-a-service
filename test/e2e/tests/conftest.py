@@ -22,6 +22,11 @@ log = logging.getLogger(__name__)
 _WORKER_ISOLATED_XDIST_GROUPS = frozenset({"api_keys", "models"})
 
 
+# pr_new marking lives in pr_new_selection.py (pytest_plugins) so it is not
+# overwritten by the trylast pytest_collection_modifyitems below.
+pytest_plugins = ["pr_new_selection"]
+
+
 def _xdist_worker_suffix() -> str:
     """Stable suffix for per-worker session fixtures under pytest-xdist."""
     worker = os.environ.get("PYTEST_XDIST_WORKER", "master")
@@ -91,7 +96,7 @@ def _activate_marked_worker_tenant(request):
 
 
 @pytest.hookimpl(trylast=True)
-def pytest_collection_modifyitems(config, items):
+def pytest_collection_modifyitems(config, items):  # noqa: ARG001 - pytest hook signature
     """Tag serial tests and activate explicitly marked worker isolation.
 
     xdist_group alone does not block other workers from touching shared cluster
