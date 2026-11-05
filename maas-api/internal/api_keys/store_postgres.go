@@ -378,6 +378,7 @@ func (s *PostgresStore) Search(
 	whereClauses = append(whereClauses, fmt.Sprintf("tenant = $%d", argPos))
 	args = append(args, s.tenantName)
 	argPos++
+	whereClauses = append(whereClauses, "deleted_at IS NULL")
 	// Exclude ephemeral keys by default
 	if filters.IncludeEphemeral == nil || !*filters.IncludeEphemeral {
 		whereClauses = append(whereClauses, "ephemeral = FALSE")
