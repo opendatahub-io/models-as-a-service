@@ -677,6 +677,7 @@ def external_governance_scenario(external_governance_backends):
 
 @pytest.mark.external
 @pytest.mark.serial
+@pytest.mark.full_suite
 @pytest.mark.xdist_group("external")
 class TestExternalModelGovernance:
     def _list_models(self, key):
@@ -1021,6 +1022,7 @@ class TestExternalModelBodyRouting:
 
 @pytest.mark.external
 @pytest.mark.serial
+@pytest.mark.full_suite
 class TestExternalModelTokenRateLimit:
     """Deterministically prove response usage is charged for an ExternalModel."""
 
