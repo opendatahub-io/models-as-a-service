@@ -39,7 +39,7 @@ from test_helper import MODEL_NAME, _get_cluster_token
 
 log = logging.getLogger(__name__)
 
-pytestmark = pytest.mark.xdist_group("tenant_ipp")
+pytestmark = [pytest.mark.xdist_group("tenant_ipp"), pytest.mark.full_suite]
 
 SWITCH_RECONCILE_TIMEOUT = 300
 POLL_INTERVAL = 5
