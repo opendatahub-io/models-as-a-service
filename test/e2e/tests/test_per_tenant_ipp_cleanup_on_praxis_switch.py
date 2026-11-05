@@ -31,7 +31,7 @@ from tenant_external_model_helpers import require_legacy_ipp_coexistence_support
 
 log = logging.getLogger(__name__)
 
-pytestmark = pytest.mark.xdist_group("tenant_ipp")
+pytestmark = [pytest.mark.xdist_group("tenant_ipp"), pytest.mark.full_suite]
 
 SWITCH_RECONCILE_TIMEOUT = 300
 POLL_INTERVAL = 5
