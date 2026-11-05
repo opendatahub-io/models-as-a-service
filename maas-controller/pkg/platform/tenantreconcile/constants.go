@@ -202,7 +202,7 @@ const (
 	LokiReadSecretName = "usage-logs-loki" //nolint:gosec // secret name reference, not a credential
 	// LokiReadSecretKey holds the Loki read API base URL injected as the
 	// LOKI_READ_ENDPOINT env var on the maas-api container.
-	LokiReadSecretKey = "LOKI_READ_ENDPOINT"
+	LokiReadSecretKey = "LOKI_READ_ENDPOINT" //nolint:gosec // secret key reference, not a credential
 	// LokiReadTokenSecretKey holds the service account token injected as the
 	// LOKI_READ_TOKEN env var on the maas-api container (via secretKeyRef, so
 	// the token value never lands in the Deployment spec).

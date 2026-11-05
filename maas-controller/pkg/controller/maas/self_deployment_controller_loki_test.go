@@ -5,8 +5,6 @@ import (
 	"context"
 	"testing"
 
-	. "github.com/onsi/gomega"
-
 	corev1 "k8s.io/api/core/v1"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -18,6 +16,8 @@ import (
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/platform/tenantreconcile"
+
+	. "github.com/onsi/gomega"
 )
 
 func persesDatasourceFixture(name string) *unstructured.Unstructured {
