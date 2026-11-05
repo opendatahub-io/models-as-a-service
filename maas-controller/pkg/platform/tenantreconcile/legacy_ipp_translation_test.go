@@ -78,7 +78,7 @@ func TestLegacyIPPTranslationModelsScopesActiveProviderBindings(t *testing.T) {
 		legacyTranslationProvider("tenant-a", "openai-model-provider", "openai"),
 	).Build()
 
-	got, err := legacyIPPTranslationModels(context.Background(), cl, params, &unstructured.Unstructured{})
+	got, err := legacyIPPTranslationModels(context.Background(), cl, params, &unstructured.Unstructured{}, false)
 	require.NoError(t, err)
 	require.Equal(t, []string{
 		"anthropic-model (apiFormat=messages, provider=anthropic)",
@@ -120,13 +120,13 @@ func TestLegacyIPPTranslationModelsCoverDefaultTenantModelsOutsideTenantNamespac
 
 	params := PlatformParams{ModelNamespace: "models-as-a-service", AppNamespace: "redhat-ai-gateway-infra",
 		GatewayName: "maas-default-gateway", GatewayNamespace: "openshift-ingress"}
-	got, err := legacyIPPTranslationModels(context.Background(), cl, params, &unstructured.Unstructured{})
+	got, err := legacyIPPTranslationModels(context.Background(), cl, params, &unstructured.Unstructured{}, false)
 	require.NoError(t, err)
 	require.Equal(t, []string{"llm/azure-model (apiFormat=openai-chat, provider=azure)"}, got)
 
 	// Another tenant serves only its own namespace.
 	params = PlatformParams{TenantIdentifier: "tenant-b", ModelNamespace: "tenant-b", GatewayName: "gateway-b", GatewayNamespace: "gateway-ns"}
-	got, err = legacyIPPTranslationModels(context.Background(), cl, params, &unstructured.Unstructured{})
+	got, err = legacyIPPTranslationModels(context.Background(), cl, params, &unstructured.Unstructured{}, false)
 	require.NoError(t, err)
 	require.Equal(t, []string{"tenant-model (apiFormat=openai-chat, provider=azure)"}, got)
 }
@@ -139,7 +139,7 @@ func TestLegacyIPPTranslationModelsDoNotAssumeOpenAIWireFormatMeansOpenAISafe(t 
 			provider := legacyTranslationProvider("tenant-a", providerType+"-model-provider", providerType)
 			cl := fake.NewClientBuilder().WithScheme(inferenceListScheme(t)).WithObjects(model, provider).Build()
 
-			got, err := legacyIPPTranslationModels(context.Background(), cl, params, &unstructured.Unstructured{})
+			got, err := legacyIPPTranslationModels(context.Background(), cl, params, &unstructured.Unstructured{}, false)
 			require.NoError(t, err)
 			require.Equal(t, []string{providerType + "-model (apiFormat=openai-chat, provider=" + providerType + ")"}, got)
 		})
@@ -150,7 +150,7 @@ func TestLegacyIPPTranslationModelsFailsClosedWhenProviderCannotBeResolved(t *te
 	model := legacyTranslationModel("tenant-a", "missing-provider", "openai-chat", "gateway-a", "gateway-ns", nil)
 	cl := fake.NewClientBuilder().WithScheme(inferenceListScheme(t)).WithObjects(model).Build()
 
-	got, err := legacyIPPTranslationModels(context.Background(), cl, PlatformParams{ModelNamespace: "tenant-a", GatewayName: "gateway-a", GatewayNamespace: "gateway-ns"}, &unstructured.Unstructured{})
+	got, err := legacyIPPTranslationModels(context.Background(), cl, PlatformParams{ModelNamespace: "tenant-a", GatewayName: "gateway-a", GatewayNamespace: "gateway-ns"}, &unstructured.Unstructured{}, false)
 	require.NoError(t, err)
 	require.Equal(t, []string{"missing-provider (apiFormat=openai-chat, provider missing-provider-provider unresolved)"}, got)
 }
@@ -158,6 +158,91 @@ func TestLegacyIPPTranslationModelsFailsClosedWhenProviderCannotBeResolved(t *te
 func TestLegacyIPPTranslationModelsFailsClosedOnUnknownActiveFormat(t *testing.T) {
 	model := legacyTranslationModel("tenant-a", "missing-format", "", "gateway-a", "gateway-ns", nil)
 	cl := fake.NewClientBuilder().WithScheme(inferenceListScheme(t)).WithObjects(model).Build()
-	_, err := legacyIPPTranslationModels(context.Background(), cl, PlatformParams{ModelNamespace: "tenant-a", GatewayName: "gateway-a", GatewayNamespace: "gateway-ns"}, &unstructured.Unstructured{})
+	_, err := legacyIPPTranslationModels(context.Background(), cl, PlatformParams{ModelNamespace: "tenant-a", GatewayName: "gateway-a", GatewayNamespace: "gateway-ns"}, &unstructured.Unstructured{}, false)
 	require.ErrorContains(t, err, "cannot prove it is safe to migrate")
+}
+
+func TestLegacyIPPTranslationModelsAllowAnthropicMessagesOnlyWithTranslation(t *testing.T) {
+	params := PlatformParams{ModelNamespace: "tenant-a", GatewayName: "gateway-a", GatewayNamespace: "gateway-ns"}
+	model := func(name, apiFormat, providerType string) []client.Object {
+		return []client.Object{
+			legacyTranslationModel("tenant-a", name, apiFormat, "gateway-a", "gateway-ns", nil),
+			legacyTranslationProvider("tenant-a", name+"-provider", providerType),
+		}
+	}
+	for _, test := range []struct {
+		name               string
+		objects            []client.Object
+		translationEnabled bool
+		want               []string
+	}{
+		{
+			name:               "Anthropic Messages with translation on is served by Praxis",
+			objects:            model("anthropic-model", "messages", "anthropic"),
+			translationEnabled: true,
+		},
+		{
+			name:    "Anthropic Messages with translation off is skipped by ai-gateway-controller",
+			objects: model("anthropic-model", "messages", "anthropic"),
+			want:    []string{"anthropic-model (apiFormat=messages, provider=anthropic)"},
+		},
+		{
+			name:               "Azure OpenAI with translation on still needs legacy IPP",
+			objects:            model("azure-model", "openai-chat", "azure-openai"),
+			translationEnabled: true,
+			want:               []string{"azure-model (apiFormat=openai-chat, provider=azure-openai)"},
+		},
+		{
+			name:               "Anthropic provider with another format is not the qualified profile",
+			objects:            model("anthropic-chat-model", "openai-chat", "anthropic"),
+			translationEnabled: true,
+			want:               []string{"anthropic-chat-model (apiFormat=openai-chat, provider=anthropic)"},
+		},
+		{
+			name:               "Messages format on a custom provider is not the qualified profile",
+			objects:            model("custom-model", "messages", "custom"),
+			translationEnabled: true,
+			want:               []string{"custom-model (apiFormat=messages, provider=custom)"},
+		},
+		{
+			name:               "mixed Anthropic and Azure names only Azure",
+			objects:            append(model("anthropic-model", "messages", "anthropic"), model("azure-model", "openai-chat", "azure-openai")...),
+			translationEnabled: true,
+			want:               []string{"azure-model (apiFormat=openai-chat, provider=azure-openai)"},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			cl := fake.NewClientBuilder().WithScheme(inferenceListScheme(t)).WithObjects(test.objects...).Build()
+			got, err := legacyIPPTranslationModels(context.Background(), cl, params, &unstructured.Unstructured{}, test.translationEnabled)
+			require.NoError(t, err)
+			require.Equal(t, test.want, got)
+		})
+	}
+}
+
+func TestAcceptedRiskWarningRechecksBindingsWithSpecTranslation(t *testing.T) {
+	cl := fake.NewClientBuilder().WithScheme(inferenceListScheme(t)).WithObjects(
+		legacyTranslationModel("tenant-a", "anthropic-model", "messages", "gateway-a", "gateway-ns", nil),
+		legacyTranslationProvider("tenant-a", "anthropic-model-provider", "anthropic"),
+		legacyTranslationModel("tenant-a", "azure-model", "openai-chat", "gateway-a", "gateway-ns", nil),
+		legacyTranslationProvider("tenant-a", "azure-model-provider", "azure-openai"),
+	).Build()
+	for _, enabled := range []bool{true, false} {
+		tenant := &maasv1alpha1.MaasTenantConfig{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: maasv1alpha1.MaasTenantConfigInstanceName, Namespace: "tenant-a",
+				Annotations: map[string]string{AnnotationAPITranslationMigrationRisk: APITranslationMigrationRiskForced},
+			},
+			Spec: maasv1alpha1.MaasTenantConfigSpec{APITranslation: &maasv1alpha1.TenantAPITranslationConfig{Enabled: migrationBoolPtr(enabled)}},
+		}
+		params := &PlatformParams{TenantIdentifier: "tenant-a", ModelNamespace: "tenant-a", GatewayName: "gateway-a", GatewayNamespace: "gateway-ns"}
+		require.NoError(t, appendAcceptedAPITranslationMigrationRiskWarning(context.Background(), cl, tenant, params))
+		require.Len(t, params.Warnings, 1)
+		require.Contains(t, params.Warnings[0], "azure-model (apiFormat=openai-chat, provider=azure-openai)")
+		if enabled {
+			require.NotContains(t, params.Warnings[0], "anthropic-model", "translation on serves the Anthropic binding")
+		} else {
+			require.Contains(t, params.Warnings[0], "anthropic-model (apiFormat=messages, provider=anthropic)")
+		}
+	}
 }
