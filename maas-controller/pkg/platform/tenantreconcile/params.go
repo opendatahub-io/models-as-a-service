@@ -77,6 +77,12 @@ type PlatformParams struct {
 	// MonitoringNamespace is the namespace where the platform monitoring stack (OTLP collector) runs.
 	MonitoringNamespace string
 
+	// LokiReadEndpoint is injected as LOKI_READ_ENDPOINT on the maas-api
+	// container, enabling the read-only Loki proxy (GET /v1/logs*). Empty
+	// disables the proxy. Resolved from the usage-logs-loki Secret in the app
+	// namespace; see resolveLokiReadEndpoint.
+	LokiReadEndpoint string
+
 	// PayloadProcessingRouterExtProcFallback enables router-anchored ext_proc patches when
 	// Kuadrant WASM auth is absent on the gateway (avoids duplicate ext_proc when WASM exists).
 	PayloadProcessingRouterExtProcFallback bool
@@ -1059,6 +1065,15 @@ func patchMaaSAPIDeployment(log logr.Logger, r *unstructured.Unstructured, param
 	deletionRetentionDays := firstNonEmpty(params.APIKeyDeletionRetentionDays, DefaultAPIKeyDeletionRetentionDays)
 	if err := setOrAddEnvVar(r, "maas-api", "API_KEY_DELETION_RETENTION_DAYS", deletionRetentionDays); err != nil {
 		return fmt.Errorf("patch API_KEY_DELETION_RETENTION_DAYS: %w", err)
+	}
+	// LOKI_READ_ENDPOINT enables the read-only Loki proxy; an empty value
+	// disables it. The base manifest never sets it, so leaving it out of the
+	// render (and the SSA apply config) removes any previously applied value.
+	if params.LokiReadEndpoint != "" {
+		if err := setOrAddEnvVar(r, "maas-api", "LOKI_READ_ENDPOINT", params.LokiReadEndpoint); err != nil {
+			return fmt.Errorf("patch LOKI_READ_ENDPOINT: %w", err)
+		}
+		log.V(4).Info("Patched maas-api LOKI_READ_ENDPOINT")
 	}
 	if params.MaaSAPIResources != nil {
 		if err := setContainerResources(r, "maas-api", params.MaaSAPIResources); err != nil {

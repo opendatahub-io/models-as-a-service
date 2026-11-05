@@ -196,6 +196,14 @@ const (
 	MaaSDBSecretName             = "maas-db-config" //nolint:gosec // secret name reference, not a credential
 	MaaSDBSecretKey              = "DB_CONNECTION_URL"
 
+	// LokiReadSecretName is the Secret in the app namespace whose presence
+	// enables the maas-api read-only Loki proxy (GET /v1/logs*). Its absence
+	// leaves LOKI_READ_ENDPOINT unset, which disables the proxy.
+	LokiReadSecretName = "usage-logs-loki" //nolint:gosec // secret name reference, not a credential
+	// LokiReadSecretKey holds the Loki read API base URL injected as the
+	// LOKI_READ_ENDPOINT env var on the maas-api container.
+	LokiReadSecretKey = "LOKI_READ_ENDPOINT"
+
 	// Condition types aligned with ODH internal/controller/status for DSC aggregation parity.
 	ConditionDependenciesAvailable      = "DependenciesAvailable"
 	ConditionMaaSPrerequisitesAvailable = "MaaSPrerequisitesAvailable"
