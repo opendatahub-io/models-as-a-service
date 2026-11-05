@@ -16,7 +16,10 @@ import os
 
 import pytest
 
-pytestmark = pytest.mark.xdist_group("readonly")
+pytestmark = [
+    pytest.mark.smoke,
+    pytest.mark.xdist_group("readonly"),
+]
 
 
 def test_pytest_version_supports_loadgroup() -> None:
