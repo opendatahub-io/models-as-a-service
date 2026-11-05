@@ -964,16 +964,30 @@ def _request_with_gateway_retry(method, url, retries=None, delay=None, deadline=
     return r
 
 
-def create_api_key_at(base_url: str, oc_token: str, name: str, *, subscription: str | None = None):
+def create_api_key_at(
+    base_url: str,
+    oc_token: str,
+    name: str,
+    *,
+    subscription: str | None = None,
+    expires_in: str | None = None,
+):
     """Create an API key against a maas-api base URL (any tenant's).
 
     Shared by the default-tenant helpers and the tenant-scoped maas-api
     callers. Retries empty 403 / Authorino AUTH_FAILURE while gateway
     AuthPolicy enforcement catches up.
+
+    Args:
+        expires_in: Optional duration string (e.g. "168h"). A tenant's
+            apiKeys.maxExpirationDays is only evaluated when the request
+            carries an expiry.
     """
     body = {"name": name}
     if subscription:
         body["subscription"] = subscription
+    if expires_in:
+        body["expiresIn"] = expires_in
 
     return _request_with_gateway_retry(
         requests.post,
