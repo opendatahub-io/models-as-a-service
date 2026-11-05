@@ -1009,6 +1009,102 @@ func TestRenderKustomizeRemapsServiceMonitorServerName(t *testing.T) {
 	assert.Equal(t, "maas-api-metrics."+appNamespace+".svc", got)
 }
 
+func TestRenderKustomizeMetricsScraper(t *testing.T) {
+	const appNamespace = "redhat-ai-gateway-infra"
+	resources := renderOverlayResources(t, appNamespace)
+
+	secret := requireResource(t, resources, schema.GroupVersionKind{Version: "v1", Kind: "Secret"}, "maas-metrics-scraper-token")
+	assert.Equal(t, appNamespace, secret.GetNamespace())
+	assert.Equal(t, "kubernetes.io/service-account-token", secret.Object["type"])
+	assert.Equal(t, "maas-metrics-scraper", secret.GetAnnotations()["kubernetes.io/service-account.name"])
+	account := requireResource(t, resources, GVKServiceAccount, "maas-metrics-scraper")
+	assert.Equal(t, appNamespace, account.GetNamespace())
+	accountIndex, secretIndex := -1, -1
+	for i := range resources {
+		if resources[i].GetName() == account.GetName() && resources[i].GroupVersionKind() == GVKServiceAccount {
+			accountIndex = i
+		}
+		if resources[i].GetName() == secret.GetName() && resources[i].GetKind() == "Secret" {
+			secretIndex = i
+		}
+	}
+	require.NotEqual(t, -1, accountIndex)
+	require.NotEqual(t, -1, secretIndex)
+	assert.Less(t, accountIndex, secretIndex, "the token controller needs the ServiceAccount before its Secret")
+
+	for _, name := range []string{"maas-api-metrics", "maas-controller-metrics"} {
+		monitor := requireResource(t, resources, GVKServiceMonitor, name)
+		assert.Equal(t, appNamespace, monitor.GetNamespace())
+		endpoints, found, err := unstructured.NestedSlice(monitor.Object, "spec", "endpoints")
+		require.NoError(t, err)
+		require.True(t, found)
+		require.Len(t, endpoints, 1)
+		endpoint, ok := endpoints[0].(map[string]any)
+		require.True(t, ok)
+		_, hasFile := endpoint["bearerTokenFile"]
+		assert.False(t, hasFile)
+		tokenName, found, err := unstructured.NestedString(endpoint, "authorization", "credentials", "name")
+		require.NoError(t, err)
+		require.True(t, found)
+		assert.Equal(t, secret.GetName(), tokenName)
+		key, found, err := unstructured.NestedString(endpoint, "authorization", "credentials", "key")
+		require.NoError(t, err)
+		require.True(t, found)
+		assert.Equal(t, "token", key)
+	}
+	controllerMonitor := requireResource(t, resources, GVKServiceMonitor, "maas-controller-metrics")
+	selector, found, err := unstructured.NestedStringMap(controllerMonitor.Object, "spec", "selector", "matchLabels")
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, map[string]string{"control-plane": "maas-controller", "app": "maas-controller"}, selector)
+
+	assert.Nil(t, findResource(resources, GVKClusterRoleBinding, "maas-metrics-scraper"))
+}
+
+func TestControllerMetricsMonitorTargetsControllerNamespace(t *testing.T) {
+	const appNamespace = "redhat-ai-gateway-infra"
+	resources := renderOverlayResources(t, appNamespace)
+	monitor := requireResource(t, resources, GVKServiceMonitor, "maas-controller-metrics")
+	disabled := false
+	defaultTenant := &maasv1alpha1.MaasTenantConfig{Spec: maasv1alpha1.MaasTenantConfigSpec{
+		Telemetry: &maasv1alpha1.TenantTelemetryConfig{Enabled: &disabled},
+	}}
+
+	configured, err := PostRender(context.Background(), logr.Discard(), defaultTenant,
+		[]unstructured.Unstructured{*monitor}, PlatformParams{ControllerNamespace: "redhat-ods-applications"})
+	require.NoError(t, err)
+	require.Len(t, configured, 1)
+	assert.Equal(t, appNamespace, configured[0].GetNamespace())
+	matchNames, found, err := unstructured.NestedStringSlice(configured[0].Object, "spec", "namespaceSelector", "matchNames")
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, []string{"redhat-ods-applications"}, matchNames)
+	endpoints, found, err := unstructured.NestedSlice(configured[0].Object, "spec", "endpoints")
+	require.NoError(t, err)
+	require.True(t, found)
+	endpoint, ok := endpoints[0].(map[string]any)
+	require.True(t, ok)
+	serverName, found, err := unstructured.NestedString(endpoint, "tlsConfig", "serverName")
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, "maas-controller-metrics.redhat-ods-applications.svc", serverName)
+
+	teamTenant := &maasv1alpha1.Tenant{Spec: maasv1alpha1.TenantSpec{
+		Telemetry: &maasv1alpha1.TenantTelemetryConfig{Enabled: &disabled},
+	}}
+	otherTenant, err := PostRender(context.Background(), logr.Discard(), teamTenant,
+		[]unstructured.Unstructured{*monitor}, PlatformParams{ControllerNamespace: "redhat-ods-applications", TenantIdentifier: "team"})
+	require.NoError(t, err)
+	assert.Empty(t, otherTenant, "the shared controller must be scraped only once")
+}
+
+func TestXKSOverlayExcludesMetricsScraper(t *testing.T) {
+	resources := renderPlatformOverlayResources(t, "xks", "opendatahub")
+	assert.Nil(t, findResource(resources, GVKServiceMonitor, "maas-controller-metrics"))
+	assert.Nil(t, findResource(resources, GVKServiceAccount, "maas-metrics-scraper"))
+	assert.Nil(t, findResource(resources, schema.GroupVersionKind{Version: "v1", Kind: "Secret"}, "maas-metrics-scraper-token"))
+}
+
 func renderOverlayResources(t *testing.T, appNamespace string) []unstructured.Unstructured {
 	t.Helper()
 

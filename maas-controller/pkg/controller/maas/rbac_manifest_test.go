@@ -49,6 +49,26 @@ func TestControllerRBACCoversMaaSAPIClusterRoles(t *testing.T) {
 	}
 }
 
+func TestMetricsScraperRBAC(t *testing.T) {
+	g := NewWithT(t)
+
+	controllerRole := readClusterRoleManifest(t, "metrics_credential_clusterrole.yaml")
+	g.Expect(hasUnrestrictedRuleForGroup(controllerRole.Rules, "", "secrets", "create")).To(BeTrue())
+	g.Expect(hasUnrestrictedRuleForGroup(controllerRole.Rules, "", "secrets", "patch")).To(BeFalse())
+	g.Expect(coversPermission(controllerRole.Rules, "", "secrets", "patch", []string{"maas-metrics-scraper-token"})).To(BeTrue())
+	g.Expect(hasNonResourceURLRule(controllerRole.Rules, "/metrics", "get")).To(BeFalse())
+	g.Expect(controllerRole.Rules).To(HaveLen(2), "the supplemental role must only permit Secret writes")
+}
+
+func hasNonResourceURLRule(rules []rbacv1.PolicyRule, path string, verbs ...string) bool {
+	for _, rule := range rules {
+		if slices.Contains(rule.NonResourceURLs, path) && containsAll(rule.Verbs, verbs) {
+			return true
+		}
+	}
+	return false
+}
+
 // coversPermission reports whether rules grant verb on group/resource for every
 // requested resource name (or unrestricted access when none are requested).
 func coversPermission(rules []rbacv1.PolicyRule, group, resource, verb string, resourceNames []string) bool {

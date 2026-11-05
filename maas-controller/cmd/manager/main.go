@@ -56,7 +56,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
-	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	crwebhook "sigs.k8s.io/controller-runtime/pkg/webhook"
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
@@ -934,11 +933,12 @@ func (c managerTLSConfig) registerWatcher(mgr ctrl.Manager, cancel context.Cance
 }
 
 // buildMetricsServerOptions configures the controller-runtime metrics endpoint.
-// When secureMetrics is true, metrics are served over HTTPS with authn/authz
-// filters and the cluster TLS profile applied (plus NextProtos).
+// When secureMetrics is true, metrics are served over HTTPS with endpoint
+// scraper identity or Kubernetes authn/authz and the cluster TLS profile.
 func buildMetricsServerOptions(
 	bindAddress string,
 	secureMetrics bool,
+	scraperNamespace string,
 	serverTLSOpt func(*tls.Config),
 	nextProtosOpt func(*tls.Config),
 ) metricsserver.Options {
@@ -953,7 +953,7 @@ func buildMetricsServerOptions(
 		TLSOpts:       tlsOpts,
 	}
 	if secureMetrics {
-		opts.FilterProvider = filters.WithAuthenticationAndAuthorization
+		opts.FilterProvider = metricsFilterProvider(scraperNamespace)
 		opts.CertDir = metricsCertDir
 	}
 	return opts
@@ -1260,7 +1260,7 @@ func main() {
 	}
 
 	metricsServerOptions := buildMetricsServerOptions(
-		metricsAddr, secureMetrics, tlsConfig.serverTLSOpt, nextProtosOpt,
+		metricsAddr, secureMetrics, infraNamespace, tlsConfig.serverTLSOpt, nextProtosOpt,
 	)
 
 	mgr, err := ctrl.NewManager(cfg, ctrl.Options{

@@ -3,6 +3,8 @@ resources:
   - clusterrole_maas_configs.yaml
   - clusterrolebinding_maas_configs.yaml
   - clusterrole_binding.yaml
+  - metrics_credential_clusterrole.yaml
+  - metrics_credential_clusterrolebinding.yaml
   - service_account.yaml
   - leader_election_role.yaml
   - leader_election_role_binding.yaml

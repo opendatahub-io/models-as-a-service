@@ -1,11 +1,17 @@
+# Kept beside the credential Secret in the MaaS application namespace. The
+# controller Service itself remains in the controller namespace.
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
   name: maas-controller-metrics
+  namespace: maas-api
   labels:
     app: maas-controller
     monitoring.opendatahub.io/scrape: "true"
 spec:
+  namespaceSelector:
+    matchNames:
+      - opendatahub
   selector:
     matchLabels:
       control-plane: maas-controller
@@ -15,11 +21,14 @@ spec:
       port: metrics
       scheme: https
       interval: 30s
-      bearerTokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
+      authorization:
+        type: Bearer
+        credentials:
+          name: maas-metrics-scraper-token
+          key: token
       tlsConfig:
         ca:
           configMap:
             name: openshift-service-ca.crt
             key: service-ca.crt
-        # name.namespace.svc — filled by kustomize replacements in default/
         serverName: maas-controller-metrics.opendatahub.svc

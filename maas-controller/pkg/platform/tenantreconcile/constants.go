@@ -223,6 +223,7 @@ var (
 	GVKAuthConfig           = schema.GroupVersionKind{Group: "authorino.kuadrant.io", Version: "v1beta3", Kind: "AuthConfig"}
 	GVKAuthorino            = schema.GroupVersionKind{Group: "operator.authorino.kuadrant.io", Version: "v1beta1", Kind: "Authorino"}
 	GVKService              = schema.GroupVersionKind{Version: "v1", Kind: "Service"}
+	GVKServiceMonitor       = schema.GroupVersionKind{Group: "monitoring.coreos.com", Version: "v1", Kind: "ServiceMonitor"}
 	GVKServiceAccount       = schema.GroupVersionKind{Version: "v1", Kind: "ServiceAccount"}
 	GVKConfigMap            = schema.GroupVersionKind{Version: "v1", Kind: "ConfigMap"}
 	GVKClusterRoleBinding   = schema.GroupVersionKind{Group: "rbac.authorization.k8s.io", Version: "v1", Kind: "ClusterRoleBinding"}

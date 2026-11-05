@@ -151,6 +151,7 @@ func serve() error {
 		Secure:              cfg.MetricsSecure,
 		CertDir:             cfg.MetricsCertDir,
 		RESTConfig:          cluster.RESTConfig(),
+		ScraperNamespace:    cfg.Namespace,
 		ProfileMinVersion:   profileMinVersion,
 		ProfileCipherSuites: profileCipherSuites,
 	})
