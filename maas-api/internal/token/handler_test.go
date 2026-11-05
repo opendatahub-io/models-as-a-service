@@ -242,6 +242,7 @@ func TestExtractUserInfoOptional(t *testing.T) {
 		user := response.User
 		assert.Equal(t, "alex", user.Username)
 		assert.Equal(t, []string{
+			"system:authenticated",
 			"42c3e46f-2477-44d7-a85b-d3b43f6b31fa/users",
 		}, user.Groups)
 		assert.Equal(t, "test", user.Tenant)

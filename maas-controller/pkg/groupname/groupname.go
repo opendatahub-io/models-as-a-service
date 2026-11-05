@@ -10,7 +10,6 @@
 //
 //   - maas-api/internal/api_keys/groupname.go (maas-api canonical)
 //   - maas-controller/pkg/controller/maas/maasauthpolicy_controller.go
-//   - scripts/data/maas-api-authpolicy-external-oidc-patch.yaml
 //   - docs/content/advanced-administration/external-oidc.md
 package groupname
 

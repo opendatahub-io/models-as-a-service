@@ -228,6 +228,9 @@ class TestGridAdminInventory:
             )
             validated_key = json.loads(body)
             assert validated_key["groups"] == [grid_inventory_resources.owner_group]
+            assert validated_key["groupsJSON"] == json.dumps(
+                validated_key["groups"]
+            )
 
             model_refs = _grid_model_refs(maas_api_base_url, api_key)
             assert (

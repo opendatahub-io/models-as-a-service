@@ -9,7 +9,7 @@ import (
 // Group-name validation for all authenticated groups.
 //
 // The same rule is enforced by maas-controller in the AuthPolicies it
-// generates and by the deploy-time kustomize patch. MaaS applies the rule
+// generates. MaaS applies the rule
 // to legacy and organization groups alike, so every authenticated group can
 // be stored in an API-key snapshot. The copies live in independent Go
 // modules, so the mirrored
@@ -19,7 +19,6 @@ import (
 //
 //   - maas-controller/pkg/groupname/groupname.go (controller canonical)
 //   - maas-controller/pkg/controller/maas/maasauthpolicy_controller.go
-//   - scripts/data/maas-api-authpolicy-external-oidc-patch.yaml
 //   - docs/content/advanced-administration/external-oidc.md
 
 // validGroupNamePattern matches legacy group names accepted by MaaS.
