@@ -53,6 +53,7 @@ from multitenancy_helpers import (
 from test_helper import (
     MODEL_NAME,
     MODEL_PATH,
+    assert_inference_response,
     _check_ipp_pods_deployed,
     _gateway_url,
     _get_cluster_token,
@@ -371,11 +372,13 @@ class TestPerTenantIPPRouting:
             f"{warmup.status_code if warmup is not None else 'no response'} "
             f"{redact_sensitive(warmup.text[:500]) if warmup is not None else ''}"
         )
+        assert_inference_response(warmup)
         response = _post_hybrid_chat(_gateway_url(), MODEL_PATH, api_key)
         assert response.status_code == 200, (
             f"Default gateway hybrid BBR failed: {response.status_code} "
             f"{redact_sensitive(response.text[:500])}"
         )
+        assert_inference_response(response)
 
         time.sleep(2)
         default_logs = deployment_log_snapshot(
@@ -434,6 +437,7 @@ class TestPerTenantIPPRouting:
             f"Tenant gateway hybrid BBR failed: {response.status_code} "
             f"{redact_sensitive(response.text[:500])}"
         )
+        assert_inference_response(response)
 
         time.sleep(2)
         tenant_logs = deployment_log_snapshot(
