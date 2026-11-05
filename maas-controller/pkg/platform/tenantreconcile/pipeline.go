@@ -287,7 +287,9 @@ func reconcilePayloadProcessingSwitch(
 			if err != nil {
 				return payloadProcessingSwitchOutcome{}, fmt.Errorf("prepare API translation migration intent before IPP cleanup: %w", err)
 			}
-			affectedModels, err := legacyIPPTranslationModels(ctx, apiReader, *params, tenant)
+			// The intent, not the possibly stale tenant spec, decides whether
+			// Praxis translates Anthropic Messages bindings after cleanup.
+			affectedModels, err := legacyIPPTranslationModels(ctx, apiReader, *params, tenant, intent.Enabled)
 			if err != nil {
 				blockedReason := fmt.Sprintf("cannot assess legacy IPP translation compatibility (%v); keeping the IPP ConfigMap and resources", err)
 				if err := setPayloadProcessingMigrationAnnotation(ctx, c, tenant, PayloadProcessingMigrationBlocked); err != nil {
@@ -302,12 +304,19 @@ func reconcilePayloadProcessingSwitch(
 				case gate.Forced:
 					params.Warnings = append(params.Warnings, forcedMigrationReason(compatibilityRisk, true))
 				case intent.Explicit && !intent.Enabled:
-					params.Warnings = append(params.Warnings, compatibilityRisk+"; explicit spec.apiTranslation.enabled=false accepts this compatibility loss")
+					params.Warnings = append(params.Warnings, compatibilityRisk+explicitFalseAcceptsRisk)
 				default:
+					forceOutcome := "the listed bindings lose IPP parity"
+					if intent.Enabled {
+						forceOutcome = "API translation stays on, so only " + forceOutcome
+					}
 					blockedReason := fmt.Sprintf(
-						"%s; keeping the IPP ConfigMap and resources. Set spec.apiTranslation.enabled=false to explicitly accept the loss or set %s=true after reviewing the risk. This does not establish parity.",
+						"%s; keeping the IPP ConfigMap and resources. To migrate, set %s=true after reviewing the risk: %s. "+
+							"Setting spec.apiTranslation.enabled=false instead also turns off targetModel and path rewriting for every ExternalModel, "+
+							"so models named differently from their targetModel or using a non-default provider path stop working too. Neither establishes parity.",
 						compatibilityRisk,
 						AnnotationForcePayloadProcessingMigration,
+						forceOutcome,
 					)
 					log.Info("blocking IPP→Praxis migration because provider translation is not available", "reason", blockedReason)
 					if err := setPayloadProcessingMigrationAnnotation(ctx, c, tenant, PayloadProcessingMigrationBlocked); err != nil {
@@ -849,6 +858,15 @@ func cleanupIPPExternalModelRoutes(ctx context.Context, c client.Client, params 
 	if err != nil {
 		return fmt.Errorf("clean up IPP-owned HTTPRoutes: %w", err)
 	}
+	// The tenant's IPP may also have routed models of other namespaces on the
+	// tenant's Gateway: the default tenant's IPP serves every namespace,
+	// including those of other tenants, and a 3.5 IPP kept by a blocked
+	// migration still does (RHOAIENG-102557). Once the tenant leaves IPP its
+	// routes on that Gateway are stale wherever they are, except in the shared
+	// infrastructure namespace.
+	if params.GatewayName != "" {
+		listOpts, scope = nil, "cluster-wide"
+	}
 	listOpts = append(listOpts, client.MatchingLabels{"app.kubernetes.io/managed-by": ippExternalModelManagedBy})
 	if err := c.List(ctx, routes, listOpts...); err != nil {
 		return fmt.Errorf("list existing IPP HTTPRoutes %s: %w", scope, err)
@@ -856,7 +874,7 @@ func cleanupIPPExternalModelRoutes(ctx context.Context, c client.Client, params 
 	for i := range routes.Items {
 		route := &routes.Items[i]
 		namespace := route.GetNamespace()
-		if !inScope(namespace) {
+		if !inScope(namespace) && (namespace == params.AppNamespace || !routeOnGateway(route, params.GatewayNamespace, params.GatewayName)) {
 			continue
 		}
 		modelName := route.GetLabels()[ippExternalModelLabel]
@@ -889,6 +907,32 @@ func cleanupIPPExternalModelRoutes(ctx context.Context, c client.Client, params 
 		}
 	}
 	return nil
+}
+
+// routeOnGateway reports whether the HTTPRoute names the Gateway as a parent.
+func routeOnGateway(route *unstructured.Unstructured, gatewayNamespace, gatewayName string) bool {
+	if gatewayName == "" {
+		return false
+	}
+	parents, _, _ := unstructured.NestedSlice(route.Object, "spec", "parentRefs")
+	for _, raw := range parents {
+		parent, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		if kind, _ := parent["kind"].(string); kind != "" && kind != "Gateway" {
+			continue
+		}
+		name, _ := parent["name"].(string)
+		namespace, _ := parent["namespace"].(string)
+		if namespace == "" {
+			namespace = route.GetNamespace()
+		}
+		if name == gatewayName && namespace == gatewayNamespace {
+			return true
+		}
+	}
+	return false
 }
 
 // ippModelNamespaceScope returns where IPP served the tenant's models: its
