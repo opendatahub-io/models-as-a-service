@@ -4317,6 +4317,94 @@ func TestSearchAPIKeys_SubscriptionAdminWithoutSubscriptionFiltersUsername(t *te
 	assert.ElementsMatch(t, []string{"bob-a", "bob-b"}, gotIDs)
 }
 
+func TestSearchAPIKeys_PlatformAdminWithoutSubscriptionKeepsTenantScope(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store := NewMockStore()
+	addSubscriptionAdminTestKey(t, store, "alice-a", "alice", "subscription-a")
+	addSubscriptionAdminTestKey(t, store, "bob-a", "bob", "subscription-a")
+	addSubscriptionAdminTestKey(t, store, "other-a", "other", "subscription-other")
+
+	resolver := &subscriptionAdminResolverStub{scopes: []*subscription.AdminScope{{
+		Tenant:       "test-tenant",
+		Namespace:    "test-ns",
+		Subscription: "subscription-a",
+	}}}
+	handler := NewHandler(
+		logger.Development(),
+		NewService(store, &config.Config{}, fixedSubSelector{}),
+		newMockAdminChecker(),
+		nil,
+		resolver,
+	)
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/api-keys/search", strings.NewReader(`{}`))
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Set("user", &token.UserContext{
+		Username: "alice",
+		Groups:   []string{"admin-users"},
+		Tenant:   "test-tenant",
+	})
+	c.Set("verified_identity", verifiedIdentityForSubscriptionAdmin())
+
+	handler.SearchAPIKeys(c)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var response SearchAPIKeysResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+	gotIDs := make([]string, 0, len(response.Data))
+	for _, key := range response.Data {
+		gotIDs = append(gotIDs, key.ID)
+	}
+	assert.ElementsMatch(t, []string{"alice-a", "bob-a", "other-a"}, gotIDs)
+	assert.Equal(t, 0, resolver.scopeCalls)
+}
+
+func TestSearchAPIKeys_SubscriptionAdminWhitespaceSubscriptionUsesUnion(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store := NewMockStore()
+	addSubscriptionAdminTestKey(t, store, "alice-a", "alice", "subscription-a")
+	addSubscriptionAdminTestKey(t, store, "bob-a", "bob", "subscription-a")
+
+	resolver := &subscriptionAdminResolverStub{scopes: []*subscription.AdminScope{{
+		Tenant:       "test-tenant",
+		Namespace:    "test-ns",
+		Subscription: "subscription-a",
+	}}}
+	handler := NewHandler(
+		logger.Development(),
+		NewService(store, &config.Config{}, fixedSubSelector{}),
+		newMockAdminChecker(),
+		nil,
+		resolver,
+	)
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(
+		http.MethodPost,
+		"/v1/api-keys/search",
+		strings.NewReader(`{"filters":{"subscription":"   "}}`),
+	)
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Set("user", &token.UserContext{Username: "alice", Tenant: "test-tenant"})
+	c.Set("verified_identity", verifiedIdentityForSubscriptionAdmin())
+
+	handler.SearchAPIKeys(c)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var response SearchAPIKeysResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+	gotIDs := make([]string, 0, len(response.Data))
+	for _, key := range response.Data {
+		gotIDs = append(gotIDs, key.ID)
+	}
+	assert.ElementsMatch(t, []string{"alice-a", "bob-a"}, gotIDs)
+	assert.Equal(t, 0, resolver.calls)
+	assert.Equal(t, 1, resolver.scopeCalls)
+}
+
 func TestSearchAPIKeys_EmptyResultsSerializeAsArray(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	handler := NewHandler(

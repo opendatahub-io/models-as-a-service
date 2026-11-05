@@ -1,6 +1,7 @@
 package subscription_test
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -122,4 +123,26 @@ func TestSelectorResolveSubscriptionAdminScopes(t *testing.T) {
 	assert.Equal(t, "test-ns", scopes[0].Namespace)
 	assert.Equal(t, "subscription-a", scopes[0].Subscription)
 	assert.Equal(t, "42c3e46f-2477-44d7-a85b-d3b43f6b31fa", scopes[0].OrganizationID)
+
+	noAdminSelector := subscription.NewSelector(
+		logger.New(false),
+		&fakeLister{err: errors.New("subscription inventory must not be loaded")},
+		nil,
+		nil,
+		subscription.WithTenantName("grid-tenant"),
+	)
+	noAdminIdentity := &token.VerifiedIdentity{
+		Source: "oidc",
+		Claims: token.VerifiedClaims{
+			Organizations: []token.OrganizationMembership{{
+				OrganizationID: "42c3e46f-2477-44d7-a85b-d3b43f6b31fa",
+				Roles:          []string{"users"},
+			}},
+		},
+	}
+
+	scopes, err = noAdminSelector.ResolveSubscriptionAdminScopes(noAdminIdentity)
+
+	require.NoError(t, err)
+	assert.Empty(t, scopes)
 }

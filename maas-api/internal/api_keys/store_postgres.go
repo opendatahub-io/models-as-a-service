@@ -403,24 +403,12 @@ func (s *PostgresStore) Search(
 		whereClauses = append(whereClauses, fmt.Sprintf("(%s) IN (%s)", effectiveStatusExpr, strings.Join(placeholders, ",")))
 	}
 
-	// Filter by subscription name
-	if filters.Subscription != nil && *filters.Subscription != "" {
-		whereClauses = append(whereClauses, fmt.Sprintf("subscription = $%d", argPos))
-		args = append(args, strings.TrimSpace(*filters.Subscription))
-		argPos++
-	}
-	if len(filters.SubscriptionNames) > 0 {
-		placeholders := make([]string, len(filters.SubscriptionNames))
-		for index, subscription := range filters.SubscriptionNames {
-			placeholders[index] = fmt.Sprintf("$%d", argPos)
-			args = append(args, strings.TrimSpace(subscription))
-			argPos++
-		}
-		whereClauses = append(
-			whereClauses,
-			fmt.Sprintf("subscription IN (%s)", strings.Join(placeholders, ",")),
-		)
-	}
+	whereClauses, args, argPos = appendSubscriptionSearchFilters(
+		whereClauses,
+		args,
+		argPos,
+		filters,
+	)
 
 	// Add labels containment filter
 	if len(filters.LabelsContain) > 0 {
@@ -935,4 +923,35 @@ func (s *PostgresStore) Close() error {
 		}
 	}
 	return writeErr
+}
+
+func appendSubscriptionSearchFilters(
+	whereClauses []string,
+	args []any,
+	argPos int,
+	filters *SearchFilters,
+) ([]string, []any, int) {
+	subscription := ""
+	if filters.Subscription != nil {
+		subscription = strings.TrimSpace(*filters.Subscription)
+	}
+	if subscription != "" {
+		whereClauses = append(whereClauses, fmt.Sprintf("subscription = $%d", argPos))
+		args = append(args, subscription)
+		argPos++
+	}
+	if len(filters.SubscriptionNames) == 0 {
+		return whereClauses, args, argPos
+	}
+
+	placeholders := make([]string, len(filters.SubscriptionNames))
+	for index, subscriptionName := range filters.SubscriptionNames {
+		placeholders[index] = fmt.Sprintf("$%d", argPos)
+		args = append(args, strings.TrimSpace(subscriptionName))
+		argPos++
+	}
+	return append(
+		whereClauses,
+		fmt.Sprintf("subscription IN (%s)", strings.Join(placeholders, ",")),
+	), args, argPos
 }
