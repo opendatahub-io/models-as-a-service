@@ -20,6 +20,15 @@ Red Hat OpenShift AI (RHOAI). MaaS is installed by enabling it in the DataScienc
     [Troubleshooting #16](troubleshooting.md#16-management-endpoints-return-auth_failure-on-rhcl-v140)
     for diagnosis.
 
+!!! warning "RHOAI 3.6 — use RHCL v1.5"
+    For RHOAI 3.6, use **RHCL v1.5.0+** (OLM channel `stable-1.5`). On RHCL 1.4.x,
+    including the 1.4.3 that the default `stable` channel installs, a provider error
+    response without token usage can hang for a caller with two or more
+    MaaSSubscriptions while a TokenRateLimitPolicy is active
+    ([Kuadrant/wasm-shim#425](https://github.com/Kuadrant/wasm-shim/issues/425)).
+    The 1.4 backport is not merged, and `stable-1.4` (1.4.4) is not a confirmed fix.
+    When upgrading, switch the RHCL Subscription channel to `stable-1.5`.
+
 !!! note "Other Kubernetes flavors"
     Other Kubernetes flavors (e.g., upstream Kubernetes, other distributions) are currently being validated.
 

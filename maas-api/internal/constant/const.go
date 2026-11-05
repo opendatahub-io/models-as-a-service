@@ -22,6 +22,9 @@ const (
 	HeaderOrganizationID = "X-MaaS-Organization-Id"
 
 	// API Key configuration defaults.
+	// APIKeyPrefix is the recognizable prefix for inference API keys.
+	APIKeyPrefix = "sk-oai-"
+
 	// DefaultAPIKeyMaxExpirationDays is the default maximum allowed expiration for API keys.
 	DefaultAPIKeyMaxExpirationDays = 90
 
