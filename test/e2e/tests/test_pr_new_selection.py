@@ -1,8 +1,9 @@
-"""Fail the smoke pass when /group-test drops the PR's new tests.
+"""Report in JUnit why /group-test dropped the PR's new tests.
 
 When run_e2e_tests.sh can't resolve the PR base or list the new tests, it falls
-back to smoke-only, and tests added in the PR silently don't run. The runner
-exports E2E_PR_NEW_LOG whenever it attempts pr_new selection, and
+back to smoke-only and fails the run after all passes. This test fails with the
+runner's selection log so the cause is in the report, not only in the console.
+The runner exports E2E_PR_NEW_LOG whenever it attempts pr_new selection, and
 E2E_NEW_TEST_IDS_FILE only when selection succeeded.
 """
 

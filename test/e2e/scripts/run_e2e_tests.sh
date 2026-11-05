@@ -198,6 +198,7 @@ fi
 # OIDC-only jobs skip passes 1–2 entirely; smoke filtering does not apply there.
 _smoke_require=""
 _include_new_from_diff=false
+_pr_new_failed=false
 case "${E2E_INCLUDE_NEW_FROM_DIFF:-false}" in
     1 | true | TRUE | yes | YES) _include_new_from_diff=true ;;
 esac
@@ -259,8 +260,9 @@ _log_pr_new_git_context() {
 
 if [[ "$smoke_only" == "true" && "$_run_only_oidc_tests" != true ]]; then
     if [[ "$_include_new_from_diff" == true ]]; then
-        # test_pr_new_selection.py reads this to fail the smoke pass when selection
-        # falls back below, so the run can't go green without the PR's new tests.
+        # A fallback below fails the run at the end, after all passes. The exit
+        # code is what enforces it, since session fixtures can skip any test;
+        # test_pr_new_selection.py reads this log to put the cause in JUnit.
         _pr_new_log="${ARTIFACTS_DIR}/pr-new-selection.log"
         : >"${_pr_new_log}"
         export E2E_PR_NEW_LOG="${_pr_new_log}"
@@ -274,6 +276,7 @@ if [[ "$smoke_only" == "true" && "$_run_only_oidc_tests" != true ]]; then
                 "(set E2E_DIFF_BASE / PULL_BASE_SHA / BASE_SHA, or E2E_DIFF_UPSTREAM_URL +" \
                 "E2E_DIFF_TARGET_BRANCH); smoke-only without pr_new. Details (${_pr_new_log}):" >&2
             sed 's/^/  /' "${_pr_new_log}" >&2 || true
+            _pr_new_failed=true
             _smoke_require="smoke and "
             echo "E2E smoke-only mode: restricting passes 1–2 to @pytest.mark.smoke"
         else
@@ -283,6 +286,7 @@ if [[ "$smoke_only" == "true" && "$_run_only_oidc_tests" != true ]]; then
                 echo "WARNING: failed to list new E2E tests against ${_diff_base};" \
                     "falling back to smoke-only without pr_new. Details (${_pr_new_log}):" >&2
                 sed 's/^/  /' "${_pr_new_log}" >&2 || true
+                _pr_new_failed=true
                 : >"${_new_ids_file}"
                 _smoke_require="smoke and "
                 echo "E2E smoke-only mode: restricting passes 1–2 to @pytest.mark.smoke"
@@ -542,6 +546,10 @@ if [[ "$any_pass_collected_tests" != "true" ]]; then
 fi
 if [[ "$parallel_rc" -ne 0 || "$serial_rc" -ne 0 || "$nightly_rc" -ne 0 ]]; then
     echo "❌ ERROR: E2E tests failed (parallel_rc=${parallel_rc}, serial_rc=${serial_rc}, nightly_rc=${nightly_rc})"
+    exit 1
+fi
+if [[ "$_pr_new_failed" == true ]]; then
+    echo "❌ ERROR: tests added in this PR were not selected (pr_new fell back to smoke-only); see ${_pr_new_log}"
     exit 1
 fi
 
