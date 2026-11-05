@@ -1120,12 +1120,50 @@ def _diagnostic_get(kind: str, name: str, namespace: Optional[str]) -> dict:
         return {"diagnosticError": f"{type(exc).__name__}: {exc}"}
 
 
+def _diagnostic_deployment_logs(deployment: str, namespace: str, tail: int = 50) -> str:
+    """Best-effort tail of a deployment's pod logs; never raises into the caller."""
+    try:
+        result = _oc_run(["logs", f"deployment/{deployment}", "-n", namespace, f"--tail={tail}"], timeout=30)
+        if result.returncode == 0:
+            return result.stdout
+        return f"diagnosticError: {result.stderr.strip() or result.stdout.strip()}"
+    except Exception as exc:  # noqa: BLE001 - diagnostics must not hide the readiness failure
+        return f"diagnosticError: {type(exc).__name__}: {exc}"
+
+
+def _diagnostic_events(namespace: str, limit: int = 20) -> list[dict] | dict:
+    """Best-effort most recent events in *namespace*, oldest first."""
+    try:
+        result = _oc_run(
+            ["get", "events", "-n", namespace, "--sort-by=.lastTimestamp", "-o", "json"],
+            timeout=30,
+        )
+        if result.returncode != 0:
+            return {"diagnosticError": result.stderr.strip() or result.stdout.strip()}
+        items = json.loads(result.stdout).get("items") or []
+        compact = [
+            {
+                "lastTimestamp": ev.get("lastTimestamp") or ev.get("eventTime"),
+                "type": ev.get("type"),
+                "reason": ev.get("reason"),
+                "object": (ev.get("involvedObject") or {}).get("name"),
+                "message": ev.get("message"),
+            }
+            for ev in items[-limit:]
+        ]
+        return compact
+    except Exception as exc:  # noqa: BLE001 - diagnostics must not hide the readiness failure
+        return {"diagnosticError": f"{type(exc).__name__}: {exc}"}
+
+
 def _write_aitenant_bootstrap_failure_crs(
     case: dict[str, str],
     *,
     aitenant: dict,
     tenant_cfg: dict,
     snapshot: dict,
+    deployment_logs: Optional[str] = None,
+    events: Optional[dict[str, Any]] = None,
 ) -> Optional[str]:
     """Persist companion CRs under ARTIFACTS_DIR before fixture cleanup deletes them.
 
@@ -1145,6 +1183,12 @@ def _write_aitenant_bootstrap_failure_crs(
         if tenant_cfg and "diagnosticError" not in tenant_cfg:
             with open(os.path.join(out_dir, "maastenantconfig.json"), "w", encoding="utf-8") as handle:
                 json.dump(tenant_cfg, handle, indent=2, sort_keys=True, default=str)
+        if deployment_logs is not None:
+            with open(os.path.join(out_dir, "maas-api-logs.txt"), "w", encoding="utf-8") as handle:
+                handle.write(deployment_logs)
+        for ns, ns_events in (events or {}).items():
+            with open(os.path.join(out_dir, f"events-{ns}.json"), "w", encoding="utf-8") as handle:
+                json.dump(ns_events, handle, indent=2, sort_keys=True, default=str)
     except OSError as exc:
         print(f"[diagnostics] failed to write AITenant bootstrap CRs to {out_dir}: {exc}")
         return None
@@ -1203,9 +1247,19 @@ def _aitenant_bootstrap_diagnostics(case: dict[str, str]) -> str:
             "parents": route_status.get("parents"),
             "diagnosticError": route.get("diagnosticError"),
         },
+        "maasApiDeploymentLogs": _diagnostic_deployment_logs(names["deployment"], INFRA_NAMESPACE),
+        "recentEvents": {
+            case["tenant_ns"]: _diagnostic_events(case["tenant_ns"]),
+            INFRA_NAMESPACE: _diagnostic_events(INFRA_NAMESPACE),
+        },
     }
     artifact_dir = _write_aitenant_bootstrap_failure_crs(
-        case, aitenant=aitenant, tenant_cfg=tenant_cfg, snapshot=snapshot
+        case,
+        aitenant=aitenant,
+        tenant_cfg=tenant_cfg,
+        snapshot=snapshot,
+        deployment_logs=snapshot["maasApiDeploymentLogs"],
+        events=snapshot["recentEvents"],
     )
     if artifact_dir:
         snapshot["artifactDir"] = artifact_dir
