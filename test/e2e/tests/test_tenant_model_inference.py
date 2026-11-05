@@ -98,7 +98,7 @@ def _tenant_gateway_auth_policy(gateway_name: str):
 def _wait_for_chat_ok(case: dict, gateway_url: str, api_key: str) -> requests.Response:
     """Poll a known-good chat completion until the new key is served with 200."""
     with _tenant_gateway_auth_policy(case["gateway_name"]):
-        return _poll_status(
+        resp = _poll_status(
             api_key,
             200,
             path=case["model_path"],
@@ -111,6 +111,8 @@ def _wait_for_chat_ok(case: dict, gateway_url: str, api_key: str) -> requests.Re
                 model_name=model_name,
             ),
         )
+    test_helper.assert_inference_response(resp)
+    return resp
 
 
 def _create_tenant_api_key(gateway_url, case, *, name_prefix="e2e-body-routing"):
@@ -465,8 +467,7 @@ class TestTenantBodyRouting:
                 f"Expected 200 with correct model in body, got {r.status_code}. "
                 f"Response: {redact_sensitive(r.text[:500])}"
             )
-            data = r.json()
-            assert "choices" in data, f"Response missing 'choices': {redact_sensitive(data)}"
+            test_helper.assert_inference_response(r)
         else:
             assert r.status_code != 200, (
                 f"Expected rejection for model body {body!r}, got 200. "
@@ -491,8 +492,7 @@ class TestTenantBodyRouting:
                 f"Tenant {case['gateway_name']}: expected 200, got {r.status_code}. "
                 f"Response: {redact_sensitive(r.text[:500])}"
             )
-            data = r.json()
-            assert "choices" in data
+            test_helper.assert_inference_response(r)
             log.info(
                 "Body routing tenant %s: HTTP %d",
                 case["gateway_name"], r.status_code,

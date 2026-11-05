@@ -6,6 +6,7 @@ import requests
 from conftest import TLS_VERIFY
 from test_helper import (
     MODEL_NAME as SERVED_MODEL_NAME,
+    assert_inference_response,
     assert_openai_sse_chat_stream,
     chat,
     completions,
@@ -105,17 +106,7 @@ def test_chat_completions_gateway_alive(model_v1: str, api_key_headers: dict):
     msg = f"[chat] POST /chat/completions -> {r.status_code}"
     log.info(msg)
     print(msg)
-    assert r.status_code == 200, f"expected 200, got {r.status_code}: {r.text[:500]}"
-    assert r.content.strip(), "HTTP 200 chat completion returned an empty response body"
-
-    response = r.json()
-    choices = response.get("choices") or []
-    assert choices, f"HTTP 200 chat completion returned no choices: {r.text[:500]}"
-    message = choices[0].get("message") or {}
-    content = message.get("content")
-    assert isinstance(content, str) and content.strip(), (
-        f"HTTP 200 chat completion returned empty assistant content: {r.text[:500]}"
-    )
+    assert_inference_response(r)
 
 
 def test_chat_completions_streaming_sse(model_v1: str, api_key_headers: dict):
@@ -148,3 +139,5 @@ def test_legacy_completions_optionally(model_v1: str, api_key_headers: dict, mod
     log.info(msg)
     print(msg)
     assert r.status_code in (200, 404), f"unexpected {r.status_code}: {r.text[:500]}"
+    if r.status_code == 200:
+        assert_inference_response(r)
