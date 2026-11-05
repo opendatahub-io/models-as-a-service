@@ -31,6 +31,7 @@ from test_helper import (
     MODEL_PATH,
     TIMEOUT,
     TLS_VERIFY,
+    assert_inference_response,
     _apply_cr,
     _delete_cr,
     _gateway_url,
@@ -212,6 +213,7 @@ class TestXAPIKeyAuthentication:
         assert r.status_code == 200, (
             f"Expected 200 with x-api-key header, got {r.status_code}: {r.text[:500]}"
         )
+        assert_inference_response(r)
 
     def test_authorization_bearer_still_works(self, x_api_key_setup):
         """Authorization: Bearer still works when x-api-key identity source is active."""
@@ -220,6 +222,7 @@ class TestXAPIKeyAuthentication:
         assert r.status_code == 200, (
             f"Expected 200 with Authorization: Bearer, got {r.status_code}: {r.text[:500]}"
         )
+        assert_inference_response(r)
 
     def test_invalid_x_api_key_rejected(self, x_api_key_setup):
         """Invalid API key in x-api-key header is rejected."""
@@ -242,3 +245,4 @@ class TestXAPIKeyAuthentication:
         assert r.status_code == 200, (
             f"Expected 200 with both auth headers, got {r.status_code}: {r.text[:500]}"
         )
+        assert_inference_response(r)

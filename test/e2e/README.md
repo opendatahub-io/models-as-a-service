@@ -45,6 +45,21 @@ pytest tests/<file>.py -v
 | File | Focus |
 |------|--------|
 | `test_smoke.py` | Read-only smoke checks: non-streaming and streaming (`text/event-stream`) chat/completions |
+
+### Inference response assertions
+
+Non-streaming chat/completions tests should use `assert_inference_response()` from
+`tests/test_helper.py` on HTTP **200** responses. It checks:
+
+- Non-empty response body (default minimum 50 bytes; override with `min_bytes=`)
+- Valid JSON with non-empty `choices[0].message.content` or `choices[0].text`
+- `usage.total_tokens > 0` when the `usage` object includes `total_tokens`
+
+Streaming smoke uses `assert_openai_sse_chat_stream()`, which also requires at
+least one non-empty content chunk before `data: [DONE]`.
+
+| File | Focus |
+|------|--------|
 | `test_subscription.py` | Subscription / inference flows |
 | `test_observability_identity.py` | Opt-in organization attribution reproduction on one gateway/model; requires `E2E_OBSERVABILITY_IDENTITY=true` and Limitador telemetry |
 | `test_trlp_rate_grouping.py` | TRLP limits grouped by rate: shared limits, per-subscription and per-user budgets, rate edits, gateway wasm config size guard |
