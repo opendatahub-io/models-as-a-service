@@ -59,7 +59,7 @@ log = logging.getLogger(__name__)
 
 # Serialized with tenant_ipp, which runs legacy IPP tenant stacks: those must not
 # run next to this suite's models.
-pytestmark = [pytest.mark.xdist_group("tenant_ipp"), pytest.mark.tenant_external_model]
+pytestmark = [pytest.mark.xdist_group("tenant_ipp"), pytest.mark.tenant_external_model, pytest.mark.full_suite]
 
 EXTERNAL_PROVIDER_KIND = "externalproviders.inference.opendatahub.io"
 EXTERNAL_MODEL_KIND = "externalmodels.inference.opendatahub.io"
