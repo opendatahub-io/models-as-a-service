@@ -4,6 +4,7 @@ package maas
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -280,6 +281,16 @@ func reconcileAITenantTwice(t *testing.T, r *AITenantReconciler, key types.Names
 func reconcileAITenantToActive(t *testing.T, r *AITenantReconciler, key types.NamespacedName) {
 	t.Helper()
 	g := NewWithT(t)
+
+	res := reconcileAITenantWithReadyTenantConfig(t, r, key)
+	g.Expect(res).To(Equal(ctrl.Result{}))
+}
+
+// reconcileAITenantWithReadyTenantConfig bootstraps the AITenant, marks its
+// MaasTenantConfig Ready and returns the result of the reconcile after that.
+func reconcileAITenantWithReadyTenantConfig(t *testing.T, r *AITenantReconciler, key types.NamespacedName) ctrl.Result {
+	t.Helper()
+	g := NewWithT(t)
 	ctx := context.Background()
 
 	reconcileAITenantTwice(t, r, key)
@@ -304,7 +315,7 @@ func reconcileAITenantToActive(t *testing.T, r *AITenantReconciler, key types.Na
 
 	res, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key})
 	g.Expect(err).NotTo(HaveOccurred())
-	g.Expect(res).To(Equal(ctrl.Result{}))
+	return res
 }
 
 func TestAITenantReconcile_ValidatesExistingGatewayAndCreatesBootstrapResources(t *testing.T) {
@@ -4114,4 +4125,424 @@ func TestEnsureInfraNamespaceGatewayLabelsRejectsUnownedConflict(t *testing.T) {
 	var ns corev1.Namespace
 	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: "redhat-ai-gateway-infra"}, &ns)).To(Succeed())
 	g.Expect(ns.Labels).To(HaveKeyWithValue("env", "prod"))
+}
+
+func TestEnsureTenantNamespaceGatewayLabelsAppliesMatchLabels(t *testing.T) {
+	g := NewWithT(t)
+	s := aitenantTestScheme(t)
+	tenantNs := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+		Name:   "ai-tenant-team-a",
+		Labels: map[string]string{tenantreconcile.LabelGatewayAccess: "true"},
+	}}
+	aitenant := &maasv1alpha1.AITenant{ObjectMeta: metav1.ObjectMeta{Name: "team-a", Namespace: tenantreconcile.DefaultAITenantNamespace}}
+	gw := gatewayWithMatchLabels("team-a", map[string]string{
+		"maas.opendatahub.io/gateway-access-team-a": "true",
+		tenantreconcile.LabelGatewayAccess:          "true",
+	})
+
+	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(tenantNs).Build()
+	r := &AITenantReconciler{
+		Client:           cl,
+		Scheme:           s,
+		APIReader:        cl,
+		AppNamespace:     "redhat-ai-gateway-infra",
+		TenantNamespace:  "models-as-a-service",
+		GatewayNamespace: "openshift-ingress",
+	}
+
+	g.Expect(r.ensureTenantNamespaceGatewayLabels(context.Background(), aitenant, gw)).To(Succeed())
+
+	var ns corev1.Namespace
+	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: "ai-tenant-team-a"}, &ns)).To(Succeed())
+	g.Expect(ns.Labels).To(HaveKeyWithValue("maas.opendatahub.io/gateway-access-team-a", "true"))
+	g.Expect(ns.Labels).To(HaveKeyWithValue(tenantreconcile.LabelGatewayAccess, "true"))
+
+	// The label applyAITenantMetadata sets is not owned by the gateway, so a
+	// later selector change cannot remove it.
+	var ownership map[string][]string
+	g.Expect(json.Unmarshal([]byte(ns.Annotations[gatewayLabelsAnnotation]), &ownership)).To(Succeed())
+	g.Expect(ownership).To(Equal(map[string][]string{"maas.opendatahub.io/gateway-access-team-a": {"team-a"}}))
+}
+
+func TestEnsureTenantNamespaceGatewayLabelsRemovesStaleLabels(t *testing.T) {
+	g := NewWithT(t)
+	s := aitenantTestScheme(t)
+	tenantNs := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+		Name: "ai-tenant-team-a",
+		Labels: map[string]string{
+			"old-label":                        "true",
+			tenantreconcile.LabelGatewayAccess: "true",
+			"unrelated":                        "keep",
+		},
+		Annotations: map[string]string{gatewayLabelsAnnotation: `{"old-label":["team-a"]}`},
+	}}
+	aitenant := &maasv1alpha1.AITenant{ObjectMeta: metav1.ObjectMeta{Name: "team-a", Namespace: tenantreconcile.DefaultAITenantNamespace}}
+	gw := gatewayWithMatchLabels("team-a", map[string]string{"new-label": "true"})
+
+	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(tenantNs).Build()
+	r := &AITenantReconciler{
+		Client:           cl,
+		Scheme:           s,
+		APIReader:        cl,
+		AppNamespace:     "redhat-ai-gateway-infra",
+		TenantNamespace:  "models-as-a-service",
+		GatewayNamespace: "openshift-ingress",
+	}
+
+	g.Expect(r.ensureTenantNamespaceGatewayLabels(context.Background(), aitenant, gw)).To(Succeed())
+
+	var ns corev1.Namespace
+	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: "ai-tenant-team-a"}, &ns)).To(Succeed())
+	g.Expect(ns.Labels).To(HaveKeyWithValue("new-label", "true"))
+	g.Expect(ns.Labels).NotTo(HaveKey("old-label"), "stale label must be removed")
+	g.Expect(ns.Labels).To(HaveKeyWithValue(tenantreconcile.LabelGatewayAccess, "true"), "AITenant metadata label must be preserved")
+	g.Expect(ns.Labels).To(HaveKeyWithValue("unrelated", "keep"), "unrelated labels must be preserved")
+
+	var ownership map[string][]string
+	g.Expect(json.Unmarshal([]byte(ns.Annotations[gatewayLabelsAnnotation]), &ownership)).To(Succeed())
+	g.Expect(ownership).To(Equal(map[string][]string{"new-label": {"team-a"}}))
+}
+
+// After a retarget the labels of the previous Gateway are released, including
+// one whose value conflicts with the new Gateway's selector.
+func TestEnsureTenantNamespaceGatewayLabelsReleasesPreviousGateway(t *testing.T) {
+	g := NewWithT(t)
+	s := aitenantTestScheme(t)
+	tenantNs := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+		Name: "ai-tenant-team-a",
+		Labels: map[string]string{
+			"gateway-old-label": "true",
+			"route-access":      "old",
+			"unrelated":         "keep",
+		},
+		Annotations: map[string]string{gatewayLabelsAnnotation: `{"gateway-old-label":["gateway-old"],"route-access":["gateway-old"]}`},
+	}}
+	aitenant := &maasv1alpha1.AITenant{ObjectMeta: metav1.ObjectMeta{Name: "team-a", Namespace: tenantreconcile.DefaultAITenantNamespace}}
+	gw := gatewayWithMatchLabels("team-a", map[string]string{"route-access": "new"})
+
+	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(tenantNs).Build()
+	r := &AITenantReconciler{
+		Client:           cl,
+		Scheme:           s,
+		APIReader:        cl,
+		AppNamespace:     "redhat-ai-gateway-infra",
+		TenantNamespace:  "models-as-a-service",
+		GatewayNamespace: "openshift-ingress",
+	}
+
+	g.Expect(r.ensureTenantNamespaceGatewayLabels(context.Background(), aitenant, gw)).To(Succeed())
+
+	var ns corev1.Namespace
+	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: "ai-tenant-team-a"}, &ns)).To(Succeed())
+	g.Expect(ns.Labels).NotTo(HaveKey("gateway-old-label"), "the previous Gateway's label must be released")
+	g.Expect(ns.Labels).To(HaveKeyWithValue("route-access", "new"))
+	g.Expect(ns.Labels).To(HaveKeyWithValue("unrelated", "keep"), "unrelated labels must be preserved")
+	g.Expect(ns.Annotations).To(HaveKeyWithValue(gatewayLabelsAnnotation, `{"route-access":["team-a"]}`))
+}
+
+// A tenant namespace that is also the infra namespace keeps every label the
+// infra namespace pass applies, including the one tenant namespaces leave out.
+func TestEnsureTenantNamespaceGatewayLabelsSkipsInfraNamespace(t *testing.T) {
+	g := NewWithT(t)
+	s := aitenantTestScheme(t)
+	infraNs := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+		Name:        "models-as-a-service",
+		Labels:      map[string]string{tenantreconcile.LabelGatewayAccess: "true"},
+		Annotations: map[string]string{gatewayLabelsAnnotation: `{"` + tenantreconcile.LabelGatewayAccess + `":["maas-default-gateway"]}`},
+	}}
+	aitenant := &maasv1alpha1.AITenant{ObjectMeta: metav1.ObjectMeta{Name: tenantreconcile.DefaultAITenantName, Namespace: tenantreconcile.DefaultAITenantNamespace}}
+	gw := gatewayWithMatchLabels("maas-default-gateway", map[string]string{tenantreconcile.LabelGatewayAccess: "true"})
+
+	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(infraNs).Build()
+	r := &AITenantReconciler{
+		Client:           cl,
+		Scheme:           s,
+		APIReader:        cl,
+		AppNamespace:     "models-as-a-service",
+		TenantNamespace:  "models-as-a-service",
+		GatewayNamespace: "openshift-ingress",
+	}
+
+	g.Expect(r.ensureTenantNamespaceGatewayLabels(context.Background(), aitenant, gw)).To(Succeed())
+
+	var ns corev1.Namespace
+	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: "models-as-a-service"}, &ns)).To(Succeed())
+	g.Expect(ns.Labels).To(HaveKeyWithValue(tenantreconcile.LabelGatewayAccess, "true"))
+	g.Expect(ns.Annotations).To(HaveKeyWithValue(gatewayLabelsAnnotation, `{"`+tenantreconcile.LabelGatewayAccess+`":["maas-default-gateway"]}`))
+}
+
+func TestAITenantReconcile_LabelsTenantAndInfraNamespacesWithGatewayMatchLabels(t *testing.T) {
+	g := NewWithT(t)
+	s := aitenantTestScheme(t)
+	ctx := context.Background()
+
+	aitenant := &maasv1alpha1.AITenant{ObjectMeta: metav1.ObjectMeta{Name: "team-a", Namespace: tenantreconcile.DefaultAITenantNamespace}}
+	infraNs := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "opendatahub"}}
+	gw := gatewayWithMatchLabels("team-a", map[string]string{"maas.opendatahub.io/gateway-access-team-a": "true"})
+	cl := fake.NewClientBuilder().
+		WithScheme(s).
+		WithStatusSubresource(&maasv1alpha1.AITenant{}).
+		WithObjects(aitenant, infraNs, gw).
+		Build()
+	r := &AITenantReconciler{
+		Client:           cl,
+		Scheme:           s,
+		APIReader:        cl,
+		AppNamespace:     "opendatahub",
+		TenantNamespace:  "models-as-a-service",
+		GatewayNamespace: "openshift-ingress",
+	}
+
+	key := types.NamespacedName{Name: aitenant.Name, Namespace: aitenant.Namespace}
+	reconcileAITenantToActive(t, r, key)
+
+	for _, name := range []string{"opendatahub", "ai-tenant-team-a"} {
+		var ns corev1.Namespace
+		g.Expect(cl.Get(ctx, client.ObjectKey{Name: name}, &ns)).To(Succeed())
+		g.Expect(ns.Labels).To(HaveKeyWithValue("maas.opendatahub.io/gateway-access-team-a", "true"), "namespace %s", name)
+		g.Expect(ns.Annotations).To(HaveKeyWithValue(gatewayLabelsAnnotation, `{"maas.opendatahub.io/gateway-access-team-a":["team-a"]}`), "namespace %s", name)
+	}
+
+	var updated maasv1alpha1.AITenant
+	g.Expect(cl.Get(ctx, key, &updated)).To(Succeed())
+	g.Expect(updated.Status.Phase).To(Equal("Active"))
+	g.Expect(apimeta.FindStatusCondition(updated.Status.Conditions, tenantreconcile.ConditionTypeDegraded)).To(BeNil())
+}
+
+func TestAITenantReconcile_TenantNamespaceLabelConflictSetsDegraded(t *testing.T) {
+	g := NewWithT(t)
+	s := aitenantTestScheme(t)
+	ctx := context.Background()
+
+	aitenant := &maasv1alpha1.AITenant{ObjectMeta: metav1.ObjectMeta{Name: "team-a", Namespace: tenantreconcile.DefaultAITenantNamespace}}
+	tenantNs := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+		Name:   "ai-tenant-team-a",
+		Labels: map[string]string{"maas.opendatahub.io/gateway-access-team-a": "false"},
+	}}
+	infraNs := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "opendatahub"}}
+	gw := gatewayWithMatchLabels("team-a", map[string]string{"maas.opendatahub.io/gateway-access-team-a": "true"})
+	cl := fake.NewClientBuilder().
+		WithScheme(s).
+		WithStatusSubresource(&maasv1alpha1.AITenant{}).
+		WithObjects(aitenant, tenantNs, infraNs, gw).
+		Build()
+	r := &AITenantReconciler{
+		Client:           cl,
+		Scheme:           s,
+		APIReader:        cl,
+		AppNamespace:     "opendatahub",
+		TenantNamespace:  "models-as-a-service",
+		GatewayNamespace: "openshift-ingress",
+	}
+
+	key := types.NamespacedName{Name: aitenant.Name, Namespace: aitenant.Namespace}
+	res := reconcileAITenantWithReadyTenantConfig(t, r, key)
+	g.Expect(res.RequeueAfter).To(Equal(30*time.Second), "a label failure must be retried")
+
+	var updated maasv1alpha1.AITenant
+	g.Expect(cl.Get(ctx, key, &updated)).To(Succeed())
+	g.Expect(updated.Status.Phase).To(Equal("Active"), "a label conflict must not block provisioning")
+	degraded := apimeta.FindStatusCondition(updated.Status.Conditions, tenantreconcile.ConditionTypeDegraded)
+	g.Expect(degraded).NotTo(BeNil())
+	g.Expect(degraded.Reason).To(Equal("TenantNamespaceLabelFailed"))
+	g.Expect(degraded.Message).To(ContainSubstring("outside the controller"))
+
+	var ns corev1.Namespace
+	g.Expect(cl.Get(ctx, client.ObjectKey{Name: "ai-tenant-team-a"}, &ns)).To(Succeed())
+	g.Expect(ns.Labels).To(HaveKeyWithValue("maas.opendatahub.io/gateway-access-team-a", "false"))
+
+	// A retry that fails again keeps Degraded's transition time. Backdate it so
+	// a reset to now would show.
+	since := metav1.NewTime(time.Now().Add(-time.Hour).Truncate(time.Second))
+	degraded.LastTransitionTime = since
+	g.Expect(cl.Status().Update(ctx, &updated)).To(Succeed())
+	res, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key})
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(res.RequeueAfter).To(Equal(30 * time.Second))
+	g.Expect(cl.Get(ctx, key, &updated)).To(Succeed())
+	degraded = apimeta.FindStatusCondition(updated.Status.Conditions, tenantreconcile.ConditionTypeDegraded)
+	g.Expect(degraded).NotTo(BeNil())
+	g.Expect(degraded.LastTransitionTime.Equal(&since)).To(BeTrue(), "LastTransitionTime %v was reset", degraded.LastTransitionTime)
+}
+
+// Retargeting from gateway-a to gateway-b releases gateway-a's labels from the
+// tenant namespace, and deleting the AITenant then releases gateway-b's.
+func TestAITenantReconcile_RetargetAndDeleteReleaseTenantNamespaceGatewayLabels(t *testing.T) {
+	g := NewWithT(t)
+	s := aitenantTestScheme(t)
+	ctx := context.Background()
+
+	aitenant := &maasv1alpha1.AITenant{
+		ObjectMeta: metav1.ObjectMeta{Name: "team-a", Namespace: tenantreconcile.DefaultAITenantNamespace},
+		Spec:       maasv1alpha1.AITenantSpec{Gateway: &maasv1alpha1.AITenantGatewayRef{Name: "gateway-a"}},
+	}
+	infraNs := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "opendatahub"}}
+	gwA := gatewayWithMatchLabels("gateway-a", map[string]string{"example.com/gateway-a": "true", "example.com/shared": "true"})
+	gwB := gatewayWithMatchLabels("gateway-b", map[string]string{"example.com/gateway-b": "true", "example.com/shared": "true"})
+	cl := fake.NewClientBuilder().
+		WithScheme(s).
+		WithStatusSubresource(&maasv1alpha1.AITenant{}).
+		WithObjects(aitenant, infraNs, gwA, gwB).
+		Build()
+	r := &AITenantReconciler{
+		Client:           cl,
+		Scheme:           s,
+		APIReader:        cl,
+		AppNamespace:     "opendatahub",
+		TenantNamespace:  "models-as-a-service",
+		GatewayNamespace: "openshift-ingress",
+	}
+
+	key := types.NamespacedName{Name: aitenant.Name, Namespace: aitenant.Namespace}
+	tenantNsKey := client.ObjectKey{Name: "ai-tenant-team-a"}
+	reconcileAITenantToActive(t, r, key)
+
+	var ns corev1.Namespace
+	g.Expect(cl.Get(ctx, tenantNsKey, &ns)).To(Succeed())
+	g.Expect(ns.Labels).To(HaveKeyWithValue("example.com/gateway-a", "true"))
+	nsBase := ns.DeepCopy()
+	ns.Labels["customer.example.com/purpose"] = "other-work"
+	g.Expect(cl.Patch(ctx, &ns, client.MergeFrom(nsBase))).To(Succeed())
+
+	var current maasv1alpha1.AITenant
+	g.Expect(cl.Get(ctx, key, &current)).To(Succeed())
+	base := current.DeepCopy()
+	current.Spec.Gateway = &maasv1alpha1.AITenantGatewayRef{Name: "gateway-b"}
+	g.Expect(cl.Patch(ctx, &current, client.MergeFrom(base))).To(Succeed())
+	res, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key})
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(res).To(Equal(ctrl.Result{}))
+
+	g.Expect(cl.Get(ctx, tenantNsKey, &ns)).To(Succeed())
+	g.Expect(ns.Labels).NotTo(HaveKey("example.com/gateway-a"), "the previous Gateway's label must be released")
+	g.Expect(ns.Labels).To(HaveKeyWithValue("example.com/gateway-b", "true"))
+	g.Expect(ns.Labels).To(HaveKeyWithValue("example.com/shared", "true"))
+	g.Expect(ns.Annotations).To(HaveKeyWithValue(gatewayLabelsAnnotation, `{"example.com/gateway-b":["gateway-b"],"example.com/shared":["gateway-b"]}`))
+
+	g.Expect(cl.Get(ctx, key, &current)).To(Succeed())
+	base = current.DeepCopy()
+	if current.Annotations == nil {
+		current.Annotations = map[string]string{}
+	}
+	current.Annotations[aitenantAPIKeysRevokedAnnotation] = "true"
+	g.Expect(cl.Patch(ctx, &current, client.MergeFrom(base))).To(Succeed())
+	g.Expect(cl.Delete(ctx, &current)).To(Succeed())
+	tenantConfigKey := client.ObjectKey{Namespace: "ai-tenant-team-a", Name: maasv1alpha1.MaasTenantConfigInstanceName}
+	for i := 0; i < 5 && !apierrors.IsNotFound(cl.Get(ctx, key, &current)); i++ {
+		_, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key})
+		g.Expect(err).NotTo(HaveOccurred())
+		// Stand in for the tenant controller, which removes the MaasTenantConfig
+		// finalizer once its cleanup is done.
+		var tenantConfig maasv1alpha1.MaasTenantConfig
+		if cl.Get(ctx, tenantConfigKey, &tenantConfig) == nil && !tenantConfig.DeletionTimestamp.IsZero() {
+			controllerutil.RemoveFinalizer(&tenantConfig, tenantFinalizer)
+			g.Expect(cl.Update(ctx, &tenantConfig)).To(Succeed())
+		}
+	}
+	g.Expect(apierrors.IsNotFound(cl.Get(ctx, key, &current))).To(BeTrue(), "AITenant deletion did not complete")
+
+	g.Expect(cl.Get(ctx, tenantNsKey, &ns)).To(Succeed())
+	g.Expect(ns.Labels).NotTo(HaveKey("example.com/gateway-b"))
+	g.Expect(ns.Labels).NotTo(HaveKey("example.com/shared"))
+	g.Expect(ns.Labels).To(HaveKeyWithValue("customer.example.com/purpose", "other-work"), "unrelated labels must be preserved")
+	g.Expect(ns.Annotations).NotTo(HaveKey(gatewayLabelsAnnotation))
+}
+
+func TestAITenantReconcile_RetriesFailedTenantNamespaceLabelPatch(t *testing.T) {
+	g := NewWithT(t)
+	s := aitenantTestScheme(t)
+	ctx := context.Background()
+
+	aitenant := &maasv1alpha1.AITenant{ObjectMeta: metav1.ObjectMeta{Name: "team-a", Namespace: tenantreconcile.DefaultAITenantNamespace}}
+	infraNs := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "opendatahub"}}
+	gw := gatewayWithMatchLabels("team-a", map[string]string{"maas.opendatahub.io/gateway-access-team-a": "true"})
+	failLabelPatch := true
+	cl := fake.NewClientBuilder().
+		WithScheme(s).
+		WithStatusSubresource(&maasv1alpha1.AITenant{}).
+		WithObjects(aitenant, infraNs, gw).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+				// Fail the gateway label patch on the tenant namespace like a
+				// 409 from a concurrent writer.
+				if _, labeling := obj.GetAnnotations()[gatewayLabelsAnnotation]; failLabelPatch && labeling && obj.GetName() == "ai-tenant-team-a" {
+					return apierrors.NewConflict(schema.GroupResource{Resource: "namespaces"}, obj.GetName(), errors.New("the object has been modified"))
+				}
+				return c.Patch(ctx, obj, patch, opts...)
+			},
+		}).
+		Build()
+	r := &AITenantReconciler{
+		Client:           cl,
+		Scheme:           s,
+		APIReader:        cl,
+		AppNamespace:     "opendatahub",
+		TenantNamespace:  "models-as-a-service",
+		GatewayNamespace: "openshift-ingress",
+	}
+
+	key := types.NamespacedName{Name: aitenant.Name, Namespace: aitenant.Namespace}
+	res := reconcileAITenantWithReadyTenantConfig(t, r, key)
+	g.Expect(res.RequeueAfter).To(Equal(30*time.Second), "no watch fires for the namespace, so the reconcile must requeue")
+
+	var updated maasv1alpha1.AITenant
+	g.Expect(cl.Get(ctx, key, &updated)).To(Succeed())
+	g.Expect(updated.Status.Phase).To(Equal("Active"))
+	degraded := apimeta.FindStatusCondition(updated.Status.Conditions, tenantreconcile.ConditionTypeDegraded)
+	g.Expect(degraded).NotTo(BeNil())
+	g.Expect(degraded.Reason).To(Equal("TenantNamespaceLabelFailed"))
+
+	failLabelPatch = false
+	res, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key})
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(res).To(Equal(ctrl.Result{}))
+
+	var ns corev1.Namespace
+	g.Expect(cl.Get(ctx, client.ObjectKey{Name: "ai-tenant-team-a"}, &ns)).To(Succeed())
+	g.Expect(ns.Labels).To(HaveKeyWithValue("maas.opendatahub.io/gateway-access-team-a", "true"))
+	g.Expect(cl.Get(ctx, key, &updated)).To(Succeed())
+	g.Expect(apimeta.FindStatusCondition(updated.Status.Conditions, tenantreconcile.ConditionTypeDegraded)).To(BeNil())
+}
+
+func TestReleaseTenantNamespaceRemovesGatewayLabels(t *testing.T) {
+	g := NewWithT(t)
+	s := aitenantTestScheme(t)
+	ctx := context.Background()
+
+	aitenant := &maasv1alpha1.AITenant{ObjectMeta: metav1.ObjectMeta{Name: "team-a", Namespace: tenantreconcile.DefaultAITenantNamespace}}
+	tenantNs := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+		Name: "ai-tenant-team-a",
+		Labels: map[string]string{
+			"maas.opendatahub.io/gateway-access-team-a": "true",
+			"example.com/gateway-old":                   "true",
+			tenantreconcile.LabelGatewayAccess:          "true",
+			"customer.example.com/purpose":              "other-work",
+		},
+		Annotations: map[string]string{
+			aitenantNameAnnotation:      "team-a",
+			aitenantNamespaceAnnotation: tenantreconcile.DefaultAITenantNamespace,
+			// gateway-old is a Gateway the AITenant was retargeted from.
+			gatewayLabelsAnnotation: `{"maas.opendatahub.io/gateway-access-team-a":["team-a"],"example.com/gateway-old":["gateway-old"]}`,
+		},
+	}}
+	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(tenantNs).Build()
+	r := &AITenantReconciler{
+		Client:           cl,
+		Scheme:           s,
+		APIReader:        cl,
+		AppNamespace:     "opendatahub",
+		TenantNamespace:  "models-as-a-service",
+		GatewayNamespace: "openshift-ingress",
+	}
+
+	g.Expect(r.releaseTenantNamespace(ctx, aitenant)).To(Succeed())
+
+	var ns corev1.Namespace
+	g.Expect(cl.Get(ctx, client.ObjectKey{Name: "ai-tenant-team-a"}, &ns)).To(Succeed())
+	g.Expect(ns.Labels).NotTo(HaveKey("maas.opendatahub.io/gateway-access-team-a"))
+	g.Expect(ns.Labels).NotTo(HaveKey("example.com/gateway-old"))
+	g.Expect(ns.Labels).NotTo(HaveKey(tenantreconcile.LabelGatewayAccess))
+	g.Expect(ns.Labels).To(HaveKeyWithValue("customer.example.com/purpose", "other-work"))
+	g.Expect(ns.Annotations).NotTo(HaveKey(gatewayLabelsAnnotation))
+	g.Expect(ns.Annotations).NotTo(HaveKey(aitenantNameAnnotation))
 }

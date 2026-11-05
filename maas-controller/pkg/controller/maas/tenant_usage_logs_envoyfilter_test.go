@@ -30,6 +30,9 @@ const (
 	usageLogsTestMonitoringNS  = "opendatahub"
 	usageLogsTestAITenantNS    = tenantreconcile.DefaultAITenantNamespace
 	usageLogsTestDefaultTenant = "models-as-a-service"
+
+	usageLogsDataScienceCollectorAddress = "data-science-usage-logs-collector-headless.opendatahub.svc.cluster.local"
+	usageLogsServiceCAFile               = "/var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt"
 )
 
 func testUsageLogsManifestPath(t *testing.T) string {
@@ -132,6 +135,55 @@ func usageLogsCollectorAddressOf(ef *unstructured.Unstructured) (string, error) 
 		return "", errors.New("collector address not found")
 	}
 	return addr, nil
+}
+
+func usageLogsClusterValueOf(ef *unstructured.Unstructured) (map[string]any, error) {
+	configPatches, found, err := unstructured.NestedSlice(ef.Object, "spec", "configPatches")
+	if err != nil {
+		return nil, err
+	}
+	if !found || len(configPatches) == 0 {
+		return nil, errors.New("configPatches not found")
+	}
+	patch, ok := configPatches[0].(map[string]any)
+	if !ok {
+		return nil, errors.New("configPatches[0] is not an object")
+	}
+	value, found, err := unstructured.NestedMap(patch, "patch", "value")
+	if err != nil {
+		return nil, err
+	}
+	if !found {
+		return nil, errors.New("cluster patch value not found")
+	}
+	return value, nil
+}
+
+func expectUsageLogsClusterTLS(g Gomega, ef *unstructured.Unstructured, wantSNI string) {
+	value, err := usageLogsClusterValueOf(ef)
+	g.Expect(err).NotTo(HaveOccurred())
+
+	name, _, _ := unstructured.NestedString(value, "transport_socket", "name")
+	g.Expect(name).To(Equal("envoy.transport_sockets.tls"))
+
+	sni, _, _ := unstructured.NestedString(value, "transport_socket", "typed_config", "sni")
+	g.Expect(sni).To(Equal(wantSNI))
+
+	minVersion, _, _ := unstructured.NestedString(value,
+		"transport_socket", "typed_config", "common_tls_context", "tls_params", "tls_minimum_protocol_version")
+	g.Expect(minVersion).To(Equal("TLSv1_2"))
+
+	caFile, _, _ := unstructured.NestedString(value,
+		"transport_socket", "typed_config", "common_tls_context", "validation_context", "trusted_ca", "filename")
+	g.Expect(caFile).To(Equal(usageLogsServiceCAFile))
+}
+
+func expectUsageLogsClusterPlaintext(g Gomega, ef *unstructured.Unstructured) {
+	value, err := usageLogsClusterValueOf(ef)
+	g.Expect(err).NotTo(HaveOccurred())
+	_, found, err := unstructured.NestedMap(value, "transport_socket")
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(found).To(BeFalse(), "self-hosted collector is plaintext and must not inherit the data-science TLS transport socket")
 }
 
 func expectUsageLogsEnvoyFilterOwnedByConfig(g Gomega, ef *unstructured.Unstructured, cfg *maasv1alpha1.Config) {
@@ -307,7 +359,8 @@ func TestTenantEnsureUsageLogsEnvoyFilter(t *testing.T) {
 			To(Succeed())
 		addr, err := usageLogsCollectorAddressOf(ef)
 		g.Expect(err).NotTo(HaveOccurred())
-		g.Expect(addr).To(Equal("data-science-usage-logs-collector.opendatahub.svc"))
+		g.Expect(addr).To(Equal(usageLogsDataScienceCollectorAddress))
+		expectUsageLogsClusterTLS(g, ef, usageLogsDataScienceCollectorAddress)
 	})
 
 	t.Run("usageLogging unset uses data-science collector", func(t *testing.T) {
@@ -334,7 +387,8 @@ func TestTenantEnsureUsageLogsEnvoyFilter(t *testing.T) {
 			To(Succeed())
 		addr, err := usageLogsCollectorAddressOf(ef)
 		g.Expect(err).NotTo(HaveOccurred())
-		g.Expect(addr).To(Equal("data-science-usage-logs-collector.opendatahub.svc"))
+		g.Expect(addr).To(Equal(usageLogsDataScienceCollectorAddress))
+		expectUsageLogsClusterTLS(g, ef, usageLogsDataScienceCollectorAddress)
 	})
 
 	t.Run("empty monitoring namespace skips without warning", func(t *testing.T) {
@@ -448,7 +502,8 @@ func TestTenantEnsureUsageLogsEnvoyFilter(t *testing.T) {
 		addr, found, err := unstructured.NestedString(lbe0, "endpoint", "address", "socket_address", "address")
 		g.Expect(err).NotTo(HaveOccurred())
 		g.Expect(found).To(BeTrue())
-		g.Expect(addr).To(Equal("usage-logs-collector.opendatahub.svc"))
+		g.Expect(addr).To(Equal("usage-logs-collector.opendatahub.svc.cluster.local"))
+		expectUsageLogsClusterPlaintext(g, ef)
 
 		g.Expect(ef.GetLabels()).To(HaveKeyWithValue(tenantreconcile.LabelManagedByAITenant, "true"))
 		g.Expect(ef.GetLabels()).To(HaveKeyWithValue(tenantreconcile.LabelTenantName, tenantreconcile.DefaultAITenantName))
