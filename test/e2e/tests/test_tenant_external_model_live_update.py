@@ -55,6 +55,7 @@ def live_update_env(tenant_external_model_tenants):
         delete_namespace_best_effort(user_ns)
 
 
+@pytest.mark.full_suite
 class TestLiveExternalModelUpdate:
     """A serving ExternalModel re-routes on edit and stops on delete, no restart."""
 
