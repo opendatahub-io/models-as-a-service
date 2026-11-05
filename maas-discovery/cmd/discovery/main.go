@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -106,16 +107,7 @@ func run() error {
 	}
 	h.RegisterRoutes(engine, authMiddleware...)
 
-	srv := &http.Server{
-		Addr:              *addr,
-		Handler:           engine,
-		TLSConfig:         tlsConfig,
-		ReadHeaderTimeout: 5 * time.Second,
-		ReadTimeout:       15 * time.Second,
-		WriteTimeout:      30 * time.Second,
-		IdleTimeout:       60 * time.Second,
-		MaxHeaderBytes:    1 << 20,
-	}
+	srv := newServer(*addr, engine, tlsConfig)
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -147,6 +139,33 @@ func run() error {
 	}
 	log.Info("server stopped")
 	return nil
+}
+
+func newServer(addr string, handler http.Handler, tlsConfig *tls.Config) *http.Server {
+	srv := &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		TLSConfig:         tlsConfig,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       60 * time.Second,
+		MaxHeaderBytes:    1 << 20,
+	}
+	if tlsConfig != nil && !slices.Contains(tlsConfig.NextProtos, "h2") {
+		disableHTTP2(srv)
+	}
+	return srv
+}
+
+// disableHTTP2 prevents net/http from running its HTTP/2 setup on a server
+// whose TLS configuration cannot serve it. NextProtos alone is not enough:
+// ListenAndServeTLS runs the HTTP/2 startup check before applying ALPN, and
+// that check rejects TLS 1.2 cipher lists without an ECDHE AES-128-GCM suite.
+func disableHTTP2(srv *http.Server) {
+	protocols := new(http.Protocols)
+	protocols.SetHTTP1(true)
+	srv.Protocols = protocols
 }
 
 func parseLogLevel(raw string) (slog.Level, error) {
@@ -237,6 +256,11 @@ func buildTLSConfig(certFile, keyFile string, selfSigned bool, profileMinVersion
 func tlsNextProtos(minVersion uint16, cipherSuites []uint16) []string {
 	if minVersion < tls.VersionTLS12 {
 		return []string{"http/1.1"}
+	}
+	// TLS 1.3 and an empty TLS 1.2 cipher list both use Go's defaults, which
+	// include an HTTP/2-eligible ECDHE AES-128-GCM suite.
+	if minVersion >= tls.VersionTLS13 || len(cipherSuites) == 0 {
+		return []string{"h2", "http/1.1"}
 	}
 	for _, id := range cipherSuites {
 		// Go's net/http requires an ECDHE AES-128-GCM suite for HTTP/2;

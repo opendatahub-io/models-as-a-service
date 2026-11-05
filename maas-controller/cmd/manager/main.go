@@ -25,6 +25,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -1476,15 +1477,10 @@ func tlsNextProtos(minVersion uint16, cipherSuites []uint16) []string {
 	if minVersion < tls.VersionTLS12 {
 		return []string{"http/1.1"}
 	}
-	for _, suite := range append(tls.CipherSuites(), tls.InsecureCipherSuites()...) {
-		if !strings.Contains(suite.Name, "_AES_128_GCM_") {
-			continue
-		}
-		for _, id := range cipherSuites {
-			if id == suite.ID {
-				return []string{"h2", "http/1.1"}
-			}
-		}
+	if minVersion >= tls.VersionTLS13 || len(cipherSuites) == 0 ||
+		slices.Contains(cipherSuites, tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256) ||
+		slices.Contains(cipherSuites, tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256) {
+		return []string{"h2", "http/1.1"}
 	}
 	return []string{"http/1.1"}
 }

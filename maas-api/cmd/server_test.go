@@ -4,10 +4,12 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	confv1 "github.com/openshift/api/config/v1"
 	"github.com/stretchr/testify/assert"
@@ -62,7 +64,8 @@ func TestBuildTLSConfig_FlagDefaultWhenNoProfile(t *testing.T) {
 		"flag default should apply when profileMinVersion is 0")
 	assert.Nil(t, tlsCfg.CipherSuites,
 		"CipherSuites should be nil when no profile suites provided")
-	assert.Equal(t, []string{"http/1.1"}, tlsCfg.NextProtos)
+	assert.Equal(t, []string{"h2", "http/1.1"}, tlsCfg.NextProtos,
+		"Go defaults include an HTTP/2-eligible suite when CipherSuites is nil")
 }
 
 func TestBuildTLSConfig_ProfileCipherSuitesEmpty(t *testing.T) {
@@ -83,7 +86,7 @@ func TestBuildTLSConfig_ProfileCipherSuitesEmpty(t *testing.T) {
 	assert.Equal(t, uint16(tls.VersionTLS13), tlsCfg.MinVersion)
 	assert.Nil(t, tlsCfg.CipherSuites,
 		"CipherSuites should be nil when profile provides empty slice (Go defaults apply)")
-	assert.Equal(t, []string{"http/1.1"}, tlsCfg.NextProtos)
+	assert.Equal(t, []string{"h2", "http/1.1"}, tlsCfg.NextProtos)
 }
 
 func TestBuildTLSConfig_HTTP2RequiresTLS12AndAES128GCM(t *testing.T) {
@@ -108,6 +111,36 @@ func TestBuildTLSConfig_HTTP2RequiresTLS12AndAES128GCM(t *testing.T) {
 			assert.Equal(t, tt.want, tlsCfg.NextProtos)
 		})
 	}
+}
+
+func TestNewServer_AES256OnlyTLS12DisablesHTTP2AndStarts(t *testing.T) {
+	cfg := &config.Config{
+		Address: "127.0.0.1:0",
+		Secure:  true,
+		TLS:     config.TLSConfig{SelfSigned: true},
+		Name:    "test-service",
+	}
+	srv, err := newServer(cfg, http.NewServeMux(), tls.VersionTLS12,
+		[]uint16{tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384})
+	require.NoError(t, err)
+	require.NotNil(t, srv.Protocols)
+	assert.False(t, srv.Protocols.HTTP2())
+	assert.Equal(t, []string{"http/1.1"}, srv.TLSConfig.NextProtos)
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- srv.ServeTLS(ln, "", "")
+	}()
+
+	select {
+	case err := <-errCh:
+		require.NoError(t, err, "AES-256-only TLS 1.2 profile must not fail HTTP/2 startup")
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	require.NoError(t, srv.Close())
 }
 
 func TestFetchTLSProfileWithRetry_TransientErrorFallsBackToIntermediate(t *testing.T) {

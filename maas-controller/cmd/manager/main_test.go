@@ -142,17 +142,25 @@ func TestFetchTLSProfileWithRetryAuthorizationErrorsFailImmediately(t *testing.T
 	}
 }
 
-func TestTLSNextProtosRequiresTLS12AndAES128GCM(t *testing.T) {
+func TestTLSNextProtosRequiresTLS12AndHTTP2Cipher(t *testing.T) {
 	tests := []struct {
 		name         string
 		minVersion   uint16
 		cipherSuites []uint16
 		want         []string
 	}{
-		{"TLS 1.2 with AES-128-GCM", tls.VersionTLS12,
+		{"TLS 1.2 with ECDHE RSA AES-128-GCM", tls.VersionTLS12,
 			[]uint16{tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256}, []string{"h2", "http/1.1"}},
+		{"TLS 1.2 with ECDHE ECDSA AES-128-GCM", tls.VersionTLS12,
+			[]uint16{tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256}, []string{"h2", "http/1.1"}},
+		{"TLS 1.2 with RSA key exchange AES-128-GCM", tls.VersionTLS12,
+			[]uint16{tls.TLS_RSA_WITH_AES_128_GCM_SHA256}, []string{"http/1.1"}},
 		{"TLS 1.2 without AES-128-GCM", tls.VersionTLS12,
 			[]uint16{tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384}, []string{"http/1.1"}},
+		{"TLS 1.2 with default cipher suites", tls.VersionTLS12,
+			nil, []string{"h2", "http/1.1"}},
+		{"TLS 1.3 with Go-managed cipher suites", tls.VersionTLS13,
+			nil, []string{"h2", "http/1.1"}},
 		{"TLS 1.1 with AES-128-GCM", tls.VersionTLS11,
 			[]uint16{tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256}, []string{"http/1.1"}},
 	}

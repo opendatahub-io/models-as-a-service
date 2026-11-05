@@ -5,10 +5,12 @@ import (
 	"crypto/tls"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -84,6 +86,8 @@ func TestBuildTLSConfigHTTP2RequiresTLS12AndAES128GCM(t *testing.T) {
 	}{
 		{"TLS 1.2 with AES-128-GCM", tls.VersionTLS12,
 			[]uint16{tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256}, []string{"h2", "http/1.1"}},
+		{"TLS 1.2 with Go defaults", tls.VersionTLS12,
+			nil, []string{"h2", "http/1.1"}},
 		{"TLS 1.2 without AES-128-GCM", tls.VersionTLS12,
 			[]uint16{tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384}, []string{"http/1.1"}},
 		{"TLS 1.1 with AES-128-GCM", tls.VersionTLS11,
@@ -96,6 +100,31 @@ func TestBuildTLSConfigHTTP2RequiresTLS12AndAES128GCM(t *testing.T) {
 			assert.Equal(t, tt.want, cfg.NextProtos)
 		})
 	}
+}
+
+func TestNewServer_AES256OnlyTLS12DisablesHTTP2AndStarts(t *testing.T) {
+	tlsConfig, err := buildTLSConfig("", "", true, tls.VersionTLS12,
+		[]uint16{tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384})
+	require.NoError(t, err)
+	srv := newServer("127.0.0.1:0", http.NewServeMux(), tlsConfig)
+	require.NotNil(t, srv.Protocols)
+	assert.False(t, srv.Protocols.HTTP2())
+	assert.Equal(t, []string{"http/1.1"}, srv.TLSConfig.NextProtos)
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- srv.ServeTLS(ln, "", "")
+	}()
+
+	select {
+	case err := <-errCh:
+		require.NoError(t, err, "AES-256-only TLS 1.2 profile must not fail HTTP/2 startup")
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	require.NoError(t, srv.Close())
 }
 
 func testLogger() *slog.Logger {
