@@ -25,6 +25,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -811,6 +812,12 @@ func fetchTLSProfileWithRetry(ctx context.Context, c client.Client) (confv1.TLSP
 				confv1.TLSAdherencePolicyNoOpinion, false, nil
 		}
 
+		if errors.IsForbidden(err) || errors.IsUnauthorized(err) {
+			return *confv1.TLSProfiles[confv1.TLSProfileIntermediateType],
+				confv1.TLSAdherencePolicyNoOpinion, false,
+				fmt.Errorf("cluster TLS profile is not readable (check the maas-controller RBAC): %w", err)
+		}
+
 		if attempt < tlsProfileFetchMaxRetries-1 {
 			setupLog.Info("transient error fetching cluster TLS profile, retrying",
 				"error", err, "attempt", attempt+1, "maxRetries", tlsProfileFetchMaxRetries)
@@ -1255,8 +1262,10 @@ func main() {
 	ctx, cancel := context.WithCancel(ctrl.SetupSignalHandler())
 
 	tlsConfig := mustLoadManagerTLSConfig(ctx, cfg)
+	profileTLSConfig := &tls.Config{}
+	tlsConfig.serverTLSOpt(profileTLSConfig)
 	nextProtosOpt := func(c *tls.Config) {
-		c.NextProtos = []string{"h2", "http/1.1"}
+		c.NextProtos = tlsNextProtos(profileTLSConfig.MinVersion, profileTLSConfig.CipherSuites)
 	}
 
 	metricsServerOptions := buildMetricsServerOptions(
@@ -1463,4 +1472,16 @@ func main() {
 		setupLog.Error(err, "problem running manager")
 		os.Exit(1)
 	}
+}
+
+func tlsNextProtos(minVersion uint16, cipherSuites []uint16) []string {
+	if minVersion < tls.VersionTLS12 {
+		return []string{"http/1.1"}
+	}
+	if minVersion >= tls.VersionTLS13 || len(cipherSuites) == 0 ||
+		slices.Contains(cipherSuites, tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256) ||
+		slices.Contains(cipherSuites, tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256) {
+		return []string{"h2", "http/1.1"}
+	}
+	return []string{"http/1.1"}
 }
