@@ -36,6 +36,29 @@ paths:
                                 $ref: '#/components/schemas/HealthResponse'
                             example:
                                 status: healthy
+    /health/database:
+        get:
+            tags:
+                - health
+            summary: Check the health status of the MaaS API database component
+            description: |
+                Returns non-secret database pool diagnostics. This component endpoint is
+                cluster-only and is not exposed through the Gateway; the stable public
+                `/health` endpoint remains implementation-agnostic.
+            operationId: health#database-healthcheck
+            security: []
+            responses:
+                "200":
+                    description: OK response.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/DatabaseHealthResponse'
+                            example:
+                                status: healthy
+                                database:
+                                    read_pool_healthy: true
+                                    read_replica_configured: true
     /v1/me:
         get:
             tags:
@@ -874,6 +897,27 @@ components:
                     type: string
                     description: Health status
                     example: healthy
+            required:
+                - status
+
+        DatabaseHealthResponse:
+            type: object
+            properties:
+                status:
+                    type: string
+                    description: Process health status; read-pool health is reported under database.
+                    example: healthy
+                database:
+                    type: object
+                    additionalProperties: true
+                    description: Non-secret database pool status
+                    properties:
+                        read_replica_configured:
+                            type: boolean
+                            description: Whether an optional read replica is configured for local reads.
+                        read_pool_healthy:
+                            type: boolean
+                            description: Whether the configured read pool is currently healthy.
             required:
                 - status
         
