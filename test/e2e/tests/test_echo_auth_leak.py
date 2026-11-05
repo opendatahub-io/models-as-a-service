@@ -16,9 +16,12 @@ How it works:
 
 ``--log-http`` writes secrets to pod logs by design, so it stays out of the
 default fixtures. The module fixture appends it for this run only, the same
-change the opt-in ``echo-sim-log-http`` overlay makes, and restores the original
-args afterwards, failing if the flag is still present. The test key is revoked
-on teardown, so a key that did reach the logs is already dead.
+change the opt-in ``echo-sim-log-http`` overlay makes, unless it is already set
+(e.g. by that overlay), in which case the fixture leaves it alone and skips the
+restore too, so it never undoes someone else's change. The test key is revoked
+on teardown on a best-effort basis (consistent with other callers of
+``_revoke_api_key``), so a key that did reach the logs is usually already dead,
+though a failed revocation is logged rather than raised.
 
 ``--log-http`` needs ``llm-d-inference-sim`` v0.9.0 or newer, which the echo-sim
 fixture pins.
@@ -178,42 +181,48 @@ def _echo_completion(api_key: str, prompt: str) -> requests.Response:
 
 @pytest.fixture(scope="module")
 def log_http_enabled():
-    """Turn on --log-http for this module only; always restore the original spec."""
+    """Turn on --log-http for this module if it isn't already on; restore only if we changed it.
+
+    Checking presence instead of asserting absence means this fixture never fights
+    whatever else manages the flag (e.g. the opt-in echo-sim-log-http overlay): if
+    it's already set, this fixture leaves it, and skips the teardown patch too, so
+    it can't accidentally turn logging off for someone else's run.
+    """
     llmis = _oc_json("get", "llminferenceservice", ECHO_MODEL_REF, "-n", MODEL_NAMESPACE)
     index, main = _main_container(llmis)
     original_args = list(main.get("args", []))
-    assert LOG_HTTP_FLAG not in original_args, (
-        f"{LOG_HTTP_FLAG} is already set on {ECHO_MODEL_REF}, probably from the echo-sim-log-http "
-        f"overlay; restore with: kustomize build test/e2e/fixtures/echo-sim | oc apply -f -"
-    )
+    already_enabled = LOG_HTTP_FLAG in original_args
 
     try:
-        _patch_main_args(index, original_args + [LOG_HTTP_FLAG])
-        _wait_for_rollout(log_http=True)
+        if not already_enabled:
+            _patch_main_args(index, original_args + [LOG_HTTP_FLAG])
+            _wait_for_rollout(log_http=True)
         yield
     finally:
-        _patch_main_args(index, original_args)
-        _wait_for_rollout(log_http=False)
-        restored = _main_container(
-            _oc_json("get", "llminferenceservice", ECHO_MODEL_REF, "-n", MODEL_NAMESPACE)
-        )[1]
-        assert LOG_HTTP_FLAG not in restored.get("args", []), (
-            f"cleanup failed: {LOG_HTTP_FLAG} still set on {ECHO_MODEL_REF}"
-        )
+        if not already_enabled:
+            _patch_main_args(index, original_args)
+            _wait_for_rollout(log_http=False)
+            restored = _main_container(
+                _oc_json("get", "llminferenceservice", ECHO_MODEL_REF, "-n", MODEL_NAMESPACE)
+            )[1]
+            assert LOG_HTTP_FLAG not in restored.get("args", []), (
+                f"cleanup failed: {LOG_HTTP_FLAG} still set on {ECHO_MODEL_REF}"
+            )
 
 
 @pytest.fixture(scope="module")
 def echo_key():
     """Grant a service account access to the echo model and mint a dedicated API key.
 
-    The key is revoked on teardown, so if it does leak into logs it is already dead.
+    The key is revoked on teardown on a best-effort basis (consistent with other
+    callers of _revoke_api_key), so a key that did leak into logs is usually
+    already dead, though a failed revocation is logged rather than raised.
     """
     ns = _ns()
     sa_name = "e2e-echo-leak-sa"
     auth_name = "e2e-echo-leak-auth"
     subscription_name = "e2e-echo-leak-sub"
 
-    oc_token = _create_sa_token(sa_name, namespace=MODEL_NAMESPACE)
     sa_user = _sa_to_user(sa_name, namespace=MODEL_NAMESPACE)
     key_id = None
     try:
@@ -228,6 +237,9 @@ def echo_key():
         # Without this the first request can 403 before the rate-limit policy is ready.
         _wait_for_subscription_inference_ready(subscription_name, ECHO_MODEL_REF, namespace=ns)
 
+        # Minted here, not before the waits above: _create_sa_token tokens are
+        # short-lived, and the readiness waits can outlast one.
+        oc_token = _create_sa_token(sa_name, namespace=MODEL_NAMESPACE)
         r = _create_api_key_raw(oc_token, name=f"e2e-echo-leak-{uuid.uuid4().hex[:8]}",
                                 subscription=subscription_name)
         assert r.status_code in (200, 201), f"API key mint failed: {r.status_code} {redact_sensitive(r.text)}"
@@ -237,7 +249,8 @@ def echo_key():
         yield _RedactedKey(body["key"])
     finally:
         if key_id:
-            _revoke_api_key(oc_token, key_id)
+            # A fresh token again: the test itself runs between mint and here.
+            _revoke_api_key(_create_sa_token(sa_name, namespace=MODEL_NAMESPACE), key_id)
         _delete_governance_and_wait(
             subscriptions=[(subscription_name, ns)],
             auth_policies=[(auth_name, ns)],
