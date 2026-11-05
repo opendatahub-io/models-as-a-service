@@ -55,12 +55,15 @@ const (
 type Handler struct {
 	logger   *logger.Logger
 	upstream *url.URL
+	token    string
 	client   *http.Client
 }
 
 // NewHandler creates a Loki proxy handler for the given upstream read endpoint
 // (LOKI_READ_ENDPOINT, e.g. https://loki-gateway.example.svc:8080/api/logs/v1/application).
-func NewHandler(log *logger.Logger, endpoint string) (*Handler, error) {
+// token (LOKI_READ_TOKEN) is sent as the Authorization: Bearer credential on
+// every proxied upstream request; when empty no Authorization header is sent.
+func NewHandler(log *logger.Logger, endpoint, token string) (*Handler, error) {
 	if log == nil {
 		log = logger.Production()
 	}
@@ -81,6 +84,7 @@ func NewHandler(log *logger.Logger, endpoint string) (*Handler, error) {
 	return &Handler{
 		logger:   log,
 		upstream: upstream,
+		token:    strings.TrimSpace(token),
 		client:   &http.Client{Timeout: proxyTimeout},
 	}, nil
 }
@@ -278,6 +282,13 @@ func (h *Handler) proxyHandler(upstreamPath string, queryEndpoint bool) gin.Hand
 		if err != nil {
 			h.proxyError(c, err)
 			return
+		}
+
+		// Authenticate against the upstream Loki with the service account token
+		// from the usage-logs-loki Secret (LOKI_READ_TOKEN). The caller's own
+		// credentials are never forwarded upstream.
+		if h.token != "" {
+			req.Header.Set("Authorization", "Bearer "+h.token)
 		}
 
 		resp, err := h.client.Do(req)

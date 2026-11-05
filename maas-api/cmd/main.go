@@ -394,7 +394,7 @@ func registerHandlers(
 	// LOKI_READ_ENDPOINT is configured; every query is restricted to the
 	// caller's organization and requires organization admin membership.
 	if cfg.LokiReadEndpoint != "" {
-		lokiHandler, err := lokiproxy.NewHandler(log, cfg.LokiReadEndpoint)
+		lokiHandler, err := lokiproxy.NewHandler(log, cfg.LokiReadEndpoint, cfg.LokiReadToken)
 		if err != nil {
 			return fmt.Errorf("failed to create Loki proxy handler: %w", err)
 		}

@@ -43,6 +43,9 @@ spec:
         #   https://<loki-gateway-service>.<loki-namespace>.svc:8080/api/logs/v1/application
         # - name: LOKI_READ_ENDPOINT
         #   value: "https://data-science-lokistack-gateway-http.opendatahub.svc:8080/api/logs/v1/application"
+        # LOKI_READ_TOKEN (service account token for the upstream Loki) is set by
+        # maas-controller via secretKeyRef to the usage-logs-loki Secret's
+        # LOKI_READ_TOKEN key when that key is present; it is never set here.
         resources:
           requests:
             memory: "128Mi"

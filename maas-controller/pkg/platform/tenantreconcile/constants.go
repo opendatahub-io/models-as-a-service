@@ -203,6 +203,10 @@ const (
 	// LokiReadSecretKey holds the Loki read API base URL injected as the
 	// LOKI_READ_ENDPOINT env var on the maas-api container.
 	LokiReadSecretKey = "LOKI_READ_ENDPOINT"
+	// LokiReadTokenSecretKey holds the service account token injected as the
+	// LOKI_READ_TOKEN env var on the maas-api container (via secretKeyRef, so
+	// the token value never lands in the Deployment spec).
+	LokiReadTokenSecretKey = "LOKI_READ_TOKEN" //nolint:gosec // secret key reference, not a credential
 
 	// Condition types aligned with ODH internal/controller/status for DSC aggregation parity.
 	ConditionDependenciesAvailable      = "DependenciesAvailable"

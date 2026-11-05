@@ -223,12 +223,20 @@ func RunPlatformWithReader(
 	return &RunResult{Warnings: params.Warnings, KuadrantDetectionWarning: params.KuadrantDetectionWarning}, nil
 }
 
-// resolveLokiReadEndpoint sets params.LokiReadEndpoint from the usage-logs-loki
-// Secret in the app namespace. When the Secret is absent the endpoint stays
-// empty, which disables the maas-api Loki proxy: the rendered Deployment omits
-// LOKI_READ_ENDPOINT and the SSA apply removes any previously applied value.
-// A Secret that exists with a missing key or an invalid URL only disables the
-// proxy and records a warning rather than failing the whole tenant reconcile.
+// resolveLokiReadEndpoint sets params.LokiReadEndpoint (and the token
+// secretKeyRef flag) from the usage-logs-loki Secret in the app namespace. When
+// the Secret is absent the endpoint stays empty, which disables the maas-api
+// Loki proxy: the rendered Deployment omits LOKI_READ_ENDPOINT and the SSA
+// apply removes any previously applied value. A Secret that exists with a
+// missing key or an invalid URL only disables the proxy and records a warning
+// rather than failing the whole tenant reconcile.
+//
+// When the LOKI_READ_TOKEN key is present, the maas-api Deployment gets a
+// LOKI_READ_TOKEN env var referencing the Secret via secretKeyRef (so the
+// token value never lands in the Deployment spec, and rotations are picked up
+// on pod restart without a reconcile). A missing token key keeps the proxy
+// enabled without upstream authentication and records a warning, since the
+// upstream may not require it.
 func resolveLokiReadEndpoint(ctx context.Context, c client.Client, appNs string, params *PlatformParams, log logr.Logger) error {
 	secret := &corev1.Secret{}
 	err := c.Get(ctx, types.NamespacedName{Namespace: appNs, Name: LokiReadSecretName}, secret)
@@ -256,7 +264,14 @@ func resolveLokiReadEndpoint(ctx context.Context, c client.Client, appNs string,
 	}
 
 	params.LokiReadEndpoint = endpoint
-	log.Info("maas-api Loki read proxy enabled", "endpoint", endpoint)
+	if strings.TrimSpace(string(secret.Data[LokiReadTokenSecretKey])) != "" {
+		params.LokiReadTokenFromSecret = true
+	} else {
+		params.Warnings = append(params.Warnings, fmt.Sprintf(
+			"Secret '%s' in namespace '%s' is missing key '%s'; the maas-api Loki proxy sends no Authorization header upstream",
+			LokiReadSecretName, appNs, LokiReadTokenSecretKey))
+	}
+	log.Info("maas-api Loki read proxy enabled", "endpoint", endpoint, "tokenInjected", params.LokiReadTokenFromSecret)
 	return nil
 }
 

@@ -117,6 +117,12 @@ type Config struct {
 	// The Loki proxy routes are only registered when it is set.
 	LokiReadEndpoint string
 
+	// LokiReadToken is the service account token sent as the Bearer credential
+	// on proxied upstream Loki requests (LOKI_READ_TOKEN, sourced from the
+	// usage-logs-loki Secret). When empty the proxy sends no Authorization
+	// header upstream.
+	LokiReadToken string
+
 	// OTELEndpoint is the OTLP gRPC endpoint for trace export (e.g., "localhost:4317").
 	// Tracing is disabled when empty.
 	OTELEndpoint string
@@ -189,6 +195,7 @@ func Load() *Config {
 		MetricsCertDir:              metricsCertDir,
 		DiscoveryEnableHTTP2:        discoveryEnableHTTP2,
 		LokiReadEndpoint:            env.GetString("LOKI_READ_ENDPOINT", ""),
+		LokiReadToken:               env.GetString("LOKI_READ_TOKEN", ""),
 		OTELEndpoint:                env.GetString("OTEL_EXPORTER_OTLP_ENDPOINT", ""),
 		OTELInsecure:                otelInsecure,
 		OTELSampleRate:              otelSampleRate,

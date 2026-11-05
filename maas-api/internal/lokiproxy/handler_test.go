@@ -22,9 +22,10 @@ const testOrganizationID = "1234"
 const testUsername = "admin@example.com"
 
 type upstreamRecord struct {
-	method string
-	path   string
-	query  url.Values
+	method        string
+	path          string
+	query         url.Values
+	authorization string
 }
 
 // newUpstream starts a fake Loki that records the last request and replies with
@@ -37,6 +38,7 @@ func newUpstream(t *testing.T, status int, body string) (*httptest.Server, *upst
 		record.method = r.Method
 		record.path = r.URL.Path
 		record.query = r.URL.Query()
+		record.authorization = r.Header.Get("Authorization")
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(status)
 		_, _ = io.WriteString(w, body)
@@ -57,7 +59,7 @@ func newRouter(t *testing.T, pathPrefix string) (*gin.Engine, *upstreamRecord) {
 	upstream, record := newUpstream(t, http.StatusOK, `{"status":"success"}`)
 
 	tokenHandler := token.NewHandler(logger.Production(), "test-tenant")
-	lokiHandler, err := lokiproxy.NewHandler(logger.Production(), upstream.URL+pathPrefix)
+	lokiHandler, err := lokiproxy.NewHandler(logger.Production(), upstream.URL+pathPrefix, "")
 	require.NoError(t, err)
 
 	router := gin.New()
@@ -340,7 +342,7 @@ func TestProxyPassesThroughUpstreamError(t *testing.T) {
 	t.Cleanup(upstream.Close)
 
 	tokenHandler := token.NewHandler(logger.Production(), "test-tenant")
-	lokiHandler, err := lokiproxy.NewHandler(logger.Production(), upstream.URL)
+	lokiHandler, err := lokiproxy.NewHandler(logger.Production(), upstream.URL, "")
 	require.NoError(t, err)
 
 	router := gin.New()
@@ -353,15 +355,51 @@ func TestProxyPassesThroughUpstreamError(t *testing.T) {
 }
 
 func TestNewHandlerValidatesEndpoint(t *testing.T) {
-	_, err := lokiproxy.NewHandler(logger.Production(), "")
+	_, err := lokiproxy.NewHandler(logger.Production(), "", "")
 	require.Error(t, err)
 
-	_, err = lokiproxy.NewHandler(logger.Production(), "not-a-url")
+	_, err = lokiproxy.NewHandler(logger.Production(), "not-a-url", "")
 	require.Error(t, err)
 
-	_, err = lokiproxy.NewHandler(logger.Production(), "ftp://loki.example")
+	_, err = lokiproxy.NewHandler(logger.Production(), "ftp://loki.example", "")
 	require.Error(t, err)
 
-	_, err = lokiproxy.NewHandler(logger.Production(), "https://loki.example/api/logs/v1/application")
+	_, err = lokiproxy.NewHandler(logger.Production(), "https://loki.example/api/logs/v1/application", "")
 	require.NoError(t, err)
+}
+
+func TestProxyInjectsUpstreamBearerToken(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	upstream, record := newUpstream(t, http.StatusOK, `{"status":"success"}`)
+
+	tokenHandler := token.NewHandler(logger.Production(), "test-tenant")
+	lokiHandler, err := lokiproxy.NewHandler(logger.Production(), upstream.URL, "sa-token-123")
+	require.NoError(t, err)
+
+	router := gin.New()
+	lokiHandler.RegisterRoutes(router.Group("/v1", tokenHandler.ExtractUserInfo()))
+
+	w := lokiRequest(t, router, http.MethodGet, "/v1/logs/loki/api/v1/query_range?query=%7B%7D", adminGroups())
+
+	require.Equal(t, http.StatusOK, w.Code)
+	require.Equal(t, "Bearer sa-token-123", record.authorization)
+}
+
+func TestProxyWithoutTokenSendsNoAuthorizationHeader(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	upstream, record := newUpstream(t, http.StatusOK, `{"status":"success"}`)
+
+	tokenHandler := token.NewHandler(logger.Production(), "test-tenant")
+	lokiHandler, err := lokiproxy.NewHandler(logger.Production(), upstream.URL, "")
+	require.NoError(t, err)
+
+	router := gin.New()
+	lokiHandler.RegisterRoutes(router.Group("/v1", tokenHandler.ExtractUserInfo()))
+
+	w := lokiRequest(t, router, http.MethodGet, "/v1/logs/loki/api/v1/query_range?query=%7B%7D", adminGroups())
+
+	require.Equal(t, http.StatusOK, w.Code)
+	require.Empty(t, record.authorization)
 }
