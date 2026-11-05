@@ -32,6 +32,7 @@ from worker_tenant_fixtures import (
 )
 
 pytestmark = [
+    pytest.mark.full_suite,
     pytest.mark.xdist_group("observability_identity"),
     pytest.mark.skipif(
         os.environ.get("E2E_OBSERVABILITY_IDENTITY", "").lower() != "true",
