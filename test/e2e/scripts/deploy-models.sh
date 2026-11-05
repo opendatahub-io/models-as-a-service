@@ -137,7 +137,7 @@ deploy_models() {
     echo "✅ MaaS system deployed (free + premium + e2e test fixtures)"
 
     echo "Waiting for models to be ready (timeout: ${LLMIS_TIMEOUT}s)..."
-    local models=("facebook-opt-125m-simulated" "premium-simulated-simulated-premium" "e2e-unconfigured-facebook-opt-125m-simulated")
+    local models=("facebook-opt-125m-simulated" "premium-simulated-simulated-premium" "e2e-unconfigured-facebook-opt-125m-simulated" "e2e-external-token-limit-simulated")
     for model in "${models[@]}"; do
         if ! oc wait "llminferenceservice/$model" -n llm --for=condition=Ready --timeout="${LLMIS_TIMEOUT}s"; then
             echo "❌ ERROR: Timed out waiting for $model to be ready"
