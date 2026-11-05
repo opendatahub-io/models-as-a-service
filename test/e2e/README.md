@@ -45,13 +45,29 @@ pytest tests/<file>.py -v
 | File | Focus |
 |------|--------|
 | `test_smoke.py` | Read-only smoke checks: non-streaming and streaming (`text/event-stream`) chat/completions |
+
+### Inference response assertions
+
+Non-streaming chat/completions tests should use `assert_inference_response()` from
+`tests/test_helper.py` on HTTP **200** responses. It checks:
+
+- Non-empty response body (default minimum 50 bytes; override with `min_bytes=`)
+- Valid JSON with non-empty `choices[0].message.content` or `choices[0].text`
+- `usage.total_tokens > 0` when the `usage` object includes `total_tokens`
+
+Streaming smoke uses `assert_openai_sse_chat_stream()`, which also requires at
+least one non-empty content chunk before `data: [DONE]`.
+
+| File | Focus |
+|------|--------|
 | `test_subscription.py` | Subscription / inference flows |
+| `test_observability_identity.py` | Opt-in organization attribution reproduction on one gateway/model; requires `E2E_OBSERVABILITY_IDENTITY=true` and Limitador telemetry |
 | `test_trlp_rate_grouping.py` | TRLP limits grouped by rate: shared limits, per-subscription and per-user budgets, rate edits, gateway wasm config size guard |
 | `test_api_keys.py` | `/v1/api-keys` |
 | `test_models_endpoint.py` | `/v1/models` |
 | `test_negative_security.py` | Security / negative paths on the **default** gateway (`GATEWAY_HOST`) |
 | `test_namespace_scoping.py` | Namespace wiring |
-| `test_external_models.py` | External model refs |
+| `test_external_models.py` | External model refs; deterministic ExternalModel token-rate exhaustion runs in the serial pass against the dedicated, MaaS-unbound `external-token-limit` simulator Service, using the OpenShift service CA mounted in the gateway proxy |
 | `test_inference_priority.py` | Subscription `inferencePriority` (llm-d flow control): InferenceObjective lifecycle, status, gateway headers; skips without the `inferenceobjectives.llm-d.ai` CRD |
 | `test_tenant.py` | `default-tenant` (subscription namespace): Ready/phase, optional payload-processing (gateway namespace), user CRs not owned by Tenant |
 | `test_aitenant_lifecycle.py` | `AITenant` bootstrap create/delete; reserved namespace rejection; **serial:** revocation operand recovery when `maas-api-cleanup` SA is removed mid-delete |
@@ -71,7 +87,46 @@ pytest tests/<file>.py -v
 | `test_tenant_external_model_crossns.py` | Multi-tenant AGC/Praxis external models: ReferenceGrant-gated cross-namespace providers, grant revoke/narrow, credential source selection (P1; gated on `TENANT_EXTERNAL_MODEL_CROSSNS_E2E`) |
 | `test_tenant_external_model_default_tenant.py` | 3.5-shaped external models (no `gatewayRefs`, `auth.type: simple`) in a namespace of no tenant (`llm`) served through the default tenant's Gateway by ai-gateway-controller; subscription-injected Gateway headers reach the provider and replace client values, `gatewayRefs` replace the implicit attachment, deleting the model removes its objects (RHOAIENG-101754; skips without the AGC or when the default tenant is on IPP) |
 
-`/group-test` sets **`E2E_SMOKE_ONLY=true`** (only `@pytest.mark.smoke`). `prow_run_smoke_test.sh` itself defaults to the full suite so nightly and unmarked callers keep coverage of tests that are neither `smoke` nor `nightly`. Locally: `./scripts/run_e2e_tests.sh --smoke-only` (or `E2E_SMOKE_ONLY=true`). Individual modules can still be run directly, for example `pytest tests/test_subscription_list_endpoints.py -v`.
+`/group-test` sets **`E2E_SMOKE_ONLY=true`** and **`E2E_INCLUDE_NEW_FROM_DIFF=true`**: curated `@pytest.mark.smoke` **plus** any tests newly added in the PR (dynamic `pr_new` marker from a git diff — sources are not rewritten). Diff base comes from `E2E_DIFF_BASE` / `PULL_BASE_SHA` / `BASE_SHA`, or by fetching **`E2E_DIFF_UPSTREAM_URL`** at **`E2E_DIFF_TARGET_BRANCH`** (Pac `{{target_branch}}`) — not the PR fork’s `origin/main`, which is what the depth-50 group-test clone uses as `origin`. If the base cannot be resolved, the runner falls back to smoke-only. `prow_run_smoke_test.sh` itself defaults to the full suite so nightly and unmarked callers keep coverage of tests that are neither `smoke` nor `nightly`. Locally: `./scripts/run_e2e_tests.sh --smoke-only` (or `E2E_SMOKE_ONLY=true`). Individual modules can still be run directly, for example `pytest tests/test_subscription_list_endpoints.py -v`.
+
+**New tests:** PRs that add E2E tests must mark them `@pytest.mark.smoke`, `@pytest.mark.full_suite`, or `@pytest.mark.nightly`. The e2e-collect workflow runs `scripts/check_new_e2e_test_tiers.py` against the PR base; existing unmarked tests are grandfathered. Tier choice is long-term policy; `pr_new` only proves new tests pass on the PR smoke job once.
+
+To reproduce organization attribution on an existing cluster, export the deployment's
+normal E2E environment (controller/infra namespaces and gateway class), then run
+the established local runner from the repository root. It prepares the Python
+environment and uses your current `oc` login. The case creates its own gateway:
+
+```bash
+ENABLE_TENANT_NAMESPACE_DISCOVERY=true E2E_OBSERVABILITY_IDENTITY=true \
+E2E_PARALLEL_WORKERS=1 ARTIFACT_DIR="$PWD/test/e2e/reports" \
+  ./test/e2e/run-tests-quick.sh tests/test_observability_identity.py
+```
+
+The fixture reuses the worker-tenant bootstrap with one simulator and creates its
+own tenant, gateway and two subscriptions. Both use `spec.organization.id`; one
+also has a conflicting deprecated `tokenMetadata.organizationId`. Three measured
+requests per subscription follow separately recorded warm-up attempts. The test
+checks source Limitador counters and their `organization_id` labels, and revokes
+keys and removes its resources on teardown. It does not require ACM or dashboards.
+JSON evidence is written to `ARTIFACT_DIR/observability-identity-<suffix>/evidence.json`,
+including expected IDs, resource specifications, deployed images, request statuses
+and filtered before/after metric samples. Credentials and response bodies are not
+included. If multiple Limitador instances exist, select the gateway's instance with
+`E2E_IDENTITY_LIMITADOR=namespace/name`.
+
+To verify the collector-to-federation path as well, configure both
+`E2E_IDENTITY_COLLECTOR` and `E2E_IDENTITY_PROMETHEUS` as `namespace/service:port`.
+The first service must expose the collector's Prometheus exporter; the second
+must expose the Prometheus-compatible query API after the federation scrape's
+metric relabeling. The additional checks wait for usage counters to increase
+at both stages, verify that `organization_id` survives export, and require each
+scraped `grid_tenant_id` to equal that subscription's `spec.organization.id`.
+Export verification fails setup if only one endpoint is supplied. Optionally
+set `E2E_IDENTITY_TENANT_ID` to require the scraped samples to retain that
+internal ACM `tenant_id`, independently of the two organization UUIDs.
+Before/after samples for both stages are included in the same evidence JSON.
+These checks use existing monitoring services; the test fixture does not
+install or remove them.
 
 **Skips:** `test_tenant.py` and `test_config_tenant.py` skip the whole module when the needed CRD or object is absent (partial cluster or older bundle). Neither module deletes Config or exercises DSC disable; that stays in operator or manual teardown.
 

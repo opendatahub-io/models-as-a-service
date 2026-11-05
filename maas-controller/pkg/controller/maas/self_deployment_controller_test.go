@@ -899,8 +899,8 @@ func TestEnsureUsageLogs(t *testing.T) {
 		wantCollector    bool
 		wantLokiInstance string
 	}{
-		{name: "usageLogging unset uses dsci-managed", spec: maasv1alpha1.ConfigSpec{}, wantCollector: false, wantLokiInstance: "data-science-lokistack"},
-		{name: "usageLogging false uses dsci-managed", spec: maasv1alpha1.ConfigSpec{UsageLogging: ptr.To(false)}, wantCollector: false, wantLokiInstance: "data-science-lokistack"},
+		{name: "usageLogging unset uses dsci-managed", spec: maasv1alpha1.ConfigSpec{}, wantCollector: false, wantLokiInstance: "data-science-usage-logs-lokistack"},
+		{name: "usageLogging false uses dsci-managed", spec: maasv1alpha1.ConfigSpec{UsageLogging: ptr.To(false)}, wantCollector: false, wantLokiInstance: "data-science-usage-logs-lokistack"},
 		{name: "usageLogging true uses usage-logs", spec: maasv1alpha1.ConfigSpec{UsageLogging: ptr.To(true)}, wantCollector: true, wantLokiInstance: "usage"},
 	}
 
@@ -1010,7 +1010,7 @@ func TestEnsureUsageLogs(t *testing.T) {
 		g.Expect(cl.Get(context.Background(), client.ObjectKey{
 			Name: "usage-tenancy-proxy-egress-restrict", Namespace: monitoringNS,
 		}, np)).To(Succeed())
-		g.Expect(lokiStackInstanceLabel(np)).To(Equal("data-science-lokistack"))
+		g.Expect(lokiStackInstanceLabel(np)).To(Equal("data-science-usage-logs-lokistack"))
 	})
 
 	t.Run("enabling usageLogging creates usage-logs resources and keeps shared ones", func(t *testing.T) {

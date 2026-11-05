@@ -54,6 +54,11 @@
 #   E2E_PARALLEL_WORKERS - pytest-xdist worker count (default: 5)
 #   E2E_SMOKE_ONLY - Restrict pytest to @pytest.mark.smoke (default: false).
 #                    /group-test sets true via Tekton podTemplate env.
+#   E2E_INCLUDE_NEW_FROM_DIFF - With E2E_SMOKE_ONLY, also run tests added since
+#                    E2E_DIFF_BASE (dynamic pr_new marker). /group-test sets true.
+#   E2E_DIFF_BASE / PULL_BASE_SHA / BASE_SHA - PR base for the new-test diff.
+#   E2E_DIFF_UPSTREAM_URL / E2E_DIFF_TARGET_BRANCH - Upstream repo + base branch
+#                    when the checkout's origin is a fork (/group-test sets these).
 #   E2E_MAXFAIL - failures before a pass stops (default: 0 here, i.e. never;
 #                 run_e2e_tests.sh defaults to 5 when invoked directly)
 #   TENANT_EXTERNAL_MODEL_CROSSNS_E2E - Opt in to P1 cross-namespace external

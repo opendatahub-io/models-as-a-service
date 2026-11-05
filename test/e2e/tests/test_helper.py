@@ -68,12 +68,181 @@ import shlex
 import subprocess
 import time
 import uuid
-from typing import Optional
+from dataclasses import dataclass
+from typing import Any, Callable, Optional
 
 import requests
 from urllib3.exceptions import NewConnectionError
 
 log = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class TokenLimitResult:
+    """Evidence collected while consuming a response-accounted token budget."""
+
+    status_codes: list[int]
+    success_count: int
+    successful_usages: list[dict[str, int]]
+    first_429_index: Optional[int]
+
+
+def openai_usage_from_response(response: requests.Response) -> dict[str, int]:
+    """Extract and validate the usage contract used by OpenAI chat completions."""
+    try:
+        usage = response.json()["usage"]
+    except (ValueError, KeyError, TypeError) as exc:
+        raise AssertionError(
+            f"HTTP 200 response did not contain OpenAI usage: {(response.text or '').strip()[:500]!r}"
+        ) from exc
+    keys = ("prompt_tokens", "completion_tokens", "total_tokens")
+    if any(not isinstance(usage.get(key), int) or usage[key] <= 0 for key in keys):
+        raise AssertionError(f"HTTP 200 response has non-positive or invalid usage: {usage!r}")
+    if usage["total_tokens"] != usage["prompt_tokens"] + usage["completion_tokens"]:
+        raise AssertionError(f"HTTP 200 response has inconsistent usage: {usage!r}")
+    return {key: usage[key] for key in keys}
+
+
+def exercise_until_token_limited(
+    request_fn: Callable[[], requests.Response],
+    *,
+    max_attempts: int,
+    interval_seconds: float = 0.1,
+    usage_extractor: Callable[[requests.Response], dict[str, int]] = openai_usage_from_response,
+    enforcement_timeout_seconds: float = 0,
+) -> TokenLimitResult:
+    """Require successful metered inference followed by an enforced HTTP 429.
+
+    Any status other than 200 or 429 fails the test; an immediate 429 also
+    fails, since it signals a stale counter or unready policy, not exhaustion.
+    Past `max_attempts`, keeps sending until `enforcement_timeout_seconds`
+    elapses if no 429 has appeared yet: a limiter that trails the policy
+    status should not fail the test, only a genuine absence of enforcement.
+    """
+    if max_attempts < 2:
+        raise ValueError("max_attempts must permit a success and a later 429")
+    statuses: list[int] = []
+    usages: list[dict[str, int]] = []
+    first_429: Optional[int] = None
+    deadline = time.time() + enforcement_timeout_seconds
+
+    index = 0
+    pending_confirmation = False
+    while pending_confirmation or index < max_attempts or (first_429 is None and time.time() < deadline):
+        was_pending = pending_confirmation
+        response = request_fn()
+        statuses.append(response.status_code)
+        if response.status_code == 200:
+            if first_429 is not None:
+                raise AssertionError(
+                    f"HTTP 200 after token-limit 429; status sequence={statuses}; "
+                    f"body={(response.text or '').strip()[:500]!r}"
+                )
+            usages.append(usage_extractor(response))
+        elif response.status_code == 429:
+            response_text = (response.text or "").lower()
+            is_rate_limit_error = any(
+                keyword in response_text for keyword in ("rate", "limit", "quota", "too many")
+            )
+            is_subscription_error = "subscription" in response_text and not is_rate_limit_error
+            if is_subscription_error:
+                raise AssertionError(
+                    "Expected a rate-limit 429, not a subscription failure; "
+                    f"status sequence={statuses}; body={(response.text or '').strip()[:500]!r}"
+                )
+            if first_429 is None:
+                first_429 = index
+        else:
+            raise AssertionError(
+                f"Unexpected HTTP {response.status_code} while exercising token limit; "
+                f"status sequence={statuses}; body={(response.text or '').strip()[:500]!r}"
+            )
+        index += 1
+        if was_pending:
+            break
+        if first_429 is not None:
+            # Confirm enforcement with exactly one additional request.
+            pending_confirmation = True
+        if interval_seconds:
+            time.sleep(interval_seconds)
+
+    result = TokenLimitResult(statuses, len(usages), usages, first_429)
+    log.info("Token-limit exercise statuses=%s successful_usage=%s", statuses, usages)
+    if not usages:
+        raise AssertionError(f"Received 429 before any successful metered inference; statuses={statuses}")
+    if first_429 is None:
+        total = sum(usage["total_tokens"] for usage in usages)
+        raise AssertionError(
+            f"No HTTP 429 within {max_attempts} attempts "
+            f"(enforcement_timeout_seconds={enforcement_timeout_seconds}); statuses={statuses}; "
+            f"observed_total_tokens={total}"
+        )
+    return result
+
+
+def create_reencrypt_route(
+    *,
+    name: str,
+    namespace: str,
+    service_name: str,
+    target_port: Any,
+    hostname: Optional[str] = None,
+    require_signing_ca: bool = False,
+    labels: Optional[dict[str, str]] = None,
+) -> dict:
+    """Create a Route that re-encrypts traffic to an HTTPS Service backend.
+
+    ``require_signing_ca`` fails fast instead of falling back to OpenShift's
+    default backend validation.
+    """
+    ca_bundle = _fetch_openshift_service_ca()
+    if require_signing_ca and not ca_bundle:
+        raise RuntimeError("OpenShift service signing CA bundle is required for this re-encrypt Route")
+    spec: dict[str, Any] = {
+        "to": {"kind": "Service", "name": service_name, "weight": 100},
+        "port": {"targetPort": target_port},
+        "tls": {"termination": "reencrypt", "insecureEdgeTerminationPolicy": "Redirect"},
+    }
+    if hostname:
+        spec["host"] = hostname
+    if ca_bundle:
+        spec["tls"]["destinationCACertificate"] = ca_bundle
+    route = {
+        "apiVersion": "route.openshift.io/v1",
+        "kind": "Route",
+        "metadata": {"name": name, "namespace": namespace, "labels": labels or {}},
+        "spec": spec,
+    }
+    _apply_cr(route)
+    return route
+
+
+def wait_for_route_admitted(
+    name: str,
+    namespace: Optional[str] = None,
+    *,
+    timeout: int = 60,
+    interval: int = 3,
+) -> dict:
+    """Wait for an OpenShift Route admission and return its admitted object.
+
+    Omitting ``namespace`` preserves the historical multitenancy helper API,
+    which watches the gateway namespace.
+    """
+    namespace = namespace or GATEWAY_NAMESPACE
+    deadline = time.time() + timeout
+    last_status: Any = None
+    while time.time() < deadline:
+        route = _get_cr("route", name, namespace)
+        if route:
+            ingress = (route.get("status") or {}).get("ingress") or []
+            for entry in ingress:
+                conditions = {c.get("type"): c.get("status") for c in entry.get("conditions") or []}
+                if conditions.get("Admitted") == "True":
+                    return route
+            last_status = route.get("status")
+        time.sleep(interval)
+    raise TimeoutError(f"Route {namespace}/{name} was not admitted within {timeout}s: {last_status}")
 
 
 # ---------------------------------------------------------------------------
@@ -1252,6 +1421,8 @@ def _create_test_subscription(
     model_namespace=MODEL_NAMESPACE,
     unlimited=False,
     inference_priority=None,
+    organization_id=None,
+    token_metadata_org_id=None,
 ):
     """Create a MaaSSubscription CR for testing.
 
@@ -1267,6 +1438,8 @@ def _create_test_subscription(
         model_namespace: Namespace containing the referenced MaaSModelRefs
         unlimited: Grant access without a token budget; token_limit and window are ignored
         inference_priority: Optional spec.inferencePriority (llm-d flow-control priority)
+        organization_id: Stable spec.organization.id association
+        token_metadata_org_id: Legacy attribution ID, only for migration/precedence tests
     """
     namespace = namespace or _ns()
     if not isinstance(model_refs, list):
@@ -1293,6 +1466,10 @@ def _create_test_subscription(
         spec["priority"] = int(priority)
     if inference_priority is not None:
         spec["inferencePriority"] = int(inference_priority)
+    if organization_id is not None:
+        spec["organization"] = {"id": organization_id}
+    if token_metadata_org_id is not None:
+        spec["tokenMetadata"] = {"organizationId": token_metadata_org_id}
 
     log.info("Creating MaaSSubscription: %s", name)
     _apply_cr(
@@ -1401,6 +1578,42 @@ def _post(url: str, payload: dict, headers: dict, timeout_sec: int = 45) -> requ
     )
 
 
+def assert_inference_response(response: requests.Response, *, min_bytes: int = 50) -> dict:
+    """
+    Assert a non-streaming chat/completions HTTP 200 carries parseable JSON with
+    non-empty completion text (``choices[0].message.content`` or ``choices[0].text``).
+    When ``usage.total_tokens`` is present it must be positive.
+    """
+    assert response.status_code == 200, (
+        f"expected HTTP 200, got {response.status_code}: {(response.text or '')[:500]}"
+    )
+    raw = response.content or b""
+    assert len(raw) >= min_bytes, (
+        f"HTTP 200 body shorter than {min_bytes} bytes (len={len(raw)})"
+    )
+    assert raw.strip(), "HTTP 200 returned an empty response body"
+    try:
+        data = response.json()
+    except json.JSONDecodeError as exc:
+        raise AssertionError(
+            f"HTTP 200 body is not valid JSON: {exc}; body={(response.text or '')[:500]}"
+        ) from exc
+    choices = data.get("choices") or []
+    assert choices, f"HTTP 200 JSON has no choices: {(response.text or '')[:500]}"
+    choice = choices[0]
+    text = choice.get("text")
+    if text is None:
+        message = choice.get("message") or {}
+        text = message.get("content")
+    assert isinstance(text, str) and text.strip(), (
+        f"HTTP 200 completion has empty text/message content: {(response.text or '')[:500]}"
+    )
+    usage = data.get("usage")
+    if isinstance(usage, dict) and "total_tokens" in usage:
+        assert usage["total_tokens"] > 0, f"usage.total_tokens must be > 0 when present: {usage}"
+    return data
+
+
 def chat(prompt: str, model_v1: str, headers: dict, model_name: str, *,
          stream: bool = False, max_tokens: Optional[int] = None):
     url = f"{model_v1}/chat/completions"
@@ -1433,9 +1646,19 @@ def assert_openai_sse_chat_stream(response: requests.Response) -> list[str]:
     assert events[-1] == OPENAI_SSE_DONE_LINE, f"stream did not end with [DONE]: {events[-3:]}"
     data_chunks = [e for e in events[:-1] if e.startswith("data: {")]
     assert data_chunks, f"stream carried no JSON data chunks: {events[:5]}"
+    aggregated: list[str] = []
     for chunk in data_chunks:
         payload = chunk[len("data: ") :]
-        json.loads(payload)
+        parsed = json.loads(payload)
+        for choice in parsed.get("choices") or []:
+            delta = choice.get("delta") or {}
+            if delta.get("content"):
+                aggregated.append(delta["content"])
+            if choice.get("text"):
+                aggregated.append(choice["text"])
+    assert "".join(aggregated).strip(), (
+        "streaming response carried no non-empty content in SSE data chunks"
+    )
     return events
 
 

@@ -199,6 +199,19 @@ func apiTranslationCompatibilityRisk(models []string) string {
 	)
 }
 
+// explicitFalseAcceptsRisk follows apiTranslationCompatibilityRisk when an
+// operator set spec.apiTranslation.enabled=false. That also stops
+// ai-gateway-controller applying targetModel and the provider path for every
+// ExternalModel, not only for the listed bindings.
+const explicitFalseAcceptsRisk = "; explicit spec.apiTranslation.enabled=false accepts this compatibility loss and also turns off targetModel and path rewriting for every ExternalModel"
+
+// specAPITranslationEnabled reports the tenant's spec.apiTranslation.enabled.
+// An omitted value is off, as ai-gateway-controller reads it.
+func specAPITranslationEnabled(tenant client.Object) bool {
+	mtc, ok := tenant.(*maasv1alpha1.MaasTenantConfig)
+	return ok && mtc.Spec.APITranslation != nil && mtc.Spec.APITranslation.Enabled != nil && *mtc.Spec.APITranslation.Enabled
+}
+
 // persistAPITranslationMigrationRisk makes an accepted compatibility loss
 // durable before cleanup removes the IPP ConfigMap. The marker is consumed on
 // later reconciles to keep the tenant's Degraded condition informative while
@@ -227,20 +240,22 @@ func appendAcceptedAPITranslationMigrationRiskWarning(
 		return nil
 	}
 
+	// Migration has persisted its translation intent by now, so the spec holds it.
+	translationEnabled := specAPITranslationEnabled(tenant)
 	if risk == APITranslationMigrationRiskExplicitFalse {
-		models, err := legacyIPPTranslationModels(ctx, reader, *params, tenant)
+		models, err := legacyIPPTranslationModels(ctx, reader, *params, tenant, translationEnabled)
 		if err != nil {
 			return fmt.Errorf("recheck accepted API translation compatibility risk: %w", err)
 		}
 		if len(models) == 0 {
 			return nil
 		}
-		params.Warnings = append(params.Warnings, apiTranslationCompatibilityRisk(models)+"; explicit spec.apiTranslation.enabled=false accepts this compatibility loss")
+		params.Warnings = append(params.Warnings, apiTranslationCompatibilityRisk(models)+explicitFalseAcceptsRisk)
 		return nil
 	}
 
 	warning := forcedMigrationReason("force-payload-processing-migration annotation allowed migration", true)
-	models, err := legacyIPPTranslationModels(ctx, reader, *params, tenant)
+	models, err := legacyIPPTranslationModels(ctx, reader, *params, tenant, translationEnabled)
 	if err != nil {
 		return fmt.Errorf("recheck forced API translation compatibility risk: %w", err)
 	}
@@ -313,13 +328,16 @@ func persistAPITranslationMigrationIntent(ctx context.Context, c client.Client, 
 }
 
 // legacyIPPTranslationModels returns active ExternalModels whose provider
-// binding is not the known-safe OpenAI-provider/OpenAI-Chat passthrough. The
-// wire format alone is insufficient: Azure, Vertex, and Bedrock providers can
-// use OpenAI-shaped requests while still needing provider-specific legacy
-// path or response handling. Current Praxis ExtProc does not dispatch those
-// legacy transforms after provider selection. The default tenant also covers
-// the models it serves outside tenant namespaces (see tenantNamespaces).
-func legacyIPPTranslationModels(ctx context.Context, reader client.Reader, params PlatformParams, tenant client.Object) ([]string, error) {
+// binding is not the known-safe OpenAI-provider/OpenAI-Chat passthrough or,
+// when translationEnabled, an Anthropic provider with apiFormat messages,
+// which Praxis translates from OpenAI Chat Completions. Without translation,
+// ai-gateway-controller skips that binding. The wire format alone is
+// insufficient: Azure, Vertex, and Bedrock providers can use OpenAI-shaped
+// requests while still needing provider-specific legacy path or response
+// handling. Current Praxis ExtProc does not dispatch those legacy transforms
+// after provider selection. The default tenant also covers the models it
+// serves outside tenant namespaces (see tenantNamespaces).
+func legacyIPPTranslationModels(ctx context.Context, reader client.Reader, params PlatformParams, tenant client.Object, translationEnabled bool) ([]string, error) {
 	namespace := params.ModelNamespace
 	if namespace == "" {
 		namespace = tenant.GetNamespace()
@@ -411,7 +429,9 @@ func legacyIPPTranslationModels(ctx context.Context, reader client.Reader, param
 				affected = append(affected, fmt.Sprintf("%s (apiFormat=%s, provider %s has unknown type)", label, apiFormat, providerName))
 				continue
 			}
-			if apiFormat != "openai-chat" || providerType != "openai" {
+			passthrough := apiFormat == "openai-chat" && providerType == "openai"
+			translated := translationEnabled && apiFormat == "messages" && providerType == "anthropic"
+			if !passthrough && !translated {
 				affected = append(affected, fmt.Sprintf("%s (apiFormat=%s, provider=%s)", label, apiFormat, providerType))
 			}
 		}

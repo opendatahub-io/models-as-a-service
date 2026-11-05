@@ -38,6 +38,11 @@
 #            The OTel ALS gRPC channel is async; if the collector is
 #            unreachable, Envoy silently discards the log entry without
 #            affecting the request.
+# Transport: OTLP/gRPC to the headless collector service over TLS. The
+#            OpenShift service CA (projected into every pod's service
+#            account volume) is the trust anchor, SNI is the headless
+#            service DNS name, and TLS 1.2+ is required. There is no
+#            plaintext fallback.
 apiVersion: networking.istio.io/v1alpha3
 kind: EnvoyFilter
 metadata:
@@ -57,6 +62,12 @@ spec:
   configPatches:
 
   # ── Cluster: gRPC endpoint to OTel Collector ──────────────────────────
+  #
+  # The data-science collector is reached through its headless Service so
+  # gRPC load-balances across collector pods. Its serving certificate is
+  # signed by the OpenShift service CA, which every pod trusts through the
+  # projected service-account volume. TLS 1.2+ is mandatory; the cluster
+  # has no plaintext fallback.
   - applyTo: CLUSTER
     patch:
       operation: ADD
@@ -65,6 +76,19 @@ spec:
         type: STRICT_DNS
         connect_timeout: 5s
         http2_protocol_options: {}
+        transport_socket:
+          name: envoy.transport_sockets.tls
+          typed_config:
+            "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
+            sni: data-science-usage-logs-collector-headless.opendatahub.svc.cluster.local
+            auto_sni_san_validation: true
+            common_tls_context:
+              alpn_protocols: ["h2"]
+              tls_params:
+                tls_minimum_protocol_version: TLSv1_2
+              validation_context:
+                trusted_ca:
+                  filename: /var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt
         load_assignment:
           cluster_name: otel_als_cluster
           endpoints:
@@ -72,7 +96,7 @@ spec:
             - endpoint:
                 address:
                   socket_address:
-                    address: data-science-usage-logs-collector.opendatahub.svc
+                    address: data-science-usage-logs-collector-headless.opendatahub.svc.cluster.local
                     port_value: 4317
 
   # ── Identity header capture: header_to_metadata ───────────────────────────

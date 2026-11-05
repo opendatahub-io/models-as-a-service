@@ -77,6 +77,19 @@ type PlatformParams struct {
 	// MonitoringNamespace is the namespace where the platform monitoring stack (OTLP collector) runs.
 	MonitoringNamespace string
 
+	// LokiReadEndpoint is injected as LOKI_READ_ENDPOINT on the maas-api
+	// container, enabling the read-only Loki proxy (GET /v1/logs*). Empty
+	// disables the proxy. Resolved from the usage-logs-loki Secret in the app
+	// namespace; see resolveLokiReadEndpoint.
+	LokiReadEndpoint string
+
+	// LokiReadTokenFromSecret injects LOKI_READ_TOKEN on the maas-api container
+	// as a secretKeyRef to the usage-logs-loki Secret, authenticating proxied
+	// upstream requests with its service account token. False leaves the env
+	// var out of the render (and the SSA apply removes any previously applied
+	// value). See resolveLokiReadEndpoint.
+	LokiReadTokenFromSecret bool
+
 	// PayloadProcessingRouterExtProcFallback enables router-anchored ext_proc patches when
 	// Kuadrant WASM auth is absent on the gateway (avoids duplicate ext_proc when WASM exists).
 	PayloadProcessingRouterExtProcFallback bool
@@ -1060,6 +1073,24 @@ func patchMaaSAPIDeployment(log logr.Logger, r *unstructured.Unstructured, param
 	if err := setOrAddEnvVar(r, "maas-api", "API_KEY_DELETION_RETENTION_DAYS", deletionRetentionDays); err != nil {
 		return fmt.Errorf("patch API_KEY_DELETION_RETENTION_DAYS: %w", err)
 	}
+	// LOKI_READ_ENDPOINT enables the read-only Loki proxy; an empty value
+	// disables it. The base manifest never sets it, so leaving it out of the
+	// render (and the SSA apply config) removes any previously applied value.
+	if params.LokiReadEndpoint != "" {
+		if err := setOrAddEnvVar(r, "maas-api", "LOKI_READ_ENDPOINT", params.LokiReadEndpoint); err != nil {
+			return fmt.Errorf("patch LOKI_READ_ENDPOINT: %w", err)
+		}
+		// The token is referenced via secretKeyRef rather than copied into the
+		// Deployment spec, so the value stays out of the manifest and rotations
+		// only need a pod restart. Omitted when the Secret has no token key;
+		// the SSA apply then removes any previously applied reference.
+		if params.LokiReadTokenFromSecret {
+			if err := setOrAddEnvVarFromSecret(r, "maas-api", "LOKI_READ_TOKEN", LokiReadSecretName, LokiReadTokenSecretKey); err != nil {
+				return fmt.Errorf("patch LOKI_READ_TOKEN: %w", err)
+			}
+		}
+		log.V(4).Info("Patched maas-api LOKI_READ_ENDPOINT")
+	}
 	if params.MaaSAPIResources != nil {
 		if err := setContainerResources(r, "maas-api", params.MaaSAPIResources); err != nil {
 			return fmt.Errorf("patch maas-api resources: %w", err)
@@ -1125,19 +1156,8 @@ func patchPayloadProcessingDeployment(log logr.Logger, r *unstructured.Unstructu
 	if err := setContainerImage(r, "payload-processing", params.PayloadProcessingImage); err != nil {
 		return fmt.Errorf("patch payload-processing image: %w", err)
 	}
-	if err := setOrAddEnvVar(r, "payload-processing", "GATEWAY_NAMESPACE", params.GatewayNamespace); err != nil {
-		return fmt.Errorf("patch GATEWAY_NAMESPACE: %w", err)
-	}
-	if err := setOrAddEnvVar(r, "payload-processing", "GATEWAY_NAME", params.GatewayName); err != nil {
-		return fmt.Errorf("patch GATEWAY_NAME: %w", err)
-	}
-	if err := setOrAddEnvVar(r, "payload-processing", "TENANT_NAMESPACE", params.SubscriptionNamespace); err != nil {
-		return fmt.Errorf("patch TENANT_NAMESPACE: %w", err)
-	}
-	if params.TenantIdentifier != "" {
-		if err := setOrAddEnvVar(r, "payload-processing", "DISABLE_EXTERNAL_MODEL_CONTROLLER", "true"); err != nil {
-			return fmt.Errorf("patch DISABLE_EXTERNAL_MODEL_CONTROLLER: %w", err)
-		}
+	if err := setIPPTenantEnv(r, PayloadProcessingName, params); err != nil {
+		return err
 	}
 	if err := addPodTemplateLabel(r, LabelTenantInstance, deploymentName); err != nil {
 		return fmt.Errorf("patch tenant-instance label: %w", err)
@@ -1184,6 +1204,9 @@ func patchPreProcessingDeployment(log logr.Logger, r *unstructured.Unstructured,
 			return fmt.Errorf("patch payload-pre-processing image: %w", err)
 		}
 	}
+	if err := setIPPTenantEnv(r, PayloadPreProcessingName, params); err != nil {
+		return err
+	}
 	if err := addPodTemplateLabel(r, LabelTenantInstance, deploymentName); err != nil {
 		return fmt.Errorf("patch tenant-instance label: %w", err)
 	}
@@ -1201,6 +1224,30 @@ func patchPreProcessingDeployment(log logr.Logger, r *unstructured.Unstructured,
 			return fmt.Errorf("patch payload-pre-processing resources: %w", err)
 		}
 		log.V(4).Info("Patched payload-pre-processing resources", "deployment", deploymentName)
+	}
+	return nil
+}
+
+// setIPPTenantEnv scopes an IPP container to its tenant's Gateway and namespace.
+// Both IPP Deployments run the same binary, which falls back to
+// maas-default-gateway without GATEWAY_NAME and runs its cluster-wide
+// ExternalModel and ExternalProvider controllers unless
+// DISABLE_EXTERNAL_MODEL_CONTROLLER=true. ExternalModels on IPP are
+// default-tenant only, so every other tenant's IPP disables them.
+func setIPPTenantEnv(r *unstructured.Unstructured, containerName string, params PlatformParams) error {
+	if err := setOrAddEnvVar(r, containerName, "GATEWAY_NAMESPACE", params.GatewayNamespace); err != nil {
+		return fmt.Errorf("patch GATEWAY_NAMESPACE: %w", err)
+	}
+	if err := setOrAddEnvVar(r, containerName, "GATEWAY_NAME", params.GatewayName); err != nil {
+		return fmt.Errorf("patch GATEWAY_NAME: %w", err)
+	}
+	if err := setOrAddEnvVar(r, containerName, "TENANT_NAMESPACE", params.SubscriptionNamespace); err != nil {
+		return fmt.Errorf("patch TENANT_NAMESPACE: %w", err)
+	}
+	if params.TenantIdentifier != "" {
+		if err := setOrAddEnvVar(r, containerName, "DISABLE_EXTERNAL_MODEL_CONTROLLER", "true"); err != nil {
+			return fmt.Errorf("patch DISABLE_EXTERNAL_MODEL_CONTROLLER: %w", err)
+		}
 	}
 	return nil
 }
@@ -1834,6 +1881,42 @@ func setOrAddEnvVar(r *unstructured.Unstructured, containerName, envName, envVal
 			}
 		}
 		envSlice = append(envSlice, map[string]any{"name": envName, "value": envValue})
+		cm["env"] = envSlice
+		containers[i] = cm
+		return unstructured.SetNestedSlice(r.Object, containers, "spec", "template", "spec", "containers")
+	}
+	return fmt.Errorf("container %q not found", containerName)
+}
+
+// setOrAddEnvVarFromSecret sets or adds an env var on the named container that
+// references secretName/secretKey via valueFrom.secretKeyRef. It replaces a
+// plain value (and setOrAddEnvVar replaces a valueFrom), so the two helpers
+// never leave both fields set on the same env var.
+func setOrAddEnvVarFromSecret(r *unstructured.Unstructured, containerName, envName, secretName, secretKey string) error {
+	containers, found, err := unstructured.NestedSlice(r.Object, "spec", "template", "spec", "containers")
+	if err != nil || !found {
+		return errors.New("containers not found")
+	}
+	valueFrom := map[string]any{
+		"secretKeyRef": map[string]any{"name": secretName, "key": secretKey},
+	}
+	for i, c := range containers {
+		cm, ok := c.(map[string]any)
+		if !ok || cm["name"] != containerName {
+			continue
+		}
+		envSlice, _ := cm["env"].([]any)
+		for j, e := range envSlice {
+			if em, ok := e.(map[string]any); ok && em["name"] == envName {
+				delete(em, "value")
+				em["valueFrom"] = valueFrom
+				envSlice[j] = em
+				cm["env"] = envSlice
+				containers[i] = cm
+				return unstructured.SetNestedSlice(r.Object, containers, "spec", "template", "spec", "containers")
+			}
+		}
+		envSlice = append(envSlice, map[string]any{"name": envName, "valueFrom": valueFrom})
 		cm["env"] = envSlice
 		containers[i] = cm
 		return unstructured.SetNestedSlice(r.Object, containers, "spec", "template", "spec", "containers")
