@@ -38,7 +38,7 @@ from test_helper import (
 
 log = logging.getLogger(__name__)
 
-pytestmark = [pytest.mark.xdist_group("tenant_ipp"), pytest.mark.api_translation]
+pytestmark = [pytest.mark.xdist_group("tenant_ipp"), pytest.mark.api_translation, pytest.mark.full_suite]
 
 DEFAULT_TENANT_NS = "models-as-a-service"
 TENANT_CONFIG = "maastenantconfig"
