@@ -137,6 +137,11 @@ fi
 source "$TEST_DIR/.venv/bin/activate"
 python -m pip install --upgrade pip --quiet
 python -m pip install -r "$TEST_DIR/requirements.txt" --quiet
+# Pass 1's isolation depends on --dist=loadgroup keeping each xdist_group on one
+# worker. When pytest breaks that (see requirements.txt), groups run concurrently
+# and the failure surfaces as an unrelated-looking flake 20 minutes in, so check
+# the installed versions before any test runs.
+"$SCRIPT_DIR/check_xdist_grouping.sh" python
 
 # ── Output paths ─────────────────────────────────────────────────────────
 user="$(oc whoami 2>/dev/null || echo 'unknown')"

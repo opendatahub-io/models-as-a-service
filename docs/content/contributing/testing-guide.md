@@ -236,6 +236,8 @@ pytestmark = pytest.mark.xdist_group("api_keys")
 
 All tests in a file run on the same xdist worker, grouped with other files sharing the same group name. Tests **without** an `xdist_group` marker are scattered round-robin across workers, which can cause resource conflicts.
 
+Grouping is only as good as the installed pytest/pytest-xdist pair: pytest 9.2.0 silently drops the nodeid suffix `--dist=loadgroup` schedules on, which turns every group back into per-test distribution (concurrent workers then mutate the same gateway AuthPolicy, tenants, and subscriptions — it shows up as an unrelated flake, not a grouping error). `scripts/check_xdist_grouping.sh` asserts the behaviour and runs both in `run_e2e_tests.sh` (before any test) and in the `E2E collection` workflow; `requirements.txt` keeps pytest below the breaking release.
+
 #### Group Assignment Rules
 
 When adding a new test file, assign it to a group using these criteria (in priority order):

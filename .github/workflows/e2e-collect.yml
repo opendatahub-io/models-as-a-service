@@ -48,6 +48,9 @@ jobs:
       - name: Install e2e requirements
         run: pip install --require-hashes --no-deps -r test/e2e/requirements-lock.txt
 
+      - name: Verify --dist=loadgroup still groups xdist tests
+        run: test/e2e/scripts/check_xdist_grouping.sh python
+
       - name: Install oc
         env:
           # Collection only needs oc to exist; without a cluster "oc get crd" fails and the
