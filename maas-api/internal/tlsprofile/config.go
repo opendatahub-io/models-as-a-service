@@ -71,7 +71,7 @@ func TLSConfigFromProfile(spec ProfileSpec) (uint16, []uint16, []string, error) 
 		ciphers = append(ciphers, code)
 	}
 
-	if minVer < tls.VersionTLS13 && len(ciphers) == 0 {
+	if len(spec.Ciphers) > 0 && minVer < tls.VersionTLS13 && len(ciphers) == 0 {
 		return 0, nil, unsupported, fmt.Errorf(
 			"no configured cipher suites are usable with minimum TLS version %q", spec.MinTLSVersion)
 	}
