@@ -19,9 +19,10 @@ Get the cluster domain and create the Gateway.
 
 The Gateway uses a per-tenant label selector for `allowedRoutes` so only explicitly
 labelled namespaces can attach HTTPRoutes. The controller automatically labels
-the infrastructure namespace with the gateway's `matchLabels` (see
-[Automatic infrastructure namespace labeling](../configuration-and-management/gateway-patterns.md#automatic-infrastructure-namespace-labeling)).
-Model namespaces still require manual labeling.
+the infrastructure namespace and the tenant namespace (`ai-tenant-${TENANT_NAME}`)
+with the gateway's `matchLabels` (see
+[Automatic infrastructure and tenant namespace labeling](../configuration-and-management/gateway-patterns.md#automatic-infrastructure-and-tenant-namespace-labeling)).
+Other model namespaces still require manual labeling.
 
 ```bash
 TENANT_NAME="red-team"
@@ -32,7 +33,7 @@ CERT_NAME="router-certs-default"
 GATEWAY_ACCESS_LABEL="maas.opendatahub.io/gateway-access-${TENANT_NAME}"
 
 # Label model namespaces that need to attach HTTPRoutes to this tenant Gateway.
-# The infrastructure namespace is labeled automatically by the controller.
+# The infrastructure and tenant namespaces are labeled automatically by the controller.
 # oc label namespace llm "${GATEWAY_ACCESS_LABEL}=true" --overwrite  # repeat for model namespaces
 
 cat <<EOF | oc apply -f -
@@ -119,8 +120,8 @@ oc get gateway ${TENANT_NAME} -n ${GATEWAY_NAMESPACE}
     NAMESPACE_SELECTOR_LABELS="maas.opendatahub.io/gateway-access-red-team=true" \
       ./scripts/create-ai-tenant.sh red-team
     ```
-    The controller labels the infrastructure namespace automatically. Label any
-    model namespaces manually:
+    The controller labels the infrastructure and tenant namespaces automatically.
+    Label any other model namespaces manually:
     ```bash
     oc label namespace llm maas.opendatahub.io/gateway-access-red-team=true --overwrite
     ```
@@ -189,6 +190,7 @@ Expected labels:
 
 - `ai-gateway.opendatahub.io/tenant=<tenant-name>`
 - `maas.opendatahub.io/managed-by-aitenant=true`
+- the tenant Gateway's `matchLabels`, for example `maas.opendatahub.io/gateway-access-${TENANT_NAME}=true`
 
 Verify the MaasTenantConfig CR exists:
 

@@ -17,6 +17,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 )
@@ -97,6 +98,80 @@ func TestBuildPlatformParams(t *testing.T) {
 		assert.Equal(t, "45", got.APIKeyMaxExpirationDays)
 		assert.Equal(t, "30", got.APIKeyDeletionRetentionDays)
 	})
+}
+
+func TestResolveGatewayBodyBufferLimitMB(t *testing.T) {
+	tests := []struct {
+		name       string
+		annotation string
+		want       int64
+		wantWarn   bool
+	}{
+		{name: "default", want: DefaultGatewayBodyBufferLimitMB},
+		{name: "valid", annotation: "32", want: 32},
+		{name: "maximum", annotation: "64", want: 64},
+		{name: "zero", annotation: "0", want: DefaultGatewayBodyBufferLimitMB, wantWarn: true},
+		{name: "too large", annotation: "65", want: DefaultGatewayBodyBufferLimitMB, wantWarn: true},
+		{name: "not an integer", annotation: "64Mi", want: DefaultGatewayBodyBufferLimitMB, wantWarn: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gateway := &gatewayapiv1.Gateway{ObjectMeta: metav1.ObjectMeta{
+				Namespace: "openshift-ingress",
+				Name:      "test-gateway",
+			}}
+			if tt.annotation != "" {
+				gateway.Annotations = map[string]string{AnnotationGatewayBodyBufferLimitMB: tt.annotation}
+			}
+			got, warning := ResolveGatewayBodyBufferLimitMB(gateway)
+			assert.Equal(t, tt.want, got)
+			assert.Equal(t, tt.wantWarn, warning != "")
+		})
+	}
+}
+
+func TestPatchGatewayBodyBufferLimit(t *testing.T) {
+	filter := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "networking.istio.io/v1alpha3",
+		"kind":       "EnvoyFilter",
+		"metadata": map[string]any{
+			"name": "maas-gateway-body-buffer-limit",
+		},
+		"spec": map[string]any{
+			"configPatches": []any{map[string]any{
+				"patch": map[string]any{
+					"value": map[string]any{
+						"per_connection_buffer_limit_bytes": DefaultGatewayBodyBufferLimitMB * 1024 * 1024,
+					},
+				},
+			}},
+		},
+	}}
+	filter.SetGroupVersionKind(GVKEnvoyFilter)
+	params := PlatformParams{
+		GatewayNamespace:         "gateway-ns",
+		GatewayName:              "team-gateway",
+		TenantIdentifier:         "team-a",
+		GatewayBodyBufferLimitMB: 32,
+	}
+
+	require.NoError(t, patchResource(logr.Discard(), filter, params))
+	assert.Equal(t, "maas-gateway-buffer-team-a", filter.GetName())
+	assert.Equal(t, "gateway-ns", filter.GetNamespace())
+	labels, found, err := unstructured.NestedStringMap(filter.Object, "spec", "workloadSelector", "labels")
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, "team-gateway", labels["gateway.networking.k8s.io/gateway-name"])
+	patches, found, err := unstructured.NestedSlice(filter.Object, "spec", "configPatches")
+	require.NoError(t, err)
+	require.True(t, found)
+	patch, ok := patches[0].(map[string]any)
+	require.True(t, ok)
+	patchBody, ok := patch["patch"].(map[string]any)
+	require.True(t, ok)
+	value, ok := patchBody["value"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, int64(32*1024*1024), value["per_connection_buffer_limit_bytes"])
 }
 
 func TestBuildPlatformParams_ReplicaAnnotations(t *testing.T) {
@@ -411,6 +486,11 @@ func TestApplyPlatformParamsWithRenderedOverlay(t *testing.T) {
 	assert.Equal(t, params.PayloadProcessingImage, requireContainerImage(t, payloadBeforeDeployment, "spec", "template", "spec", "containers"))
 	assert.Equal(t, PayloadPreProcessingDeploymentName(tenantID), requirePodTemplateLabel(t, payloadBeforeDeployment, LabelTenantInstance))
 	assertDeploymentSelectorLabelAbsent(t, payloadBeforeDeployment, LabelTenantInstance)
+	// The pre-auth IPP runs the same binary and is scoped like the post-auth one.
+	assert.Equal(t, params.GatewayNamespace, requireEnvVarValue(t, payloadBeforeDeployment, PayloadPreProcessingName, "GATEWAY_NAMESPACE"))
+	assert.Equal(t, params.GatewayName, requireEnvVarValue(t, payloadBeforeDeployment, PayloadPreProcessingName, "GATEWAY_NAME"))
+	assert.Equal(t, params.SubscriptionNamespace, requireEnvVarValue(t, payloadBeforeDeployment, PayloadPreProcessingName, "TENANT_NAMESPACE"))
+	assertEnvVarAbsent(t, payloadBeforeDeployment, PayloadPreProcessingName, "DISABLE_EXTERNAL_MODEL_CONTROLLER")
 
 	payloadBeforeService := requireResource(t, resources, GVKService, PayloadPreProcessingServiceName(tenantID))
 	assert.Equal(t, params.GatewayNamespace, payloadBeforeService.GetNamespace())
@@ -806,6 +886,11 @@ func TestApplyPlatformParamsWithRenderedOverlay_AITenant(t *testing.T) {
 
 	payloadBeforeDeployment := requireResource(t, resources, GVKDeployment, "payload-pre-processing-redteam")
 	assert.Equal(t, "payload-pre-processing-redteam", requireDeploymentSelectorLabel(t, payloadBeforeDeployment, LabelTenantInstance))
+	assert.Equal(t, "gateway-ns", requireEnvVarValue(t, payloadBeforeDeployment, PayloadPreProcessingName, "GATEWAY_NAMESPACE"))
+	assert.Equal(t, "redteam-gateway", requireEnvVarValue(t, payloadBeforeDeployment, PayloadPreProcessingName, "GATEWAY_NAME"))
+	assert.Equal(t, "ai-tenant-redteam", requireEnvVarValue(t, payloadBeforeDeployment, PayloadPreProcessingName, "TENANT_NAMESPACE"))
+	// The pre-auth IPP of a non-default tenant must not run the cluster-wide ExternalModel controller either.
+	assert.Equal(t, "true", requireEnvVarValue(t, payloadBeforeDeployment, PayloadPreProcessingName, "DISABLE_EXTERNAL_MODEL_CONTROLLER"))
 
 	gatewayPolicy := requireResource(t, resources, GVKNetworkPolicy, MaaSAPIGatewayNetworkPolicyName("redteam"))
 	gatewayTargetSelector, found, err := unstructured.NestedMap(gatewayPolicy.Object, "spec", "podSelector")
