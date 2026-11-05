@@ -46,6 +46,7 @@ type AdminChecker interface {
 
 type SubscriptionAdminResolver interface {
 	ResolveSubscriptionAdmin(identity *token.VerifiedIdentity, requestedSubscription string) (*subscription.AdminScope, error)
+	ResolveSubscriptionAdminScopes(identity *token.VerifiedIdentity) ([]*subscription.AdminScope, error)
 	CanonicalizeSubscription(requestedSubscription string) (string, error)
 }
 
@@ -189,6 +190,31 @@ func (h *Handler) resolveSubscriptionAdmin(
 	return scope, nil, nil
 }
 
+func (h *Handler) resolveSubscriptionAdminScopes(
+	identity *token.VerifiedIdentity,
+	user *token.UserContext,
+) ([]*subscription.AdminScope, *subscription.SubscriptionAdminError, error) {
+	if h.adminResolver == nil {
+		return nil, nil, errors.New("subscription admin resolver is not configured")
+	}
+	if identity == nil || user == nil {
+		return nil, nil, nil
+	}
+	scopes, err := h.adminResolver.ResolveSubscriptionAdminScopes(identity)
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, scope := range scopes {
+		if scope == nil || scope.Tenant != user.Tenant || scope.Subscription == "" {
+			return nil, &subscription.SubscriptionAdminError{
+				Code:    "access_denied",
+				Message: "organization administration is denied",
+			}, nil
+		}
+	}
+	return scopes, nil, nil
+}
+
 func (h *Handler) canonicalizeSubscription(
 	requestedSubscription string,
 ) (string, *subscription.SubscriptionAdminError, error) {
@@ -221,6 +247,7 @@ type delegatedAdminAuditEvent struct {
 	User               *token.UserContext
 	Identity           *token.VerifiedIdentity
 	Scope              *subscription.AdminScope
+	Scopes             []*subscription.AdminScope
 	KeyID              string
 	TargetUsername     string
 	TargetSubscription string
@@ -265,6 +292,21 @@ func delegatedAdminAuditFields(event delegatedAdminAuditEvent, requestID string)
 	}
 	if organizationID != "" {
 		fields = append(fields, "audit.organizationId", organizationID)
+	}
+	if len(event.Scopes) > 0 {
+		subscriptions := make([]string, 0, len(event.Scopes))
+		organizationIDs := make([]string, 0, len(event.Scopes))
+		for _, scope := range event.Scopes {
+			if scope == nil {
+				continue
+			}
+			subscriptions = append(subscriptions, logger.RedactValue(scope.Subscription))
+			organizationIDs = append(organizationIDs, scope.OrganizationID)
+		}
+		fields = append(fields,
+			"audit.targetSubscriptions", subscriptions,
+			"audit.organizationIds", organizationIDs,
+		)
 	}
 	if event.TargetUsername != "" {
 		fields = append(fields, "audit.targetUser", logger.RedactValue(event.TargetUsername))
@@ -965,6 +1007,56 @@ func (h *Handler) SearchAPIKeys(c *gin.Context) {
 		}
 	}
 
+	if identity != nil && requestedSubscription == "" {
+		scopes, adminErr, resolveErr := h.resolveSubscriptionAdminScopes(identity, user)
+		if resolveErr != nil {
+			h.logger.Error("Failed to resolve subscription administration scopes", "error", resolveErr)
+			h.emitDelegatedAdminAudit(c, &delegatedAdminAuditEvent{
+				Action:         "api-key-search",
+				Outcome:        "error",
+				Reason:         "resolution_error",
+				User:           user,
+				Identity:       identity,
+				TargetUsername: targetUsername,
+			})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to check authorization"})
+			return
+		}
+		if adminErr != nil {
+			h.emitDelegatedAdminAudit(c, &delegatedAdminAuditEvent{
+				Action:         "api-key-search",
+				Outcome:        "denied",
+				Reason:         adminErr.Code,
+				User:           user,
+				Identity:       identity,
+				TargetUsername: targetUsername,
+			})
+			c.JSON(http.StatusForbidden, gin.H{"error": "Failed to check authorization"})
+			return
+		}
+		if len(scopes) > 0 {
+			delegatedAdmin = true
+			subscriptionNames := make([]string, 0, len(scopes))
+			seenSubscriptions := make(map[string]struct{}, len(scopes))
+			for _, scope := range scopes {
+				if _, seen := seenSubscriptions[scope.Subscription]; seen {
+					continue
+				}
+				seenSubscriptions[scope.Subscription] = struct{}{}
+				subscriptionNames = append(subscriptionNames, scope.Subscription)
+			}
+			req.Filters.SubscriptionNames = subscriptionNames
+			delegatedAudit = &delegatedAdminAuditEvent{
+				Action:         "api-key-search",
+				Outcome:        "allowed",
+				User:           user,
+				Identity:       identity,
+				Scopes:         scopes,
+				TargetUsername: targetUsername,
+			}
+		}
+	}
+
 	isAdmin := false
 	if !delegatedAdmin {
 		var adminErr error
@@ -1046,6 +1138,9 @@ func (h *Handler) SearchAPIKeys(c *gin.Context) {
 	}
 
 	// Build response
+	if result.Keys == nil {
+		result.Keys = []ApiKey{}
+	}
 	response := SearchAPIKeysResponse{
 		Object:  "list",
 		Data:    result.Keys,

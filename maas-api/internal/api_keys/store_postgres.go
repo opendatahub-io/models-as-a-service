@@ -409,6 +409,18 @@ func (s *PostgresStore) Search(
 		args = append(args, strings.TrimSpace(*filters.Subscription))
 		argPos++
 	}
+	if len(filters.SubscriptionNames) > 0 {
+		placeholders := make([]string, len(filters.SubscriptionNames))
+		for index, subscription := range filters.SubscriptionNames {
+			placeholders[index] = fmt.Sprintf("$%d", argPos)
+			args = append(args, strings.TrimSpace(subscription))
+			argPos++
+		}
+		whereClauses = append(
+			whereClauses,
+			fmt.Sprintf("subscription IN (%s)", strings.Join(placeholders, ",")),
+		)
+	}
 
 	// Add labels containment filter
 	if len(filters.LabelsContain) > 0 {
