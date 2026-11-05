@@ -6,6 +6,7 @@ import (
 
 	confv1 "github.com/openshift/api/config/v1"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/tlsprofile"
 )
@@ -26,7 +27,7 @@ func TestTLSConfigFromProfile_Intermediate(t *testing.T) {
 
 	minVer, ciphers, unsupported, err := tlsprofile.TLSConfigFromProfile(spec)
 
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Equal(t, uint16(tls.VersionTLS12), minVer)
 	assert.Contains(t, ciphers, tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256)
 	assert.Contains(t, ciphers, tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256)
@@ -48,7 +49,7 @@ func TestTLSConfigFromProfile_TLS13CiphersSkipped(t *testing.T) {
 
 	minVer, ciphers, unsupported, err := tlsprofile.TLSConfigFromProfile(spec)
 
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Equal(t, uint16(tls.VersionTLS13), minVer)
 	assert.Empty(t, ciphers, "TLS 1.3 ciphers should be skipped (Go manages them)")
 	assert.Empty(t, unsupported)
@@ -65,7 +66,7 @@ func TestTLSConfigFromProfile_UnsupportedCiphers(t *testing.T) {
 
 	_, ciphers, unsupported, err := tlsprofile.TLSConfigFromProfile(spec)
 
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Len(t, ciphers, 1)
 	assert.Equal(t, []string{"UNKNOWN-CIPHER-XYZ"}, unsupported)
 }
@@ -79,9 +80,10 @@ func TestTLSConfigFromProfile_InvalidMinVersion(t *testing.T) {
 		},
 	}
 
-	_, _, _, err := tlsprofile.TLSConfigFromProfile(spec)
+	gotMinVer, _, _, err := tlsprofile.TLSConfigFromProfile(spec)
+	_ = gotMinVer
 
-	assert.ErrorContains(t, err, "unrecognized minimum TLS version")
+	require.ErrorContains(t, err, "unrecognized minimum TLS version")
 }
 
 func TestTLSConfigFromProfile_AllVersions(t *testing.T) {
@@ -105,7 +107,7 @@ func TestTLSConfigFromProfile_AllVersions(t *testing.T) {
 				},
 			}
 			minVer, _, _, err := tlsprofile.TLSConfigFromProfile(spec)
-			assert.NoError(t, err)
+			require.NoError(t, err)
 			assert.Equal(t, tt.want, minVer)
 		})
 	}
@@ -133,7 +135,7 @@ func TestTLSConfigFromProfile_CipherMapping(t *testing.T) {
 				},
 			}
 			_, ciphers, unsupported, err := tlsprofile.TLSConfigFromProfile(spec)
-			assert.NoError(t, err)
+			require.NoError(t, err)
 			assert.Empty(t, unsupported)
 			assert.Equal(t, []uint16{tt.goID}, ciphers)
 		})
@@ -154,7 +156,7 @@ func TestTLSConfigFromProfile_IANACipherMapping(t *testing.T) {
 
 	_, ciphers, unsupported, err := tlsprofile.TLSConfigFromProfile(spec)
 
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Empty(t, unsupported)
 	assert.Equal(t, []uint16{
 		tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
@@ -176,7 +178,7 @@ func TestTLSConfigFromProfile_DeduplicatesCipherAliases(t *testing.T) {
 
 	_, ciphers, unsupported, err := tlsprofile.TLSConfigFromProfile(spec)
 
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Empty(t, unsupported)
 	assert.Equal(t, []uint16{tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256}, ciphers)
 }
@@ -192,7 +194,7 @@ func TestTLSConfigFromProfile_RejectsNoUsableCipherSuites(t *testing.T) {
 
 	_, ciphers, unsupported, err := tlsprofile.TLSConfigFromProfile(spec)
 
-	assert.ErrorContains(t, err, "no configured cipher suites are usable")
+	require.ErrorContains(t, err, "no configured cipher suites are usable")
 	assert.Empty(t, ciphers)
 	assert.Equal(t, []string{"TLS_AES_128_GCM_SHA256"}, unsupported)
 }
@@ -207,7 +209,7 @@ func TestTLSConfigFromProfile_TLS13EmptyCipherList(t *testing.T) {
 
 	minVersion, ciphers, unsupported, err := tlsprofile.TLSConfigFromProfile(spec)
 
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Equal(t, uint16(tls.VersionTLS13), minVersion)
 	assert.Empty(t, ciphers)
 	assert.Empty(t, unsupported)
