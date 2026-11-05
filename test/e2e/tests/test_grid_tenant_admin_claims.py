@@ -122,14 +122,13 @@ class TestGridTenantAdminClaims:
             f"{maas_api_base_url}/v1/subscriptions",
             headers={"Authorization": f"Bearer {token}"},
             timeout=30,
+            auth_denial_is_transient=False,
         )
-        assert response.status_code == 200, (
-            f"GET /v1/subscriptions failed for grid_reserved_group: "
+        assert response.status_code == 403, (
+            f"Expected GET /v1/subscriptions to reject grid_reserved_group "
+            f"with 403, got "
             f"{response.status_code} {response.text}"
         )
-        assert [
-            subscription["subscription_id_header"] for subscription in response.json()
-        ] == [test_helper.SIMULATOR_SUBSCRIPTION]
 
     def test_tampered_grid_token_is_rejected(self, maas_api_base_url: str):
         token = request_grid_token("grid_admin") + "tampered"
