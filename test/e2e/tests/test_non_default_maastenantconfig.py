@@ -31,7 +31,13 @@ from test_helper import (
     _get_cluster_token,
 )
 
-pytestmark = [pytest.mark.tenant_isolation, pytest.mark.xdist_group("tenant_isolation")]
+pytestmark = [
+    # Two provisioned tenants and a full maas-api rollout each — too heavy for the
+    # curated smoke path, but core enough that nightly-only would under-cover it.
+    pytest.mark.full_suite,
+    pytest.mark.tenant_isolation,
+    pytest.mark.xdist_group("tenant_isolation"),
+]
 
 CONVERGENCE_TIMEOUT = 300
 
