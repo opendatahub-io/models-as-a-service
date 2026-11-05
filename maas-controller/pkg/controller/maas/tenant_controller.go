@@ -120,7 +120,8 @@ type TenantReconciler struct {
 // ClusterRoles. The API-server escalation check requires the applying SA to already hold every permission those
 // ClusterRoles grant — which is why secrets get;list;watch must remain unrestricted (payload-processing-reader
 // grants unrestricted get on secrets; Kubernetes also does not support resourceNames on list/watch).
-// The client-side predicate secretNamedMaaSDB() filters informer events to maas-db-config only.
+// The client-side predicate watchedPlatformSecrets() filters informer events to
+// maas-db-config and usage-logs-loki only.
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles,verbs=get;list;watch;create;patch;delete
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterrolebindings,verbs=get;list;watch;create;patch;delete
@@ -229,9 +230,13 @@ func crdLabeledForMaaSComponent() predicate.Predicate {
 	})
 }
 
-func secretNamedMaaSDB() predicate.Predicate {
+// watchedPlatformSecrets matches Secrets whose lifecycle must trigger a tenant
+// platform reconcile: maas-db-config gates maas-api startup, and usage-logs-loki
+// toggles the maas-api Loki read proxy (LOKI_READ_ENDPOINT).
+func watchedPlatformSecrets() predicate.Predicate {
 	return predicate.NewPredicateFuncs(func(o client.Object) bool {
-		return o.GetName() == tenantreconcile.MaaSDBSecretName
+		name := o.GetName()
+		return name == tenantreconcile.MaaSDBSecretName || name == tenantreconcile.LokiReadSecretName
 	})
 }
 
@@ -351,7 +356,7 @@ func (r *TenantReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(
 			&corev1.Secret{},
 			handler.EnqueueRequestsFromMapFunc(r.enqueueDefaultTenant),
-			builder.WithPredicates(secretNamedMaaSDB(), r.inTenantWorkNamespaces()),
+			builder.WithPredicates(watchedPlatformSecrets(), r.inTenantWorkNamespaces()),
 		).
 		Watches(
 			&netwv1.NetworkPolicy{},
