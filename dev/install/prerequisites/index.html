@@ -3527,6 +3527,26 @@ component enabled (KServe) and properly configured for deploying models with
 <a id="__codelineno-1-27" name="__codelineno-1-27" href="#__codelineno-1-27"></a><span class="w">  </span><span class="nt">tenants</span><span class="p">:</span>
 <a id="__codelineno-1-28" name="__codelineno-1-28" href="#__codelineno-1-28"></a><span class="w">    </span><span class="nt">mode</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">openshift-logging</span>
 </code></pre></div>
+<div class="admonition note">
+<p class="admonition-title">AI Grid deployments</p>
+<p>For AI Grid deployments using the MaaS API Loki read proxy, add
+<code>organization_id</code> and <code>user_id</code> to the existing
+<code>spec.limits.global.otlp.streamLabels.resourceAttributes</code> list in the
+<code>LokiStack</code> spec:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nt">streamLabels</span><span class="p">:</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span><span class="nt">resourceAttributes</span><span class="p">:</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">    </span><span class="c1"># Keep the existing resource attributes and add these entries.</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">organization_id</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">user_id</span>
+</code></pre></div>
+<p>The collector must also export both fields as OTLP resource attributes.
+If it uses the <code>groupbyattrs</code> processor, include both fields in
+<code>groupbyattrs.keys</code>. The proxy requires indexed stream labels for its
+organization and user filters to match logs. These changes affect newly
+ingested logs; existing logs retain their original label configuration.
+See <a href="../../observability/setup/#logs-based-usage-dashboards">Logs-based usage dashboards</a>
+for identity capture settings.</p>
+</div>
 <h2 id="genai-studio">GenAI Studio</h2>
 <p>To enable <strong>GenAI Studio</strong> in the RHOAI Dashboard, you need the LlamaStack Operator enabled in your
 DSC and a Dashboard feature flag. See <a href="../maas-setup/#odhdashboardconfig-feature-flags">OdhDashboardConfig Feature Flags</a> for setup.</p>
@@ -3552,7 +3572,7 @@ DSC and a Dashboard feature flag. See <a href="../maas-setup/#odhdashboardconfig
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="November 4, 2026 22:40:05 UTC">November 4, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="November 5, 2026 20:09:48 UTC">November 5, 2026</span>
   </span>
 
     
