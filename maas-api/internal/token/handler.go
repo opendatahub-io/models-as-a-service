@@ -244,9 +244,7 @@ func (h *Handler) setUserContextFromVerifiedIdentity(c *gin.Context, value any) 
 		h.rejectIdentity(c, err)
 		return false
 	}
-	if !identity.Claims.orgIDPresent {
-		groups = append([]string{"system:authenticated"}, groups...)
-	}
+	groups = append([]string{"system:authenticated"}, groups...)
 	username := identity.Claims.PreferredUsername
 	if username == "" {
 		username = identity.Claims.Subject

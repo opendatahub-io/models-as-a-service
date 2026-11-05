@@ -10,17 +10,15 @@ import (
 // Group-name validation for all authenticated groups.
 //
 // The same rule is enforced by maas-controller in the AuthPolicies it
-// generates and by the deploy-time kustomize patch. Flat organization
-// groups use exact matching and are checked against the same rule, so every
-// authenticated group can be stored in an API-key snapshot. The copies live
-// in independent Go modules, so the mirrored
+// generates. Flat organization groups use exact matching and are checked
+// against the same rule, so every authenticated group can be stored in an
+// API-key snapshot. The copies live in independent Go modules, so the mirrored
 // sync tests (groupname_sync_test.go here, sync_test.go in
 // maas-controller) check them as text and fail when they drift.
 // Never edit one without the others:
 //
 //   - maas-controller/pkg/groupname/groupname.go (controller canonical)
 //   - maas-controller/pkg/controller/maas/maasauthpolicy_controller.go
-//   - scripts/data/maas-api-authpolicy-external-oidc-patch.yaml
 //   - docs/content/advanced-administration/external-oidc.md
 
 // ErrInvalidGroupName is returned by CreateAPIKey when one of the user's
