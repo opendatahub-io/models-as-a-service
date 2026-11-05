@@ -373,6 +373,19 @@ func (m *MockStore) Search(
 		}
 		allKeys = filtered
 	}
+	if len(filters.SubscriptionNames) > 0 {
+		allowedSubscriptions := make(map[string]struct{}, len(filters.SubscriptionNames))
+		for _, subscription := range filters.SubscriptionNames {
+			allowedSubscriptions[strings.TrimSpace(subscription)] = struct{}{}
+		}
+		filtered := allKeys[:0]
+		for _, key := range allKeys {
+			if _, allowed := allowedSubscriptions[key.Subscription]; allowed {
+				filtered = append(filtered, key)
+			}
+		}
+		allKeys = filtered
+	}
 
 	if len(filters.LabelsContain) > 0 {
 		filtered := allKeys[:0]
