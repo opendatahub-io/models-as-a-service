@@ -260,7 +260,7 @@ func resolveLokiReadEndpoint(ctx context.Context, c client.Client, appNs string,
 		params.Warnings = append(params.Warnings, fmt.Sprintf(
 			"Secret '%s' in namespace '%s' has an invalid '%s' value (must be a valid http(s) URL); the maas-api Loki proxy stays disabled",
 			LokiReadSecretName, appNs, LokiReadSecretKey))
-		return nil
+		return nil //nolint:nilerr // Invalid optional configuration disables the proxy without failing tenant reconciliation.
 	}
 
 	params.LokiReadEndpoint = endpoint
