@@ -356,9 +356,9 @@ paths:
 
                 Regular users can search only their own keys. A verified SSO subscription
                 administrator can search metadata for all users in an explicitly authorized
-                subscription. The subscription filter is canonicalized to its stored plain name
-                before pagination and result counts; omitting it does not broaden a delegated
-                administrator's search to every administered subscription or organization user.
+                subscription, or in the union of subscriptions they administer when the
+                subscription filter is omitted. The subscription filter is canonicalized to
+                its stored plain name before pagination and result counts.
             operationId: api-keys-v2#search
             requestBody:
                 required: false
