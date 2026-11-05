@@ -1125,19 +1125,8 @@ func patchPayloadProcessingDeployment(log logr.Logger, r *unstructured.Unstructu
 	if err := setContainerImage(r, "payload-processing", params.PayloadProcessingImage); err != nil {
 		return fmt.Errorf("patch payload-processing image: %w", err)
 	}
-	if err := setOrAddEnvVar(r, "payload-processing", "GATEWAY_NAMESPACE", params.GatewayNamespace); err != nil {
-		return fmt.Errorf("patch GATEWAY_NAMESPACE: %w", err)
-	}
-	if err := setOrAddEnvVar(r, "payload-processing", "GATEWAY_NAME", params.GatewayName); err != nil {
-		return fmt.Errorf("patch GATEWAY_NAME: %w", err)
-	}
-	if err := setOrAddEnvVar(r, "payload-processing", "TENANT_NAMESPACE", params.SubscriptionNamespace); err != nil {
-		return fmt.Errorf("patch TENANT_NAMESPACE: %w", err)
-	}
-	if params.TenantIdentifier != "" {
-		if err := setOrAddEnvVar(r, "payload-processing", "DISABLE_EXTERNAL_MODEL_CONTROLLER", "true"); err != nil {
-			return fmt.Errorf("patch DISABLE_EXTERNAL_MODEL_CONTROLLER: %w", err)
-		}
+	if err := setIPPTenantEnv(r, PayloadProcessingName, params); err != nil {
+		return err
 	}
 	if err := addPodTemplateLabel(r, LabelTenantInstance, deploymentName); err != nil {
 		return fmt.Errorf("patch tenant-instance label: %w", err)
@@ -1184,6 +1173,9 @@ func patchPreProcessingDeployment(log logr.Logger, r *unstructured.Unstructured,
 			return fmt.Errorf("patch payload-pre-processing image: %w", err)
 		}
 	}
+	if err := setIPPTenantEnv(r, PayloadPreProcessingName, params); err != nil {
+		return err
+	}
 	if err := addPodTemplateLabel(r, LabelTenantInstance, deploymentName); err != nil {
 		return fmt.Errorf("patch tenant-instance label: %w", err)
 	}
@@ -1201,6 +1193,30 @@ func patchPreProcessingDeployment(log logr.Logger, r *unstructured.Unstructured,
 			return fmt.Errorf("patch payload-pre-processing resources: %w", err)
 		}
 		log.V(4).Info("Patched payload-pre-processing resources", "deployment", deploymentName)
+	}
+	return nil
+}
+
+// setIPPTenantEnv scopes an IPP container to its tenant's Gateway and namespace.
+// Both IPP Deployments run the same binary, which falls back to
+// maas-default-gateway without GATEWAY_NAME and runs its cluster-wide
+// ExternalModel and ExternalProvider controllers unless
+// DISABLE_EXTERNAL_MODEL_CONTROLLER=true. ExternalModels on IPP are
+// default-tenant only, so every other tenant's IPP disables them.
+func setIPPTenantEnv(r *unstructured.Unstructured, containerName string, params PlatformParams) error {
+	if err := setOrAddEnvVar(r, containerName, "GATEWAY_NAMESPACE", params.GatewayNamespace); err != nil {
+		return fmt.Errorf("patch GATEWAY_NAMESPACE: %w", err)
+	}
+	if err := setOrAddEnvVar(r, containerName, "GATEWAY_NAME", params.GatewayName); err != nil {
+		return fmt.Errorf("patch GATEWAY_NAME: %w", err)
+	}
+	if err := setOrAddEnvVar(r, containerName, "TENANT_NAMESPACE", params.SubscriptionNamespace); err != nil {
+		return fmt.Errorf("patch TENANT_NAMESPACE: %w", err)
+	}
+	if params.TenantIdentifier != "" {
+		if err := setOrAddEnvVar(r, containerName, "DISABLE_EXTERNAL_MODEL_CONTROLLER", "true"); err != nil {
+			return fmt.Errorf("patch DISABLE_EXTERNAL_MODEL_CONTROLLER: %w", err)
+		}
 	}
 	return nil
 }
