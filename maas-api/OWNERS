@@ -1,0 +1,4 @@
+filters:
+  "^openapi3\\.yaml$":
+    labels:
+      - changes/api-contract
