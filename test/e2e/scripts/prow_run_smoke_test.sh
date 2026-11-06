@@ -421,13 +421,13 @@ organization_name = claims.get("org_name")
 if "https://redhat.com/maas/orgs" in claims or "maasOrganizations" in claims:
     raise SystemExit("OIDC token must not include nested MaaS organization claims")
 if not isinstance(organization_id, str):
-    raise SystemExit(f"OIDC org_id must be a canonical UUID string, got {organization_id!r}")
+    raise SystemExit("OIDC org_id must be a canonical UUID string")
 try:
     canonical_organization_id = str(uuid.UUID(organization_id))
 except ValueError:
-    raise SystemExit(f"OIDC org_id must be a canonical UUID string, got {organization_id!r}")
+    raise SystemExit("OIDC org_id must be a canonical UUID string")
 if canonical_organization_id != organization_id:
-    raise SystemExit(f"OIDC org_id must be a canonical UUID string, got {organization_id!r}")
+    raise SystemExit("OIDC org_id must be a canonical UUID string")
 
 if "org_name" in claims and (
     not isinstance(organization_name, str)
@@ -456,7 +456,7 @@ if len(groups) != len(set(groups)):
     raise SystemExit("OIDC organization groups must be unique")
 
 authorized_party = claims.get("azp")
-print(f"azp={authorized_party}, audience={token_audience!r}, org_id={organization_id}")
+print(f"azp={authorized_party}, audience={token_audience!r}")
                     ' 2>&1); then
                     printf '%s\n' "$oidc_claim_summary" > "${ARTIFACTS_DIR}/oidc-readiness-claim-error.log"
                     echo "❌ ERROR: OIDC readiness token contract validation failed"

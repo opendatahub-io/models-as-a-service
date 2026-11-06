@@ -127,7 +127,7 @@ class TestGridTenantAdminClaims:
         assert response.status_code == 403, (
             f"Expected GET /v1/subscriptions to reject grid_reserved_group "
             f"with 403, got "
-            f"{response.status_code} {response.text}"
+            f"{response.status_code}"
         )
 
     def test_tampered_grid_token_is_rejected(self, maas_api_base_url: str):

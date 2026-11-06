@@ -212,7 +212,7 @@ class TestGridAdminInventory:
         )
         assert create_response.status_code == 201, (
             f"Flat-identity API-key creation failed: "
-            f"{create_response.status_code} {create_response.text}"
+            f"{create_response.status_code}"
         )
         created_key = create_response.json()
         api_key = created_key["key"]
@@ -224,7 +224,7 @@ class TestGridAdminInventory:
                 json_body={"key": api_key},
             )
             assert status_code == 200, (
-                f"Internal API-key validation failed: {status_code} {body}"
+                f"Internal API-key validation failed: {status_code}"
             )
             validated_key = json.loads(body)
             assert validated_key["groups"] == [
@@ -251,7 +251,7 @@ class TestGridAdminInventory:
             )
             assert cleanup_response.status_code in (200, 404), (
                 f"Flat-identity API-key cleanup failed: "
-                f"{cleanup_response.status_code} {cleanup_response.text}"
+                f"{cleanup_response.status_code}"
             )
 
 
@@ -269,7 +269,7 @@ def _grid_model_refs(
     )
     assert response.status_code == 200, (
         f"GET /v1/models failed for Grid identity: "
-        f"{response.status_code} {response.text}"
+        f"{response.status_code}"
     )
     return {
         model["owned_by"]

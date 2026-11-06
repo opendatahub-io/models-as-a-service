@@ -517,7 +517,7 @@ class TestGridGovernanceIdentity:
         )
         assert response.status_code == 200, (
             f"GET /v1/me failed for Grid organization B admin: "
-            f"{response.status_code} {response.text}"
+            f"{response.status_code}"
         )
         identity = response.json()
         assert identity["preferred_username"] == "grid_admin_b"
