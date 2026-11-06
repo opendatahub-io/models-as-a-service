@@ -88,6 +88,21 @@ func (s failingSearchStore) Search(
 	return nil, s.err
 }
 
+type emptySearchResultStore struct {
+	*MockStore
+}
+
+func (s emptySearchResultStore) Search(
+	context.Context,
+	string,
+	string,
+	*SearchFilters,
+	*SortParams,
+	*PaginationParams,
+) (*PaginatedResult, error) {
+	return &PaginatedResult{}, nil
+}
+
 type failingBulkRevokeStore struct {
 	*MockStore
 
@@ -3576,14 +3591,22 @@ func (noopSubscriptionAdminResolver) ResolveSubscriptionAdmin(
 	return nil, nil
 }
 
+func (noopSubscriptionAdminResolver) ResolveSubscriptionAdminScopes(
+	*token.VerifiedIdentity,
+) ([]*subscription.AdminScope, error) {
+	return nil, nil
+}
+
 func (noopSubscriptionAdminResolver) CanonicalizeSubscription(requestedSubscription string) (string, error) {
 	return requestedSubscription, nil
 }
 
 type subscriptionAdminResolverStub struct {
 	scope          *subscription.AdminScope
+	scopes         []*subscription.AdminScope
 	err            error
 	calls          int
+	scopeCalls     int
 	canonical      map[string]string
 	canonicalErr   error
 	canonicalCalls int
@@ -3601,6 +3624,16 @@ func (r *subscriptionAdminResolverStub) ResolveSubscriptionAdmin(
 	return r.scope, nil
 }
 
+func (r *subscriptionAdminResolverStub) ResolveSubscriptionAdminScopes(
+	*token.VerifiedIdentity,
+) ([]*subscription.AdminScope, error) {
+	r.scopeCalls++
+	if r.err != nil {
+		return nil, r.err
+	}
+	return r.scopes, nil
+}
+
 func (r *subscriptionAdminResolverStub) CanonicalizeSubscription(requestedSubscription string) (string, error) {
 	r.canonicalCalls++
 	if r.canonicalErr != nil {
@@ -3612,19 +3645,25 @@ func (r *subscriptionAdminResolverStub) CanonicalizeSubscription(requestedSubscr
 	return requestedSubscription, nil
 }
 
+const subscriptionAdminIdentity = `{
+  "source": "oidc",
+  "claims": {
+    "iss": "https://issuer.example.com",
+    "sub": "admin-subject",
+    "aud": "maas-api",
+    "azp": "maas-client",
+    "preferred_username": "alice",
+    "org_id": "42c3e46f-2477-44d7-a85b-d3b43f6b31fa",
+    "roles": ["admins"]
+  }
+}`
+
 func verifiedIdentityForSubscriptionAdmin() *token.VerifiedIdentity {
-	return &token.VerifiedIdentity{
-		Source: "oidc",
-		Claims: token.VerifiedClaims{
-			Issuer:            "https://issuer.example.com",
-			Subject:           "admin-subject",
-			PreferredUsername: "alice",
-			Organizations: []token.OrganizationMembership{{
-				OrganizationID: "42c3e46f-2477-44d7-a85b-d3b43f6b31fa",
-				Roles:          []string{"admins"},
-			}},
-		},
+	var identity token.VerifiedIdentity
+	if err := json.Unmarshal([]byte(subscriptionAdminIdentity), &identity); err != nil {
+		panic(err)
 	}
+	return &identity
 }
 
 func addSubscriptionAdminTestKey(
@@ -4185,16 +4224,25 @@ func TestRevokeAPIKeys_MetadataFailurePreservesSuccessfulRevocation(t *testing.T
 	assert.Equal(t, StatusRevoked, key.Status)
 }
 
-func TestSearchAPIKeys_SubscriptionAdminMissingSubscriptionStaysOwnScope(t *testing.T) {
+func TestSearchAPIKeys_SubscriptionAdminWithoutSubscriptionUnionsAdministeredScopes(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	store := NewMockStore()
 	addSubscriptionAdminTestKey(t, store, "alice-a", "alice", "subscription-a")
 	addSubscriptionAdminTestKey(t, store, "bob-a", "bob", "subscription-a")
+	addSubscriptionAdminTestKey(t, store, "bob-b", "bob", "subscription-b")
+	addSubscriptionAdminTestKey(t, store, "alice-other", "alice", "subscription-other")
 
-	resolver := &subscriptionAdminResolverStub{scope: &subscription.AdminScope{
-		Tenant:       "test-tenant",
-		Namespace:    "test-ns",
-		Subscription: "subscription-a",
+	resolver := &subscriptionAdminResolverStub{scopes: []*subscription.AdminScope{
+		{
+			Tenant:       "test-tenant",
+			Namespace:    "test-ns",
+			Subscription: "subscription-a",
+		},
+		{
+			Tenant:       "test-tenant",
+			Namespace:    "test-ns",
+			Subscription: "subscription-b",
+		},
 	}}
 	handler := NewHandler(
 		logger.Development(),
@@ -4216,9 +4264,216 @@ func TestSearchAPIKeys_SubscriptionAdminMissingSubscriptionStaysOwnScope(t *test
 	require.Equal(t, http.StatusOK, w.Code)
 	var response SearchAPIKeysResponse
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+	gotIDs := make([]string, 0, len(response.Data))
+	for _, key := range response.Data {
+		gotIDs = append(gotIDs, key.ID)
+	}
+	assert.ElementsMatch(t, []string{"alice-a", "bob-a", "bob-b"}, gotIDs)
+	assert.Equal(t, 0, resolver.calls)
+	assert.Equal(t, 1, resolver.scopeCalls)
+}
+
+func TestSearchAPIKeys_SubscriptionAdminWithoutOrganizationUsesSelfService(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store := NewMockStore()
+	addSubscriptionAdminTestKey(t, store, "alice-a", "alice", "subscription-a")
+	addSubscriptionAdminTestKey(t, store, "bob-a", "bob", "subscription-b")
+	resolver := subscription.NewSelector(
+		logger.Development(),
+		nil,
+		nil,
+		nil,
+		subscription.WithTenantName("test-tenant"),
+	)
+	handler := NewHandler(
+		logger.Development(),
+		NewService(store, &config.Config{}, fixedSubSelector{}),
+		newMockAdminChecker(),
+		nil,
+		resolver,
+	)
+	identity := verifiedIdentityForSubscriptionAdmin()
+	identity.Claims.OrgID = ""
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/api-keys/search", strings.NewReader(`{}`))
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Set("user", &token.UserContext{Username: "alice", Tenant: "test-tenant"})
+	c.Set("verified_identity", identity)
+
+	handler.SearchAPIKeys(c)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var response SearchAPIKeysResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
 	require.Len(t, response.Data, 1)
 	assert.Equal(t, "alice-a", response.Data[0].ID)
+}
+
+func TestSearchAPIKeys_SubscriptionAdminWithoutSubscriptionFiltersUsername(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store := NewMockStore()
+	addSubscriptionAdminTestKey(t, store, "alice-a", "alice", "subscription-a")
+	addSubscriptionAdminTestKey(t, store, "bob-a", "bob", "subscription-a")
+	addSubscriptionAdminTestKey(t, store, "bob-b", "bob", "subscription-b")
+
+	resolver := &subscriptionAdminResolverStub{scopes: []*subscription.AdminScope{
+		{
+			Tenant:       "test-tenant",
+			Namespace:    "test-ns",
+			Subscription: "subscription-a",
+		},
+		{
+			Tenant:       "test-tenant",
+			Namespace:    "test-ns",
+			Subscription: "subscription-b",
+		},
+	}}
+	handler := NewHandler(
+		logger.Development(),
+		NewService(store, &config.Config{}, fixedSubSelector{}),
+		newMockAdminChecker(),
+		nil,
+		resolver,
+	)
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(
+		http.MethodPost,
+		"/v1/api-keys/search",
+		strings.NewReader(`{"filters":{"username":"bob"}}`),
+	)
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Set("user", &token.UserContext{Username: "alice", Tenant: "test-tenant"})
+	c.Set("verified_identity", verifiedIdentityForSubscriptionAdmin())
+
+	handler.SearchAPIKeys(c)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var response SearchAPIKeysResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+	gotIDs := make([]string, 0, len(response.Data))
+	for _, key := range response.Data {
+		gotIDs = append(gotIDs, key.ID)
+	}
+	assert.ElementsMatch(t, []string{"bob-a", "bob-b"}, gotIDs)
+}
+
+func TestSearchAPIKeys_PlatformAdminWithoutSubscriptionKeepsTenantScope(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store := NewMockStore()
+	addSubscriptionAdminTestKey(t, store, "alice-a", "alice", "subscription-a")
+	addSubscriptionAdminTestKey(t, store, "bob-a", "bob", "subscription-a")
+	addSubscriptionAdminTestKey(t, store, "other-a", "other", "subscription-other")
+
+	resolver := &subscriptionAdminResolverStub{scopes: []*subscription.AdminScope{{
+		Tenant:       "test-tenant",
+		Namespace:    "test-ns",
+		Subscription: "subscription-a",
+	}}}
+	handler := NewHandler(
+		logger.Development(),
+		NewService(store, &config.Config{}, fixedSubSelector{}),
+		newMockAdminChecker(),
+		nil,
+		resolver,
+	)
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/api-keys/search", strings.NewReader(`{}`))
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Set("user", &token.UserContext{
+		Username: "alice",
+		Groups:   []string{"admin-users"},
+		Tenant:   "test-tenant",
+	})
+	c.Set("verified_identity", verifiedIdentityForSubscriptionAdmin())
+
+	handler.SearchAPIKeys(c)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var response SearchAPIKeysResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+	gotIDs := make([]string, 0, len(response.Data))
+	for _, key := range response.Data {
+		gotIDs = append(gotIDs, key.ID)
+	}
+	assert.ElementsMatch(t, []string{"alice-a", "bob-a", "other-a"}, gotIDs)
+	assert.Equal(t, 0, resolver.scopeCalls)
+}
+
+func TestSearchAPIKeys_SubscriptionAdminWhitespaceSubscriptionUsesUnion(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store := NewMockStore()
+	addSubscriptionAdminTestKey(t, store, "alice-a", "alice", "subscription-a")
+	addSubscriptionAdminTestKey(t, store, "bob-a", "bob", "subscription-a")
+
+	resolver := &subscriptionAdminResolverStub{scopes: []*subscription.AdminScope{{
+		Tenant:       "test-tenant",
+		Namespace:    "test-ns",
+		Subscription: "subscription-a",
+	}}}
+	handler := NewHandler(
+		logger.Development(),
+		NewService(store, &config.Config{}, fixedSubSelector{}),
+		newMockAdminChecker(),
+		nil,
+		resolver,
+	)
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(
+		http.MethodPost,
+		"/v1/api-keys/search",
+		strings.NewReader(`{"filters":{"subscription":"   "}}`),
+	)
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Set("user", &token.UserContext{Username: "alice", Tenant: "test-tenant"})
+	c.Set("verified_identity", verifiedIdentityForSubscriptionAdmin())
+
+	handler.SearchAPIKeys(c)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var response SearchAPIKeysResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+	gotIDs := make([]string, 0, len(response.Data))
+	for _, key := range response.Data {
+		gotIDs = append(gotIDs, key.ID)
+	}
+	assert.ElementsMatch(t, []string{"alice-a", "bob-a"}, gotIDs)
 	assert.Equal(t, 0, resolver.calls)
+	assert.Equal(t, 1, resolver.scopeCalls)
+}
+
+func TestSearchAPIKeys_EmptyResultsSerializeAsArray(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	handler := NewHandler(
+		logger.Development(),
+		NewService(&emptySearchResultStore{MockStore: NewMockStore()}, &config.Config{}, fixedSubSelector{}),
+		newMockAdminChecker(),
+		nil,
+		noopSubscriptionAdminResolver{},
+	)
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/api-keys/search", strings.NewReader(`{}`))
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Set("user", &token.UserContext{Username: "alice", Tenant: "test-tenant"})
+
+	handler.SearchAPIKeys(c)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var response struct {
+		Data json.RawMessage `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+	require.NotNil(t, response.Data)
+	assert.JSONEq(t, `[]`, string(response.Data))
 }
 
 func TestSearchAPIKeys_SubscriptionAdminNotFoundMatchesUnauthorizedSubscription(t *testing.T) {
@@ -4347,6 +4602,39 @@ func TestGetAndRevokeAPIKey_SubscriptionAdminUsesStoredBinding(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestGetAPIKey_APIKeyCallerDoesNotUseSSOOrganizationAdmin(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store := NewMockStore()
+	addSubscriptionAdminTestKey(t, store, "bob-a", "bob", "subscription-a")
+	resolver := &subscriptionAdminResolverStub{scope: &subscription.AdminScope{
+		Tenant:       "test-tenant",
+		Namespace:    "test-ns",
+		Subscription: "subscription-a",
+	}}
+	handler := NewHandler(
+		logger.Development(),
+		NewService(store, &config.Config{}, fixedSubSelector{}),
+		newMockAdminChecker(),
+		nil,
+		resolver,
+	)
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodGet, "/v1/api-keys/bob-a", nil)
+	c.Params = gin.Params{{Key: "id", Value: "bob-a"}}
+	c.Set("user", &token.UserContext{
+		Username: "alice",
+		Groups:   []string{"42c3e46f-2477-44d7-a85b-d3b43f6b31fa/admins"},
+		Tenant:   "test-tenant",
+	})
+
+	handler.GetAPIKey(c)
+
+	assert.Equal(t, http.StatusNotFound, w.Code)
+	assert.Zero(t, resolver.calls)
 }
 
 func TestGetAPIKey_PlatformAdminFallsBackWhenSubscriptionAdminDenied(t *testing.T) {

@@ -1,0 +1,4 @@
+filters:
+  "_types\\.go$":
+    labels:
+      - changes/api-contract

@@ -164,6 +164,41 @@ func TestNewMetricsServer_SecureLoadsTLS(t *testing.T) {
 	require.NotEmpty(t, cert.Certificate)
 }
 
+func TestNewMetricsServer_AES256OnlyTLS12DisablesHTTP2AndStarts(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	writeTestCertPair(t, dir)
+
+	reg := prometheus.NewRegistry()
+	srv, err := metrics.NewMetricsServer(metrics.ServerOptions{
+		Addr:                "127.0.0.1:0",
+		Reg:                 reg,
+		Secure:              true,
+		CertDir:             dir,
+		RESTConfig:          &rest.Config{Host: "https://127.0.0.1:1"},
+		HTTPClient:          &http.Client{Timeout: 50 * time.Millisecond},
+		ProfileMinVersion:   tls.VersionTLS12,
+		ProfileCipherSuites: []uint16{tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, srv.Protocols)
+	assert.False(t, srv.Protocols.HTTP2())
+	assert.Equal(t, []string{"http/1.1"}, srv.TLSConfig.NextProtos)
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- metrics.ListenAndServe(srv)
+	}()
+
+	select {
+	case err := <-errCh:
+		require.NoError(t, err, "AES-256-only TLS 1.2 profile must not fail HTTP/2 startup")
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	require.NoError(t, srv.Close())
+}
+
 func TestNewMetricsServer_SecureReloadsTLSAfterRotation(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
