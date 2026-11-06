@@ -28,6 +28,7 @@ fixture pins.
 """
 
 import json
+import logging
 import os
 import re
 import subprocess
@@ -53,6 +54,7 @@ from test_helper import (
     _delete_governance_and_wait,
     _gateway_url,
     _ns,
+    _oc_json,
     _revoke_api_key,
     _run_oc,
     _sa_to_user,
@@ -66,6 +68,8 @@ from test_helper import (
 # full_suite: off the smoke/group-test path (restarts a shared pod); still runs
 # in the regular serial pass.
 pytestmark = [pytest.mark.xdist_group("echo_auth_leak"), pytest.mark.serial, pytest.mark.full_suite]
+
+log = logging.getLogger(__name__)
 
 LOG_HTTP_FLAG = "--log-http"
 # KServe names the simulator Deployment after the LLMIS.
@@ -83,12 +87,6 @@ class _RedactedKey(str):
 
     def __repr__(self):
         return "'sk-oai-<redacted>'"
-
-
-def _oc_json(*args):
-    result = _run_oc(["oc", *args, "-o", "json"])
-    assert result.returncode == 0, redact_sensitive(result.stderr)
-    return json.loads(result.stdout)
 
 
 def _main_container(llmis):
@@ -198,7 +196,10 @@ def log_http_enabled():
     try:
         if not already_enabled:
             _patch_main_args(index, original_args + [LOG_HTTP_FLAG])
-            _wait_for_rollout(log_http=True)
+        # Always wait, even when already_enabled: the flag can be in the spec
+        # moments before the Deployment actually rolls it out (e.g. the overlay
+        # was just applied), and the canary check needs it live, not just set.
+        _wait_for_rollout(log_http=True)
         yield
     finally:
         if not already_enabled:
@@ -251,8 +252,12 @@ def echo_key():
         yield _RedactedKey(body["key"])
     finally:
         if key_id:
-            # A fresh token again: the test itself runs between mint and here.
-            _revoke_api_key(_create_sa_token(sa_name, namespace=MODEL_NAMESPACE), key_id)
+            # A fresh token again: the test itself runs between mint and here. Caught,
+            # not raised: a failure here must not skip the governance cleanup below.
+            try:
+                _revoke_api_key(_create_sa_token(sa_name, namespace=MODEL_NAMESPACE), key_id)
+            except Exception:
+                log.warning("Failed to revoke echo-leak test API key %s", key_id, exc_info=True)
         _delete_governance_and_wait(
             subscriptions=[(subscription_name, ns)],
             auth_policies=[(auth_name, ns)],
