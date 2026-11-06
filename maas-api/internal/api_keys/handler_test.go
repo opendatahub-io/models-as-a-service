@@ -4273,6 +4273,44 @@ func TestSearchAPIKeys_SubscriptionAdminWithoutSubscriptionUnionsAdministeredSco
 	assert.Equal(t, 1, resolver.scopeCalls)
 }
 
+func TestSearchAPIKeys_SubscriptionAdminWithoutOrganizationUsesSelfService(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store := NewMockStore()
+	addSubscriptionAdminTestKey(t, store, "alice-a", "alice", "subscription-a")
+	addSubscriptionAdminTestKey(t, store, "bob-a", "bob", "subscription-b")
+	resolver := subscription.NewSelector(
+		logger.Development(),
+		nil,
+		nil,
+		nil,
+		subscription.WithTenantName("test-tenant"),
+	)
+	handler := NewHandler(
+		logger.Development(),
+		NewService(store, &config.Config{}, fixedSubSelector{}),
+		newMockAdminChecker(),
+		nil,
+		resolver,
+	)
+	identity := verifiedIdentityForSubscriptionAdmin()
+	identity.Claims.OrgID = ""
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/api-keys/search", strings.NewReader(`{}`))
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Set("user", &token.UserContext{Username: "alice", Tenant: "test-tenant"})
+	c.Set("verified_identity", identity)
+
+	handler.SearchAPIKeys(c)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var response SearchAPIKeysResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+	require.Len(t, response.Data, 1)
+	assert.Equal(t, "alice-a", response.Data[0].ID)
+}
+
 func TestSearchAPIKeys_SubscriptionAdminWithoutSubscriptionFiltersUsername(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	store := NewMockStore()

@@ -82,6 +82,9 @@ func (s *Selector) ResolveSubscriptionAdminScopes(
 		return nil, nil
 	}
 	organizationID := identity.Claims.OrgID
+	if organizationID == "" {
+		return nil, nil
+	}
 	organizationID, err := canonicalOrganizationID(organizationID)
 	if err != nil {
 		return nil, err
