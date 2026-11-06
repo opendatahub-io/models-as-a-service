@@ -245,6 +245,17 @@ _resolve_e2e_diff_base() {
     return 1
 }
 
+# In /group-test the checkout root is owned by another uid than the e2e step, and
+# git refuses it ("dubious ownership"). Trust $PROJECT_ROOT for this script and the
+# tier checker it spawns. safe.directory is read only from protected config, which
+# includes GIT_CONFIG_* (command scope); repo-local config is ignored, and --global
+# would edit a developer's ~/.gitconfig.
+_trust_project_root_for_git() {
+    local n="${GIT_CONFIG_COUNT:-0}"
+    export "GIT_CONFIG_KEY_${n}=safe.directory" "GIT_CONFIG_VALUE_${n}=${PROJECT_ROOT}"
+    export GIT_CONFIG_COUNT=$((n + 1))
+}
+
 # Who runs git and who owns the clone. The clone happens in an earlier pipeline
 # step with its own image and git config.
 _log_pr_new_git_context() {
@@ -266,6 +277,7 @@ if [[ "$smoke_only" == "true" && "$_run_only_oidc_tests" != true ]]; then
         _pr_new_log="${ARTIFACTS_DIR}/pr-new-selection.log"
         : >"${_pr_new_log}"
         export E2E_PR_NEW_LOG="${_pr_new_log}"
+        _trust_project_root_for_git
         _diff_base=""
         if ! _diff_base="$(_resolve_e2e_diff_base)"; then
             _diff_base=""
