@@ -38,6 +38,8 @@ spec:
     value: pull-request
   - name: enable-group-testing
     value: "true"
+  - name: enable-oidc-group-testing
+    value: "true"
   pipelineRef:
     resolver: git
     params:
