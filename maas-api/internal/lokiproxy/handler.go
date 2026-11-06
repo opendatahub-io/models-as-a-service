@@ -45,6 +45,7 @@ const (
 
 // upstreamPaths maps the maas-api route to the proxied Loki read API path.
 const (
+	upstreamQuery       = "/loki/api/v1/query"
 	upstreamQueryRange  = "/loki/api/v1/query_range"
 	upstreamLabels      = "/loki/api/v1/labels"
 	upstreamLabelValues = "/loki/api/v1/label/%s/values"
@@ -90,10 +91,11 @@ func NewHandler(log *logger.Logger, endpoint, token string) (*Handler, error) {
 }
 
 // RegisterRoutes registers the read-only Loki proxy routes on the given group.
-// Only these three Loki read endpoints are proxied; every other Loki API path
+// Only these four Loki read endpoints are proxied; every other Loki API path
 // (writes, rules, tail, series, legacy /api/prom/*) is not registered and
 // therefore returns 404.
 func (h *Handler) RegisterRoutes(rg *gin.RouterGroup) {
+	rg.GET("/logs/loki/api/v1/query", h.proxyHandler(upstreamQuery, true))
 	rg.GET("/logs/loki/api/v1/query_range", h.proxyHandler(upstreamQueryRange, true))
 	rg.GET("/logs/loki/api/v1/labels", h.proxyHandler(upstreamLabels, false))
 	rg.GET("/logs/loki/api/v1/label/:name/values", h.proxyToLabelValues)
