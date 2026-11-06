@@ -26,6 +26,7 @@ from multitenancy_helpers import (
     TLS_VERIFY,
     _oc_run,
     redact_sensitive,
+    wait_until,
 )
 from test_helper import (
     MODEL_CANONICAL_ID,
@@ -33,6 +34,7 @@ from test_helper import (
     _create_api_key_raw,
     _gateway_url,
     _get_cluster_token,
+    _request_with_gateway_retry,
     _revoke_api_key,
     _wait_for_gateway_auth_enforced,
 )
@@ -133,20 +135,31 @@ def _apply_api_translation(enabled: bool | None, *, gate: bool = False) -> bool:
     return True
 
 
-def _post(url: str, api_key: str, body: dict, *, stream: bool = False) -> requests.Response:
+def _post(
+    url: str,
+    api_key: str,
+    body: dict,
+    *,
+    stream: bool = False,
+    auth_denial_is_transient: bool = True,
+) -> requests.Response:
+    """POST to the gateway via the shared retry helper (transient 5xx / empty-401-403 /
+    connection errors), plus a route-propagation 404 retry on top — a just-enabled route
+    (SSE included) can 404 briefly. Negative tests that expect a denial pass
+    ``auth_denial_is_transient=False`` so an empty 401/403 is the answer, not a retry."""
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     for attempt in range(1, GATEWAY_RETRIES + 1):
-        response = requests.post(
+        response = _request_with_gateway_retry(
+            requests.post,
             url,
-            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            headers=headers,
             json=body,
-            timeout=60,
-            verify=TLS_VERIFY,
             stream=stream,
+            retries=GATEWAY_RETRIES,
+            delay=GATEWAY_RETRY_DELAY,
+            auth_denial_is_transient=auth_denial_is_transient,
         )
-        # Retry transient route-propagation/ExtProc-reload responses for streaming
-        # requests too: a just-enabled SSE route can 404 briefly, and a single-shot
-        # streaming check would otherwise fail on a slower/colder cluster.
-        if response.status_code in (404, 503) and attempt < GATEWAY_RETRIES:
+        if response.status_code == 404 and attempt < GATEWAY_RETRIES:
             time.sleep(GATEWAY_RETRY_DELAY)
             continue
         return response
@@ -206,26 +219,25 @@ def _is_translated(response: requests.Response) -> bool:
 
 
 def _wait_until_gated(url: str, api_key: str, timeout: int = RENDER_TIMEOUT) -> requests.Response:
-    """Poll /v1/messages until translation is no longer served. Disabling is
-    eventually-consistent at the data plane (beyond the ConfigMap edit and ExtProc
-    rollout), so a single check can still catch a stale translated 200. Returns the
-    first non-translated response, or the last one seen on timeout."""
-    deadline = time.time() + timeout
-    last = None
-    while time.time() < deadline:
-        last = requests.post(
+    """Poll /v1/messages until translation is no longer served, via the shared
+    wait_until helper. Disabling is eventually-consistent at the data plane (beyond the
+    ConfigMap edit and ExtProc rollout), so a single check can catch a stale translated
+    200. A transient gateway error (502/503/504) is not proof of gating, so keep polling
+    on those too."""
+
+    def _gated() -> requests.Response | None:
+        response = requests.post(
             url,
             headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
             json=_anthropic_body(),
             timeout=60,
             verify=TLS_VERIFY,
         )
-        # A transient gateway error (502/503/504) is not proof translation is gated —
-        # keep polling so translation resuming on the next request can't slip through.
-        if last.status_code not in (502, 503, 504) and not _is_translated(last):
-            return last
-        time.sleep(POLL)
-    return last
+        if response.status_code in (502, 503, 504) or _is_translated(response):
+            return None
+        return response
+
+    return wait_until(_gated, timeout, f"{url} stops serving translation", interval=POLL)
 
 
 @pytest.fixture(scope="module")
@@ -268,7 +280,7 @@ class TestApiTranslation:
     def test_auth_rejects_invalid_key(self, api_translation_env):
         """An invalid key must be rejected at the gateway regardless of translation state."""
         messages_url = f"{_gateway_url().rstrip('/')}/v1/messages"
-        invalid = _post(messages_url, "sk-invalid-not-real", _anthropic_body())
+        invalid = _post(messages_url, "sk-invalid-not-real", _anthropic_body(), auth_denial_is_transient=False)
         assert invalid.status_code == 401, f"expected 401 Unauthorized for invalid key, got {invalid.status_code}"
 
     @pytest.mark.serial
