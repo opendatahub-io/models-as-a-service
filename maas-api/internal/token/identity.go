@@ -1,6 +1,7 @@
 package token
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"io"
@@ -22,11 +23,10 @@ const (
 	// The envelope is intentionally flat. These limits bound parser work and
 	// prevent a syntactically valid claim collection from becoming a resource
 	// exhaustion vector.
-	maxIdentityJSONDepth     = 6
-	maxIdentityGroups        = 128
-	maxIdentityOrganizations = 32
-	maxOrganizationRoles     = 64
-	maxAudiences             = 16
+	maxIdentityJSONDepth = 6
+	maxIdentityGroups    = 128
+	maxOrganizationRoles = 64
+	maxAudiences         = 16
 )
 
 var (
@@ -61,10 +61,48 @@ type VerifiedClaims struct {
 	PreferredUsername string   `json:"preferred_username,omitempty"`
 	Email             string   `json:"email,omitempty"`
 	Groups            []string `json:"groups,omitempty"`
-	// Organization memberships are the only future source of delegated-admin
-	// decisions. Keeping them in typed, bounded entries prevents mixing one
-	// organization's ID with another organization's roles.
-	Organizations []OrganizationMembership `json:"https://redhat.com/maas/orgs,omitempty"`
+	OrgID             string   `json:"org_id,omitempty"`
+	OrgName           string   `json:"org_name,omitempty"`
+	Roles             []string `json:"roles,omitempty"`
+
+	orgIDPresent   bool
+	orgNamePresent bool
+	rolesPresent   bool
+}
+
+func (claims *VerifiedClaims) UnmarshalJSON(data []byte) error {
+	var rawClaims map[string]json.RawMessage
+	if err := json.Unmarshal(data, &rawClaims); err != nil {
+		return err
+	}
+	for name := range rawClaims {
+		switch name {
+		case "iss", "sub", "aud", "azp",
+			"name", "given_name", "family_name",
+			"preferred_username", "email", "groups",
+			"org_id", "org_name", "roles":
+		default:
+			return errors.New("identity claim key is not allowed")
+		}
+	}
+	for _, name := range []string{"org_id", "org_name", "roles"} {
+		if value, exists := rawClaims[name]; exists && bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+			return errors.New("organization claim must not be null")
+		}
+	}
+
+	type decodedClaims VerifiedClaims
+	var decoded decodedClaims
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&decoded); err != nil {
+		return err
+	}
+	*claims = VerifiedClaims(decoded)
+	_, claims.orgIDPresent = rawClaims["org_id"]
+	_, claims.orgNamePresent = rawClaims["org_name"]
+	_, claims.rolesPresent = rawClaims["roles"]
+	return nil
 }
 
 type Audience struct {
@@ -97,28 +135,21 @@ func (audience *Audience) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-type OrganizationMembership struct {
-	// OrganizationID is canonicalized by validate before it can be used for
-	// association, preventing equivalent noncanonical UUID spellings from
-	// bypassing duplicate detection.
-	OrganizationID   string   `json:"organization_id"`
-	OrganizationName string   `json:"organization_name,omitempty"`
-	Roles            []string `json:"roles,omitempty"`
-}
-
 // IdentityResponse contains only the identity fields exposed by GET /v1/me.
 // It is deliberately separate from VerifiedIdentity so transport provenance
 // and internal claim representations cannot leak into the public response.
 type IdentityResponse struct {
-	Issuer            string                   `json:"iss,omitempty"`
-	Subject           string                   `json:"sub"`
-	Name              string                   `json:"name,omitempty"`
-	GivenName         string                   `json:"given_name,omitempty"`
-	FamilyName        string                   `json:"family_name,omitempty"`
-	PreferredUsername string                   `json:"preferred_username,omitempty"`
-	Email             string                   `json:"email,omitempty"`
-	Groups            []string                 `json:"groups,omitempty"`
-	Organizations     []OrganizationMembership `json:"https://redhat.com/maas/orgs,omitempty"`
+	Issuer            string   `json:"iss,omitempty"`
+	Subject           string   `json:"sub"`
+	Name              string   `json:"name,omitempty"`
+	GivenName         string   `json:"given_name,omitempty"`
+	FamilyName        string   `json:"family_name,omitempty"`
+	PreferredUsername string   `json:"preferred_username,omitempty"`
+	Email             string   `json:"email,omitempty"`
+	Groups            []string `json:"groups,omitempty"`
+	OrgID             string   `json:"org_id,omitempty"`
+	OrgName           string   `json:"org_name,omitempty"`
+	Roles             []string `json:"roles,omitempty"`
 }
 
 // ParseIdentityEnvelope validates the fixed Authorino-to-maas-api identity
@@ -212,38 +243,58 @@ func (identity *VerifiedIdentity) validate() error {
 		}
 	}
 
-	if len(claims.Organizations) > maxIdentityOrganizations {
-		return errors.New("too many organizations")
-	}
-	organizationIDs := make(map[string]struct{}, len(claims.Organizations))
-	for _, organization := range claims.Organizations {
-		// Parse and re-render the UUID to require the canonical form. This also
-		// prevents duplicate IDs that differ only in case or formatting.
-		parsedID, err := uuid.Parse(organization.OrganizationID)
-		if err != nil || parsedID.String() != organization.OrganizationID {
-			return errors.New("invalid organization id")
-		}
-		if _, exists := organizationIDs[organization.OrganizationID]; exists {
-			return errors.New("duplicate organization id")
-		}
-		organizationIDs[organization.OrganizationID] = struct{}{}
+	return validateOrganizationClaims(claims)
+}
 
-		// The name is optional display data for /v1/me. It is not used for
-		// association or authorization, but still requires a transport bound.
-		if !optionalBoundedString(organization.OrganizationName, 256) {
-			return errors.New("invalid organization name claim")
+func validateOrganizationClaims(claims VerifiedClaims) error {
+	if !claims.orgIDPresent {
+		if claims.orgNamePresent || claims.rolesPresent {
+			return errors.New("organization claims require org_id")
 		}
-		if len(organization.Roles) > maxOrganizationRoles {
-			return errors.New("too many organization roles")
+		return nil
+	}
+	parsedID, err := uuid.Parse(claims.OrgID)
+	if err != nil || parsedID.String() != claims.OrgID {
+		return errors.New("invalid organization id")
+	}
+	seenGroups := make(map[string]struct{}, len(claims.Groups))
+	for _, group := range claims.Groups {
+		if _, found := seenGroups[group]; found {
+			return errors.New("duplicate organization group")
 		}
-		for _, role := range organization.Roles {
-			if !nonEmptyBoundedString(role, 128) {
-				return errors.New("invalid organization role")
-			}
+		seenGroups[group] = struct{}{}
+	}
+	if !optionalBoundedString(claims.OrgName, 256) {
+		return errors.New("invalid organization name claim")
+	}
+	if len(claims.Roles) > maxOrganizationRoles {
+		return errors.New("too many organization roles")
+	}
+	for _, role := range claims.Roles {
+		if !nonEmptyBoundedString(role, 128) {
+			return errors.New("invalid organization role")
 		}
 	}
 
 	return nil
+}
+
+// QualifiedGroups scopes flat organization groups to their verified organization.
+func QualifiedGroups(identity *VerifiedIdentity) ([]string, error) {
+	if identity == nil {
+		return nil, errors.New("verified identity is required")
+	}
+
+	groups := append([]string(nil), identity.Claims.Groups...)
+	if identity.Claims.OrgID == "" {
+		return groups, nil
+	}
+
+	qualified := make([]string, len(groups))
+	for i, group := range groups {
+		qualified[i] = identity.Claims.OrgID + "/" + group
+	}
+	return qualified, nil
 }
 
 func nonEmptyBoundedString(value string, limit int) bool {
@@ -398,7 +449,9 @@ func (h *Handler) GetMe(c *gin.Context) {
 			PreferredUsername: identity.Claims.PreferredUsername,
 			Email:             identity.Claims.Email,
 			Groups:            identity.Claims.Groups,
-			Organizations:     identity.Claims.Organizations,
+			OrgID:             identity.Claims.OrgID,
+			OrgName:           identity.Claims.OrgName,
+			Roles:             identity.Claims.Roles,
 		})
 		return
 	}

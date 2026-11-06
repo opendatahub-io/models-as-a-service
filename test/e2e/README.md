@@ -45,6 +45,21 @@ pytest tests/<file>.py -v
 | File | Focus |
 |------|--------|
 | `test_smoke.py` | Read-only smoke checks: non-streaming and streaming (`text/event-stream`) chat/completions |
+
+### Inference response assertions
+
+Non-streaming chat/completions tests should use `assert_inference_response()` from
+`tests/test_helper.py` on HTTP **200** responses. It checks:
+
+- Non-empty response body (default minimum 50 bytes; override with `min_bytes=`)
+- Valid JSON with non-empty `choices[0].message.content` or `choices[0].text`
+- `usage.total_tokens > 0` when the `usage` object includes `total_tokens`
+
+Streaming smoke uses `assert_openai_sse_chat_stream()`, which also requires at
+least one non-empty content chunk before `data: [DONE]`.
+
+| File | Focus |
+|------|--------|
 | `test_subscription.py` | Subscription / inference flows |
 | `test_observability_identity.py` | Opt-in organization attribution reproduction on one gateway/model; requires `E2E_OBSERVABILITY_IDENTITY=true` and Limitador telemetry |
 | `test_trlp_rate_grouping.py` | TRLP limits grouped by rate: shared limits, per-subscription and per-user budgets, rate edits, gateway wasm config size guard |
@@ -71,6 +86,7 @@ pytest tests/<file>.py -v
 | `test_tenant_external_model_compat.py` | Multi-tenant AGC/Praxis external models: omitted-`gatewayRefs` compatibility (no-op own-tenant attachment) and legacy IPP coexistence (serial, gated on `TENANT_EXTERNAL_MODEL_LEGACY_IPP_E2E`) |
 | `test_tenant_external_model_crossns.py` | Multi-tenant AGC/Praxis external models: ReferenceGrant-gated cross-namespace providers, grant revoke/narrow, credential source selection (P1; gated on `TENANT_EXTERNAL_MODEL_CROSSNS_E2E`) |
 | `test_tenant_external_model_default_tenant.py` | 3.5-shaped external models (no `gatewayRefs`, `auth.type: simple`) in a namespace of no tenant (`llm`) served through the default tenant's Gateway by ai-gateway-controller; subscription-injected Gateway headers reach the provider and replace client values, `gatewayRefs` replace the implicit attachment, deleting the model removes its objects (RHOAIENG-101754; skips without the AGC or when the default tenant is on IPP) |
+| `test_non_default_maastenantconfig.py` | Per-tenant `MaasTenantConfig` behaviour: `spec.apiKeys.maxExpirationDays` is enforced by that tenant's own `maas-api` (over-cap mint rejected with `exceeds maximum allowed`, under-cap mint accepted) and is not inherited by a sibling tenant (RHOAIENG-100759) |
 
 `/group-test` sets **`E2E_SMOKE_ONLY=true`** and **`E2E_INCLUDE_NEW_FROM_DIFF=true`**: curated `@pytest.mark.smoke` **plus** any tests newly added in the PR (dynamic `pr_new` marker from a git diff — sources are not rewritten). Diff base comes from `E2E_DIFF_BASE` / `PULL_BASE_SHA` / `BASE_SHA`, or by fetching **`E2E_DIFF_UPSTREAM_URL`** at **`E2E_DIFF_TARGET_BRANCH`** (Pac `{{target_branch}}`) — not the PR fork’s `origin/main`, which is what the depth-50 group-test clone uses as `origin`. If the base cannot be resolved, the runner falls back to smoke-only. `prow_run_smoke_test.sh` itself defaults to the full suite so nightly and unmarked callers keep coverage of tests that are neither `smoke` nor `nightly`. Locally: `./scripts/run_e2e_tests.sh --smoke-only` (or `E2E_SMOKE_ONLY=true`). Individual modules can still be run directly, for example `pytest tests/test_subscription_list_endpoints.py -v`.
 
