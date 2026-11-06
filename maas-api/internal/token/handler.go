@@ -35,7 +35,8 @@ func ParseGroupsHeader(header string) ([]string, error) {
 	if header == "" {
 		return nil, errors.New("header is empty")
 	}
-	if strings.TrimSpace(header) == "[]" {
+	trimmed := strings.TrimSpace(header)
+	if trimmed == "[]" {
 		return []string{}, nil
 	}
 
@@ -45,7 +46,6 @@ func ParseGroupsHeader(header string) ([]string, error) {
 	if err := json.Unmarshal([]byte(header), &parsedGroups); err != nil {
 		// Fall back to bracket-wrapped space-separated format (e.g., [ai-eng platform]).
 		// Authorino's plain selector serializes arrays this way.
-		trimmed := strings.TrimSpace(header)
 		if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
 			inner := trimmed[1 : len(trimmed)-1]
 			parsedGroups = strings.Fields(inner)
@@ -56,8 +56,8 @@ func ParseGroupsHeader(header string) ([]string, error) {
 
 	var validGroups []string
 	for _, g := range parsedGroups {
-		if tg := strings.TrimSpace(g); tg != "" {
-			validGroups = append(validGroups, tg)
+		if g != "" {
+			validGroups = append(validGroups, g)
 		}
 	}
 
@@ -72,6 +72,13 @@ func ParseGroupsHeader(header string) ([]string, error) {
 func (h *Handler) ExtractUserInfo() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		requestLogger := h.logger.WithContext(c.Request.Context())
+		if value, exists := c.Get("verified_identity"); exists {
+			if !h.setUserContextFromVerifiedIdentity(c, value) {
+				return
+			}
+			c.Next()
+			return
+		}
 
 		username := strings.TrimSpace(c.GetHeader(constant.HeaderUsername))
 		groupHeader := c.GetHeader(constant.HeaderGroup)
@@ -157,35 +164,9 @@ func (h *Handler) ExtractUserInfo() gin.HandlerFunc {
 func (h *Handler) ExtractUserInfoOptional() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if value, exists := c.Get("verified_identity"); exists {
-			identity, ok := value.(*VerifiedIdentity)
-			if !ok || identity == nil {
-				requestLogger := h.logger.WithContext(c.Request.Context())
-				requestLogger.Error("Invalid verified identity context type")
-				c.JSON(http.StatusInternalServerError, gin.H{
-					"error":         "Exception thrown while generating token",
-					"exceptionCode": "AUTH_FAILURE",
-					"refId":         "004",
-				})
-				c.Abort()
+			if !h.setUserContextFromVerifiedIdentity(c, value) {
 				return
 			}
-
-			username := identity.Claims.PreferredUsername
-			if username == "" {
-				username = identity.Claims.Subject
-			}
-			claimGroups := identity.Claims.Groups
-			if !groupname.AllValid(claimGroups) {
-				claimGroups = nil
-			}
-			groups := make([]string, 0, len(claimGroups)+1)
-			groups = append(groups, "system:authenticated")
-			groups = append(groups, claimGroups...)
-			c.Set("user", &UserContext{
-				Username: username,
-				Groups:   groups,
-				Tenant:   h.tenantName,
-			})
 			c.Next()
 			return
 		}
@@ -241,4 +222,40 @@ func (h *Handler) ExtractUserInfoOptional() gin.HandlerFunc {
 		c.Set("user", userContext)
 		c.Next()
 	}
+}
+
+func (h *Handler) setUserContextFromVerifiedIdentity(c *gin.Context, value any) bool {
+	identity, ok := value.(*VerifiedIdentity)
+	if !ok || identity == nil {
+		requestLogger := h.logger.WithContext(c.Request.Context())
+		requestLogger.Error("Invalid verified identity context type")
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":         "Exception thrown while generating token",
+			"exceptionCode": "AUTH_FAILURE",
+			"refId":         "004",
+		})
+		c.Abort()
+		return false
+	}
+
+	groups, err := QualifiedGroups(identity)
+	if err != nil {
+		h.rejectIdentity(c, err)
+		return false
+	}
+	if !groupname.AllValid(identity.Claims.Groups) {
+		groups = nil
+	}
+	groups = append([]string{"system:authenticated"}, groups...)
+	username := identity.Claims.PreferredUsername
+	if username == "" {
+		username = identity.Claims.Subject
+	}
+	c.Set("user", &UserContext{
+		Username:       username,
+		Groups:         groups,
+		Tenant:         h.tenantName,
+		OrganizationID: identity.Claims.OrgID,
+	})
+	return true
 }
