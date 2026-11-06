@@ -2220,6 +2220,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#group-matching" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Group matching
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -3393,6 +3404,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#group-matching" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Group matching
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -3646,8 +3668,29 @@ contract.</p>
 <a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a><span class="w">    </span><span class="nt">clientId</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">team-a-client</span>
 <a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a><span class="w">    </span><span class="nt">ttl</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">60</span><span class="w">  </span><span class="c1"># team-a uses aggressive JWKS refresh</span>
 </code></pre></div>
-<p>Group names in <code>MaaSSubscription</code> and <code>MaaSAuthPolicy</code> resources must match the group claims in that tenant's OIDC tokens exactly. They are opaque strings; a <code>/</code> in a group name is not interpreted as a namespace/name separator.</p>
+<p>Subscription groups and model-policy groups for an organization must use qualified group values.</p>
 <p>See <a href="../../install/multi-tenant-setup/">Multi-Tenant Setup</a> and <a href="../../concepts/multi-tenancy/">Multi-Tenancy</a>.</p>
+<h3 id="group-matching">Group matching</h3>
+<p>A flat organization identity has an <code>org_id</code> claim beside its <code>groups</code> claim.
+The gateway sends verified token claims in an identity envelope.
+MaaS adds <code>&lt;org_id&gt;/</code> before each raw group for access checks.
+For example, <code>users</code> becomes <code>42c3e46f-2477-44d7-a85b-d3b43f6b31fa/users</code>.
+Use qualified group values in subscription and model policy rules.
+MaaS keeps the original case, spaces, slashes, and punctuation.
+MaaS reserves names that start with a canonical lowercase UUID and <code>/</code> for organization-qualified groups.
+Raw token groups must not use that reserved prefix, including when the token has <code>org_id</code>; MaaS rejects such tokens.
+The <code>/v1/me</code> endpoint returns the raw token groups.
+Flat group values must not be empty, and each value must be unique.
+The gateway accepts up to 128 groups. Each group can contain up to 256 bytes.
+Flat groups use the allowlist <code>[A-Za-z0-9:#._/ -]</code>.
+The gateway carries flat groups in the identity envelope.
+MaaS stores the qualified groups with an API key created from a flat identity.
+MaaS stores the qualified groups as PostgreSQL <code>TEXT[]</code> values.
+MaaS reuses those saved values and does not add the organization prefix again.
+The public API key response does not include the flag for exact matching.
+OIDC groups without organization claims and OpenShift groups also keep the allowlist <code>[A-Za-z0-9:#._/ -]</code>.
+MaaS still reserves names that start with a canonical lowercase UUID and <code>/</code>.
+MaaS uses the same allowlist for every authenticated group, so every group that can authenticate can also mint an API key.</p>
 <h2 id="authentication-evaluation-order">Authentication evaluation order</h2>
 <p>The gateway-level <code>maas-gateway-auth</code> AuthPolicy evaluates authenticators in priority order. A request succeeds when <strong>any</strong> matching authenticator validates the token:</p>
 <table>
@@ -3795,9 +3838,9 @@ contract.</p>
 <td>When configured, the same rule requires the intended <code>aud</code> value and configured access-token purpose. Delegated Grid administration requires both checks. Legacy OIDC deployments can omit these optional fields during migration.</td>
 </tr>
 <tr>
-<td><strong>OIDC group claim sanitization</strong></td>
+<td><strong>OIDC group claim handling</strong></td>
 <td>MaaS controller (gateway AuthPolicy) + maas-api</td>
-<td>The <code>oidc-groups-safe</code> authorization rule rejects OIDC tokens whose <code>groups</code> claim contains characters outside <code>[A-Za-z0-9:#._/ -]</code> (alphanumerics, colons, hashes, dots, underscores, hyphens, spaces, and slashes). Identity headers (<code>X-MaaS-Group</code>) select the group source by identity type — JWT identities use only the <code>groups</code> claim, OpenShift TokenReview identities use only <code>user.groups</code> — and gate both sources on the same pattern, so a JWT cannot forge TokenReview groups with a crafted <code>user</code> claim. maas-api enforces the same rule when minting API keys as defense in depth: if an invalid group name reaches the API-key handler, the mint request is rejected with 400 (requests with unsafe OIDC groups are rejected earlier, at the gateway, with 403). Ensure IdP group names match this pattern and your <code>MaaSSubscription</code> / <code>MaaSAuthPolicy</code> group entries. Slashes are allowed because they are common in IdP group claims (for example, Keycloak full-path groups, Entra ID, Okta, GitHub <code>org/team</code>), and hashes are allowed for providers that emit names such as <code>IAM#AccessGroupId-...</code>.</td>
+<td>The gateway sends flat organization groups in the verified identity envelope. MaaS compares the qualified values without changing them. MaaS maps each group to <code>&lt;org_id&gt;/&lt;group&gt;</code>. <code>/v1/me</code> returns the raw groups. The gateway rejects empty or duplicate flat groups and groups longer than 256 bytes. OIDC groups without organization claims and OpenShift groups keep the allowlist <code>[A-Za-z0-9:#._/ -]</code>. MaaS reserves names that start with a canonical lowercase UUID and <code>/</code> for organization-qualified groups. MaaS uses the same allowlist for every authenticated group, so every group that can authenticate can also mint an API key. The gateway rejects client copies of <code>X-MaaS-Exact-Groups</code>.</td>
 </tr>
 <tr>
 <td><strong>SSRF on issuer URL</strong></td>
@@ -3847,7 +3890,7 @@ contract.</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="October 27, 2026 09:21:53 UTC">October 27, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="November 6, 2026 10:28:52 UTC">November 6, 2026</span>
   </span>
 
     
