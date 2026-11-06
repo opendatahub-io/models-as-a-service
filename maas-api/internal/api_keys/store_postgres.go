@@ -378,6 +378,7 @@ func (s *PostgresStore) Search(
 	whereClauses = append(whereClauses, fmt.Sprintf("tenant = $%d", argPos))
 	args = append(args, s.tenantName)
 	argPos++
+	whereClauses = append(whereClauses, "deleted_at IS NULL")
 	// Exclude ephemeral keys by default
 	if filters.IncludeEphemeral == nil || !*filters.IncludeEphemeral {
 		whereClauses = append(whereClauses, "ephemeral = FALSE")
@@ -403,12 +404,12 @@ func (s *PostgresStore) Search(
 		whereClauses = append(whereClauses, fmt.Sprintf("(%s) IN (%s)", effectiveStatusExpr, strings.Join(placeholders, ",")))
 	}
 
-	// Filter by subscription name
-	if filters.Subscription != nil && *filters.Subscription != "" {
-		whereClauses = append(whereClauses, fmt.Sprintf("subscription = $%d", argPos))
-		args = append(args, strings.TrimSpace(*filters.Subscription))
-		argPos++
-	}
+	whereClauses, args, argPos = appendSubscriptionSearchFilters(
+		whereClauses,
+		args,
+		argPos,
+		filters,
+	)
 
 	// Add labels containment filter
 	if len(filters.LabelsContain) > 0 {
@@ -665,7 +666,6 @@ func (s *PostgresStore) GetByHash(ctx context.Context, keyHash string) (*ApiKey,
 		if description.Valid {
 			k.Description = description.String
 		}
-		// user_groups is now directly scanned as []string - no JSON parsing needed
 		k.Groups = userGroups
 
 		if lastUsedAt.Valid {
@@ -923,4 +923,35 @@ func (s *PostgresStore) Close() error {
 		}
 	}
 	return writeErr
+}
+
+func appendSubscriptionSearchFilters(
+	whereClauses []string,
+	args []any,
+	argPos int,
+	filters *SearchFilters,
+) ([]string, []any, int) {
+	subscription := ""
+	if filters.Subscription != nil {
+		subscription = strings.TrimSpace(*filters.Subscription)
+	}
+	if subscription != "" {
+		whereClauses = append(whereClauses, fmt.Sprintf("subscription = $%d", argPos))
+		args = append(args, subscription)
+		argPos++
+	}
+	if len(filters.SubscriptionNames) == 0 {
+		return whereClauses, args, argPos
+	}
+
+	placeholders := make([]string, len(filters.SubscriptionNames))
+	for index, subscriptionName := range filters.SubscriptionNames {
+		placeholders[index] = fmt.Sprintf("$%d", argPos)
+		args = append(args, strings.TrimSpace(subscriptionName))
+		argPos++
+	}
+	return append(
+		whereClauses,
+		fmt.Sprintf("subscription IN (%s)", strings.Join(placeholders, ",")),
+	), args, argPos
 }

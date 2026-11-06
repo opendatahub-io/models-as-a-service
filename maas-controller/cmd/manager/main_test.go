@@ -14,6 +14,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientsetfake "k8s.io/client-go/kubernetes/fake"
@@ -97,6 +98,84 @@ func TestFetchTLSProfileWithRetryTransientErrorFallsBackToIntermediate(t *testin
 	}
 	if len(profile.Ciphers) == 0 {
 		t.Fatalf("default Intermediate profile should include TLS ciphers")
+	}
+}
+
+func TestFetchTLSProfileWithRetryAuthorizationErrorsFailImmediately(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+	}{
+		{"forbidden", apierrors.NewForbidden(
+			schema.GroupResource{Group: "config.openshift.io", Resource: "apiservers"},
+			"cluster", errors.New("denied"))},
+		{"unauthorized", apierrors.NewUnauthorized("expired credentials")},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			calls := 0
+			cl := controllerfake.NewClientBuilder().
+				WithScheme(managerTestScheme(t)).
+				WithInterceptorFuncs(interceptor.Funcs{
+					Get: func(
+						ctx context.Context,
+						c client.WithWatch,
+						key client.ObjectKey,
+						obj client.Object,
+						opts ...client.GetOption,
+					) error {
+						calls++
+						return tt.err
+					},
+				}).
+				Build()
+
+			_, _, _, err := fetchTLSProfileWithRetry(context.Background(), cl)
+
+			if err == nil {
+				t.Fatal("expected authorization error")
+			}
+			if calls != 1 {
+				t.Fatalf("Get calls = %d, want 1", calls)
+			}
+		})
+	}
+}
+
+func TestTLSNextProtosRequiresTLS12AndHTTP2Cipher(t *testing.T) {
+	tests := []struct {
+		name         string
+		minVersion   uint16
+		cipherSuites []uint16
+		want         []string
+	}{
+		{"TLS 1.2 with ECDHE RSA AES-128-GCM", tls.VersionTLS12,
+			[]uint16{tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256}, []string{"h2", "http/1.1"}},
+		{"TLS 1.2 with ECDHE ECDSA AES-128-GCM", tls.VersionTLS12,
+			[]uint16{tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256}, []string{"h2", "http/1.1"}},
+		{"TLS 1.2 with RSA key exchange AES-128-GCM", tls.VersionTLS12,
+			[]uint16{tls.TLS_RSA_WITH_AES_128_GCM_SHA256}, []string{"http/1.1"}},
+		{"TLS 1.2 without AES-128-GCM", tls.VersionTLS12,
+			[]uint16{tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384}, []string{"http/1.1"}},
+		{"TLS 1.2 with default cipher suites", tls.VersionTLS12,
+			nil, []string{"h2", "http/1.1"}},
+		{"TLS 1.3 with Go-managed cipher suites", tls.VersionTLS13,
+			nil, []string{"h2", "http/1.1"}},
+		{"TLS 1.1 with AES-128-GCM", tls.VersionTLS11,
+			[]uint16{tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256}, []string{"http/1.1"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tlsNextProtos(tt.minVersion, tt.cipherSuites)
+			if len(got) != len(tt.want) {
+				t.Fatalf("NextProtos = %v, want %v", got, tt.want)
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Fatalf("NextProtos = %v, want %v", got, tt.want)
+				}
+			}
+		})
 	}
 }
 

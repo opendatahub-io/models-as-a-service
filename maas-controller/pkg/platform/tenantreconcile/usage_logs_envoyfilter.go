@@ -266,6 +266,8 @@ func patchUsageLogsIdentityCapture(ef *unstructured.Unstructured, capture usageL
 }
 
 // PatchUsageLogsClusterAddress sets the collector address in the CLUSTER configPatch.
+// When the cluster carries a TLS transport socket, it also sets its SNI to the same
+// DNS name so the verified server name always matches the configured endpoint.
 func PatchUsageLogsClusterAddress(ef *unstructured.Unstructured, address string) error {
 	configPatches, found, err := unstructured.NestedSlice(ef.Object, "spec", "configPatches")
 	if err != nil {
@@ -308,6 +310,17 @@ func PatchUsageLogsClusterAddress(ef *unstructured.Unstructured, address string)
 		return fmt.Errorf("set socket_address.address: %w", err)
 	}
 
+	_, hasTransportSocket, err := unstructured.NestedMap(patch, "patch", "value", "transport_socket")
+	if err != nil {
+		return fmt.Errorf("read transport_socket: %w", err)
+	}
+	if hasTransportSocket {
+		if err := unstructured.SetNestedField(patch, address,
+			"patch", "value", "transport_socket", "typed_config", "sni"); err != nil {
+			return fmt.Errorf("set transport_socket sni: %w", err)
+		}
+	}
+
 	lbEndpoints[0] = lbe0
 	ep0["lb_endpoints"] = lbEndpoints
 	endpoints[0] = ep0
@@ -315,6 +328,28 @@ func PatchUsageLogsClusterAddress(ef *unstructured.Unstructured, address string)
 		"patch", "value", "load_assignment", "endpoints"); err != nil {
 		return fmt.Errorf("write back endpoints: %w", err)
 	}
+	configPatches[0] = patch
+	return unstructured.SetNestedSlice(ef.Object, configPatches, "spec", "configPatches")
+}
+
+// DisableUsageLogsClusterTLS removes the TLS transport socket from the CLUSTER
+// configPatch. The self-hosted usage-logs collector serves plaintext OTLP; the
+// data-science collector keeps the TLS transport socket from the manifest.
+func DisableUsageLogsClusterTLS(ef *unstructured.Unstructured) error {
+	configPatches, found, err := unstructured.NestedSlice(ef.Object, "spec", "configPatches")
+	if err != nil {
+		return fmt.Errorf("read configPatches: %w", err)
+	}
+	if !found || len(configPatches) == 0 {
+		return errors.New("configPatches not found or empty")
+	}
+
+	patch, ok := configPatches[0].(map[string]any)
+	if !ok {
+		return errors.New("configPatches[0] is not an object")
+	}
+
+	unstructured.RemoveNestedField(patch, "patch", "value", "transport_socket")
 	configPatches[0] = patch
 	return unstructured.SetNestedSlice(ef.Object, configPatches, "spec", "configPatches")
 }

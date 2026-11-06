@@ -28,10 +28,144 @@ func TestPatchUsageLogsClusterAddress(t *testing.T) {
 			},
 		},
 	}
-	err := PatchUsageLogsClusterAddress(ef, "usage-logs-collector.opendatahub.svc")
+	err := PatchUsageLogsClusterAddress(ef, "usage-logs-collector.opendatahub.svc.cluster.local")
 	g.Expect(err).To(HaveOccurred())
 	g.Expect(err.Error()).NotTo(ContainSubstring("%!w"))
 	g.Expect(err.Error()).To(ContainSubstring("endpoints not found or empty"))
+}
+
+// usageLogsClusterEF builds an EnvoyFilter shaped like the real manifest: a CLUSTER
+// patch with load_assignment.endpoints and, optionally, a TLS transport socket.
+func usageLogsClusterEF(withTLS bool) *unstructured.Unstructured {
+	clusterValue := map[string]any{
+		"name": "otel_als_cluster",
+		"load_assignment": map[string]any{
+			"endpoints": []any{
+				map[string]any{
+					"lb_endpoints": []any{
+						map[string]any{
+							"endpoint": map[string]any{
+								"address": map[string]any{
+									"socket_address": map[string]any{
+										"address":    "old-collector.opendatahub.svc.cluster.local",
+										"port_value": int64(4317),
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	if withTLS {
+		clusterValue["transport_socket"] = map[string]any{
+			"name": "envoy.transport_sockets.tls",
+			"typed_config": map[string]any{
+				"@type":                   "type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext",
+				"sni":                     "old-collector.opendatahub.svc.cluster.local",
+				"auto_sni_san_validation": true,
+				"common_tls_context": map[string]any{
+					"alpn_protocols": []any{"h2"},
+				},
+			},
+		}
+	}
+	return &unstructured.Unstructured{
+		Object: map[string]any{
+			"spec": map[string]any{
+				"configPatches": []any{
+					map[string]any{
+						"applyTo": "CLUSTER",
+						"patch":   map[string]any{"value": clusterValue},
+					},
+				},
+			},
+		},
+	}
+}
+
+// usageLogsClusterAddressOf reads the first endpoint address from a CLUSTER patch value.
+func usageLogsClusterAddressOf(g *WithT, patch map[string]any) string {
+	g.THelper()
+	value, _, err := unstructured.NestedMap(patch, "patch", "value")
+	g.Expect(err).NotTo(HaveOccurred())
+	endpoints, _, err := unstructured.NestedSlice(value, "load_assignment", "endpoints")
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(endpoints).NotTo(BeEmpty())
+	ep0, ok := endpoints[0].(map[string]any)
+	g.Expect(ok).To(BeTrue())
+	lbEndpoints, _, err := unstructured.NestedSlice(ep0, "lb_endpoints")
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(lbEndpoints).NotTo(BeEmpty())
+	lbe0, ok := lbEndpoints[0].(map[string]any)
+	g.Expect(ok).To(BeTrue())
+	addr, _, err := unstructured.NestedString(lbe0, "endpoint", "address", "socket_address", "address")
+	g.Expect(err).NotTo(HaveOccurred())
+	return addr
+}
+
+func TestPatchUsageLogsClusterAddressUpdatesSNI(t *testing.T) {
+	t.Run("updates address and SNI", func(t *testing.T) {
+		g := NewWithT(t)
+		ef := usageLogsClusterEF(true)
+		want := "data-science-usage-logs-collector-headless.opendatahub.svc.cluster.local"
+
+		g.Expect(PatchUsageLogsClusterAddress(ef, want)).To(Succeed())
+
+		configPatches, _, _ := unstructured.NestedSlice(ef.Object, "spec", "configPatches")
+		patch, _ := configPatches[0].(map[string]any)
+		g.Expect(usageLogsClusterAddressOf(g, patch)).To(Equal(want))
+		sni, _, _ := unstructured.NestedString(patch, "patch", "value", "transport_socket", "typed_config", "sni")
+		g.Expect(sni).To(Equal(want))
+
+		// gRPC negotiation and hostname validation must survive the patch untouched.
+		autoSNISANValidation, _, _ := unstructured.NestedBool(patch, "patch", "value", "transport_socket", "typed_config", "auto_sni_san_validation")
+		g.Expect(autoSNISANValidation).To(BeTrue())
+		alpnProtocols, _, _ := unstructured.NestedStringSlice(patch, "patch", "value", "transport_socket", "typed_config", "common_tls_context", "alpn_protocols")
+		g.Expect(alpnProtocols).To(ContainElement("h2"))
+	})
+
+	t.Run("does not add TLS when the cluster has none", func(t *testing.T) {
+		g := NewWithT(t)
+		ef := usageLogsClusterEF(false)
+		want := "usage-logs-collector.opendatahub.svc.cluster.local"
+
+		g.Expect(PatchUsageLogsClusterAddress(ef, want)).To(Succeed())
+
+		configPatches, _, _ := unstructured.NestedSlice(ef.Object, "spec", "configPatches")
+		patch, _ := configPatches[0].(map[string]any)
+		_, found, err := unstructured.NestedMap(patch, "patch", "value", "transport_socket")
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(found).To(BeFalse())
+	})
+}
+
+func TestDisableUsageLogsClusterTLS(t *testing.T) {
+	t.Run("removes the transport socket", func(t *testing.T) {
+		g := NewWithT(t)
+		ef := usageLogsClusterEF(true)
+
+		g.Expect(DisableUsageLogsClusterTLS(ef)).To(Succeed())
+
+		configPatches, _, _ := unstructured.NestedSlice(ef.Object, "spec", "configPatches")
+		patch, _ := configPatches[0].(map[string]any)
+		_, found, err := unstructured.NestedMap(patch, "patch", "value", "transport_socket")
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(found).To(BeFalse())
+
+		// The address is untouched.
+		g.Expect(usageLogsClusterAddressOf(g, patch)).To(Equal("old-collector.opendatahub.svc.cluster.local"))
+	})
+
+	t.Run("rejects a missing cluster patch", func(t *testing.T) {
+		g := NewWithT(t)
+		ef := &unstructured.Unstructured{Object: map[string]any{"spec": map[string]any{}}}
+
+		err := DisableUsageLogsClusterTLS(ef)
+		g.Expect(err).To(HaveOccurred())
+		g.Expect(err.Error()).To(ContainSubstring("configPatches not found or empty"))
+	})
 }
 
 // usageLogsEFWithAccessLog builds an EnvoyFilter shaped like the real manifest: a CLUSTER

@@ -50,6 +50,7 @@ import pytest
 import requests
 
 from conftest import TLS_VERIFY
+from test_helper import assert_inference_response
 
 log = logging.getLogger(__name__)
 
@@ -497,6 +498,7 @@ class TestOIDCModelAccess:
             f"OIDC-minted API key inference failed: "
             f"{inference_response.status_code} {inference_response.text}"
         )
+        assert_inference_response(inference_response)
         log.info(f"Inference succeeded for {model_id}")
 
     def test_revoked_api_key_cannot_access_models(self, maas_api_base_url: str):

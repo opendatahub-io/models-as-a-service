@@ -23,6 +23,7 @@ type MockStore struct {
 
 type storedKey struct {
 	metadata   ApiKey
+	groups     []string
 	username   string
 	keyHash    string
 	expiresAt  time.Time
@@ -97,6 +98,7 @@ func (m *MockStore) AddKey(
 		},
 		username:  username,
 		keyHash:   keyHash,
+		groups:    userGroups,
 		expiresAt: expiresAtTime,
 		ephemeral: ephemeral,
 	}
@@ -373,6 +375,19 @@ func (m *MockStore) Search(
 		}
 		allKeys = filtered
 	}
+	if len(filters.SubscriptionNames) > 0 {
+		allowedSubscriptions := make(map[string]struct{}, len(filters.SubscriptionNames))
+		for _, subscription := range filters.SubscriptionNames {
+			allowedSubscriptions[strings.TrimSpace(subscription)] = struct{}{}
+		}
+		filtered := allKeys[:0]
+		for _, key := range allKeys {
+			if _, allowed := allowedSubscriptions[key.Subscription]; allowed {
+				filtered = append(filtered, key)
+			}
+		}
+		allKeys = filtered
+	}
 
 	if len(filters.LabelsContain) > 0 {
 		filtered := allKeys[:0]
@@ -425,6 +440,7 @@ func (m *MockStore) Get(ctx context.Context, keyID string) (*ApiKey, error) {
 
 	meta := k.metadata
 	meta.Username = k.username
+	meta.Groups = k.groups
 
 	// Compute status
 	now := time.Now().UTC()
@@ -462,6 +478,7 @@ func (m *MockStore) GetByHash(ctx context.Context, keyHash string) (*ApiKey, err
 
 			meta := k.metadata
 			meta.Username = k.username
+			meta.Groups = k.groups
 			if k.lastUsedAt != nil {
 				meta.LastUsedAt = k.lastUsedAt.Format(time.RFC3339)
 			}
