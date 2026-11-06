@@ -1,4 +1,7 @@
-pytest>=9.0.3,<10
+# <9.2: pytest 9.2.0 no longer appends the "@group" nodeid suffix, so
+# --dist=loadgroup silently degrades to --dist=load and xdist_group stops
+# pinning tests to one worker. See test_xdist_config.py.
+pytest>=9.0.3,<9.2
 pytest-xdist>=3.5,<4
 pytest-html>=4.1,<5
 pytest-metadata>=3.1,<4

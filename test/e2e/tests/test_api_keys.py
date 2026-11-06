@@ -74,7 +74,7 @@ from test_helper import (
 
 log = logging.getLogger(__name__)
 
-pytestmark = [pytest.mark.xdist_group("api_keys"), pytest.mark.worker_tenant]
+pytestmark = [pytest.mark.xdist_group("api_keys_core"), pytest.mark.worker_tenant]
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -1622,7 +1622,7 @@ class TestAPIKeySubscriptionPhases:
             _wait_for_cr_absent("maassubscription", subscription_name, namespace=ns)
             _wait_for_cr_absent("maasauthpolicy", auth_name, namespace=ns)
 
-    @pytest.mark.serial
+    @pytest.mark.serial_exclusive  # scales maas-controller to 0/1
     def test_create_key_for_pending_subscription(self):
         """API key creation succeeds for Pending subscription."""
         ns = _ns()
@@ -1692,7 +1692,7 @@ class TestAPIKeySubscriptionPhases:
             _wait_for_cr_absent("maassubscription", subscription_name, namespace=ns)
             _wait_for_cr_absent("maasauthpolicy", auth_name, namespace=ns)
 
-    @pytest.mark.serial
+    @pytest.mark.serial_exclusive  # scales maas-controller to 0/1
     def test_reject_key_for_unreconciled_subscription(self):
         """
         API key creation is rejected for unreconciled subscription (empty phase).

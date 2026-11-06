@@ -26,8 +26,8 @@ import pytest
 log = logging.getLogger(__name__)
 
 pytestmark = [
-    pytest.mark.xdist_group("mt_lifecycle"),
-    pytest.mark.serial,
+    pytest.mark.xdist_group("mt_lc_crd_watch"),
+    pytest.mark.serial_exclusive,  # deletes the cluster-scoped KServe CRD
     pytest.mark.skipif(
         os.environ.get("E2E_RUN_CRD_WATCH_RESILIENCE", "").lower()
         not in {"1", "true", "yes"},

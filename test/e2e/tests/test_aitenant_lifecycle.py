@@ -29,7 +29,7 @@ CONFIG_NAME = "default"
 DEFAULT_AITENANT_BOOTSTRAPPED_ANNOTATION = "maas.opendatahub.io/default-aitenant-bootstrapped"
 ANNOTATION_AITENANT_NAME = "maas.opendatahub.io/aitenant-name"
 ANNOTATION_AITENANT_NAMESPACE = "maas.opendatahub.io/aitenant-namespace"
-pytestmark = pytest.mark.xdist_group("mt_lifecycle")
+pytestmark = pytest.mark.xdist_group("mt_lc_aitenant")
 
 ANNOTATION_CREATED_BY_AITENANT = "maas.opendatahub.io/created-by-aitenant"
 TENANT_NAME = "default-tenant"

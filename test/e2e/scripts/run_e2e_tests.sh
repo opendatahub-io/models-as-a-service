@@ -5,9 +5,13 @@
 #
 # Owns pytest invocation for MaaS E2E tests. Separated from
 # prow_run_smoke_test.sh so that test-only changes don't touch deploy/validate
-# logic. Implements the two-phase model:
-#   Pass 1: parallel with pytest-xdist (-m "not serial and not legacy_ipp", --dist=loadgroup)
-#   Pass 2: serial cluster mutators (-m "serial and not legacy_ipp", single worker)
+# logic. Implements the three-phase model:
+#   Pass 1: parallel with pytest-xdist (-m "not serial and not serial_exclusive and
+#           not legacy_ipp", --dist=loadgroup)
+#   Pass 2a: serial_exclusive cluster-wide tests (-m "serial_exclusive …", single worker)
+#   Pass 2b: serial cluster mutators and per-tenant legacy IPP (-m "(serial and not legacy_ipp)
+#           or legacy_ipp_pass2b) and not serial_exclusive …",
+#            E2E_SERIAL_WORKERS lanes, default 1)
 #   Pass 3 (optional): -m nightly when MAAS_PYTEST_INCLUDE_NIGHTLY=true (e.g. EXTERNAL_OIDC deploys)
 #
 # Passes 1–2 always exclude @pytest.mark.nightly; the flag below only gates pass 3.
@@ -25,6 +29,10 @@
 #
 # Optional env vars:
 #   E2E_PARALLEL_WORKERS          pytest-xdist worker count (default: 5)
+#   E2E_SERIAL_WORKERS            pytest-xdist worker count for serial pass 2b
+#                                 (default: 1). Lanes split between files only, and
+#                                 files that mutate the same shared model share one
+#                                 group, so they can never land on two lanes.
 #   E2E_MAXFAIL                   stop a pass after N failures (default: 5, 0 = never).
 #                                 CI sets 0: on a shared control plane, five failures used
 #                                 to truncate the pass, undercounting failures and leaving
@@ -136,13 +144,34 @@ fi
 # shellcheck disable=SC1091
 source "$TEST_DIR/.venv/bin/activate"
 python -m pip install --upgrade pip --quiet
-python -m pip install -r "$TEST_DIR/requirements.txt" --quiet
+# Prefer the hash-pinned lock so CI installs exactly the reviewed set. Lock is
+# compiled for Python 3.10+ (includes exceptiongroup/tomli on 3.10). Installing
+# requirements.txt alone let pytest drift to 9.2.0, which silently disables
+# --dist=loadgroup (see test/e2e/tests/test_xdist_config.py).
+if [[ -f "$TEST_DIR/requirements-lock.txt" ]]; then
+    python -m pip install --require-hashes --no-deps -r "$TEST_DIR/requirements-lock.txt" --quiet
+else
+    python -m pip install -r "$TEST_DIR/requirements.txt" --quiet
+fi
+python - <<'PY'
+import sys
+import pytest
+
+major, minor = (int(x) for x in pytest.__version__.split(".")[:2])
+if (major, minor) >= (9, 2):
+    sys.exit(
+        f"ERROR: pytest {pytest.__version__} breaks --dist=loadgroup "
+        "(the @group nodeid suffix is no longer appended). Install pytest<9.2, "
+        "e.g. from test/e2e/requirements-lock.txt."
+    )
+PY
 
 # ── Output paths ─────────────────────────────────────────────────────────
 user="$(oc whoami 2>/dev/null || echo 'unknown')"
 html="$ARTIFACTS_DIR/e2e-${user}.html"
 xml="$ARTIFACTS_DIR/e2e-${user}.xml"
 xml_serial="${xml%.xml}-serial.xml"
+xml_serial_exclusive="${xml%.xml}-serial-exclusive.xml"
 xml_nightly="${xml%.xml}-nightly.xml"
 xml_limitador="${xml%.xml}-limitador.xml"
 
@@ -276,13 +305,18 @@ if [[ "$smoke_only" == "true" && "$_run_only_oidc_tests" != true ]]; then
         echo "E2E smoke-only mode: restricting passes 1–2 to @pytest.mark.smoke"
     fi
 fi
-_parallel_marker="${_smoke_require}not serial and not legacy_ipp${_nightly_exclude}"
-_serial_marker="${_smoke_require}serial and not legacy_ipp${_nightly_exclude}"
+_parallel_marker="${_smoke_require}not serial and not serial_exclusive and not legacy_ipp and not legacy_ipp_pass2b${_nightly_exclude}"
+# Serial tests run in two passes. serial_exclusive tests scale a control plane
+# down or delete a cluster-scoped CRD, so they run alone (pass 2a). Everything
+# else is safe beside another lane provided files that mutate the same shared
+# model share one xdist group (pass 2b).
+_serial_exclusive_marker="${_smoke_require}serial_exclusive and not legacy_ipp${_nightly_exclude}"
+_serial_marker="${_smoke_require}((serial and not legacy_ipp) or legacy_ipp_pass2b) and not serial_exclusive${_nightly_exclude}"
 # The Limitador sync subset: tests that wait on a TokenRateLimitPolicy reaching
 # Enforced=True. Only they can see a stalled limiter, and because an unapplied
 # token limit still admits every request, the rest of the suite passes either way.
 # Already-serial limitador tests are left to the serial pass so nothing runs twice.
-_limitador_marker="limitador and not serial and not legacy_ipp${_nightly_exclude}"
+_limitador_marker="limitador and not serial and not serial_exclusive and not legacy_ipp${_nightly_exclude}"
 _pass_total=2
 if [[ "$_include_nightly_pass" == true ]]; then
     _pass_total=3
@@ -417,11 +451,39 @@ run_limitador_pass() {
     fi
 }
 
-run_serial_pass() {
-    echo "Running E2E pass 2/${_pass_total}: serial cluster mutators (-m '${_serial_marker}', single worker)"
-    if ! run_pytest_pass "pass 2 (serial)" \
+run_serial_exclusive_pass() {
+    # Always one worker: these tests scale a control plane down or delete a
+    # cluster-scoped CRD, so a second lane would observe (or cause) the outage.
+    echo "Running E2E pass 2a: exclusive serial tests (-m '${_serial_exclusive_marker}', 1 worker)"
+    if ! run_pytest_pass "pass 2a (serial_exclusive)" \
         env E2E_PYTEST_PASS=serial PYTHONPATH="$TEST_DIR:${PYTHONPATH:-}" pytest \
         --maxfail="${E2E_MAXFAIL:-5}" \
+        --junitxml="$xml_serial_exclusive" \
+        --html="${html%.html}-serial-exclusive.html" --self-contained-html \
+        "${pytest_common_args[@]}" \
+        -m "${_serial_exclusive_marker}"; then
+        serial_rc=1
+    fi
+}
+
+run_serial_pass() {
+    local workers="${E2E_SERIAL_WORKERS:-1}"
+    if ! [[ "$workers" =~ ^[1-9][0-9]*$ ]]; then
+        echo "ERROR: E2E_SERIAL_WORKERS must be a positive integer (>= 1), got '$workers'" >&2
+        exit 1
+    fi
+    # Serial tests keep one xdist group per file, so lanes only ever split
+    # between files. Files that mutate the same shared model share one group and
+    # therefore one lane; serial_exclusive tests never reach this pass.
+    local xdist_args=()
+    if [[ "$workers" -gt 1 ]]; then
+        xdist_args=(-n "$workers" --dist=loadgroup)
+    fi
+    echo "Running E2E pass 2b: serial cluster mutators (-m '${_serial_marker}', ${workers} worker(s))"
+    if ! run_pytest_pass "pass 2b (serial)" \
+        env E2E_PYTEST_PASS=serial PYTHONPATH="$TEST_DIR:${PYTHONPATH:-}" pytest \
+        --maxfail="${E2E_MAXFAIL:-5}" \
+        ${xdist_args[@]+"${xdist_args[@]}"} \
         --junitxml="$xml_serial" \
         --html="${html%.html}-serial.html" --self-contained-html \
         "${pytest_common_args[@]}" \
@@ -453,8 +515,9 @@ maybe_run_serial_pass() {
     # gap: the job reports only the parallel error and never learns whether
     # serial tests would also have failed. Both rc values are reported at exit.
     if [[ "$parallel_rc" -ne 0 ]]; then
-        echo "E2E pass 1 (parallel) failed; still running pass 2/${_pass_total} (serial) to report its result independently"
+        echo "E2E pass 1 (parallel) failed; still running the serial passes (2a/2b) to report their result independently"
     fi
+    run_serial_exclusive_pass
     run_serial_pass
 }
 
@@ -475,9 +538,11 @@ elif [[ "$limitador_triage" == "true" ]]; then
     echo "Running E2E tests (Limitador triage only: -m '${_limitador_marker}' then -m '${_serial_marker}'; the broad parallel pass is skipped)"
     run_limitador_pass
     snapshot_parallel_pass_pods || echo "WARNING: failed to snapshot pods after the triage pass"
+    run_serial_exclusive_pass
     run_serial_pass
 elif [[ "$serial_only" == "true" ]]; then
-    echo "Running E2E tests (serial pass only, -m '${_serial_marker}')"
+    echo "Running E2E tests (serial passes only: -m '${_serial_exclusive_marker}', then -m '${_serial_marker}')"
+    run_serial_exclusive_pass
     run_serial_pass
 elif [[ "$E2E_PARALLEL_WORKERS" -le 1 ]]; then
     # Single worker: still split by marker so module-scoped worker fixtures never
@@ -524,6 +589,9 @@ fi
 
 echo "✅ E2E tests completed"
 echo " - JUnit XML : ${xml}"
+if [[ -f "$xml_serial_exclusive" ]]; then
+    echo " - JUnit XML (serial exclusive pass): ${xml_serial_exclusive}"
+fi
 if [[ -f "$xml_serial" ]]; then
     echo " - JUnit XML (serial pass): ${xml_serial}"
 fi

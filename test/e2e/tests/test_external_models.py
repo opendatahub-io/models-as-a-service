@@ -289,7 +289,10 @@ def _check_external_endpoint_reachable():
     return False
 
 
-pytestmark = [pytest.mark.xdist_group("external")]
+pytestmark = [
+    pytest.mark.legacy_ipp,
+    pytest.mark.xdist_group("legacy_ipp_external_models"),
+]
 
 
 @pytest.fixture(scope="module")
