@@ -26,7 +26,7 @@ spec:
     value: 'false'
   # Validation for opendatahub-io/odh-konflux-central#764 — single squashed commit on fork; revert after merge.
   - name: odh-konflux-central-revision
-    value: 25f27a9ff70a0796189ea5289ed262c3aa9df083
+    value: 9f4c18614dc6eca3425f29a1dd421de27e85473e
   - name: odh-konflux-central-git-url
     value: https://github.com/somya-bhatnagar/odh-konflux-central.git
   pipelineRef:
@@ -35,7 +35,7 @@ spec:
     - name: url
       value: https://github.com/somya-bhatnagar/odh-konflux-central.git
     - name: revision
-      value: 25f27a9ff70a0796189ea5289ed262c3aa9df083
+      value: 9f4c18614dc6eca3425f29a1dd421de27e85473e
     - name: pathInRepo
       value: integration-tests/models-as-a-service/pr-group-testing-pipeline.yaml
   taskRunTemplate:
