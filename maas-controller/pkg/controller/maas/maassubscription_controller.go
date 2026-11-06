@@ -110,7 +110,7 @@ type MaaSSubscriptionReconciler struct {
 const (
 	maasSubscriptionFinalizer = "maas.opendatahub.io/subscription-cleanup"
 	// retainAPIKeysOnDeleteAnnotation lets an external owner retain API keys
-	// when a projected MaaSSubscription copy is removed from one cluster.
+	// when a projected copy is removed from one cluster.
 	retainAPIKeysOnDeleteAnnotation = "maas.opendatahub.io/retain-api-keys-on-delete" //nolint:gosec // Annotation name, not a credential.
 	// modelRefIndexKey is the field index key for looking up MaaSSubscriptions by model reference.
 	// The index value format is "namespace/name" of the model.

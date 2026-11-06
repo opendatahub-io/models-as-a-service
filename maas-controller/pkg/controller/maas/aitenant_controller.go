@@ -1385,6 +1385,9 @@ func (r *AITenantReconciler) ensureTenantAPIKeysRevoked(ctx context.Context, ait
 	if tenantAPIKeysRevoked(aitenant) {
 		return true, nil
 	}
+	if aitenant.Annotations[retainAPIKeysOnDeleteAnnotation] == "true" {
+		return r.retainTenantAPIKeys(ctx, aitenant)
+	}
 	if strings.TrimSpace(r.AppNamespace) == "" {
 		return false, errors.New("app namespace is required to revoke tenant API keys")
 	}

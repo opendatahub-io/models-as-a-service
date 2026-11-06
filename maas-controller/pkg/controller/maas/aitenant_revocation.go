@@ -23,11 +23,37 @@ import (
 const (
 	aitenantAPIKeysRevokedReasonJobCompleted        = "RevocationJobCompleted"
 	aitenantAPIKeysRevokedReasonOperandsUnavailable = "RevocationOperandsUnavailable"
+	aitenantAPIKeysRevokedReasonRetained            = "APIKeysRetainedByExternalOwner"
 
 	// maasTenantConfigRevocationOperandsRequestedAnnotation nudges MaasTenantConfig reconcile so the
 	// tenant controller can re-apply maas-api operands before the revocation Job runs.
 	maasTenantConfigRevocationOperandsRequestedAnnotation = "maas.opendatahub.io/revocation-operands-requested"
 )
+
+func (r *AITenantReconciler) retainTenantAPIKeys(ctx context.Context, aitenant *maasv1alpha1.AITenant) (bool, error) {
+	oteljson.FromContext(ctx).Info("retaining tenant API keys on AITenant deletion",
+		"aitenant", aitenant.Namespace+"/"+aitenant.Name)
+	if r.Recorder != nil {
+		r.Recorder.Eventf(aitenant, nil, corev1.EventTypeNormal, "APIKeyCleanupSkipped", "InvalidateAPIKeys",
+			"Retaining API keys for AITenant %s/%s because an external owner requested retention",
+			aitenant.Namespace, aitenant.Name)
+	}
+
+	statusSnapshot := aitenant.Status.DeepCopy()
+	apimeta.SetStatusCondition(&aitenant.Status.Conditions, metav1.Condition{
+		Type:               aitenantAPIKeysRevokedCondition,
+		Status:             metav1.ConditionTrue,
+		Reason:             aitenantAPIKeysRevokedReasonRetained,
+		Message:            "API keys are retained by the external owner",
+		ObservedGeneration: aitenant.Generation,
+		LastTransitionTime: metav1.Now(),
+	})
+	if err := r.updateAITenantStatus(ctx, aitenant, statusSnapshot); err != nil {
+		return false, fmt.Errorf("mark retained tenant API keys on AITenant %s/%s: %w",
+			aitenant.Namespace, aitenant.Name, err)
+	}
+	return true, nil
+}
 
 // prepareRevocationOperands ensures maas-api and the cleanup ServiceAccount exist before
 // creating the revocation Job. When operands cannot be restored, revocation is skipped
