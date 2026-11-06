@@ -390,6 +390,7 @@ run_e2e_tests() {
 import base64
 import json
 import os
+import uuid
 
 parts = os.environ["OIDC_TOKEN"].split(".")
 if len(parts) != 3:
@@ -397,6 +398,8 @@ if len(parts) != 3:
 payload = parts[1]
 payload += "=" * (-len(payload) % 4)
 claims = json.loads(base64.urlsafe_b64decode(payload))
+if not isinstance(claims, dict):
+    raise SystemExit("OIDC token claims must be a JSON object")
 
 client_id = os.environ.get("OIDC_CLIENT_ID", "")
 if client_id and claims.get("azp") != client_id:
@@ -413,15 +416,47 @@ purpose = os.environ.get("OIDC_ACCESS_TOKEN_PURPOSE", "")
 if purpose_claim and claims.get(purpose_claim) != purpose:
     raise SystemExit(f"OIDC purpose mismatch: {purpose_claim}={claims.get(purpose_claim)!r}, expected {purpose!r}")
 
-organizations = claims.get("https://redhat.com/maas/orgs")
-if not isinstance(organizations, list) or not organizations:
-    raise SystemExit(f"OIDC organization claim must be a non-empty array, got {organizations!r}")
-for organization in organizations:
-    if not isinstance(organization, dict) or not organization.get("organization_id") or not organization.get("roles"):
-        raise SystemExit(f"Invalid OIDC organization membership: {organization!r}")
+organization_id = claims.get("org_id")
+organization_name = claims.get("org_name")
+if "https://redhat.com/maas/orgs" in claims or "maasOrganizations" in claims:
+    raise SystemExit("OIDC token must not include nested MaaS organization claims")
+if not isinstance(organization_id, str):
+    raise SystemExit("OIDC org_id must be a canonical UUID string")
+try:
+    canonical_organization_id = str(uuid.UUID(organization_id))
+except ValueError:
+    raise SystemExit("OIDC org_id must be a canonical UUID string")
+if canonical_organization_id != organization_id:
+    raise SystemExit("OIDC org_id must be a canonical UUID string")
+
+if "org_name" in claims and (
+    not isinstance(organization_name, str)
+    or len(organization_name.encode("utf-8")) > 256
+):
+    raise SystemExit("OIDC org_name must be a string of at most 256 bytes")
+
+roles = claims.get("roles", [])
+if not isinstance(roles, list) or len(roles) > 64:
+    raise SystemExit("OIDC roles must be an array with at most 64 values")
+if any(
+    not isinstance(role, str) or not role or len(role.encode("utf-8")) > 128
+    for role in roles
+):
+    raise SystemExit("OIDC roles must contain non-empty strings of at most 128 bytes")
+
+groups = claims.get("groups", [])
+if not isinstance(groups, list) or len(groups) > 128:
+    raise SystemExit("OIDC groups must be an array with at most 128 values")
+if any(
+    not isinstance(group, str) or not group or len(group.encode("utf-8")) > 256
+    for group in groups
+):
+    raise SystemExit("OIDC groups must contain non-empty strings of at most 256 bytes")
+if len(groups) != len(set(groups)):
+    raise SystemExit("OIDC organization groups must be unique")
 
 authorized_party = claims.get("azp")
-print(f"azp={authorized_party}, audience={token_audience!r}, organizations={len(organizations)}")
+print(f"azp={authorized_party}, audience={token_audience!r}")
                     ' 2>&1); then
                     printf '%s\n' "$oidc_claim_summary" > "${ARTIFACTS_DIR}/oidc-readiness-claim-error.log"
                     echo "❌ ERROR: OIDC readiness token contract validation failed"

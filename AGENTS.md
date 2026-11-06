@@ -77,19 +77,7 @@ If the developer asks an agent to create a PR and the branch includes RBAC chang
 2. Ask whether those PRs already exist (or whether the agent should help prepare them).
 3. Do **not** open this repo's PR until the developer confirms how to proceed.
 
-### This repo's PR body
-
-- When companion PRs exist, link both URLs in the PR description (e.g. under a **Parent operator PRs** section).
-- When companion PRs **cannot** be created yet, put this notice at the **very top** of the PR body (above Summary):
-
-```markdown
-> [!IMPORTANT]
-> **Parent operator RBAC not yet updated.** This PR changes maas-controller RBAC.
-> Companion PRs are still needed in:
-> - https://github.com/opendatahub-io/ai-gateway-operator/
-> - https://github.com/opendatahub-io/opendatahub-operator
-> Do not merge until those repos reflect the same RBAC changes (link the PRs here when ready).
-```
+`.github/PULL_REQUEST_TEMPLATE.md` says how to record this in the PR description.
 
 ## Kustomize / deployment
 
@@ -100,35 +88,13 @@ If the developer asks an agent to create a PR and the branch includes RBAC chang
 
 When editing Kustomize files, always run `./scripts/ci/validate-manifests.sh` before committing.
 
-## PR titles
+## Pull requests
 
-Semantic format required: `type: subject` (lowercase subject).
+Before you write a PR title or description, read `.github/PULL_REQUEST_TEMPLATE.md`. Its comments are the rules: follow them, then delete every one. `.github/PR_DESCRIPTION_EXAMPLES.md` shows the right size.
 
-Allowed types: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, `revert`.
-
-## PR review process
+If the branch includes RBAC changes, follow **RBAC changes: parent operator repos** above before you open the PR.
 
 After creating a PR, immediately add a comment with `@coderabbitai review` to trigger automated code review.
-
-If the PR includes RBAC changes, follow **RBAC changes: parent operator repos** above: remind the developer before creating the PR, link companion parent-operator PRs when available, or put the `[!IMPORTANT]` notice at the top of the PR body if those PRs do not exist yet.
-
-## PR description: risk analysis
-
-When you open or draft a pull request, include a **Risk analysis** in the PR body:
-
-- **Risk rating**: an integer from 0 (lowest) to 5 (highest).
-- **Why**: a short explanation of how you chose the rating (what could break, what is untested, or why it is safe).
-
-Use this scale consistently:
-
-| Rating | Typical meaning |
-|--------|-----------------|
-| 0 | Documentation-only or other changes with negligible runtime impact (e.g. typo fixes, clarifications under `docs/` that do not change product behavior). |
-| 1–3 | Any change to code (Go, scripts that affect builds/deploys, Kustomize, CI logic, etc.) is at least 1. Most code changes fall in 2–3 depending on scope, blast radius, and how well unit/integration tests cover the path. |
-| 4–5 | Automatically 4 or 5 if the behavior is unlikely to be covered by the Prow smoke path in `test/e2e/scripts/prow_run_smoke_test.sh` (review that script's steps and env flags — e.g. full deploy, API keys, subscriptions, models endpoints, deployment validation; paths gated by variables may not run in default CI). |
-| 4–5 | Automatically 4 or 5 for changes involving external systems or tight coupling to upstream operators (e.g. OpenDataHub / parent operator integration, operator catalog images, or contracts outside this repo). |
-
-If multiple rules apply, use the **highest** justified rating and explain the main drivers in **Why**.
 
 ## Testing conventions
 
