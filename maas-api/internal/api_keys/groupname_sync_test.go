@@ -1,18 +1,20 @@
-package api_keys //nolint:testpackage // Pins the other copies against the private validGroupNamePattern
+package api_keys_test
 
 import (
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/groupname"
 )
 
 // TestGroupNamePatternCopiesInSync is maas-api's mirror of
 // maas-controller/pkg/groupname/sync_test.go. It fails when any copy of the
-// group-name allowlist drifts from validGroupNamePattern:
+// group-name allowlist drifts from groupname.Pattern:
 //
 //   - maas-controller/pkg/groupname/groupname.go (canonical, independent module)
-//   - scripts/data/maas-api-authpolicy-external-oidc-patch.yaml (CEL gate)
+//   - maas-api/internal/groupname/groupname.go (maas-api canonical)
 //   - docs/content/advanced-administration/external-oidc.md (documented charset)
 //
 // The copies live in an independent Go module and cannot be imported, so they
@@ -43,17 +45,9 @@ func TestGroupNamePatternCopiesInSync(t *testing.T) {
 	if !ok {
 		t.Skip("maas-controller is not checked out alongside maas-api; nothing to sync against")
 	}
-	pattern := validGroupNamePattern.String()
+	pattern := groupname.Pattern
 	if !strings.Contains(controllerSrc, "`"+pattern+"`") {
 		t.Errorf("maas-controller/pkg/groupname/groupname.go no longer embeds %q — the group-name rule must stay identical in every copy; edit them together", pattern)
-	}
-
-	yamlSrc, ok := read("scripts/data/maas-api-authpolicy-external-oidc-patch.yaml")
-	if !ok {
-		t.Fatalf("scripts/data/maas-api-authpolicy-external-oidc-patch.yaml is missing; expected in a full-repo checkout")
-	}
-	if !strings.Contains(yamlSrc, "'"+pattern+"'") {
-		t.Errorf("scripts/data/maas-api-authpolicy-external-oidc-patch.yaml no longer gates on %q — edit the copies together", pattern)
 	}
 
 	docsSrc, ok := read("docs/content/advanced-administration/external-oidc.md")

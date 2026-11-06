@@ -10,10 +10,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 	"testing"
 
+	"github.com/google/cel-go/cel"
+	"github.com/google/cel-go/ext"
 	"sigs.k8s.io/yaml"
 )
 
@@ -184,6 +187,353 @@ func TestGatewayAuthPolicySpec_AllCEL_RHCLCompatible(t *testing.T) {
 			assertAllAuthPolicyCEL_RHCLCompatible(t, spec)
 		})
 	}
+}
+
+func TestCELGroupsQualifyFlatOIDCGroups(t *testing.T) {
+	const (
+		organizationA = "42c3e46f-2477-44d7-a85b-d3b43f6b31fa"
+		organizationB = "1e0ce6d3-3812-4dab-a090-1c8eacdddb4e"
+	)
+
+	tests := []struct {
+		name     string
+		identity map[string]any
+		metadata map[string]any
+		want     []any
+	}{
+		{
+			name:     "organization A",
+			identity: map[string]any{"iss": "https://issuer.example.com", "org_id": organizationA, "groups": []any{"users"}},
+			want:     []any{organizationA + "/users"},
+		},
+		{
+			name:     "organization B",
+			identity: map[string]any{"iss": "https://issuer.example.com", "org_id": organizationB, "groups": []any{"users"}},
+			want:     []any{organizationB + "/users"},
+		},
+		{
+			name:     "group with slash",
+			identity: map[string]any{"iss": "https://issuer.example.com", "org_id": organizationA, "groups": []any{"users/team"}},
+			want:     []any{organizationA + "/users/team"},
+		},
+		{
+			name:     "group case is preserved",
+			identity: map[string]any{"iss": "https://issuer.example.com", "org_id": organizationA, "groups": []any{"Users"}},
+			want:     []any{organizationA + "/Users"},
+		},
+		{
+			name:     "group trailing space is preserved",
+			identity: map[string]any{"iss": "https://issuer.example.com", "org_id": organizationA, "groups": []any{"users "}},
+			want:     []any{organizationA + "/users "},
+		},
+		{
+			name:     "flat group at 256 ASCII bytes is accepted",
+			identity: map[string]any{"iss": "https://issuer.example.com", "org_id": organizationA, "groups": []any{strings.Repeat("a", 256)}},
+			want:     []any{organizationA + "/" + strings.Repeat("a", 256)},
+		},
+		{
+			name:     "flat group outside the group-name allowlist is rejected",
+			identity: map[string]any{"iss": "https://issuer.example.com", "org_id": organizationA, "groups": []any{"équipe"}},
+			want:     []any{},
+		},
+		{
+			name:     "non-string flat group is rejected",
+			identity: map[string]any{"iss": "https://issuer.example.com", "org_id": organizationA, "groups": []any{42}},
+			want:     []any{},
+		},
+		{
+			name:     "empty flat group list",
+			identity: map[string]any{"iss": "https://issuer.example.com", "org_id": organizationA, "groups": []any{}},
+			want:     []any{},
+		},
+		{
+			name:     "flat identity without groups",
+			identity: map[string]any{"iss": "https://issuer.example.com", "org_id": organizationA},
+			want:     []any{},
+		},
+		{
+			name:     "empty group is rejected",
+			identity: map[string]any{"iss": "https://issuer.example.com", "org_id": organizationA, "groups": []any{""}},
+			want:     []any{},
+		},
+		{
+			name:     "duplicate flat group is qualified and passed through (rego will reject)",
+			identity: map[string]any{"iss": "https://issuer.example.com", "org_id": organizationA, "groups": []any{"users", "users"}},
+			want:     []any{organizationA + "/users", organizationA + "/users"},
+		},
+		{
+			name:     "organization-qualified flat group is rejected",
+			identity: map[string]any{"iss": "https://issuer.example.com", "org_id": organizationA, "groups": []any{organizationA + "/users"}},
+			want:     []any{},
+		},
+		{
+			name:     "more than 128 flat groups are rejected",
+			identity: map[string]any{"iss": "https://issuer.example.com", "org_id": organizationA, "groups": makeGroups(129)},
+			want:     []any{},
+		},
+		{
+			name:     "invalid organization id is rejected",
+			identity: map[string]any{"iss": "https://issuer.example.com", "org_id": "not-a-uuid", "groups": []any{"users"}},
+			want:     []any{},
+		},
+		{
+			name:     "non-organization OIDC groups stay plain",
+			identity: map[string]any{"iss": "https://issuer.example.com", "groups": []any{"users"}},
+			want:     []any{"users"},
+		},
+		{
+			name:     "non-string legacy OIDC group is rejected",
+			identity: map[string]any{"iss": "https://issuer.example.com", "groups": []any{42}},
+			want:     []any{},
+		},
+		{
+			name:     "legacy OIDC group with slash stays plain",
+			identity: map[string]any{"iss": "https://issuer.example.com", "groups": []any{"users/team"}},
+			want:     []any{"users/team"},
+		},
+		{
+			name:     "organization-qualified OIDC group without organization is rejected",
+			identity: map[string]any{"iss": "https://issuer.example.com", "groups": []any{organizationA + "/users"}},
+			want:     []any{},
+		},
+		{
+			name:     "Kubernetes groups stay plain",
+			identity: map[string]any{"user": map[string]any{"groups": []any{"users"}}},
+			want:     []any{"users"},
+		},
+		{
+			name:     "organization-qualified Kubernetes group is rejected",
+			identity: map[string]any{"user": map[string]any{"groups": []any{organizationA + "/users"}}},
+			want:     []any{},
+		},
+		{
+			name:     "API key snapshot stays unchanged",
+			identity: map[string]any{"org_id": organizationA},
+			metadata: map[string]any{"apiKeyValidation": map[string]any{"groups": []any{organizationA + "/users"}}},
+			want:     []any{organizationA + "/users"},
+		},
+		{
+			name:     "explicit system group is qualified",
+			identity: map[string]any{"iss": "https://issuer.example.com", "org_id": organizationA, "groups": []any{"system:authenticated"}},
+			want:     []any{organizationA + "/system:authenticated"},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			auth := map[string]any{"identity": test.identity}
+			if test.metadata != nil {
+				auth["metadata"] = test.metadata
+			}
+			got := evaluateGatewayCELList(t, celGroups, auth)
+			if !reflect.DeepEqual(got, test.want) {
+				t.Errorf("celGroups = %#v, want %#v", got, test.want)
+			}
+		})
+	}
+}
+
+func makeGroups(count int) []any {
+	groups := make([]any, 0, count)
+	for i := 0; i < count; i++ {
+		groups = append(groups, fmt.Sprintf("group-%d", i))
+	}
+	return groups
+}
+
+func TestGatewayAuthPolicyFlatGroupsAllowAllowlistedValues(t *testing.T) {
+	const organizationID = "42c3e46f-2477-44d7-a85b-d3b43f6b31fa"
+	groups := []any{"users", "team/devs", "system:authenticated", "role#admin", "app.example", "test_group", "dash-name", "with space"}
+	auth := map[string]any{"identity": map[string]any{
+		"iss":    "https://issuer.example.com",
+		"org_id": organizationID,
+		"groups": groups,
+	}}
+	want := []any{
+		organizationID + "/users",
+		organizationID + "/team/devs",
+		organizationID + "/system:authenticated",
+		organizationID + "/role#admin",
+		organizationID + "/app.example",
+		organizationID + "/test_group",
+		organizationID + "/dash-name",
+		organizationID + "/with space",
+	}
+	got := evaluateGatewayCELList(t, celGroups, auth)
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("celGroups = %#v, want %#v", got, want)
+	}
+}
+
+func TestCELAPIKeyGroupsHeaderJSONFallsBackToGroups(t *testing.T) {
+	tests := []struct {
+		name     string
+		metadata map[string]any
+		want     string
+	}{
+		{
+			name:     "groupsJSON is preferred",
+			metadata: map[string]any{"apiKeyValidation": map[string]any{"groupsJSON": `["saved"]`, "groups": []any{"ignored"}}},
+			want:     `["saved"]`,
+		},
+		{
+			name:     "groups list is used when groupsJSON is absent",
+			metadata: map[string]any{"apiKeyValidation": map[string]any{"groups": []any{"users", "admins"}}},
+			want:     `["users","admins"]`,
+		},
+		{
+			name:     "empty groups list is encoded",
+			metadata: map[string]any{"apiKeyValidation": map[string]any{"groups": []any{}}},
+			want:     `[]`,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			auth := map[string]any{"metadata": test.metadata}
+			got := evaluateGatewayCELString(t, celAPIKeyGroupsHeaderJSON, auth)
+			if got != test.want {
+				t.Fatalf("celAPIKeyGroupsHeaderJSON = %s, want %s", got, test.want)
+			}
+		})
+	}
+}
+
+func TestCELTokenGroupsHeaderJSONReservesQualifiedGroups(t *testing.T) {
+	const organizationA = "42c3e46f-2477-44d7-a85b-d3b43f6b31fa"
+
+	tests := []struct {
+		name     string
+		identity map[string]any
+		want     string
+	}{
+		{
+			name:     "organization-bound OIDC group is qualified",
+			identity: map[string]any{"iss": "https://issuer.example.com", "org_id": organizationA, "groups": []any{"users"}},
+			want:     `["system:authenticated","` + organizationA + `/users"]`,
+		},
+		{
+			name:     "legacy OIDC group with slash stays plain",
+			identity: map[string]any{"iss": "https://issuer.example.com", "groups": []any{"users/team"}},
+			want:     `["system:authenticated","users/team"]`,
+		},
+		{
+			name:     "unbound OIDC qualified group is rejected",
+			identity: map[string]any{"iss": "https://issuer.example.com", "groups": []any{organizationA + "/users"}},
+			want:     `["system:authenticated"]`,
+		},
+		{
+			name:     "legacy Kubernetes group with slash stays plain",
+			identity: map[string]any{"user": map[string]any{"groups": []any{"users/team"}}},
+			want:     `["system:authenticated","users/team"]`,
+		},
+		{
+			name:     "unbound Kubernetes qualified group is rejected",
+			identity: map[string]any{"user": map[string]any{"groups": []any{organizationA + "/users"}}},
+			want:     `["system:authenticated"]`,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := evaluateGatewayCELString(t, celTokenGroupsHeaderJSON, map[string]any{"identity": test.identity})
+			if got != test.want {
+				t.Errorf("celTokenGroupsHeaderJSON = %s, want %s", got, test.want)
+			}
+		})
+	}
+}
+
+func evaluateGatewayCELList(t *testing.T, expression string, auth map[string]any) []any {
+	t.Helper()
+	env, err := cel.NewEnv(cel.Variable("auth", cel.DynType), cel.Variable("request", cel.DynType), ext.Strings())
+	if err != nil {
+		t.Fatalf("NewEnv: %v", err)
+	}
+	ast, issues := env.Compile(expression)
+	if issues.Err() != nil {
+		t.Fatalf("Compile: %v", issues.Err())
+	}
+	program, err := env.Program(ast)
+	if err != nil {
+		t.Fatalf("Program: %v", err)
+	}
+	value, _, err := program.Eval(map[string]any{
+		"auth":    auth,
+		"request": map[string]any{"path": "/v1/models", "headers": map[string]any{}},
+	})
+	if err != nil {
+		t.Fatalf("Eval: %v", err)
+	}
+	native, err := value.ConvertToNative(reflect.TypeFor[[]any]())
+	if err != nil {
+		t.Fatalf("ConvertToNative: %v", err)
+	}
+	groups, ok := native.([]any)
+	if !ok {
+		t.Fatalf("groups value = %#v, want []any", native)
+	}
+	return groups
+}
+
+func evaluateGatewayCELString(t *testing.T, expression string, auth map[string]any) string {
+	t.Helper()
+	env, err := cel.NewEnv(cel.Variable("auth", cel.DynType), cel.Variable("request", cel.DynType), ext.Strings())
+	if err != nil {
+		t.Fatalf("NewEnv: %v", err)
+	}
+	ast, issues := env.Compile(expression)
+	if issues.Err() != nil {
+		t.Fatalf("Compile: %v", issues.Err())
+	}
+	program, err := env.Program(ast)
+	if err != nil {
+		t.Fatalf("Program: %v", err)
+	}
+	value, _, err := program.Eval(map[string]any{
+		"auth":    auth,
+		"request": map[string]any{"path": "/v1/model/default/llm", "headers": map[string]any{"x-maas-subscription": "gold"}},
+	})
+	if err != nil {
+		t.Fatalf("Eval: %v", err)
+	}
+	result, ok := value.Value().(string)
+	if !ok {
+		t.Fatalf("value = %#v, want string", value.Value())
+	}
+	return result
+}
+
+func evaluateGatewayCELMap(t *testing.T, expression string, auth map[string]any) map[string]any {
+	t.Helper()
+	env, err := cel.NewEnv(cel.Variable("auth", cel.DynType), cel.Variable("request", cel.DynType), ext.Strings())
+	if err != nil {
+		t.Fatalf("NewEnv: %v", err)
+	}
+	ast, issues := env.Compile(expression)
+	if issues.Err() != nil {
+		t.Fatalf("Compile: %v", issues.Err())
+	}
+	program, err := env.Program(ast)
+	if err != nil {
+		t.Fatalf("Program: %v", err)
+	}
+	value, _, err := program.Eval(map[string]any{
+		"auth":    auth,
+		"request": map[string]any{"path": "/v1/model/default/llm", "headers": map[string]any{"x-maas-subscription": "gold"}},
+	})
+	if err != nil {
+		t.Fatalf("Eval: %v", err)
+	}
+	native, err := value.ConvertToNative(reflect.TypeFor[map[string]any]())
+	if err != nil {
+		t.Fatalf("ConvertToNative: %v", err)
+	}
+	body, ok := native.(map[string]any)
+	if !ok {
+		t.Fatalf("value = %#v, want map[string]any", native)
+	}
+	return body
 }
 
 func TestMaaSAPIAuthPolicyYAML_CEL_RHCLCompatible(t *testing.T) {

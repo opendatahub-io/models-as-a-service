@@ -1570,6 +1570,126 @@ func TestMaaSAuthPolicyReconciler_CacheKeyIsolation(t *testing.T) {
 //
 // All authorization evaluators in the singleton gateway AuthPolicy use dynamic CEL
 // (X-Gateway-Model-Name header or path) for runtime model isolation.
+func TestGatewaySubscriptionSelectionUsesQualifiedGroups(t *testing.T) {
+	const organizationID = "42c3e46f-2477-44d7-a85b-d3b43f6b31fa"
+	auth := map[string]any{
+		"identity": map[string]any{
+			"iss":    "https://issuer.example.com",
+			"sub":    "user-1",
+			"org_id": organizationID,
+			"groups": []any{"users"},
+		},
+	}
+	obj := gatewayAuthPolicySpecTestObject(t, &oidcConfig{IssuerURL: "https://issuer.example.com"})
+	bodyExpression := nestedStringRequired(t, obj,
+		"spec", "defaults", "rules", "metadata", "subscription-info", "http", "body", "expression",
+	)
+	body := evaluateGatewayCELMap(t, bodyExpression, auth)
+	groups, ok := body["groups"].([]any)
+	if !ok {
+		t.Fatalf("subscription callback groups have type %T, want []any", body["groups"])
+	}
+	if len(groups) != 1 || groups[0] != organizationID+"/users" {
+		t.Fatalf("subscription callback groups = %#v, want [%s/users]", groups, organizationID)
+	}
+}
+
+func TestBuildGatewayAuthPolicySpecUsesSafeAPIKeyGroupTransport(t *testing.T) {
+	obj := gatewayAuthPolicySpecTestObject(t, nil)
+	headers := nestedMapRequired(t, obj, "spec", "defaults", "rules", "response", "success", "headers")
+
+	groupHeader, ok := headers["X-MaaS-Group"].(map[string]any)
+	if !ok {
+		t.Fatalf("X-MaaS-Group header has type %T", headers["X-MaaS-Group"])
+	}
+	plain, ok := groupHeader["plain"].(map[string]any)
+	expression, expressionOK := plain["expression"].(string)
+	if !ok || !expressionOK || !strings.Contains(expression, "has(auth.metadata.apiKeyValidation.groupsJSON)") {
+		t.Fatalf("API key group header plain config = %#v, want guarded groupsJSON expression", groupHeader["plain"])
+	}
+}
+
+func TestMaaSAuthPolicyReconciler_CacheKeyOrganizationIsolation(t *testing.T) {
+	const (
+		organizationA = "42c3e46f-2477-44d7-a85b-d3b43f6b31fa"
+		organizationB = "1e0ce6d3-3812-4dab-a090-1c8eacdddb4e"
+	)
+	makeAuth := func(organizationID string, groups []any) map[string]any {
+		return map[string]any{"identity": map[string]any{
+			"iss":                "https://issuer.example.com",
+			"sub":                "same-subject",
+			"preferred_username": "same-user",
+			"org_id":             organizationID,
+			"groups":             groups,
+		}}
+	}
+	selector := subscriptionGatewayCacheKeySelector()
+	keyA := evaluateGatewayCELString(t, selector, makeAuth(organizationA, []any{"users"}))
+	keyB := evaluateGatewayCELString(t, selector, makeAuth(organizationB, []any{"users"}))
+	if keyA == keyB {
+		t.Fatalf("cache key is shared across organizations for equal groups: %q", keyA)
+	}
+
+	emptyKeyA := evaluateGatewayCELString(t, selector, makeAuth(organizationA, []any{}))
+	emptyKeyB := evaluateGatewayCELString(t, selector, makeAuth(organizationB, []any{}))
+	if emptyKeyA == emptyKeyB {
+		t.Fatalf("cache key is shared across organizations with empty groups: %q", emptyKeyA)
+	}
+}
+
+func TestSubscriptionCacheKeySeparatesOpaqueGroupsAndMatchingModes(t *testing.T) {
+	makeAuth := func(groups []any) map[string]any {
+		return map[string]any{
+			"metadata": map[string]any{"apiKeyValidation": map[string]any{
+				"userId":       "same-key-id",
+				"keyId":        "same-key-id",
+				"username":     "same-user",
+				"subscription": "bound-subscription",
+				"groups":       groups,
+			}},
+			"identity": map[string]any{},
+		}
+	}
+	selector := subscriptionGatewayCacheKeySelector()
+	commaGroup := evaluateGatewayCELString(t, selector, makeAuth([]any{"a,b"}))
+	twoGroups := evaluateGatewayCELString(t, selector, makeAuth([]any{"a", "b"}))
+	if commaGroup == twoGroups {
+		t.Fatalf("cache key collides for one comma group and two groups: %q", commaGroup)
+	}
+}
+
+func TestBuildGatewayAuthPolicySpec_RejectsInvalidFlatOIDCGroups(t *testing.T) {
+	obj := gatewayAuthPolicySpecTestObject(t, &oidcConfig{IssuerURL: "https://issuer.example.com"})
+	predicate := nestedWhenPredicateRequired(t, obj, "spec", "defaults", "rules", "authorization", "oidc-groups-safe", "when")
+	if !strings.Contains(predicate, `"org_id" in auth.identity`) {
+		t.Errorf("oidc-groups-safe predicate does not cover flat identities: %s", predicate)
+	}
+	rego := nestedStringRequired(t, obj, "spec", "defaults", "rules", "authorization", "oidc-groups-safe", "opa", "rego")
+	for _, required := range []string{"invalid_org_id", "invalid_group_list", "duplicate_group"} {
+		if !strings.Contains(rego, required) {
+			t.Errorf("oidc-groups-safe rego does not include %q: %s", required, rego)
+		}
+	}
+	reservedGroupPattern := `regex.match("` + celOrganizationQualifiedGroup + `", g)`
+	if !strings.Contains(rego, reservedGroupPattern) {
+		t.Errorf("oidc-groups-safe rego does not reject organization-qualified groups without an organization: %s", rego)
+	}
+	if !strings.Contains(rego, "count(groups) > 128") {
+		t.Errorf("oidc-groups-safe rego does not enforce the 128-group limit: %s", rego)
+	}
+	if !strings.Contains(rego, "count(groups) <= 128") {
+		t.Errorf("oidc-groups-safe duplicate rule is not bounded by the 128-group limit: %s", rego)
+	}
+	if !strings.Contains(rego, "count({g | g := groups[_]}) != count(groups)") {
+		t.Errorf("oidc-groups-safe rego does not use set-based duplicate detection: %s", rego)
+	}
+	for _, required := range []string{"base64.encode(g)", "count(encoded) > 344", `not regex.match("==$", encoded)`} {
+		if !strings.Contains(rego, required) {
+			t.Errorf("oidc-groups-safe rego does not enforce the 256-byte group limit with %q: %s", required, rego)
+		}
+	}
+}
+
 func TestMaaSAuthPolicyReconciler_CacheKeyModelIsolation(t *testing.T) {
 	const (
 		namespace = "default"
@@ -2035,7 +2155,7 @@ func TestBuildGatewayAuthPolicySpec_DenyClientIdentityHeaders(t *testing.T) {
 		"spec", "defaults", "rules", "authorization", "deny-client-identity-headers", "patternMatching", "patterns",
 	)
 
-	if err != nil || !found || len(patterns) != 9 {
+	if err != nil || !found || len(patterns) != 10 {
 		t.Fatalf("deny-client-identity-headers patterns missing: found=%v len=%d err=%v", found, len(patterns), err)
 	}
 
@@ -2055,6 +2175,7 @@ func TestBuildGatewayAuthPolicySpec_DenyClientIdentityHeaders(t *testing.T) {
 	want := []string{
 		`!("x-maas-username" in request.headers)`,
 		`!("x-maas-group" in request.headers)`,
+		`!("x-maas-exact-groups" in request.headers)`,
 		`!("x-maas-keyname" in request.headers)`,
 		`!("x-maas-subscription-rate-limit-id" in request.headers)`,
 		`!("x-maas-organization-id" in request.headers)`,
@@ -3876,5 +3997,49 @@ func TestMaaSAuthPolicyReconciler_ReconcileErrorPreservedOnStatusFailure(t *test
 	_, err := r.Reconcile(t.Context(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(policy)})
 	if !errors.Is(err, listErr) || errors.Is(err, statusErr) {
 		t.Fatalf("Reconcile error = %v, want original error %v", err, listErr)
+	}
+}
+
+func TestCacheKeyKeepsIdentityDiscriminatorsWithoutExactGroups(t *testing.T) {
+	cacheKeySelector := subscriptionGatewayCacheKeySelector()
+
+	if !strings.Contains(cacheKeySelector, `"api-key"`) {
+		t.Errorf("cache key missing identity-source discriminator (api-key): %s", cacheKeySelector)
+	}
+	if !strings.Contains(cacheKeySelector, `"oidc"`) {
+		t.Errorf("cache key missing identity-source discriminator (oidc): %s", cacheKeySelector)
+	}
+	if !strings.Contains(cacheKeySelector, `"token-review"`) {
+		t.Errorf("cache key missing identity-source discriminator (token-review): %s", cacheKeySelector)
+	}
+	if !strings.Contains(cacheKeySelector, `keyId`) {
+		t.Errorf("cache key missing API-key ID term: %s", cacheKeySelector)
+	}
+	if strings.Contains(cacheKeySelector, "exactGroups") {
+		t.Errorf("cache key contains exactGroups term (should be removed): %s", cacheKeySelector)
+	}
+	if strings.Contains(cacheKeySelector, "celExactGroups") {
+		t.Errorf("cache key contains celExactGroups term (should be removed): %s", cacheKeySelector)
+	}
+}
+
+func TestNoExactGroupsHeader(t *testing.T) {
+	obj := gatewayAuthPolicySpecTestObject(t, nil)
+	headers := nestedMapRequired(t, obj, "spec", "defaults", "rules", "response", "success", "headers")
+
+	if _, exists := headers["X-MaaS-Exact-Groups"]; exists {
+		t.Errorf("X-MaaS-Exact-Groups header should not exist in generated AuthPolicy")
+	}
+}
+
+func TestLegacyGroupPrefixSpoofBlocked(t *testing.T) {
+	obj := gatewayAuthPolicySpecTestObject(t, &oidcConfig{IssuerURL: "https://issuer.example.com"})
+	rego := nestedStringRequired(t, obj, "spec", "defaults", "rules", "authorization", "oidc-groups-safe", "opa", "rego")
+
+	if !strings.Contains(rego, `[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/`) {
+		t.Errorf("flat-groups safe rego missing UUID prefix spoof check: %s", rego)
+	}
+	if !strings.Contains(rego, `^[A-Za-z0-9:#._/ -]+$`) {
+		t.Errorf("flat-groups safe rego missing allowlist pattern: %s", rego)
 	}
 }

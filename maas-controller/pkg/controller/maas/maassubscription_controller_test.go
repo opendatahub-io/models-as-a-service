@@ -277,6 +277,68 @@ func TestEnsureSubscriptionAPIKeysRevoked_SkipsWhenTenantConfigIsGone(t *testing
 	}
 }
 
+func TestEnsureSubscriptionAPIKeysRevoked_SkipsWhenRetainAnnotationSet(t *testing.T) {
+	const (
+		tenantNamespace = "team-a-maas"
+		appNamespace    = "odh-ai-gateway-infra"
+	)
+
+	subscription := newMaaSSubscription("sub-delete", tenantNamespace, "team-a", "llm", 100)
+	subscription.Annotations = map[string]string{
+		retainAPIKeysOnDeleteAnnotation: "true",
+	}
+	tenant := &maasv1alpha1.MaasTenantConfig{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      maasv1alpha1.MaasTenantConfigInstanceName,
+			Namespace: tenantNamespace,
+			Labels: map[string]string{
+				"maas.opendatahub.io/managed-by-aitenant": "true",
+				"maas.opendatahub.io/tenant-name":         "team-a",
+				"maas.opendatahub.io/tenant-namespace":    tenantNamespace,
+			},
+		},
+	}
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(&batcv1.Job{}).
+		WithObjects(subscription, tenant).
+		Build()
+	recorder := events.NewFakeRecorder(1)
+	r := &MaaSSubscriptionReconciler{
+		Client:       c,
+		APIReader:    c,
+		Scheme:       scheme,
+		AppNamespace: appNamespace,
+		Recorder:     recorder,
+	}
+
+	complete, err := r.ensureSubscriptionAPIKeysRevoked(context.Background(), ctrl.Log, subscription)
+	if err != nil {
+		t.Fatalf("ensureSubscriptionAPIKeysRevoked: %v", err)
+	}
+	if !complete {
+		t.Fatal("cleanup must be considered complete when the subscription retains its API keys")
+	}
+
+	jobs := &batcv1.JobList{}
+	if err := c.List(context.Background(), jobs); err != nil {
+		t.Fatalf("list cleanup Jobs: %v", err)
+	}
+	if len(jobs.Items) != 0 {
+		t.Fatalf("cleanup Jobs = %d, want 0", len(jobs.Items))
+	}
+
+	select {
+	case event := <-recorder.Events:
+		if !strings.Contains(event, "Normal APIKeyCleanupSkipped") {
+			t.Fatalf("event = %q, want Normal APIKeyCleanupSkipped", event)
+		}
+	default:
+		t.Fatal("expected a Normal event when API keys are retained")
+	}
+}
+
 // TestMaaSSubscriptionReconciler_DuplicateReconciliation verifies that reconciling
 // multiple subscriptions for the same model does not produce redundant TokenRateLimitPolicy updates.
 //
