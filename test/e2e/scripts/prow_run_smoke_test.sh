@@ -30,9 +30,14 @@
 #   MAAS_CONTROLLER_IMAGE - Custom MaaS controller image (optional)
 #   AI_GATEWAY_OPERATOR_IMAGE - Custom ai-gateway-operator image (optional)
 #   AI_GATEWAY_CONTROLLER_IMAGE - AIGC manager image; unset defaults to
-#                                quay.io/opendatahub/odh-ai-gateway-controller:latest (main after AIGC #91).
+#                                quay.io/opendatahub/odh-ai-gateway-controller:odh-stable.
 #                                Set to empty to skip companion install.
 #   AIGC_GIT_URL / AIGC_GIT_REF - Optional overrides for deploy-aigc-companion.sh (defaults live in that script)
+#   E2E_RUN_GUARDRAILS - Install the NeMo Guardrails controller and run the guardrail
+#                        tests (default: true). One switch for both, so the tests
+#                        never run against a cluster that lacks their platform.
+#   TRUSTYAI_GIT_URL / TRUSTYAI_GIT_REF / TRUSTYAI_OPERATOR_IMAGE - Optional overrides
+#                        for deploy-trustyai-guardrails.sh (defaults live in that script)
 #   DEPLOY_MODE - MaaS ownership mode (default: kustomize for presubmits)
 #   POLICY_ENGINE - Rate-limiting policy engine (default: rhcl)
 #   RHCL_STARTING_CSV - Optional RHCL operator startingCSV pin
@@ -97,13 +102,20 @@ EXTERNAL_OIDC=${EXTERNAL_OIDC:-false}
 export MAAS_API_IMAGE=${MAAS_API_IMAGE:-}
 export MAAS_CONTROLLER_IMAGE=${MAAS_CONTROLLER_IMAGE:-}
 export AI_GATEWAY_OPERATOR_IMAGE=${AI_GATEWAY_OPERATOR_IMAGE:-}
-# Default to AIGC main (Konflux :latest after AIGC #91). odh-stable lags that merge.
+# AIGC's odh-stable channel tag, not the mutable :latest of its main branch:
+# a CI run must not flip behavior because a companion merged overnight (the
+# fwn7x group-test failure was exactly that).
 # Unset → install companion; explicit empty → skip.
 if [[ -z "${AI_GATEWAY_CONTROLLER_IMAGE+x}" ]]; then
-    export AI_GATEWAY_CONTROLLER_IMAGE="quay.io/opendatahub/odh-ai-gateway-controller:latest"
+    export AI_GATEWAY_CONTROLLER_IMAGE="quay.io/opendatahub/odh-ai-gateway-controller:odh-stable"
 else
     export AI_GATEWAY_CONTROLLER_IMAGE
 fi
+# Gates both the guardrail platform install and the guardrail tests, which read
+# it as their opt-in. Set to false to drop the TrustyAI install and skip them.
+# Lowercased so the shell gate below accepts exactly what the tests accept.
+E2E_RUN_GUARDRAILS="$(printf '%s' "${E2E_RUN_GUARDRAILS:-true}" | tr '[:upper:]' '[:lower:]')"
+export E2E_RUN_GUARDRAILS
 export OPERATOR_CATALOG=${OPERATOR_CATALOG:-}
 export OPERATOR_IMAGE=${OPERATOR_IMAGE:-}
 export DEPLOY_MODE=${DEPLOY_MODE:-kustomize}
@@ -559,11 +571,30 @@ else
     source "${SCRIPT_DIR}/deploy-platform.sh"
     phase_mark deploy_platform end
 
+    # Before the companion: AIGC registers its NemoGuardrails watch only when
+    # that CRD already resolves at controller startup, so installing TrustyAI
+    # afterwards leaves provider edits on the resync cadence.
+    if [[ "${E2E_RUN_GUARDRAILS}" =~ ^(1|true|yes)$ ]]; then
+        print_header "Installing the NeMo Guardrails controller"
+        phase_mark deploy_trustyai_guardrails start
+        DEPLOYMENT_NAMESPACE="$DEPLOYMENT_NAMESPACE" bash "${SCRIPT_DIR}/deploy-trustyai-guardrails.sh"
+        phase_mark deploy_trustyai_guardrails end
+    fi
+
     if [[ -n "${AI_GATEWAY_CONTROLLER_IMAGE:-}" ]]; then
         print_header "Installing AIGC companion (praxis dataplane)"
         phase_mark deploy_aigc start
         bash "${SCRIPT_DIR}/deploy-aigc-companion.sh"
         phase_mark deploy_aigc end
+
+        # After the companion: it just installed the AIGuardrail CRD, and
+        # maas-api discovers that API once at startup — a maas-api that
+        # predates the CRD fails every guarded selection closed. Restart it
+        # so the informer picks the new API up.
+        if [[ -n "${MAAS_API_DEPLOYMENT_NAMESPACE:-}" ]]; then
+            kubectl rollout restart deployment/maas-api -n "$MAAS_API_DEPLOYMENT_NAMESPACE"
+            kubectl rollout status deployment/maas-api -n "$MAAS_API_DEPLOYMENT_NAMESPACE" --timeout=180s
+        fi
     fi
 
     print_header "Deploying Models"
