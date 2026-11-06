@@ -6,9 +6,13 @@ metadata:
   annotations:
     config.kubernetes.io/local-config: "true"
 
+# The admin auth decisions dashboard is deliberately NOT listed here. This kustomization is
+# rendered only when Config.spec.usageMetricsDashboard is true, and its resources are deleted
+# when that gate is off. The auth decisions dashboard is a delivered platform feature, so it
+# ships from ./auth-decisions/ and is applied unconditionally by
+# LifecycleReconciler.ensureAuthDecisionsDashboard.
 resources:
   - usage-dashboard.yaml
-  - auth-decisions-dashboard.yaml
 
 labels:
   - pairs:
