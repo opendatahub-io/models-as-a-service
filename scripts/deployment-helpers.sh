@@ -444,7 +444,8 @@ patch_kuadrant_csv() {
   patch_csv_operator_container_env "$namespace" "$csv_name" "AUTH_SERVICE_TIMEOUT" "2s" && patched_any=true
 
   # --- Operator resources ---
-  local operator_memory_limit="1Gi"
+  # 2Gi: RHCL 1.5+ can OOM at 1Gi while syncing TRLPs into Limitador/EnvoyFilter.
+  local operator_memory_limit="2Gi"
   local operator_resources
   operator_resources=$(jq -nc --arg mem "$operator_memory_limit" \
     '{requests: {cpu: "200m", memory: "512Mi"}, limits: {cpu: "1", memory: $mem}}')

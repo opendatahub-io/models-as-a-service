@@ -58,6 +58,8 @@ PAYLOAD_PROCESSING_IMAGE="${PAYLOAD_PROCESSING_IMAGE:-}"
 OPERATOR_CATALOG="${OPERATOR_CATALOG:-}"
 OPERATOR_IMAGE="${OPERATOR_IMAGE:-}"
 OPERATOR_CHANNEL="${OPERATOR_CHANNEL:-}"
+# RHCL 1.5+ publishes on stable-1.5 (1.4.x uses stable-1.4; older 1.3/early 1.4 used stable).
+RHCL_CHANNEL="${RHCL_CHANNEL:-stable-1.5}"
 RHCL_STARTING_CSV="${RHCL_STARTING_CSV:-}"
 RHCL_NAMESPACE="${RHCL_NAMESPACE:-kuadrant-system}"
 
@@ -206,11 +208,12 @@ build_helm_sets() {
     ]'
   )
 
-  # Match the resource sizing applied by the legacy RHCL installer. The
-  # operator's upstream defaults can OOM while reconciling many rate-limit
-  # policies, leaving TokenRateLimitPolicies waiting for Limitador to sync.
+  # RHCL/Kuadrant operator needs headroom while reconciling many rate-limit
+  # policies. Upstream defaults (and even 1Gi) can OOM under RHCL 1.5+, leaving
+  # TokenRateLimitPolicies accepted but Limitador/EnvoyFilter sync incomplete
+  # so validate sees all 200s and no 429s.
   HELM_SETS+=(
-    --set-json 'dependencies.rhcl.olm.config.resources={"requests":{"cpu":"200m","memory":"512Mi"},"limits":{"cpu":"1","memory":"1Gi"}}'
+    --set-json 'dependencies.rhcl.olm.config.resources={"requests":{"cpu":"200m","memory":"512Mi"},"limits":{"cpu":"1","memory":"2Gi"}}'
   )
 
   if [[ -n "$RHCL_STARTING_CSV" ]]; then
@@ -260,6 +263,9 @@ EOF
       )
       ;;
     rhcl|"")
+      HELM_SETS+=(
+        --set "dependencies.rhcl.olm.channel=${RHCL_CHANNEL}"
+      )
       ;;
   esac
 }

@@ -142,6 +142,7 @@ esac
 OPERATOR_TYPE="${OPERATOR_TYPE:-odh}"
 DEPLOY_MODE="${DEPLOY_MODE:-operator}"
 POLICY_ENGINE="${POLICY_ENGINE:-}"  # Auto-determined unless set via env or --policy-engine
+RHCL_CHANNEL="${RHCL_CHANNEL:-stable-1.5}"
 RHCL_STARTING_CSV="${RHCL_STARTING_CSV:-}"
 RHCL_NAMESPACE="${RHCL_NAMESPACE:-kuadrant-system}"
 NAMESPACE="${DEPLOYMENT_NAMESPACE:-}"  # Auto-determined based on operator type
@@ -187,7 +188,7 @@ OPTIONS:
 
   --policy-engine <rhcl|kuadrant>
       Rate-limiting policy engine (default: auto-selected)
-      - rhcl: Red Hat Connectivity Link from redhat-operators (stable channel head)
+      - rhcl: Red Hat Connectivity Link from redhat-operators (stable-1.5 channel head)
       - kuadrant: upstream community catalog (v1.4.2)
       Overrides auto-selection.
 
@@ -279,7 +280,8 @@ ENVIRONMENT VARIABLES:
   OPERATOR_IMAGE            Custom operator image
   OPERATOR_TYPE             Operator type (rhoai/odh)
   POLICY_ENGINE             Policy engine override (rhcl|kuadrant)
-  RHCL_STARTING_CSV         Pin RHCL operator CSV (default: channel head on redhat-operators)
+  RHCL_CHANNEL              RHCL OLM channel (default: stable-1.5)
+  RHCL_STARTING_CSV         Pin RHCL operator CSV (default: channel head on RHCL_CHANNEL)
   RHCL_NAMESPACE            RHCL operator/Kuadrant workload namespace (default: kuadrant-system)
   EXTERNAL_OIDC             Enable external OIDC on maas-api (true/false)
   OIDC_ISSUER_URL           External OIDC issuer URL for maas-api AuthPolicy patching
@@ -559,7 +561,7 @@ validate_configuration() {
   export NAMESPACE OPERATOR_TYPE DEPLOY_MODE
   export POLICY_ENGINE OPERATOR_CATALOG OPERATOR_IMAGE OPERATOR_CHANNEL
   export MAAS_API_IMAGE MAAS_CONTROLLER_IMAGE AI_GATEWAY_OPERATOR_IMAGE
-  export PAYLOAD_PROCESSING_IMAGE RHCL_STARTING_CSV RHCL_NAMESPACE
+  export PAYLOAD_PROCESSING_IMAGE RHCL_CHANNEL RHCL_STARTING_CSV RHCL_NAMESPACE
 
   log_info "Configuration validated successfully"
 }
@@ -580,6 +582,9 @@ main() {
   log_info "  Mode: $DEPLOY_MODE"
   log_info "  Operator: $OPERATOR_TYPE"
   log_info "  Policy Engine: $POLICY_ENGINE"
+  if [[ "$POLICY_ENGINE" == "rhcl" ]]; then
+    log_info "  RHCL Channel: $RHCL_CHANNEL${RHCL_STARTING_CSV:+ (startingCSV: $RHCL_STARTING_CSV)}"
+  fi
   log_info "  Namespace: $NAMESPACE"
   log_info "  TLS Backend: $ENABLE_TLS_BACKEND"
   log_info "  External OIDC: $EXTERNAL_OIDC"
