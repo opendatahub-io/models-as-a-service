@@ -415,35 +415,52 @@ const (
 	// the X-MaaS-Group header consistent with the oidc-groups-safe denial:
 	// a TokenReview group that fails the pattern must never authorize a
 	// subscription the forwarded identity header omits.
-	celGroups = `(has(auth.metadata) && has(auth.metadata.apiKeyValidation)) ` +
-		`? auth.metadata.apiKeyValidation.groups ` +
-		`: (has(auth.identity.iss) ? ` +
-		`(has(auth.identity.groups) && ` + celOIDCGroupsSafe + ` ? auth.identity.groups : []) : ` +
-		`(has(auth.identity.user.groups) && ` +
-		`auth.identity.user.groups.all(g, g.matches('` + safeGroupNamePattern + `')) ? ` +
-		`auth.identity.user.groups : []))`
+	celOIDCTransportGroups = `("org_id" in auth.identity ? ` +
+		`(` + celOIDCOrganizationIDSafe + ` && (!has(auth.identity.groups) || ` + celOIDCFlatGroupsSafe + `) ` +
+		`? (has(auth.identity.groups) ? auth.identity.groups.map(g, auth.identity["org_id"] + "/" + g) : []) : []) ` +
+		`: (has(auth.identity.groups) && ` + celOIDCLegacyGroupsSafe + ` ? auth.identity.groups : []))`
+	celTokenReviewGroups = `(has(auth.identity.user.groups) && ` +
+		celTokenReviewGroupsSafe + ` ? auth.identity.user.groups : [])`
+	celNonAPIKeyGroups = `(has(auth.identity.iss) ? ` + celOIDCTransportGroups + ` : ` + celTokenReviewGroups + `)`
+	celGroups          = `(has(auth.metadata) && has(auth.metadata.apiKeyValidation)) ` +
+		`? auth.metadata.apiKeyValidation.groups : ` + celNonAPIKeyGroups
+	celAPIKeyGroupsHeaderJSON = `(has(auth.metadata.apiKeyValidation.groupsJSON) ` +
+		`? auth.metadata.apiKeyValidation.groupsJSON ` +
+		`: (has(auth.metadata.apiKeyValidation.groups) ` +
+		`? (size(auth.metadata.apiKeyValidation.groups) > 0 ` +
+		`? '["' + auth.metadata.apiKeyValidation.groups.join('","') + '"]' : '[]') ` +
+		`: '[]'))`
 
-	safeGroupNamePattern = groupname.Pattern
-	celOIDCGroupsSafe    = `auth.identity.groups.all(g, g.matches('` + safeGroupNamePattern + `'))`
+	safeGroupNamePattern              = groupname.Pattern
+	celOIDCGroupsSafe                 = `auth.identity.groups.all(g, type(g) == string && g.matches('` + safeGroupNamePattern + `'))`
+	celCanonicalOrganizationID        = `^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`
+	celCanonicalOrganizationIDPattern = celCanonicalOrganizationID + `$`
+	celOrganizationQualifiedGroup     = celCanonicalOrganizationID + `/`
+	celOIDCOrganizationIDSafe         = `type(auth.identity["org_id"]) == string && ` +
+		`auth.identity["org_id"].matches('` + celCanonicalOrganizationIDPattern + `')`
+	celOIDCLegacyGroupsSafe = celOIDCGroupsSafe + ` && ` +
+		`auth.identity.groups.all(g, !g.matches('` + celOrganizationQualifiedGroup + `'))`
+	celTokenReviewGroupsSafe = `auth.identity.user.groups.all(g, ` +
+		`type(g) == string && g.matches('` + safeGroupNamePattern + `') && ` +
+		`!g.matches('` + celOrganizationQualifiedGroup + `'))`
+	celOIDCFlatGroupsSafe = `size(auth.identity.groups) <= 128 && auth.identity.groups.all(g, ` +
+		`type(g) == string && g.matches('` + safeGroupNamePattern + `') && ` +
+		`!g.matches('` + celOrganizationQualifiedGroup + `'))`
+	celIdentityOrganizationID = `(has(auth.metadata) && has(auth.metadata.apiKeyValidation)) ? "" : ` +
+		`("org_id" in auth.identity && ` + celOIDCOrganizationIDSafe + ` ? auth.identity["org_id"] : "")`
 
-	// celTokenGroupsHeaderJSON renders the X-MaaS-Group header for non-API-key
-	// identities. The group source is selected by identity type, never by
+	// celTokenGroupsHeaderJSON renders the X-MaaS-Group header for non-organization,
+	// non-API-key identities. The group source is selected by identity type, never by
 	// claim presence: JWT identities (auth.identity.iss set) use only the
 	// groups claim, TokenReview identities use only user.groups — Authorino
 	// overlays the decoded JWT payload into auth.identity, so a JWT could
 	// otherwise craft a "user" claim and reach the TokenReview branch. Both
-	// sources are gated on the canonical group-name pattern because CEL builds
-	// the JSON by concatenation without escaping. Identities with no usable
-	// groups still get system:authenticated, which API-key minting requires
-	// to match the default subscription.
-	celTokenGroupsHeaderJSON = `has(auth.identity.iss) ? ` +
-		`(has(auth.identity.groups) && size(auth.identity.groups) > 0 && ` + celOIDCGroupsSafe + ` ? ` +
-		`'["system:authenticated","' + auth.identity.groups.join('","') + '"]' : ` +
-		`'["system:authenticated"]') : ` +
-		`(has(auth.identity.user.groups) && size(auth.identity.user.groups) > 0 && ` +
-		`auth.identity.user.groups.all(g, g.matches('` + safeGroupNamePattern + `')) ? ` +
-		`'["system:authenticated","' + auth.identity.user.groups.join('","') + '"]' : ` +
-		`'["system:authenticated"]')`
+	// sources use celNonAPIKeyGroups so the header matches subscription
+	// selection exactly. Identities with no usable groups still get
+	// system:authenticated. Flat identities use their verified envelope instead.
+	celTokenGroupsHeaderJSON = `size(` + celNonAPIKeyGroups + `) > 0 ? ` +
+		`'["system:authenticated","' + ` + celNonAPIKeyGroups + `.join('","') + '"]' : ` +
+		`'["system:authenticated"]'`
 
 	celSubscription = `(has(auth.metadata) && has(auth.metadata.apiKeyValidation)) ` +
 		`? auth.metadata.apiKeyValidation.subscription : ` +
@@ -487,14 +504,37 @@ const maasGatewayAuthPolicyName = "maas-gateway-auth"
 // favor of maas-gateway-auth. Kept only for upgrade cleanup of stale cluster resources.
 const legacyGatewayDefaultAuthPolicyName = "gateway-default-auth"
 
-// subscriptionGatewayCacheKeySelector builds the cache-key expression for the gateway-level
-// subscription-info and subscription-valid evaluators: "userId|groups|subscription|modelIdentity".
-// Model identity is derived dynamically from X-Gateway-Model-Name header or request path.
+// subscriptionGatewayCacheKeySelector builds a collision-safe key for gateway-level selection.
+// It length-prefixes every value so opaque group names cannot collide with separators.
 func subscriptionGatewayCacheKeySelector() string {
-	return fmt.Sprintf(
-		`(%s) + "|" + (%s).join(",") + "|" + (%s) + "|" + %s`,
-		celUserID, celGroups, celSubscription, celModelIdentity,
-	)
+	//nolint:gosec // CEL expression, not a credential
+	apiKey := `(has(auth.metadata) && has(auth.metadata.apiKeyValidation))`
+	identitySource := `(` + apiKey + ` ? "api-key" : (has(auth.identity.iss) ? "oidc" : "token-review"))`
+	apiKeyID := `(` + apiKey + ` && "keyId" in auth.metadata.apiKeyValidation ? auth.metadata.apiKeyValidation.keyId : "")`
+	issuer := `(!` + apiKey + ` && has(auth.identity.iss) ? auth.identity.iss : "")`
+	subject := `(!` + apiKey + ` && has(auth.identity.sub) ? auth.identity.sub : "")`
+	requestedSubscription := `("x-maas-subscription" in request.headers ? request.headers["x-maas-subscription"] : "")`
+	groupList := `(` + celGroups + `)`
+	groups := `string(size(` + groupList + `)) + ":" + ` +
+		groupList + `.map(g, string(size(g)) + ":" + g).join("")`
+	model := `(` + celModelIdentity + `)`
+	values := []string{
+		identitySource,
+		celUserID,
+		apiKeyID,
+		celUsername,
+		issuer,
+		subject,
+		celIdentityOrganizationID,
+		groups,
+		celSubscription,
+		requestedSubscription,
+		model,
+	}
+	for i, value := range values {
+		values[i] = `string(size(` + value + `)) + ":" + (` + value + `)`
+	}
+	return strings.Join(values, ` + `)
 }
 
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=maasauthpolicies,verbs=get;list;watch;create;update;patch;delete
@@ -910,6 +950,9 @@ func (r *MaaSAuthPolicyReconciler) buildGatewayAuthPolicySpec(oidc *oidcConfig, 
 						"predicate": `!("x-maas-group" in request.headers)`,
 					},
 					map[string]any{
+						"predicate": `!("x-maas-exact-groups" in request.headers)`,
+					},
+					map[string]any{
 						"predicate": `!("x-maas-keyname" in request.headers)`,
 					},
 					map[string]any{
@@ -1015,19 +1058,111 @@ allow {
 		authorizationRules["oidc-groups-safe"] = map[string]any{
 			"when": []any{
 				map[string]any{
-					"predicate": celIsNotAPIKey + ` && has(auth.identity.groups) && size(auth.identity.groups) > 0`,
+					"predicate": celIsNotAPIKey + ` && has(auth.identity.iss) && ` +
+						`("org_id" in auth.identity || (has(auth.identity.groups) && size(auth.identity.groups) > 0))`,
 				},
 			},
 			"metrics":  false,
 			"priority": int64(0),
 			"opa": map[string]any{
-				"rego": `unsafe_group[g] {
+				"rego": `unsafe_group["invalid_type"] {
 	g := input.auth.identity.groups[_]
+	not is_string(g)
+}
+
+unsafe_group[g] {
+	org_id := input.auth.identity.org_id
+	is_string(org_id)
+	g := input.auth.identity.groups[_]
+	is_string(g)
+	g == ""
+}
+
+unsafe_group[g] {
+	org_id := input.auth.identity.org_id
+	is_string(org_id)
+	g := input.auth.identity.groups[_]
+	is_string(g)
+	encoded := base64.encode(g)
+	count(encoded) > 344
+}
+
+unsafe_group[g] {
+	org_id := input.auth.identity.org_id
+	is_string(org_id)
+	g := input.auth.identity.groups[_]
+	is_string(g)
+	encoded := base64.encode(g)
+	count(encoded) == 344
+	not regex.match("==$", encoded)
+}
+
+unsafe_group[g] {
+	org_id := input.auth.identity.org_id
+	is_string(org_id)
+	g := input.auth.identity.groups[_]
+	is_string(g)
 	not regex.match("` + safeGroupNamePattern + `", g)
+}
+
+unsafe_group[g] {
+	org_id := input.auth.identity.org_id
+	is_string(org_id)
+	g := input.auth.identity.groups[_]
+	is_string(g)
+	regex.match("` + celOrganizationQualifiedGroup + `", g)
+}
+
+unsafe_group[g] {
+	g := input.auth.identity.groups[_]
+	is_string(g)
+	not input.auth.identity.org_id
+	not regex.match("` + safeGroupNamePattern + `", g)
+}
+
+unsafe_group[g] {
+	g := input.auth.identity.groups[_]
+	is_string(g)
+	not input.auth.identity.org_id
+	regex.match("` + celOrganizationQualifiedGroup + `", g)
+}
+
+invalid_org_id {
+	org_id := input.auth.identity.org_id
+	not is_string(org_id)
+}
+
+invalid_org_id {
+	org_id := input.auth.identity.org_id
+	is_string(org_id)
+	not regex.match("` + celCanonicalOrganizationIDPattern + `", org_id)
+}
+
+invalid_group_list {
+	object.keys(input.auth.identity)[_] == "groups"
+	not is_array(input.auth.identity.groups)
+}
+
+invalid_group_list {
+	groups := input.auth.identity.groups
+	is_array(groups)
+	count(groups) > 128
+}
+
+duplicate_group {
+	org_id := input.auth.identity.org_id
+	is_string(org_id)
+	groups := input.auth.identity.groups
+	is_array(groups)
+	count(groups) <= 128
+	count({g | g := groups[_]}) != count(groups)
 }
 
 allow {
 	count(unsafe_group) == 0
+	not invalid_org_id
+	not invalid_group_list
+	not duplicate_group
 }`,
 			},
 		}
@@ -1143,10 +1278,7 @@ allow {
 							},
 						},
 						"plain": map[string]any{
-							// NOTE: Manual JSON construction without escaping (CEL lacks JSON escape functions).
-							// Group names are validated on API key creation to reject quotes/backslashes.
-							// Kubernetes group names follow DNS rules (no special chars).
-							"expression": `size(auth.metadata.apiKeyValidation.groups) > 0 ? '["' + auth.metadata.apiKeyValidation.groups.join('","') + '"]' : '[]'`,
+							"expression": celAPIKeyGroupsHeaderJSON,
 						},
 						"metrics":  false,
 						"priority": int64(0),
@@ -1154,7 +1286,7 @@ allow {
 					"X-MaaS-Group-Token": map[string]any{
 						"when": []any{
 							map[string]any{
-								"predicate": celIsNotAPIKey,
+								"predicate": celIsNotAPIKey + ` && !("org_id" in auth.identity)`,
 							},
 						},
 						"plain": map[string]any{
