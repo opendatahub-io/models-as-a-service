@@ -186,9 +186,6 @@ func (s *PostgresStore) AddKey(
 	if keyHash == "" {
 		return errors.New("key hash is required")
 	}
-	if subscription == "" {
-		return errors.New("subscription is required")
-	}
 	if ephemeral && expiresAt == nil {
 		return errors.New("ephemeral keys must have an expiration time")
 	}

@@ -284,6 +284,7 @@ The maas-api server is configured via **environment variables** or **CLI flags**
 | `GATEWAY_NAME` | `maas-default-gateway` | Name of the Gateway resource used for model routing. |
 | `GATEWAY_NAMESPACE` | `openshift-ingress` | Namespace of the Gateway resource. |
 | `MAAS_SUBSCRIPTION_NAMESPACE` | `models-as-a-service` | Namespace where MaaSSubscription CRs are located. |
+| `MAAS_SUBSCRIPTION_MODE` | `enforced` | `enforced` requires reconciled subscriptions; `standalone` disables subscription binding for API-key-only deployments. |
 | `INSTANCE_NAME` | Value of `GATEWAY_NAME` | Name of the MaaS instance (for logging/identification). |
 | `SECURE` | `false` | Enable HTTPS. Requires TLS configuration. |
 | `ADDRESS` | `:8443` (HTTPS) or `:8080` (HTTP) | Server listen address (host:port). |

@@ -65,10 +65,6 @@ func (m *MockStore) AddKey(
 	if name == "" {
 		return ErrEmptyName
 	}
-	if subscription == "" {
-		return errors.New("subscription is required")
-	}
-
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
