@@ -1,4 +1,4 @@
-package api_keys_test
+package api_keys
 
 import (
 	"os"

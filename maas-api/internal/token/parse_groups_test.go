@@ -50,20 +50,20 @@ func TestParseGroupsHeader_EmptyAuthorinoBrackets(t *testing.T) {
 	assert.Error(t, err)
 }
 
-func TestParseGroupsHeader_WhitespaceOnlyJSON(t *testing.T) {
-	_, err := token.ParseGroupsHeader(`["  ", ""]`)
-	assert.Error(t, err)
+func TestParseGroupsHeader_PreservesWhitespaceAndDropsEmptyEntries(t *testing.T) {
+	groups, err := token.ParseGroupsHeader(`["  ", ""]`)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"  "}, groups)
 }
 
-func TestParseGroupsHeaderTrimsOpaqueValues(t *testing.T) {
+func TestParseGroupsHeaderPreservesOpaqueValues(t *testing.T) {
 	input := []string{" users ", `quote"slash\`, "é漢字", "zero\x00byte", "comma,pipe|"} //nolint:gosmopolitan // Testing Unicode handling
 	header, err := json.Marshal(input)
 	require.NoError(t, err)
 
 	groups, err := token.ParseGroupsHeader(string(header))
 	require.NoError(t, err)
-	// Now trimming is always applied
-	expected := []string{"users", `quote"slash\`, "é漢字", "zero\x00byte", "comma,pipe|"} //nolint:gosmopolitan // Testing Unicode handling
+	expected := input
 	assert.Equal(t, expected, groups)
 }
 

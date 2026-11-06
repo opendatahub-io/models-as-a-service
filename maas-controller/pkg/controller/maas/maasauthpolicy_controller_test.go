@@ -1677,6 +1677,12 @@ func TestBuildGatewayAuthPolicySpec_RejectsInvalidFlatOIDCGroups(t *testing.T) {
 	if !strings.Contains(rego, "count(groups) > 128") {
 		t.Errorf("oidc-groups-safe rego does not enforce the 128-group limit: %s", rego)
 	}
+	if !strings.Contains(rego, "count(groups) <= 128") {
+		t.Errorf("oidc-groups-safe duplicate rule is not bounded by the 128-group limit: %s", rego)
+	}
+	if !strings.Contains(rego, "count({g | g := groups[_]}) != count(groups)") {
+		t.Errorf("oidc-groups-safe rego does not use set-based duplicate detection: %s", rego)
+	}
 	for _, required := range []string{"base64.encode(g)", "count(encoded) > 344", `not regex.match("==$", encoded)`} {
 		if !strings.Contains(rego, required) {
 			t.Errorf("oidc-groups-safe rego does not enforce the 256-byte group limit with %q: %s", required, rego)

@@ -286,7 +286,7 @@ func QualifiedGroups(identity *VerifiedIdentity) ([]string, error) {
 	}
 
 	groups := append([]string(nil), identity.Claims.Groups...)
-	if !identity.Claims.orgIDPresent {
+	if identity.Claims.OrgID == "" {
 		return groups, nil
 	}
 

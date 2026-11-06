@@ -178,7 +178,7 @@ func TestExtractUserInfoOptional(t *testing.T) {
 		assert.Equal(t, []string{}, body.Groups)
 	})
 
-	t.Run("trims group values from header", func(t *testing.T) {
+	t.Run("preserves group values from header", func(t *testing.T) {
 		router := setupOptionalRouter(t)
 		req := httptest.NewRequest(http.MethodGet, "/test", nil)
 		req.Header.Set(constant.HeaderUsername, "testuser")
@@ -192,7 +192,7 @@ func TestExtractUserInfoOptional(t *testing.T) {
 			Groups []string `json:"groups"`
 		}
 		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
-		assert.Equal(t, []string{"org/users", `quote\"comma,pipe|`}, body.Groups)
+		assert.Equal(t, []string{" org/users ", `quote\"comma,pipe|`}, body.Groups)
 	})
 
 	t.Run("aborts when group header is malformed", func(t *testing.T) {
@@ -265,7 +265,7 @@ func TestExtractUserInfoOptional(t *testing.T) {
 
 		envelope := strings.Replace(
 			validIdentityEnvelope,
-			`"groups": ["42c3e46f-2477-44d7-a85b-d3b43f6b31fa/users"]`,
+			`"groups": ["users"]`,
 			`"groups": ["valid-group", "bad,group"]`,
 			1,
 		)

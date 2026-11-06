@@ -443,7 +443,7 @@ const (
 	celTokenReviewGroupsSafe = `auth.identity.user.groups.all(g, ` +
 		`type(g) == string && g.matches('` + safeGroupNamePattern + `') && ` +
 		`!g.matches('` + celOrganizationQualifiedGroup + `'))`
-	celOIDCFlatGroupsSafe = `auth.identity.groups.all(g, ` +
+	celOIDCFlatGroupsSafe = `size(auth.identity.groups) <= 128 && auth.identity.groups.all(g, ` +
 		`type(g) == string && g.matches('` + safeGroupNamePattern + `') && ` +
 		`!g.matches('` + celOrganizationQualifiedGroup + `'))`
 	celIdentityOrganizationID = `(has(auth.metadata) && has(auth.metadata.apiKeyValidation)) ? "" : ` +
@@ -1106,6 +1106,14 @@ unsafe_group[g] {
 }
 
 unsafe_group[g] {
+	org_id := input.auth.identity.org_id
+	is_string(org_id)
+	g := input.auth.identity.groups[_]
+	is_string(g)
+	regex.match("` + celOrganizationQualifiedGroup + `", g)
+}
+
+unsafe_group[g] {
 	g := input.auth.identity.groups[_]
 	is_string(g)
 	not input.auth.identity.org_id
@@ -1146,10 +1154,8 @@ duplicate_group {
 	is_string(org_id)
 	groups := input.auth.identity.groups
 	is_array(groups)
-	some i
-	some j
-	i < j
-	groups[i] == groups[j]
+	count(groups) <= 128
+	count({g | g := groups[_]}) != count(groups)
 }
 
 allow {

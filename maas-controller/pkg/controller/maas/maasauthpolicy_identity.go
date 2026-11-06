@@ -11,13 +11,15 @@ const managementIdentityRoutePredicate = `request.path == "/v1/me" ||
 request.path == "/maas-api/v1/me" ||
 request.path == "/v1/subscriptions" ||
 request.path.startsWith("/v1/subscriptions/") ||
-request.path == "/v1/models" ||
-request.path.startsWith("/v1/model/") && request.path.endsWith("/subscriptions") ||
-request.path.startsWith("/v1/api-keys") ||
-request.path.startsWith("/maas-api/v1/subscriptions") ||
-request.path == "/maas-api/v1/models" ||
-request.path.startsWith("/maas-api/v1/model/") && request.path.endsWith("/subscriptions") ||
-request.path.startsWith("/maas-api/v1/api-keys")`
+	request.path == "/v1/models" ||
+	request.path.startsWith("/v1/model/") && request.path.endsWith("/subscriptions") ||
+	request.path.startsWith("/v1/api-keys") ||
+	request.path.startsWith("/v1/logs") ||
+	request.path.startsWith("/maas-api/v1/subscriptions") ||
+	request.path == "/maas-api/v1/models" ||
+	request.path.startsWith("/maas-api/v1/model/") && request.path.endsWith("/subscriptions") ||
+	request.path.startsWith("/maas-api/v1/api-keys") ||
+	request.path.startsWith("/maas-api/v1/logs")`
 
 // verifiedIdentityClaims lists the claims carried in the trusted identity
 // envelope, in the order they appear in the generated CEL map.

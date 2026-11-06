@@ -231,6 +231,8 @@ func TestVerifiedIdentityHeaderStrictContract(t *testing.T) {
 		`request.path.startsWith("/v1/model/") && request.path.endsWith("/subscriptions")`,
 		`request.path.startsWith("/maas-api/v1/model/") && request.path.endsWith("/subscriptions")`,
 		`request.path.startsWith("/maas-api/v1/api-keys")`,
+		`request.path.startsWith("/v1/logs")`,
+		`request.path.startsWith("/maas-api/v1/logs")`,
 		`request.headers.authorization.matches("^Bearer [^.]+\\.[^.]+\\.[^.]+$")`,
 		`has(auth.identity.iss)`,
 	} {

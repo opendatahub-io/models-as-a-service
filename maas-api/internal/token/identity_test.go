@@ -111,6 +111,20 @@ func TestParseIdentityEnvelope_EmptyOrganizationGroups(t *testing.T) {
 	assert.Empty(t, identity.Claims.Groups)
 }
 
+func TestQualifiedGroupsUsesExportedOrganizationID(t *testing.T) {
+	identity := &token.VerifiedIdentity{
+		Source: "oidc",
+		Claims: token.VerifiedClaims{
+			OrgID:  "42c3e46f-2477-44d7-a85b-d3b43f6b31fa",
+			Groups: []string{"users"},
+		},
+	}
+
+	groups, err := token.QualifiedGroups(identity)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"42c3e46f-2477-44d7-a85b-d3b43f6b31fa/users"}, groups)
+}
+
 func TestParseIdentityEnvelope_RejectsInvalidTransport(t *testing.T) {
 	nestedOrganizationClaim := strings.Replace(
 		validIdentityEnvelope,

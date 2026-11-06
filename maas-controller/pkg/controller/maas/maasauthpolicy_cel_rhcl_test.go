@@ -262,6 +262,16 @@ func TestCELGroupsQualifyFlatOIDCGroups(t *testing.T) {
 			want:     []any{organizationA + "/users", organizationA + "/users"},
 		},
 		{
+			name:     "organization-qualified flat group is rejected",
+			identity: map[string]any{"iss": "https://issuer.example.com", "org_id": organizationA, "groups": []any{organizationA + "/users"}},
+			want:     []any{},
+		},
+		{
+			name:     "more than 128 flat groups are rejected",
+			identity: map[string]any{"iss": "https://issuer.example.com", "org_id": organizationA, "groups": makeGroups(129)},
+			want:     []any{},
+		},
+		{
 			name:     "invalid organization id is rejected",
 			identity: map[string]any{"iss": "https://issuer.example.com", "org_id": "not-a-uuid", "groups": []any{"users"}},
 			want:     []any{},
@@ -321,6 +331,14 @@ func TestCELGroupsQualifyFlatOIDCGroups(t *testing.T) {
 			}
 		})
 	}
+}
+
+func makeGroups(count int) []any {
+	groups := make([]any, 0, count)
+	for i := 0; i < count; i++ {
+		groups = append(groups, fmt.Sprintf("group-%d", i))
+	}
+	return groups
 }
 
 func TestGatewayAuthPolicyFlatGroupsAllowAllowlistedValues(t *testing.T) {

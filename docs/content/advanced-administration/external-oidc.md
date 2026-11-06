@@ -113,7 +113,7 @@ For example, `users` becomes `42c3e46f-2477-44d7-a85b-d3b43f6b31fa/users`.
 Use qualified group values in subscription and model policy rules.
 MaaS keeps the original case, spaces, slashes, and punctuation.
 MaaS reserves names that start with a canonical lowercase UUID and `/` for organization-qualified groups.
-A token without `org_id` cannot use those names.
+Raw token groups must not use that reserved prefix, including when the token has `org_id`; MaaS rejects such tokens.
 The `/v1/me` endpoint returns the raw token groups.
 Flat group values must not be empty, and each value must be unique.
 The gateway accepts up to 128 groups. Each group can contain up to 256 bytes.

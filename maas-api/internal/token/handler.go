@@ -46,7 +46,6 @@ func ParseGroupsHeader(header string) ([]string, error) {
 	if err := json.Unmarshal([]byte(header), &parsedGroups); err != nil {
 		// Fall back to bracket-wrapped space-separated format (e.g., [ai-eng platform]).
 		// Authorino's plain selector serializes arrays this way.
-		trimmed := strings.TrimSpace(header)
 		if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
 			inner := trimmed[1 : len(trimmed)-1]
 			parsedGroups = strings.Fields(inner)
@@ -57,8 +56,8 @@ func ParseGroupsHeader(header string) ([]string, error) {
 
 	var validGroups []string
 	for _, g := range parsedGroups {
-		if tg := strings.TrimSpace(g); tg != "" {
-			validGroups = append(validGroups, tg)
+		if g != "" {
+			validGroups = append(validGroups, g)
 		}
 	}
 
@@ -243,6 +242,9 @@ func (h *Handler) setUserContextFromVerifiedIdentity(c *gin.Context, value any) 
 	if err != nil {
 		h.rejectIdentity(c, err)
 		return false
+	}
+	if !groupname.AllValid(identity.Claims.Groups) {
+		groups = nil
 	}
 	groups = append([]string{"system:authenticated"}, groups...)
 	username := identity.Claims.PreferredUsername
