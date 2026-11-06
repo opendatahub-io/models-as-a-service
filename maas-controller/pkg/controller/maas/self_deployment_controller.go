@@ -49,6 +49,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/oteljson"
@@ -97,16 +98,17 @@ const usageLogsTenancyProxyContainerName = "proxy"
 // ownerReference (set by older maas-controller versions) are removed when present.
 type LifecycleReconciler struct {
 	client.Client
-	Scheme                      *runtime.Scheme
-	DeploymentName              string
-	DeploymentNS                string
-	TenantSubscriptionNamespace string
-	AITenantNamespace           string
-	GatewayName                 string
-	GatewayNamespace            string
-	ObservabilityManifestsPath  string
-	MonitoringNamespace         string
-	UsageLogsManifestPath       string
+	Scheme                           *runtime.Scheme
+	DeploymentName                   string
+	DeploymentNS                     string
+	TenantSubscriptionNamespace      string
+	AITenantNamespace                string
+	GatewayName                      string
+	GatewayNamespace                 string
+	ObservabilityManifestsPath       string
+	AuthorinoMonitoringManifestsPath string
+	MonitoringNamespace              string
+	UsageLogsManifestPath            string
 	// InfraNamespace is where maas-api runs; the usage-logs-loki Secret is
 	// looked up there to switch the Perses datasources to the maas-api Loki
 	// proxy (see ensureUsageLogs / patchPersesDatasourceMaaSAPILoki).
@@ -473,6 +475,9 @@ func (r *LifecycleReconciler) ensureObservability(ctx context.Context, log logr.
 	}
 
 	if err := r.ensureLimitadorServiceMonitor(ctx); err != nil {
+		return err
+	}
+	if err := r.ensureAuthorinoMonitoring(ctx, log); err != nil {
 		return err
 	}
 	if err := r.ensureUsageDashboard(ctx, log); err != nil {
@@ -1177,7 +1182,7 @@ func (r *LifecycleReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	// (ensureDefaultAITenantReferencesConfig) and the cross-tenant health
 	// aggregation (syncTenantsHealth) stay current.
 
-	return ctrl.NewControllerManagedBy(mgr).
+	b := ctrl.NewControllerManagedBy(mgr).
 		For(&appsv1.Deployment{}, builder.WithPredicates(selfOnly)).
 		Watches(
 			&maasv1alpha1.Config{},
@@ -1277,8 +1282,84 @@ func (r *LifecycleReconciler) SetupWithManager(mgr ctrl.Manager) error {
 				}
 				return o.GetName() == discoveryDeploymentName && o.GetNamespace() == discoveryNS
 			})),
-		).
-		Complete(r)
+		)
+
+	// ServiceMonitor is provided by core OpenShift monitoring. Watch metadata so
+	// edits and deletions reconcile without caching full monitoring specifications.
+	b = b.WatchesMetadata(managedMonitoringObject(serviceMonitorGVK),
+		handler.EnqueueRequestsFromMapFunc(r.enqueueSelfDeployment),
+		builder.WithPredicates(r.managedInMonitoringNamespace()),
+	)
+	// COO's PrometheusRule API is optional. The CRD watch above triggers resource
+	// creation; this resource watch also handles later edits and deletions.
+	ruleExists := crdExists(context.Background(), mgr.GetAPIReader(), prometheusRuleCRD)
+	if ruleExists {
+		b = b.WatchesMetadata(managedMonitoringObject(prometheusRuleGVK),
+			handler.EnqueueRequestsFromMapFunc(r.enqueueSelfDeployment),
+			builder.WithPredicates(r.managedInMonitoringNamespace()),
+		)
+	}
+
+	c, err := b.Build(r)
+	if err != nil {
+		return err
+	}
+
+	if !ruleExists {
+		if err := registerWatchWhenCRDAppears(c, mgr, prometheusRuleCRD, func() source.Source {
+			return source.Kind(mgr.GetCache(), managedMonitoringObject(prometheusRuleGVK),
+				handler.EnqueueRequestsFromMapFunc(r.enqueueSelfDeployment),
+				r.managedInMonitoringNamespace(),
+			)
+		}); err != nil {
+			return fmt.Errorf("failed to register CRD watcher for PrometheusRule: %w", err)
+		}
+	}
+	return nil
+}
+
+const prometheusRuleCRD = "prometheusrules.monitoring.rhobs"
+
+var (
+	serviceMonitorGVK = schema.GroupVersionKind{Group: "monitoring.coreos.com", Version: "v1", Kind: "ServiceMonitor"}
+	prometheusRuleGVK = schema.GroupVersionKind{Group: "monitoring.rhobs", Version: "v1", Kind: "PrometheusRule"}
+)
+
+// managedMonitoringObject returns metadata only: watch predicates need labels and
+// namespace, not full monitoring specifications from every namespace.
+func managedMonitoringObject(gvk schema.GroupVersionKind) client.Object {
+	obj := &metav1.PartialObjectMetadata{}
+	obj.SetGroupVersionKind(gvk)
+	return obj
+}
+
+// managedInMonitoringNamespace admits MaaS observability objects in the monitoring
+// namespace, so edits to unrelated monitors and rules never trigger reconciles.
+//
+// Deliberately not keyed on app.kubernetes.io/managed-by: isOwnedByConfigOrController
+// treats that label as proof of ownership, so putting it on the rendered manifests
+// would make pre-existing unowned resources of the same name eligible for deletion.
+// Ownership is still re-checked per object during reconcile; this only decides which
+// events are worth waking the reconciler for.
+func (r *LifecycleReconciler) managedInMonitoringNamespace() predicate.Predicate {
+	matches := func(o client.Object) bool {
+		return o != nil && o.GetNamespace() == r.MonitoringNamespace &&
+			o.GetLabels()["app.kubernetes.io/part-of"] == "maas-observability"
+	}
+	filter := predicate.NewPredicateFuncs(matches)
+	filter.UpdateFunc = func(e event.UpdateEvent) bool {
+		return matches(e.ObjectOld) || matches(e.ObjectNew)
+	}
+	return filter
+}
+
+// enqueueSelfDeployment maps any watched object back to the maas-controller
+// Deployment, the single request this reconciler acts on.
+func (r *LifecycleReconciler) enqueueSelfDeployment(_ context.Context, _ client.Object) []reconcile.Request {
+	return []reconcile.Request{{NamespacedName: types.NamespacedName{
+		Namespace: r.DeploymentNS,
+		Name:      r.DeploymentName,
+	}}}
 }
 
 // aitenantReadyChanged admits an AITenant event only when the Ready condition

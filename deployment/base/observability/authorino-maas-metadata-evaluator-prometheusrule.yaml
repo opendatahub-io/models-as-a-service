@@ -1,14 +1,8 @@
-# PrometheusRule: alert when Authorino HTTP metadata evaluators for maas-api fail often.
-#
-# Scraped metrics come from Authorino /server-metrics (see authorino-server-metrics-servicemonitor.yaml).
-# Requires metadata rules apiKeyValidation + subscription-info with metrics enabled (MaaS controller).
-#
-# Deployed by: scripts/observability/install-observability.sh → kustomize build deployment/base/observability
-apiVersion: monitoring.coreos.com/v1
+# Managed by Config.spec.authorinoMonitoring. Metrics are normalized by OTEL.
+apiVersion: monitoring.rhobs/v1
 kind: PrometheusRule
 metadata:
   name: authorino-maas-metadata-evaluator-high-failure-rate
-  namespace: kuadrant-system
   labels:
     app.kubernetes.io/part-of: maas-observability
     app.kubernetes.io/component: alerting
@@ -26,7 +20,7 @@ spec:
               and subscription/API-key validation paths.
           expr: |
             (
-              sum(rate(auth_server_evaluator_cancelled{namespace=~"rh-connectivity-link|kuadrant-system",evaluator_type="METADATA_GENERIC_HTTP",evaluator_name=~"apiKeyValidation|subscription-info"}[5m]))
+              sum(rate(auth_server_evaluator_cancelled_total{namespace=~"rh-connectivity-link|kuadrant-system",evaluator_type="METADATA_GENERIC_HTTP",evaluator_name=~"apiKeyValidation|subscription-info"}[5m]))
               /
               sum(rate(auth_server_evaluator_total{namespace=~"rh-connectivity-link|kuadrant-system",evaluator_type="METADATA_GENERIC_HTTP",evaluator_name=~"apiKeyValidation|subscription-info"}[5m]))
             ) > 0.1
