@@ -30,7 +30,7 @@
 #   MAAS_CONTROLLER_IMAGE - Custom MaaS controller image (optional)
 #   AI_GATEWAY_OPERATOR_IMAGE - Custom ai-gateway-operator image (optional)
 #   AI_GATEWAY_CONTROLLER_IMAGE - AIGC manager image; unset defaults to
-#                                quay.io/opendatahub/odh-ai-gateway-controller:latest (main after AIGC #91).
+#                                quay.io/opendatahub/odh-ai-gateway-controller:odh-stable.
 #                                Set to empty to skip companion install.
 #   AIGC_GIT_URL / AIGC_GIT_REF - Optional overrides for deploy-aigc-companion.sh (defaults live in that script)
 #   E2E_RUN_GUARDRAILS - Install the NeMo Guardrails controller and run the guardrail
@@ -105,10 +105,12 @@ EXTERNAL_OIDC=${EXTERNAL_OIDC:-false}
 export MAAS_API_IMAGE=${MAAS_API_IMAGE:-}
 export MAAS_CONTROLLER_IMAGE=${MAAS_CONTROLLER_IMAGE:-}
 export AI_GATEWAY_OPERATOR_IMAGE=${AI_GATEWAY_OPERATOR_IMAGE:-}
-# Default to AIGC main (Konflux :latest after AIGC #91). odh-stable lags that merge.
+# AIGC's odh-stable channel tag, not the mutable :latest of its main branch:
+# a CI run must not flip behavior because a companion merged overnight (the
+# fwn7x group-test failure was exactly that).
 # Unset → install companion; explicit empty → skip.
 if [[ -z "${AI_GATEWAY_CONTROLLER_IMAGE+x}" ]]; then
-    export AI_GATEWAY_CONTROLLER_IMAGE="quay.io/opendatahub/odh-ai-gateway-controller:latest"
+    export AI_GATEWAY_CONTROLLER_IMAGE="quay.io/opendatahub/odh-ai-gateway-controller:odh-stable"
 else
     export AI_GATEWAY_CONTROLLER_IMAGE
 fi

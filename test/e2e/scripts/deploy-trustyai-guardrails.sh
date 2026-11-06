@@ -10,10 +10,14 @@
 # Env:
 #   TRUSTYAI_GIT_URL          Default: trustyai-explainability/trustyai-service-operator
 #   TRUSTYAI_GIT_REF          Default: main
-#   TRUSTYAI_OPERATOR_IMAGE   Optional; overlay params.env default is used when empty.
-#                             The CRD comes from the git ref, but status.endpoint
+#   TRUSTYAI_OPERATOR_IMAGE   Default: quay.io/opendatahub/trustyai-service-operator:odh-3.6.0.
+#                             The CRD comes from the git ref, but status.workloadNamespace
 #                             and allowedConsumers are populated by the controller
-#                             in this image, so the two have to match.
+#                             in this image, so the two have to match. Pinned, not the
+#                             overlay's mutable :latest: quay's latest is an Oct 20 build
+#                             that predates status.workloadNamespace, which AGC requires
+#                             (the fwn7x group-test failure). When bumping past TrustyAI
+#                             #1105, the provider fixtures must set spec.aiGatewayMode.
 #   DEPLOYMENT_NAMESPACE      Default: opendatahub
 # =============================================================================
 
@@ -21,6 +25,7 @@ set -euo pipefail
 
 TRUSTYAI_GIT_URL="${TRUSTYAI_GIT_URL:-https://github.com/trustyai-explainability/trustyai-service-operator.git}"
 TRUSTYAI_GIT_REF="${TRUSTYAI_GIT_REF:-main}"
+TRUSTYAI_OPERATOR_IMAGE="${TRUSTYAI_OPERATOR_IMAGE:-quay.io/opendatahub/trustyai-service-operator:odh-3.6.0}"
 DEPLOYMENT_NAMESPACE="${DEPLOYMENT_NAMESPACE:-opendatahub}"
 NEMO_CRD="nemoguardrails.trustyai.opendatahub.io"
 
@@ -31,7 +36,7 @@ redacted_url() { printf '%s' "${1}" | sed -E 's#(://)[^/@]*@#\1***@#'; }
 echo "Installing the NeMo Guardrails controller..."
 echo "  TRUSTYAI_GIT_URL=$(redacted_url "${TRUSTYAI_GIT_URL}")"
 echo "  TRUSTYAI_GIT_REF=${TRUSTYAI_GIT_REF}"
-echo "  TRUSTYAI_OPERATOR_IMAGE=${TRUSTYAI_OPERATOR_IMAGE:-<overlay default>}"
+echo "  TRUSTYAI_OPERATOR_IMAGE=${TRUSTYAI_OPERATOR_IMAGE}"
 echo "  DEPLOYMENT_NAMESPACE=${DEPLOYMENT_NAMESPACE}"
 
 work_dir="$(mktemp -d -t trustyai-guardrails.XXXXXXXXXX)"
