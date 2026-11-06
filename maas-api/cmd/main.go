@@ -324,10 +324,11 @@ func registerHandlers(
 		TenantNamespace: cfg.MaaSSubscriptionNamespace,
 		GatewayName:     cfg.GatewayName,
 	}
-	// Model listing keeps the existing SSO username/group path. It does not
-	// consume the new organization-role identity envelope.
+	// Model listing accepts both the verified OIDC identity envelope and the
+	// existing trusted username/group headers.
 	modelAuthMiddleware := make([]gin.HandlerFunc, 0, 3)
 	modelAuthMiddleware = append(modelAuthMiddleware,
+		tokenHandler.ExtractVerifiedIdentityOptional(),
 		tokenHandler.ExtractUserInfoOptional(),
 		middleware.TenantLogger(log, tenantLogCfg),
 	)

@@ -57,19 +57,45 @@
               }
             },
             {
-              "name": "maas-organizations",
+              "name": "maas-org-id",
               "protocol": "openid-connect",
               "protocolMapper": "oidc-usermodel-attribute-mapper",
               "config": {
-                "user.attribute": "maasOrganizations",
-                "claim.name": "https://redhat\\.com/maas/orgs",
-                "jsonType.label": "JSON",
+                "user.attribute": "maasOrganizationId",
+                "claim.name": "org_id",
+                "jsonType.label": "String",
+                "id.token.claim": "true",
+                "access.token.claim": "true",
+                "userinfo.token.claim": "true"
+              }
+            },
+            {
+              "name": "maas-org-name",
+              "protocol": "openid-connect",
+              "protocolMapper": "oidc-usermodel-attribute-mapper",
+              "config": {
+                "user.attribute": "maasOrganizationName",
+                "claim.name": "org_name",
+                "jsonType.label": "String",
+                "id.token.claim": "true",
+                "access.token.claim": "true",
+                "userinfo.token.claim": "true"
+              }
+            },
+            {
+              "name": "maas-organization-roles",
+              "protocol": "openid-connect",
+              "protocolMapper": "oidc-usermodel-attribute-mapper",
+              "config": {
+                "user.attribute": "maasOrganizationRoles",
+                "claim.name": "roles",
+                "jsonType.label": "String",
                 "id.token.claim": "true",
                 "access.token.claim": "true",
                 "userinfo.token.claim": "true",
                 "multivalued": "true"
               }
-        }
+            }
       ]
     },
     {
@@ -88,8 +114,8 @@
     {"name": "Site-Reliability"},
     {"name": "Project-Alpha"},
     {"name": "unsafe;group"},
-    {"name": "42c3e46f-2477-44d7-a85b-d3b43f6b31fa/ai-grid-admins"},
-    {"name": "53d4f57e-3588-55e8-b96c-4ec54a7c42fa/ai-grid-users"}
+    {"name": "ai-grid-admins"},
+    {"name": "42c3e46f-2477-44d7-a85b-d3b43f6b31fa/reserved-ai-grid-admins"}
   ],
   "users": [
     {
@@ -139,14 +165,60 @@
       "requiredActions": [],
       "credentials": [{"type": "password", "value": "letmein", "temporary": false}],
       "attributes": {
-        "maasOrganizations": [
-          "{\"organization_id\":\"42c3e46f-2477-44d7-a85b-d3b43f6b31fa\",\"roles\":[\"admins\"]}",
-          "{\"organization_id\":\"53d4f57e-3588-55e8-b96c-4ec54a7c42fa\",\"roles\":[\"users\"]}"
+        "maasOrganizationId": [
+          "42c3e46f-2477-44d7-a85b-d3b43f6b31fa"
+        ],
+        "maasOrganizationName": [
+          "coke"
+        ],
+        "maasOrganizationRoles": [
+          "admins"
         ]
       },
       "groups": [
-        "42c3e46f-2477-44d7-a85b-d3b43f6b31fa/ai-grid-admins",
-        "53d4f57e-3588-55e8-b96c-4ec54a7c42fa/ai-grid-users"
+        "ai-grid-admins"
+      ]
+    },
+    {
+      "username": "grid_admin_b",
+      "enabled": true,
+      "emailVerified": true,
+      "requiredActions": [],
+      "credentials": [{"type": "password", "value": "letmein", "temporary": false}],
+      "attributes": {
+        "maasOrganizationId": [
+          "53d4f57e-3588-55e8-b96c-4ec54a7c42fa"
+        ],
+        "maasOrganizationName": [
+          "org-b"
+        ],
+        "maasOrganizationRoles": [
+          "admins"
+        ]
+      },
+      "groups": [
+        "ai-grid-admins"
+      ]
+    },
+    {
+      "username": "grid_non_admin",
+      "enabled": true,
+      "emailVerified": true,
+      "requiredActions": [],
+      "credentials": [{"type": "password", "value": "letmein", "temporary": false}],
+      "attributes": {
+        "maasOrganizationId": [
+          "42c3e46f-2477-44d7-a85b-d3b43f6b31fa"
+        ],
+        "maasOrganizationName": [
+          "coke"
+        ],
+        "maasOrganizationRoles": [
+          "users"
+        ]
+      },
+      "groups": [
+        "ai-grid-admins"
       ]
     },
     {
@@ -156,6 +228,14 @@
       "requiredActions": [],
       "credentials": [{"type": "password", "value": "letmein", "temporary": false}],
       "groups": []
+    },
+    {
+      "username": "grid_reserved_group",
+      "enabled": true,
+      "emailVerified": true,
+      "requiredActions": [],
+      "credentials": [{"type": "password", "value": "letmein", "temporary": false}],
+      "groups": ["42c3e46f-2477-44d7-a85b-d3b43f6b31fa/reserved-ai-grid-admins"]
     }
   ]
 }

@@ -11,8 +11,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
-	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/authpolicy"
-	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/groupname"
 )
 
 // PostRender mutates rendered resources after kustomize build. It patches all
@@ -190,89 +188,6 @@ func configureExternalOIDC(log logr.Logger, params PlatformParams) error {
 	// The route-level maas-api-auth-policy has been removed, so there is nothing
 	// to patch in the kustomize-rendered resources here.
 	log.V(1).Info("external OIDC configured via gateway-level AuthPolicy; no kustomize resources to patch")
-	return nil
-}
-
-func patchAuthPolicyWithOIDC(log logr.Logger, resource *unstructured.Unstructured, oidc *maasv1alpha1.TenantExternalOIDCConfig) error {
-	if (oidc.AccessTokenPurposeClaim == "") != (oidc.AccessTokenPurpose == "") {
-		return errors.New("external OIDC access-token purpose claim and value must be configured together")
-	}
-	ttl := int64(oidc.TTL)
-	if ttl == 0 {
-		ttl = 300
-	}
-	notAPIKey := `!request.headers.authorization.startsWith("Bearer sk-oai-")`
-	if err := unstructured.SetNestedField(resource.Object, map[string]any{
-		"when": []any{
-			map[string]any{
-				"predicate": notAPIKey + ` && request.headers.authorization.matches("^Bearer [^.]+\\.[^.]+\\.[^.]+$")`,
-			},
-		},
-		"jwt": map[string]any{
-			"issuerUrl": oidc.IssuerURL,
-			"ttl":       ttl,
-		},
-		"priority": int64(1),
-	}, "spec", "rules", "authentication", "oidc-identities"); err != nil {
-		return fmt.Errorf("failed to set oidc-identities: %w", err)
-	}
-	if err := unstructured.SetNestedField(resource.Object, int64(2),
-		"spec", "rules", "authentication", "openshift-identities", "priority"); err != nil {
-		return fmt.Errorf("failed to set openshift-identities priority: %w", err)
-	}
-	if err := unstructured.SetNestedField(resource.Object, []any{
-		map[string]any{
-			"predicate": notAPIKey,
-		},
-	}, "spec", "rules", "authentication", "openshift-identities", "when"); err != nil {
-		return fmt.Errorf("failed to set openshift-identities when: %w", err)
-	}
-	if err := unstructured.SetNestedField(resource.Object, map[string]any{
-		"when": authpolicy.OIDCTokenBoundWhen(notAPIKey),
-		"patternMatching": map[string]any{
-			"patterns": authpolicy.OIDCTokenBoundPatterns(
-				oidc.IssuerURL,
-				oidc.ClientID,
-				oidc.Audience,
-				oidc.AccessTokenPurposeClaim,
-				oidc.AccessTokenPurpose,
-			),
-		},
-		"priority": int64(1),
-	}, "spec", "rules", "authorization", "oidc-client-bound"); err != nil {
-		return fmt.Errorf("failed to set oidc-client-bound: %w", err)
-	}
-	if err := unstructured.SetNestedField(resource.Object, map[string]any{
-		"expression": `has(auth.identity.preferred_username) ? auth.identity.preferred_username : (has(auth.identity.sub) ? auth.identity.sub : auth.identity.user.username)`,
-	}, "spec", "rules", "response", "success", "headers", "X-MaaS-Username-OC", "plain"); err != nil {
-		return fmt.Errorf("failed to set X-MaaS-Username-OC: %w", err)
-	}
-	// The group source is selected by identity type, never by claim presence:
-	// JWT identities (auth.identity.iss set) use only the groups claim,
-	// TokenReview identities use only user.groups — Authorino overlays the
-	// decoded JWT payload into auth.identity, so a JWT could otherwise craft
-	// a "user" claim and reach the TokenReview branch. Both sources are
-	// gated on the canonical pattern because CEL builds the JSON by
-	// concatenation without escaping.
-	groupsExpr := `has(auth.identity.iss) ? ` +
-		`(has(auth.identity.groups) && size(auth.identity.groups) > 0 && ` +
-		`auth.identity.groups.all(g, g.matches('` + groupname.Pattern + `')) ? ` +
-		`'["system:authenticated","' + auth.identity.groups.join('","') + '"]' : ` +
-		`'["system:authenticated"]') : ` +
-		`(has(auth.identity.user.groups) && size(auth.identity.user.groups) > 0 && ` +
-		`auth.identity.user.groups.all(g, g.matches('` + groupname.Pattern + `')) ? ` +
-		`'["system:authenticated","' + auth.identity.user.groups.join('","') + '"]' : ` +
-		`'["system:authenticated"]')`
-	if err := unstructured.SetNestedField(resource.Object, map[string]any{
-		"expression": groupsExpr,
-	}, "spec", "rules", "response", "success", "headers", "X-MaaS-Group-OC", "plain"); err != nil {
-		return fmt.Errorf("failed to set X-MaaS-Group-OC: %w", err)
-	}
-	log.Info("Patched maas-api AuthPolicy with external OIDC configuration",
-		"issuerUrl", oidc.IssuerURL,
-		"clientId", oidc.ClientID,
-		"audience", oidc.Audience,
-		"accessTokenPurposeClaim", oidc.AccessTokenPurposeClaim)
 	return nil
 }
 
