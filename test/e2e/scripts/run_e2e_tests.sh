@@ -256,34 +256,18 @@ _trust_project_root_for_git() {
     export GIT_CONFIG_COUNT=$((n + 1))
 }
 
-# Who runs git and who owns the clone. The clone happens in an earlier pipeline
-# step with its own image and git config.
-_log_pr_new_git_context() {
-    {
-        echo "--- git context"
-        echo "uid=$(id -u) gid=$(id -g) HOME=${HOME:-}"
-        git --version
-        ls -ldn "$PROJECT_ROOT" "$PROJECT_ROOT/.git"
-        echo "safe.directory: $(git config --show-origin --get-all safe.directory | tr '\n' ' ')"
-        git -C "$PROJECT_ROOT" rev-parse --is-inside-work-tree
-    } >>"${_pr_new_log}" 2>&1 || true
-}
-
 if [[ "$smoke_only" == "true" && "$_run_only_oidc_tests" != true ]]; then
     if [[ "$_include_new_from_diff" == true ]]; then
-        # A fallback below fails the run at the end, after all passes. The exit
-        # code is what enforces it, since session fixtures can skip any test;
-        # test_pr_new_selection.py reads this log to put the cause in JUnit.
+        # A fallback below fails the run at the end, after all passes, so tests
+        # added in the PR can't be dropped while the check stays green.
         _pr_new_log="${ARTIFACTS_DIR}/pr-new-selection.log"
         : >"${_pr_new_log}"
-        export E2E_PR_NEW_LOG="${_pr_new_log}"
         _trust_project_root_for_git
         _diff_base=""
         if ! _diff_base="$(_resolve_e2e_diff_base)"; then
             _diff_base=""
         fi
         if [[ -z "${_diff_base}" ]]; then
-            _log_pr_new_git_context
             echo "WARNING: E2E_INCLUDE_NEW_FROM_DIFF=true but could not resolve a PR base" \
                 "(set E2E_DIFF_BASE / PULL_BASE_SHA / BASE_SHA, or E2E_DIFF_UPSTREAM_URL +" \
                 "E2E_DIFF_TARGET_BRANCH); smoke-only without pr_new. Details (${_pr_new_log}):" >&2
