@@ -7,21 +7,18 @@ import (
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/groupname"
 )
 
-// Group-name validation errors for API-key mint time. The canonical maas-api
-// rule in internal/groupname is also applied to verified OIDC group claims.
+// Group-name validation for all authenticated groups.
 //
-// The SAME rule is enforced by maas-controller in the AuthPolicies it
-// generates (the oidc-groups-safe Rego rule and the CEL expressions that
-// build the X-MaaS-Group header JSON) and by the deploy-time kustomize
-// patch. Those copies live in independent Go modules, so the mirrored
+// The same rule is enforced by maas-controller in the AuthPolicies it
+// generates. Flat organization groups use exact matching and are checked
+// against the same rule, so every authenticated group can be stored in an
+// API-key snapshot. The copies live in independent Go modules, so the mirrored
 // sync tests (groupname_sync_test.go here, sync_test.go in
 // maas-controller) check them as text and fail when they drift.
 // Never edit one without the others:
 //
 //   - maas-controller/pkg/groupname/groupname.go (controller canonical)
 //   - maas-controller/pkg/controller/maas/maasauthpolicy_controller.go
-//   - maas-controller/pkg/platform/tenantreconcile/postrender.go
-//   - scripts/data/maas-api-authpolicy-external-oidc-patch.yaml
 //   - docs/content/advanced-administration/external-oidc.md
 
 // ErrInvalidGroupName is returned by CreateAPIKey when one of the user's

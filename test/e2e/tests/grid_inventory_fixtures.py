@@ -63,7 +63,7 @@ def new_grid_inventory_resources() -> GridInventoryResources:
         owner_group=f"{ORGANIZATION_A}/ai-grid-admins",
         owner_user=f"{ORGANIZATION_A}/inventory-owner",
         admin_only_owner_group=f"{ORGANIZATION_A}/admin-only-owners",
-        other_organization_owner_group=f"{ORGANIZATION_B}/unrelated-owners",
+        other_organization_owner_group=f"{ORGANIZATION_B}/ai-grid-admins",
         governance_owner_group="Engineering",
         governance_secondary_owner_group="Site-Reliability",
         non_owner_group=f"{ORGANIZATION_A}/model-only-users",
@@ -160,7 +160,6 @@ def apply_grid_inventory_resources(resources: GridInventoryResources) -> None:
         [
             resources.owner_group,
             resources.admin_only_owner_group,
-            resources.other_organization_owner_group,
             resources.governance_owner_group,
             resources.governance_secondary_owner_group,
             resources.non_owner_group,
@@ -170,12 +169,12 @@ def apply_grid_inventory_resources(resources: GridInventoryResources) -> None:
     _apply_auth_policy(
         resources.unmatched_auth_policy,
         resources.unmatched_model_ref,
-        [resources.non_owner_group],
+        [resources.other_organization_owner_group, resources.non_owner_group],
         [resources.unqualified_user],
     )
     _apply_subscription(
         resources.owner_admin_subscription,
-        [resources.owner_model_ref, resources.unmatched_model_ref],
+        [resources.owner_model_ref],
         [resources.owner_group],
         [resources.owner_user],
         ORGANIZATION_A,
@@ -189,7 +188,7 @@ def apply_grid_inventory_resources(resources: GridInventoryResources) -> None:
     )
     _apply_subscription(
         resources.other_organization_subscription,
-        [resources.owner_model_ref],
+        [resources.unmatched_model_ref],
         [resources.other_organization_owner_group],
         [],
         ORGANIZATION_B,

@@ -72,16 +72,24 @@ func (s *Selector) ResolveSubscriptionAdmin(identity *token.VerifiedIdentity, re
 	}, nil
 }
 
-// ResolveSubscriptionAdminScopes returns every subscription associated with an
-// organization administered by the verified identity. It does not infer admin
-// access from inference ownership or platform RBAC.
+// ResolveSubscriptionAdminScopes returns every subscription associated with the
+// verified flat organization administered by the identity. It does not infer
+// admin access from inference ownership or platform RBAC.
 func (s *Selector) ResolveSubscriptionAdminScopes(
 	identity *token.VerifiedIdentity,
 ) ([]*AdminScope, error) {
 	if identity == nil || identity.Source != "oidc" {
 		return nil, nil
 	}
-	if !identityHasAnyOrganizationAdmin(identity) {
+	organizationID := identity.Claims.OrgID
+	if organizationID == "" {
+		return nil, nil
+	}
+	organizationID, err := canonicalOrganizationID(organizationID)
+	if err != nil {
+		return nil, err
+	}
+	if !identityHasOrganizationAdmin(identity, organizationID) {
 		return nil, nil
 	}
 	if s.tenantName == "" {
@@ -101,18 +109,18 @@ func (s *Selector) ResolveSubscriptionAdminScopes(
 		if candidate.AssociatedOrganizationID == "" {
 			continue
 		}
-		organizationID, err := canonicalOrganizationID(candidate.AssociatedOrganizationID)
+		candidateOrganizationID, err := canonicalOrganizationID(candidate.AssociatedOrganizationID)
 		if err != nil {
 			continue
 		}
-		if !identityHasOrganizationAdmin(identity, organizationID) {
+		if !identityHasOrganizationAdmin(identity, candidateOrganizationID) {
 			continue
 		}
 		scopes = append(scopes, &AdminScope{
 			Tenant:         s.tenantName,
 			Namespace:      candidate.Namespace,
 			Subscription:   candidate.Name,
-			OrganizationID: organizationID,
+			OrganizationID: candidateOrganizationID,
 		})
 	}
 	return scopes, nil
@@ -228,25 +236,8 @@ func canonicalOrganizationID(organizationID string) (string, error) {
 }
 
 func identityHasOrganizationAdmin(identity *token.VerifiedIdentity, organizationID string) bool {
-	if identity == nil || identity.Source != "oidc" {
-		return false
-	}
-	for _, membership := range identity.Claims.Organizations {
-		if membership.OrganizationID == organizationID && slices.Contains(membership.Roles, organizationAdminRole) {
-			return true
-		}
-	}
-	return false
-}
-
-func identityHasAnyOrganizationAdmin(identity *token.VerifiedIdentity) bool {
-	if identity == nil || identity.Source != "oidc" {
-		return false
-	}
-	for _, membership := range identity.Claims.Organizations {
-		if slices.Contains(membership.Roles, organizationAdminRole) {
-			return true
-		}
-	}
-	return false
+	return identity != nil &&
+		identity.Source == "oidc" &&
+		identity.Claims.OrgID == organizationID &&
+		slices.Contains(identity.Claims.Roles, organizationAdminRole)
 }
