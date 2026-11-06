@@ -218,7 +218,7 @@ class TestGridGovernanceAPIKeys:
             item["subscription"] == resources.governance_subscription for item in items
         )
 
-    def test_grid_admin_search_without_subscription_stays_self_service(
+    def test_grid_admin_search_without_subscription_returns_administered_keys(
         self, maas_api_base_url: str, grid_governance_context: GridGovernanceContext
     ):
         token = request_grid_token("grid_admin")
@@ -227,11 +227,24 @@ class TestGridGovernanceAPIKeys:
         assert response.status_code == 200, (
             f"Grid admin own-key search failed: {response.status_code} {response.text}"
         )
-        returned_ids = {item["id"] for item in response.json()["data"]}
-        fixture_ids = {key.key_id for key in grid_governance_context.keys}
-        assert fixture_ids.isdisjoint(returned_ids), (
-            f"Missing subscription must not broaden Grid admin search to "
-            f"administered users; unexpectedly returned {fixture_ids & returned_ids}"
+        payload = response.json()
+        assert isinstance(payload["data"], list), (
+            f"Grid admin own-key search must return a data array, got "
+            f"{payload['data']!r}"
+        )
+        returned_ids = {item["id"] for item in payload["data"]}
+        expected_ids = {
+            grid_governance_context.keys[0].key_id,
+            grid_governance_context.keys[1].key_id,
+        }
+        assert expected_ids.issubset(returned_ids), (
+            f"Missing subscription must return all keys from Grid admin's "
+            f"authorized organization; expected {expected_ids}, got {returned_ids}"
+        )
+        assert grid_governance_context.keys[2].key_id not in returned_ids, (
+            f"Missing subscription must not broaden Grid admin search to another "
+            f"organization; unexpectedly returned "
+            f"{grid_governance_context.keys[2].key_id}"
         )
 
     def test_grid_admin_cannot_search_other_organization_keys(

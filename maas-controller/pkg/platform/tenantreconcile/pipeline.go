@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/go-logr/logr"
 	appsv1 "k8s.io/api/apps/v1"
@@ -113,7 +115,16 @@ func RunPlatformWithReader(
 	if err != nil {
 		return nil, fmt.Errorf("build params: %w", err)
 	}
+	bufferLimit, bufferWarning := ResolveGatewayBodyBufferLimitMB(gw)
+	params.GatewayBodyBufferLimitMB = bufferLimit
+	if bufferWarning != "" {
+		params.Warnings = append(params.Warnings, bufferWarning)
+		log.Info(bufferWarning)
+	}
 	applyMaaSAPIEgressConfig(&params, mcfg)
+	if err := resolveLokiReadEndpoint(ctx, c, appNs, &params, log); err != nil {
+		return nil, fmt.Errorf("resolve loki read endpoint: %w", err)
+	}
 
 	if !params.SkipIPP {
 		wasmPresent, warning, err := gatewayHasKuadrantWasmAuth(ctx, c, platformContext.GatewayRef.Namespace, platformContext.GatewayRef.Name)
@@ -212,6 +223,58 @@ func RunPlatformWithReader(
 	return &RunResult{Warnings: params.Warnings, KuadrantDetectionWarning: params.KuadrantDetectionWarning}, nil
 }
 
+// resolveLokiReadEndpoint sets params.LokiReadEndpoint (and the token
+// secretKeyRef flag) from the usage-logs-loki Secret in the app namespace. When
+// the Secret is absent the endpoint stays empty, which disables the maas-api
+// Loki proxy: the rendered Deployment omits LOKI_READ_ENDPOINT and the SSA
+// apply removes any previously applied value. A Secret that exists with a
+// missing key or an invalid URL only disables the proxy and records a warning
+// rather than failing the whole tenant reconcile.
+//
+// When the LOKI_READ_TOKEN key is present, the maas-api Deployment gets a
+// LOKI_READ_TOKEN env var referencing the Secret via secretKeyRef (so the
+// token value never lands in the Deployment spec, and rotations are picked up
+// on pod restart without a reconcile). A missing token key keeps the proxy
+// enabled without upstream authentication and records a warning, since the
+// upstream may not require it.
+func resolveLokiReadEndpoint(ctx context.Context, c client.Client, appNs string, params *PlatformParams, log logr.Logger) error {
+	secret := &corev1.Secret{}
+	err := c.Get(ctx, types.NamespacedName{Namespace: appNs, Name: LokiReadSecretName}, secret)
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			log.V(1).Info("usage-logs-loki Secret not found; maas-api Loki proxy disabled",
+				"name", LokiReadSecretName, "namespace", appNs)
+			return nil
+		}
+		return fmt.Errorf("get Secret %s/%s: %w", appNs, LokiReadSecretName, err)
+	}
+
+	endpoint := strings.TrimSpace(string(secret.Data[LokiReadSecretKey]))
+	if endpoint == "" {
+		params.Warnings = append(params.Warnings, fmt.Sprintf(
+			"Secret '%s' in namespace '%s' is missing key '%s'; the maas-api Loki proxy stays disabled",
+			LokiReadSecretName, appNs, LokiReadSecretKey))
+		return nil
+	}
+	if u, parseErr := url.Parse(endpoint); parseErr != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+		params.Warnings = append(params.Warnings, fmt.Sprintf(
+			"Secret '%s' in namespace '%s' has an invalid '%s' value (must be a valid http(s) URL); the maas-api Loki proxy stays disabled",
+			LokiReadSecretName, appNs, LokiReadSecretKey))
+		return nil //nolint:nilerr // Invalid optional configuration disables the proxy without failing tenant reconciliation.
+	}
+
+	params.LokiReadEndpoint = endpoint
+	if strings.TrimSpace(string(secret.Data[LokiReadTokenSecretKey])) != "" {
+		params.LokiReadTokenFromSecret = true
+	} else {
+		params.Warnings = append(params.Warnings, fmt.Sprintf(
+			"Secret '%s' in namespace '%s' is missing key '%s'; the maas-api Loki proxy sends no Authorization header upstream",
+			LokiReadSecretName, appNs, LokiReadTokenSecretKey))
+	}
+	log.Info("maas-api Loki read proxy enabled", "endpoint", endpoint, "tokenInjected", params.LokiReadTokenFromSecret)
+	return nil
+}
+
 type payloadProcessingSwitchOutcome struct {
 	blockedReason string // plugins ConfigMap gate blocked; caller continues non-IPP apply
 	pendingDetail string // peer handshake wait; caller returns DeploymentPending immediately
@@ -281,7 +344,9 @@ func reconcilePayloadProcessingSwitch(
 			if err != nil {
 				return payloadProcessingSwitchOutcome{}, fmt.Errorf("prepare API translation migration intent before IPP cleanup: %w", err)
 			}
-			affectedModels, err := legacyIPPTranslationModels(ctx, apiReader, *params, tenant)
+			// The intent, not the possibly stale tenant spec, decides whether
+			// Praxis translates Anthropic Messages bindings after cleanup.
+			affectedModels, err := legacyIPPTranslationModels(ctx, apiReader, *params, tenant, intent.Enabled)
 			if err != nil {
 				blockedReason := fmt.Sprintf("cannot assess legacy IPP translation compatibility (%v); keeping the IPP ConfigMap and resources", err)
 				if err := setPayloadProcessingMigrationAnnotation(ctx, c, tenant, PayloadProcessingMigrationBlocked); err != nil {
@@ -296,12 +361,19 @@ func reconcilePayloadProcessingSwitch(
 				case gate.Forced:
 					params.Warnings = append(params.Warnings, forcedMigrationReason(compatibilityRisk, true))
 				case intent.Explicit && !intent.Enabled:
-					params.Warnings = append(params.Warnings, compatibilityRisk+"; explicit spec.apiTranslation.enabled=false accepts this compatibility loss")
+					params.Warnings = append(params.Warnings, compatibilityRisk+explicitFalseAcceptsRisk)
 				default:
+					forceOutcome := "the listed bindings lose IPP parity"
+					if intent.Enabled {
+						forceOutcome = "API translation stays on, so only " + forceOutcome
+					}
 					blockedReason := fmt.Sprintf(
-						"%s; keeping the IPP ConfigMap and resources. Set spec.apiTranslation.enabled=false to explicitly accept the loss or set %s=true after reviewing the risk. This does not establish parity.",
+						"%s; keeping the IPP ConfigMap and resources. To migrate, set %s=true after reviewing the risk: %s. "+
+							"Setting spec.apiTranslation.enabled=false instead also turns off targetModel and path rewriting for every ExternalModel, "+
+							"so models named differently from their targetModel or using a non-default provider path stop working too. Neither establishes parity.",
 						compatibilityRisk,
 						AnnotationForcePayloadProcessingMigration,
+						forceOutcome,
 					)
 					log.Info("blocking IPP→Praxis migration because provider translation is not available", "reason", blockedReason)
 					if err := setPayloadProcessingMigrationAnnotation(ctx, c, tenant, PayloadProcessingMigrationBlocked); err != nil {
@@ -843,6 +915,15 @@ func cleanupIPPExternalModelRoutes(ctx context.Context, c client.Client, params 
 	if err != nil {
 		return fmt.Errorf("clean up IPP-owned HTTPRoutes: %w", err)
 	}
+	// The tenant's IPP may also have routed models of other namespaces on the
+	// tenant's Gateway: the default tenant's IPP serves every namespace,
+	// including those of other tenants, and a 3.5 IPP kept by a blocked
+	// migration still does (RHOAIENG-102557). Once the tenant leaves IPP its
+	// routes on that Gateway are stale wherever they are, except in the shared
+	// infrastructure namespace.
+	if params.GatewayName != "" {
+		listOpts, scope = nil, "cluster-wide"
+	}
 	listOpts = append(listOpts, client.MatchingLabels{"app.kubernetes.io/managed-by": ippExternalModelManagedBy})
 	if err := c.List(ctx, routes, listOpts...); err != nil {
 		return fmt.Errorf("list existing IPP HTTPRoutes %s: %w", scope, err)
@@ -850,7 +931,7 @@ func cleanupIPPExternalModelRoutes(ctx context.Context, c client.Client, params 
 	for i := range routes.Items {
 		route := &routes.Items[i]
 		namespace := route.GetNamespace()
-		if !inScope(namespace) {
+		if !inScope(namespace) && (namespace == params.AppNamespace || !routeOnGateway(route, params.GatewayNamespace, params.GatewayName)) {
 			continue
 		}
 		modelName := route.GetLabels()[ippExternalModelLabel]
@@ -883,6 +964,32 @@ func cleanupIPPExternalModelRoutes(ctx context.Context, c client.Client, params 
 		}
 	}
 	return nil
+}
+
+// routeOnGateway reports whether the HTTPRoute names the Gateway as a parent.
+func routeOnGateway(route *unstructured.Unstructured, gatewayNamespace, gatewayName string) bool {
+	if gatewayName == "" {
+		return false
+	}
+	parents, _, _ := unstructured.NestedSlice(route.Object, "spec", "parentRefs")
+	for _, raw := range parents {
+		parent, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		if kind, _ := parent["kind"].(string); kind != "" && kind != "Gateway" {
+			continue
+		}
+		name, _ := parent["name"].(string)
+		namespace, _ := parent["namespace"].(string)
+		if namespace == "" {
+			namespace = route.GetNamespace()
+		}
+		if name == gatewayName && namespace == gatewayNamespace {
+			return true
+		}
+	}
+	return false
 }
 
 // ippModelNamespaceScope returns where IPP served the tenant's models: its

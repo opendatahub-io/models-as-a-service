@@ -10,6 +10,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/constant"
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/groupname"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 )
 
@@ -155,7 +156,36 @@ func (h *Handler) ExtractUserInfo() gin.HandlerFunc {
 // that real configuration errors are surfaced.
 func (h *Handler) ExtractUserInfoOptional() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if _, exists := c.Get("verified_identity"); exists {
+		if value, exists := c.Get("verified_identity"); exists {
+			identity, ok := value.(*VerifiedIdentity)
+			if !ok || identity == nil {
+				requestLogger := h.logger.WithContext(c.Request.Context())
+				requestLogger.Error("Invalid verified identity context type")
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"error":         "Exception thrown while generating token",
+					"exceptionCode": "AUTH_FAILURE",
+					"refId":         "004",
+				})
+				c.Abort()
+				return
+			}
+
+			username := identity.Claims.PreferredUsername
+			if username == "" {
+				username = identity.Claims.Subject
+			}
+			claimGroups := identity.Claims.Groups
+			if !groupname.AllValid(claimGroups) {
+				claimGroups = nil
+			}
+			groups := make([]string, 0, len(claimGroups)+1)
+			groups = append(groups, "system:authenticated")
+			groups = append(groups, claimGroups...)
+			c.Set("user", &UserContext{
+				Username: username,
+				Groups:   groups,
+				Tenant:   h.tenantName,
+			})
 			c.Next()
 			return
 		}

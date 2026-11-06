@@ -1,17 +1,20 @@
-package api_keys //nolint:testpackage // Pins the other copies against the private validGroupNamePattern
+package api_keys_test
 
 import (
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/groupname"
 )
 
 // TestGroupNamePatternCopiesInSync is maas-api's mirror of
 // maas-controller/pkg/groupname/sync_test.go. It fails when any copy of the
-// group-name allowlist drifts from validGroupNamePattern:
+// group-name allowlist drifts from groupname.Pattern:
 //
 //   - maas-controller/pkg/groupname/groupname.go (canonical, independent module)
+//   - maas-api/internal/groupname/groupname.go (maas-api canonical)
 //   - scripts/data/maas-api-authpolicy-external-oidc-patch.yaml (CEL gate)
 //   - docs/content/advanced-administration/external-oidc.md (documented charset)
 //
@@ -43,7 +46,7 @@ func TestGroupNamePatternCopiesInSync(t *testing.T) {
 	if !ok {
 		t.Skip("maas-controller is not checked out alongside maas-api; nothing to sync against")
 	}
-	pattern := validGroupNamePattern.String()
+	pattern := groupname.Pattern
 	if !strings.Contains(controllerSrc, "`"+pattern+"`") {
 		t.Errorf("maas-controller/pkg/groupname/groupname.go no longer embeds %q — the group-name rule must stay identical in every copy; edit them together", pattern)
 	}

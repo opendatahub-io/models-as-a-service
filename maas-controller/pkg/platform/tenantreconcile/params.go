@@ -14,18 +14,20 @@ import (
 	netwv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 )
 
 // PlatformParams holds resolved runtime values for PostRender patching.
 type PlatformParams struct {
-	AppNamespace          string
-	ControllerNamespace   string
-	GatewayNamespace      string
-	GatewayName           string
-	ClusterAudience       string
-	SubscriptionNamespace string
+	AppNamespace             string
+	ControllerNamespace      string
+	GatewayNamespace         string
+	GatewayName              string
+	GatewayBodyBufferLimitMB int64
+	ClusterAudience          string
+	SubscriptionNamespace    string
 	// ModelNamespace is the tenant namespace containing ExternalModels and their HTTPRoutes.
 	ModelNamespace string
 	ExternalOIDC   *maasv1alpha1.TenantExternalOIDCConfig
@@ -74,6 +76,19 @@ type PlatformParams struct {
 
 	// MonitoringNamespace is the namespace where the platform monitoring stack (OTLP collector) runs.
 	MonitoringNamespace string
+
+	// LokiReadEndpoint is injected as LOKI_READ_ENDPOINT on the maas-api
+	// container, enabling the read-only Loki proxy (GET /v1/logs*). Empty
+	// disables the proxy. Resolved from the usage-logs-loki Secret in the app
+	// namespace; see resolveLokiReadEndpoint.
+	LokiReadEndpoint string
+
+	// LokiReadTokenFromSecret injects LOKI_READ_TOKEN on the maas-api container
+	// as a secretKeyRef to the usage-logs-loki Secret, authenticating proxied
+	// upstream requests with its service account token. False leaves the env
+	// var out of the render (and the SSA apply removes any previously applied
+	// value). See resolveLokiReadEndpoint.
+	LokiReadTokenFromSecret bool
 
 	// PayloadProcessingRouterExtProcFallback enables router-anchored ext_proc patches when
 	// Kuadrant WASM auth is absent on the gateway (avoids duplicate ext_proc when WASM exists).
@@ -126,6 +141,7 @@ func BuildPlatformParams(tenant client.Object, platformContext PlatformContext, 
 		ControllerNamespace:         controllerNamespace,
 		GatewayNamespace:            platformContext.GatewayRef.Namespace,
 		GatewayName:                 platformContext.GatewayRef.Name,
+		GatewayBodyBufferLimitMB:    DefaultGatewayBodyBufferLimitMB,
 		ClusterAudience:             clusterAudience,
 		MonitoringNamespace:         monitoringNamespace,
 		SubscriptionNamespace:       tenant.GetNamespace(),
@@ -213,6 +229,26 @@ func BuildPlatformParams(tenant client.Object, platformContext PlatformContext, 
 		"gatewayName", params.GatewayName)
 
 	return params, nil
+}
+
+// ResolveGatewayBodyBufferLimitMB reads the experimental Gateway annotation.
+// Invalid or out-of-range values fall back to the safe default and return a
+// warning for inclusion in tenant status.
+func ResolveGatewayBodyBufferLimitMB(gateway *gwapiv1.Gateway) (int64, string) {
+	if gateway == nil || gateway.Annotations == nil {
+		return DefaultGatewayBodyBufferLimitMB, ""
+	}
+	raw, ok := gateway.Annotations[AnnotationGatewayBodyBufferLimitMB]
+	if !ok || strings.TrimSpace(raw) == "" {
+		return DefaultGatewayBodyBufferLimitMB, ""
+	}
+	value, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
+	if err != nil || value < 1 || value > MaxGatewayBodyBufferLimitMB {
+		return DefaultGatewayBodyBufferLimitMB, fmt.Sprintf(
+			"Gateway %s/%s has invalid %s=%q; using %d MB",
+			gateway.Namespace, gateway.Name, AnnotationGatewayBodyBufferLimitMB, raw, DefaultGatewayBodyBufferLimitMB)
+	}
+	return value, ""
 }
 
 func firstNonEmpty(values ...string) string {
@@ -541,6 +577,9 @@ func patchResource(log logr.Logger, r *unstructured.Unstructured, params Platfor
 	case gvk == GVKEnvoyFilter && name == PayloadProcessingName:
 		r.SetName(PayloadProcessingEnvoyFilterName(tenantID))
 		return patchPayloadProcessingEnvoyFilter(log, r, params)
+	case gvk == GVKEnvoyFilter && name == GatewayBodyBufferLimitEnvoyFilterBaseName:
+		r.SetName(GatewayBodyBufferLimitEnvoyFilterName(tenantID))
+		return patchGatewayBodyBufferLimit(r, params)
 	case gvk == GVKDeployment && name == PayloadPreProcessingName:
 		r.SetName(PayloadPreProcessingDeploymentName(tenantID))
 		return patchPreProcessingDeployment(log, r, params)
@@ -570,6 +609,43 @@ func patchResource(log logr.Logger, r *unstructured.Unstructured, params Platfor
 		return patchMaaSAPIServingCert(log, r, params)
 	}
 	return nil
+}
+
+func patchGatewayBodyBufferLimit(r *unstructured.Unstructured, params PlatformParams) error {
+	r.SetNamespace(params.GatewayNamespace)
+	limitMB := params.GatewayBodyBufferLimitMB
+	if limitMB < 1 || limitMB > MaxGatewayBodyBufferLimitMB {
+		limitMB = DefaultGatewayBodyBufferLimitMB
+	}
+	if err := unstructured.SetNestedStringMap(r.Object,
+		map[string]string{"gateway.networking.k8s.io/gateway-name": params.GatewayName},
+		"spec", "workloadSelector", "labels"); err != nil {
+		return fmt.Errorf("write gateway buffer workloadSelector: %w", err)
+	}
+	patches, found, err := unstructured.NestedSlice(r.Object, "spec", "configPatches")
+	if err != nil {
+		return fmt.Errorf("read gateway buffer configPatches: %w", err)
+	}
+	if !found || len(patches) == 0 {
+		return errors.New("gateway buffer configPatches is empty")
+	}
+	patch, ok := patches[0].(map[string]any)
+	if !ok {
+		return errors.New("gateway buffer configPatches[0] is not an object")
+	}
+	patchBody, ok := patch["patch"].(map[string]any)
+	if !ok {
+		return errors.New("gateway buffer configPatches[0].patch is not an object")
+	}
+	value, ok := patchBody["value"].(map[string]any)
+	if !ok {
+		return errors.New("gateway buffer configPatches[0].patch.value is not an object")
+	}
+	value["per_connection_buffer_limit_bytes"] = limitMB * 1024 * 1024
+	patchBody["value"] = value
+	patch["patch"] = patchBody
+	patches[0] = patch
+	return unstructured.SetNestedSlice(r.Object, patches, "spec", "configPatches")
 }
 
 func patchNetworkPolicyResource(
@@ -997,6 +1073,24 @@ func patchMaaSAPIDeployment(log logr.Logger, r *unstructured.Unstructured, param
 	if err := setOrAddEnvVar(r, "maas-api", "API_KEY_DELETION_RETENTION_DAYS", deletionRetentionDays); err != nil {
 		return fmt.Errorf("patch API_KEY_DELETION_RETENTION_DAYS: %w", err)
 	}
+	// LOKI_READ_ENDPOINT enables the read-only Loki proxy; an empty value
+	// disables it. The base manifest never sets it, so leaving it out of the
+	// render (and the SSA apply config) removes any previously applied value.
+	if params.LokiReadEndpoint != "" {
+		if err := setOrAddEnvVar(r, "maas-api", "LOKI_READ_ENDPOINT", params.LokiReadEndpoint); err != nil {
+			return fmt.Errorf("patch LOKI_READ_ENDPOINT: %w", err)
+		}
+		// The token is referenced via secretKeyRef rather than copied into the
+		// Deployment spec, so the value stays out of the manifest and rotations
+		// only need a pod restart. Omitted when the Secret has no token key;
+		// the SSA apply then removes any previously applied reference.
+		if params.LokiReadTokenFromSecret {
+			if err := setOrAddEnvVarFromSecret(r, "maas-api", "LOKI_READ_TOKEN", LokiReadSecretName, LokiReadTokenSecretKey); err != nil {
+				return fmt.Errorf("patch LOKI_READ_TOKEN: %w", err)
+			}
+		}
+		log.V(4).Info("Patched maas-api LOKI_READ_ENDPOINT")
+	}
 	if params.MaaSAPIResources != nil {
 		if err := setContainerResources(r, "maas-api", params.MaaSAPIResources); err != nil {
 			return fmt.Errorf("patch maas-api resources: %w", err)
@@ -1062,19 +1156,8 @@ func patchPayloadProcessingDeployment(log logr.Logger, r *unstructured.Unstructu
 	if err := setContainerImage(r, "payload-processing", params.PayloadProcessingImage); err != nil {
 		return fmt.Errorf("patch payload-processing image: %w", err)
 	}
-	if err := setOrAddEnvVar(r, "payload-processing", "GATEWAY_NAMESPACE", params.GatewayNamespace); err != nil {
-		return fmt.Errorf("patch GATEWAY_NAMESPACE: %w", err)
-	}
-	if err := setOrAddEnvVar(r, "payload-processing", "GATEWAY_NAME", params.GatewayName); err != nil {
-		return fmt.Errorf("patch GATEWAY_NAME: %w", err)
-	}
-	if err := setOrAddEnvVar(r, "payload-processing", "TENANT_NAMESPACE", params.SubscriptionNamespace); err != nil {
-		return fmt.Errorf("patch TENANT_NAMESPACE: %w", err)
-	}
-	if params.TenantIdentifier != "" {
-		if err := setOrAddEnvVar(r, "payload-processing", "DISABLE_EXTERNAL_MODEL_CONTROLLER", "true"); err != nil {
-			return fmt.Errorf("patch DISABLE_EXTERNAL_MODEL_CONTROLLER: %w", err)
-		}
+	if err := setIPPTenantEnv(r, PayloadProcessingName, params); err != nil {
+		return err
 	}
 	if err := addPodTemplateLabel(r, LabelTenantInstance, deploymentName); err != nil {
 		return fmt.Errorf("patch tenant-instance label: %w", err)
@@ -1121,6 +1204,9 @@ func patchPreProcessingDeployment(log logr.Logger, r *unstructured.Unstructured,
 			return fmt.Errorf("patch payload-pre-processing image: %w", err)
 		}
 	}
+	if err := setIPPTenantEnv(r, PayloadPreProcessingName, params); err != nil {
+		return err
+	}
 	if err := addPodTemplateLabel(r, LabelTenantInstance, deploymentName); err != nil {
 		return fmt.Errorf("patch tenant-instance label: %w", err)
 	}
@@ -1138,6 +1224,30 @@ func patchPreProcessingDeployment(log logr.Logger, r *unstructured.Unstructured,
 			return fmt.Errorf("patch payload-pre-processing resources: %w", err)
 		}
 		log.V(4).Info("Patched payload-pre-processing resources", "deployment", deploymentName)
+	}
+	return nil
+}
+
+// setIPPTenantEnv scopes an IPP container to its tenant's Gateway and namespace.
+// Both IPP Deployments run the same binary, which falls back to
+// maas-default-gateway without GATEWAY_NAME and runs its cluster-wide
+// ExternalModel and ExternalProvider controllers unless
+// DISABLE_EXTERNAL_MODEL_CONTROLLER=true. ExternalModels on IPP are
+// default-tenant only, so every other tenant's IPP disables them.
+func setIPPTenantEnv(r *unstructured.Unstructured, containerName string, params PlatformParams) error {
+	if err := setOrAddEnvVar(r, containerName, "GATEWAY_NAMESPACE", params.GatewayNamespace); err != nil {
+		return fmt.Errorf("patch GATEWAY_NAMESPACE: %w", err)
+	}
+	if err := setOrAddEnvVar(r, containerName, "GATEWAY_NAME", params.GatewayName); err != nil {
+		return fmt.Errorf("patch GATEWAY_NAME: %w", err)
+	}
+	if err := setOrAddEnvVar(r, containerName, "TENANT_NAMESPACE", params.SubscriptionNamespace); err != nil {
+		return fmt.Errorf("patch TENANT_NAMESPACE: %w", err)
+	}
+	if params.TenantIdentifier != "" {
+		if err := setOrAddEnvVar(r, containerName, "DISABLE_EXTERNAL_MODEL_CONTROLLER", "true"); err != nil {
+			return fmt.Errorf("patch DISABLE_EXTERNAL_MODEL_CONTROLLER: %w", err)
+		}
 	}
 	return nil
 }
@@ -1771,6 +1881,42 @@ func setOrAddEnvVar(r *unstructured.Unstructured, containerName, envName, envVal
 			}
 		}
 		envSlice = append(envSlice, map[string]any{"name": envName, "value": envValue})
+		cm["env"] = envSlice
+		containers[i] = cm
+		return unstructured.SetNestedSlice(r.Object, containers, "spec", "template", "spec", "containers")
+	}
+	return fmt.Errorf("container %q not found", containerName)
+}
+
+// setOrAddEnvVarFromSecret sets or adds an env var on the named container that
+// references secretName/secretKey via valueFrom.secretKeyRef. It replaces a
+// plain value (and setOrAddEnvVar replaces a valueFrom), so the two helpers
+// never leave both fields set on the same env var.
+func setOrAddEnvVarFromSecret(r *unstructured.Unstructured, containerName, envName, secretName, secretKey string) error {
+	containers, found, err := unstructured.NestedSlice(r.Object, "spec", "template", "spec", "containers")
+	if err != nil || !found {
+		return errors.New("containers not found")
+	}
+	valueFrom := map[string]any{
+		"secretKeyRef": map[string]any{"name": secretName, "key": secretKey},
+	}
+	for i, c := range containers {
+		cm, ok := c.(map[string]any)
+		if !ok || cm["name"] != containerName {
+			continue
+		}
+		envSlice, _ := cm["env"].([]any)
+		for j, e := range envSlice {
+			if em, ok := e.(map[string]any); ok && em["name"] == envName {
+				delete(em, "value")
+				em["valueFrom"] = valueFrom
+				envSlice[j] = em
+				cm["env"] = envSlice
+				containers[i] = cm
+				return unstructured.SetNestedSlice(r.Object, containers, "spec", "template", "spec", "containers")
+			}
+		}
+		envSlice = append(envSlice, map[string]any{"name": envName, "valueFrom": valueFrom})
 		cm["env"] = envSlice
 		containers[i] = cm
 		return unstructured.SetNestedSlice(r.Object, containers, "spec", "template", "spec", "containers")

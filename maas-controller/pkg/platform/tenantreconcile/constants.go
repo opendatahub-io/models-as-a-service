@@ -21,6 +21,17 @@ const (
 	// other packages that need the same key must reference this constant.
 	AnnotationManaged = "opendatahub.io/managed"
 
+	// AnnotationGatewayBodyBufferLimitMB configures the experimental Envoy
+	// listener buffer limit for a MaaS Gateway. The value is expressed in MB.
+	AnnotationGatewayBodyBufferLimitMB = "maas.opendatahub.io/experimental-body-buffer-limit-mb"
+
+	// DefaultGatewayBodyBufferLimitMB is the large-response mitigation applied
+	// when the experimental Gateway annotation is absent.
+	DefaultGatewayBodyBufferLimitMB int64 = 64
+	// MaxGatewayBodyBufferLimitMB bounds the experimental setting.
+	MaxGatewayBodyBufferLimitMB               int64 = 64
+	GatewayBodyBufferLimitEnvoyFilterBaseName       = "maas-gateway-body-buffer-limit"
+
 	// AnnotationMaaSAPIReplicas overrides the maas-api Deployment replica count for a tenant.
 	// spec.maasApi.replicas takes precedence when both are set.
 	AnnotationMaaSAPIReplicas = "maas.opendatahub.io/maas-api-replicas"
@@ -185,6 +196,18 @@ const (
 	MaaSDBSecretName             = "maas-db-config" //nolint:gosec // secret name reference, not a credential
 	MaaSDBSecretKey              = "DB_CONNECTION_URL"
 
+	// LokiReadSecretName is the Secret in the app namespace whose presence
+	// enables the maas-api read-only Loki proxy (GET /v1/logs*). Its absence
+	// leaves LOKI_READ_ENDPOINT unset, which disables the proxy.
+	LokiReadSecretName = "usage-logs-loki" //nolint:gosec // secret name reference, not a credential
+	// LokiReadSecretKey holds the Loki read API base URL injected as the
+	// LOKI_READ_ENDPOINT env var on the maas-api container.
+	LokiReadSecretKey = "LOKI_READ_ENDPOINT" //nolint:gosec // secret key reference, not a credential
+	// LokiReadTokenSecretKey holds the service account token injected as the
+	// LOKI_READ_TOKEN env var on the maas-api container (via secretKeyRef, so
+	// the token value never lands in the Deployment spec).
+	LokiReadTokenSecretKey = "LOKI_READ_TOKEN" //nolint:gosec // secret key reference, not a credential
+
 	// Condition types aligned with ODH internal/controller/status for DSC aggregation parity.
 	ConditionDependenciesAvailable      = "DependenciesAvailable"
 	ConditionMaaSPrerequisitesAvailable = "MaaSPrerequisitesAvailable"
@@ -246,6 +269,15 @@ func resourceNameForTenant(baseName, tenantID string) string {
 		return baseName
 	}
 	return baseName + "-" + tenantID
+}
+
+// GatewayBodyBufferLimitEnvoyFilterName returns a stable name for the filter
+// serving one tenant Gateway. The default tenant keeps the historical name.
+func GatewayBodyBufferLimitEnvoyFilterName(tenantID string) string {
+	if tenantID == "" {
+		return GatewayBodyBufferLimitEnvoyFilterBaseName
+	}
+	return resourceNameForTenant("maas-gateway-buffer", tenantID)
 }
 
 func GatewayTokenRateLimitDefaultDenyPolicyName(tenantID string) string {
