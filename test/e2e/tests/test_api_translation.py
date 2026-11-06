@@ -30,9 +30,10 @@ from multitenancy_helpers import (
 from test_helper import (
     MODEL_CANONICAL_ID,
     SIMULATOR_SUBSCRIPTION,
+    _create_api_key_raw,
     _gateway_url,
     _get_cluster_token,
-    _maas_api_url,
+    _revoke_api_key,
     _wait_for_gateway_auth_enforced,
 )
 
@@ -84,6 +85,10 @@ def _api_translation_state() -> bool | None:
 
 def _plugins_have_translator() -> bool:
     result = _oc_run(["get", "configmap", PLUGINS_CONFIGMAP, "-n", GATEWAY_NAMESPACE, "-o", "jsonpath={.data}"], timeout=60)
+    if result.returncode != 0:
+        # A failed read is not evidence the translator is absent; raise so callers do
+        # not mistake an unreadable ConfigMap for a reconciled (empty) one.
+        raise RuntimeError(f"Failed to read {PLUGINS_CONFIGMAP}: {(result.stderr or result.stdout).strip()}")
     data = result.stdout or ""
     return all(key in data for key in TRANSLATOR_KEYS)
 
@@ -96,8 +101,11 @@ def _wait_translator_state(present: bool, timeout: int = RENDER_TIMEOUT) -> bool
     already complete."""
     deadline = time.time() + timeout
     while time.time() < deadline:
-        if _plugins_have_translator() == present:
-            return True
+        try:
+            if _plugins_have_translator() == present:
+                return True
+        except RuntimeError:
+            pass  # transient read failure: keep polling rather than trust an unread state
         time.sleep(POLL)
     return False
 
@@ -168,20 +176,18 @@ def _sse_event_names(response: requests.Response) -> list[str]:
     return names
 
 
-def _create_default_api_key() -> str:
-    response = requests.post(
-        f"{_maas_api_url()}/v1/api-keys",
-        headers={"Authorization": f"Bearer {_get_cluster_token()}", "Content-Type": "application/json"},
-        json={"name": "e2e-apitranslation", "subscription": SIMULATOR_SUBSCRIPTION},
-        timeout=45,
-        verify=TLS_VERIFY,
-    )
+def _create_default_api_key() -> tuple[str, str | None]:
+    """Create the shared API key and return (key, id). Uses the retrying helper so a
+    transient 403 while gateway AuthPolicy enforcement is still propagating does not
+    fail the module; the id lets the fixture revoke the key on teardown."""
+    response = _create_api_key_raw(_get_cluster_token(), "e2e-apitranslation", SIMULATOR_SUBSCRIPTION)
     assert response.status_code in (200, 201), (
         f"Failed to create API key: {response.status_code} {redact_sensitive(response.text)}"
     )
-    key = response.json().get("key")
-    assert key, f"API key missing: {redact_sensitive(response.json())}"
-    return key
+    data = response.json()
+    key = data.get("key")
+    assert key, f"API key missing: {redact_sensitive(data)}"
+    return key, data.get("id")
 
 
 def _is_well_formed_anthropic(body: dict) -> bool:
@@ -214,7 +220,9 @@ def _wait_until_gated(url: str, api_key: str, timeout: int = RENDER_TIMEOUT) -> 
             timeout=60,
             verify=TLS_VERIFY,
         )
-        if not _is_translated(last):
+        # A transient gateway error (502/503/504) is not proof translation is gated —
+        # keep polling so translation resuming on the next request can't slip through.
+        if last.status_code not in (502, 503, 504) and not _is_translated(last):
             return last
         time.sleep(POLL)
     return last
@@ -226,10 +234,12 @@ def api_translation_env():
     tenant's original apiTranslation state after the module's tests finish."""
     original = _api_translation_state()
     _wait_for_gateway_auth_enforced()
-    api_key = _create_default_api_key()
+    api_key, api_key_id = _create_default_api_key()
     try:
         yield {"api_key": api_key}
     finally:
+        if api_key_id:
+            _revoke_api_key(_get_cluster_token(), api_key_id)
         _apply_api_translation(original)
 
 
