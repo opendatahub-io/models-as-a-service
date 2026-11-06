@@ -235,7 +235,7 @@ spec:
                 type: object
               payloadPreProcessing:
                 description: PayloadPreProcessing defines scaling configuration for
-                  payload-pre-processing (IPP) pods.
+                  payload-pre-processing pods.
                 properties:
                   autoscaling:
                     description: |-
@@ -267,6 +267,21 @@ spec:
                         minimum: 1
                         type: integer
                     type: object
+                  maxBodyBytes:
+                    default: 10485760
+                    description: |-
+                      MaxBodyBytes bounds ExtProc request-body accumulation (server.max_body_bytes)
+                      for the Praxis payload-processing dataplane. This is ExtProc's accumulation
+                      ceiling, not Envoy's HTTP buffer filter. When set under
+                      MaasTenantConfig.spec.payloadProcessing, the AI Gateway controller always
+                      renders server.max_body_bytes and never allow_unbounded_body. Omission
+                      defaults to 10485760 (10 MiB); values above 104857600 (100 MiB) are rejected.
+                      Under payloadPreProcessing the field is currently unused by the AI Gateway
+                      controller. Keep the Maximum in sync with AGC MaxExtProcMaxBodyBytes.
+                    format: int64
+                    maximum: 104857600
+                    minimum: 1
+                    type: integer
                   replicas:
                     description: |-
                       Replicas overrides the Deployment replica count.
@@ -305,8 +320,9 @@ spec:
                     type: object
                 type: object
               payloadProcessing:
-                description: PayloadProcessing defines scaling configuration for payload-processing
-                  (IPP) pods.
+                description: |-
+                  PayloadProcessing defines configuration for payload-processing pods
+                  (scaling/resources and ExtProc server.max_body_bytes).
                 properties:
                   autoscaling:
                     description: |-
@@ -338,6 +354,21 @@ spec:
                         minimum: 1
                         type: integer
                     type: object
+                  maxBodyBytes:
+                    default: 10485760
+                    description: |-
+                      MaxBodyBytes bounds ExtProc request-body accumulation (server.max_body_bytes)
+                      for the Praxis payload-processing dataplane. This is ExtProc's accumulation
+                      ceiling, not Envoy's HTTP buffer filter. When set under
+                      MaasTenantConfig.spec.payloadProcessing, the AI Gateway controller always
+                      renders server.max_body_bytes and never allow_unbounded_body. Omission
+                      defaults to 10485760 (10 MiB); values above 104857600 (100 MiB) are rejected.
+                      Under payloadPreProcessing the field is currently unused by the AI Gateway
+                      controller. Keep the Maximum in sync with AGC MaxExtProcMaxBodyBytes.
+                    format: int64
+                    maximum: 104857600
+                    minimum: 1
+                    type: integer
                   replicas:
                     description: |-
                       Replicas overrides the Deployment replica count.
