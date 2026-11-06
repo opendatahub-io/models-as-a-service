@@ -199,9 +199,9 @@ The E2E framework auto-discovers most values from the cluster. These are the mos
 | `EXTERNAL_OIDC` | Set `true` to enable external OIDC tests |
 | `E2E_PARALLEL_WORKERS` | pytest-xdist worker count for pass 1 (default `5`). Set to `1` for single-worker pass 1 without xdist; pass 2 stays serial. |
 | `LLMISVC_CONTROLLER_CPU_REQUEST` / `LLMISVC_CONTROLLER_CPU_LIMIT` | CPU that `deploy-platform.sh` gives `llmisvc-controller-manager` on the test cluster (defaults `1` / `2`; shipped is 100m). Set the limit empty to keep the shipped resources. |
-| `E2E_LARGE_IO` | Set `1` or `true` to enable large payload I/O tests. Opt-in because: (1) each request sends and echoes ~4.3MB, making the suite slow (~3 min) and bandwidth-heavy; (2) the echo-sim fixture requires a 1Gi memory limit which is expensive on shared clusters; (3) these tests validate a specific buffer-limit concern (WASM/ext_proc/Envoy truncation) rather than general model serving correctness, so they are not needed on every PR. Intended for nightly or extended runs. |
+| `E2E_LARGE_IO` | Set `1` or `true` to enable large payload I/O tests. Opt-in because: (1) each request sends and echoes ~4.3MB, making the suite slow (~3 min) and bandwidth-heavy; (2) the `echo-simulator-large-io` fixture requires a 1Gi memory limit which is expensive on shared clusters; (3) these tests validate a specific buffer-limit concern (WASM/ext_proc/Envoy truncation) rather than general model serving correctness, so they are not needed on every PR. Intended for nightly or extended runs. |
 | `E2E_LARGE_IO_TIMEOUT` | Request timeout in seconds for large I/O tests (default `300`) |
-| `E2E_LARGE_IO_WORDS` | Prompt size in words for large I/O tests (default `800000`, ~4.3MB) |
+| `E2E_LARGE_IO_WORDS` | Prompt size in words for large I/O tests (default `600000`, ~3.2MB) |
 
 See `test/e2e/tests/conftest.py` and individual test module docstrings for the full set of supported variables.
 

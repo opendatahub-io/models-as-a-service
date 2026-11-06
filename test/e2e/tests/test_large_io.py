@@ -11,18 +11,18 @@ A gateway that handles the non-streaming path correctly may still buffer or
 truncate chunks on the streaming path — these tests catch exactly that.
 
 Prerequisites:
-  Echo fixture (RHOAIENG-94273) deployed at cluster setup time:
+  echo-simulator-large-io fixture deployed at cluster setup time:
     kustomize build test/e2e/fixtures | kubectl apply -f -
-  The echo-sim LLMIS mirrors the last user message back verbatim, making
+  The large-io LLMIS mirrors the last user message back verbatim, making
   response content a deterministic function of the request.
 
-Payload size: LARGE_WORDS words (~4.3MB) — satisfies the ≥1-4MB AC.
-echo-sim context window is 1700000 tokens; 800K words × 2 = 1.6M tokens.
+Payload size: LARGE_WORDS words (~3.2MB) — satisfies the ≥1-4MB AC.
+echo-simulator-large-io context window is 1700000 tokens; 600K words × 2 = 1.2M tokens.
 
 Environment variables:
   E2E_LARGE_IO         Set to "1" to enable (gated for CI time budget).
   E2E_LARGE_IO_TIMEOUT Request timeout in seconds (default: 300).
-  E2E_LARGE_IO_WORDS   Prompt size in words (default: 800000, ~4.3MB).
+  E2E_LARGE_IO_WORDS   Prompt size in words (default: 600000, ~3.2MB).
 
 Epic: RHOAIENG-94270
 Story: RHOAIENG-94274
@@ -37,9 +37,6 @@ import pytest
 import requests
 
 from test_helper import (
-    ECHO_MODEL_NAME,
-    ECHO_MODEL_PATH,
-    ECHO_MODEL_REF,
     MODEL_NAMESPACE,
     TLS_VERIFY,
     _create_api_key,
@@ -58,13 +55,21 @@ from test_helper import (
 
 log = logging.getLogger(__name__)
 
+LARGE_IO_MODEL_REF = "echo-simulator-large-io"
+LARGE_IO_MODEL_NAME = "test/e2e-echo-model-large-io"
+LARGE_IO_MODEL_PATH = "/llm/echo-simulator-large-io"
+
 LARGE_IO_ENABLED = os.environ.get("E2E_LARGE_IO", "").lower() in ("1", "true")
 LARGE_IO_TIMEOUT = int(os.environ.get("E2E_LARGE_IO_TIMEOUT", "300"))
 
-# ~800k words / ~4.3MB — satisfies the ≥1-4MB AC in RHOAIENG-94274.
-# echo-sim's context window is 1700000 tokens; 800K words × 2 (prompt + echo)
-# = 1.6M tokens, comfortably within the limit.
-LARGE_WORDS = int(os.environ.get("E2E_LARGE_IO_WORDS", "800000"))
+# ~600k words / ~3.2MB — satisfies the ≥1-4MB AC in RHOAIENG-94274.
+# The 3.2MB prompt fits within praxis-extproc's gRPC message limit (4MB).
+# The SSE response (~139MB) far exceeds the Kuadrant WASM body-accumulation
+# buffer (~5.1MB), so streaming tests fail with 500/response_payload_too_large
+# until the WASM gains incremental SSE support. See RHOAIENG-94274.
+# echo-sim's context window is 1700000 tokens; 600K words × 2 (prompt + echo)
+# = 1.2M tokens, comfortably within the limit.
+LARGE_WORDS = int(os.environ.get("E2E_LARGE_IO_WORDS", "600000"))
 SMALL_WORDS = max(1000, LARGE_WORDS // 800)  # ~0.1% of LARGE_WORDS, min 1000
 
 if LARGE_WORDS <= SMALL_WORDS:
@@ -100,10 +105,10 @@ def _echo_completion_stream(api_key: str, prompt: str) -> requests.Response:
     tight for a ~4.3MB payload traversing the full gateway filter chain.
     """
     return requests.post(
-        f"{_gateway_url()}{ECHO_MODEL_PATH}/v1/chat/completions",
+        f"{_gateway_url()}{LARGE_IO_MODEL_PATH}/v1/chat/completions",
         headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
         json={
-            "model": ECHO_MODEL_NAME,
+            "model": LARGE_IO_MODEL_NAME,
             "messages": [{"role": "user", "content": prompt}],
             "stream": True,
         },
@@ -168,13 +173,13 @@ def large_io_access():
     sa_user = _sa_to_user(sa_name, namespace=MODEL_NAMESPACE)
 
     try:
-        _create_test_auth_policy(auth_name, ECHO_MODEL_REF, users=[sa_user])
+        _create_test_auth_policy(auth_name, LARGE_IO_MODEL_REF, users=[sa_user])
         # Use an explicit token budget rather than unlimited=True: the unlimited
         # field is a newer CRD addition and older clusters reject the subscription
         # with "spec.modelRefs[0].tokenRateLimits: Required value".
         _create_test_subscription(
             subscription_name,
-            ECHO_MODEL_REF,
+            LARGE_IO_MODEL_REF,
             users=[sa_user],
             token_limit=TOKEN_BUDGET,
             window="1m",
@@ -182,7 +187,7 @@ def large_io_access():
 
         # Wait for the MaaSModelRef to reconcile its endpoint; without this the
         # first request can race and return 404/403 before the route is up.
-        _wait_for_model_ready(ECHO_MODEL_REF, namespace=MODEL_NAMESPACE, timeout=120)
+        _wait_for_model_ready(LARGE_IO_MODEL_REF, namespace=MODEL_NAMESPACE, timeout=120)
         _wait_for_gateway_auth_enforced()
 
         # The TRLP derived from the subscription reconciles separately from the
@@ -190,7 +195,7 @@ def large_io_access():
         # every request with 403 "subscription rate limiting policies are not ready".
         _wait_for_subscription_inference_ready(
             subscription_name,
-            ECHO_MODEL_REF,
+            LARGE_IO_MODEL_REF,
             namespace=ns,
             model_namespace=MODEL_NAMESPACE,
             timeout=180,
@@ -225,13 +230,15 @@ class TestLargeIOStream:
         prompt = _lorem(LARGE_WORDS)
 
         with _echo_completion_stream(large_io_access, prompt) as r:
-            assert r.status_code == 200, f"{r.status_code}: {r.headers}"
+            assert r.status_code == 200, (
+                f"status={r.status_code} content-type={r.headers.get('content-type')!r}"
+            )
             events, _ = _collect_stream_content(r)
 
         data_chunks = [e for e in events if e.startswith("data: {")]
-        assert data_chunks, f"Stream carried no data chunks. All events: {events[:10]}"
+        assert data_chunks, f"Stream carried no data chunks ({len(events)} total events)"
         assert events and events[-1] == "data: [DONE]", (
-            f"Stream did not close with [DONE] as the final event. Last 3 events: {events[-3:]}"
+            f"Stream did not close with [DONE] as the final event ({len(events)} total events)"
         )
 
     def test_stream_content_equals_prompt(self, large_io_access):
@@ -243,7 +250,9 @@ class TestLargeIOStream:
         prompt = _lorem(LARGE_WORDS)
 
         with _echo_completion_stream(large_io_access, prompt) as r:
-            assert r.status_code == 200, f"{r.status_code}: {r.headers}"
+            assert r.status_code == 200, (
+                f"status={r.status_code} content-type={r.headers.get('content-type')!r}"
+            )
             _, content = _collect_stream_content(r)
 
         assert len(content) == len(prompt), (
@@ -262,11 +271,15 @@ class TestLargeIOStream:
         large = _lorem(LARGE_WORDS)
 
         with _echo_completion_stream(large_io_access, small) as r:
-            assert r.status_code == 200, f"{r.status_code} {str(r.headers)}"
+            assert r.status_code == 200, (
+                f"status={r.status_code} content-type={r.headers.get('content-type')!r}"
+            )
             _, small_content = _collect_stream_content(r)
 
         with _echo_completion_stream(large_io_access, large) as r:
-            assert r.status_code == 200, f"{r.status_code} {str(r.headers)}"
+            assert r.status_code == 200, (
+                f"status={r.status_code} content-type={r.headers.get('content-type')!r}"
+            )
             _, large_content = _collect_stream_content(r)
 
         assert small_content == small, (
