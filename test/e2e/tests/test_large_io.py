@@ -75,7 +75,7 @@ SMALL_WORDS = max(1000, LARGE_WORDS // 800)  # ~0.1% of LARGE_WORDS, min 1000
 if LARGE_WORDS <= SMALL_WORDS:
     raise ValueError(
         f"E2E_LARGE_IO_WORDS ({LARGE_WORDS}) must be larger than SMALL_WORDS ({SMALL_WORDS}); "
-        "increase E2E_LARGE_IO_WORDS (default 800000)"
+        "increase E2E_LARGE_IO_WORDS (default 600000)"
     )
 
 # Each streaming round trip bills ~40k tokens (prompt + mirrored completion).
