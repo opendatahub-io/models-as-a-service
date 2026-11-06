@@ -20,6 +20,25 @@ namespace: opendatahub
 # also pollutes NetworkPolicy ingress selectors, making the ext_proc
 # rule unmatchable (gateway pods don't have payload-processing labels).
 patches:
+# Perses reads usage logs through the maas-api HTTPS Loki proxy. Add this
+# after the base label transformer so its source selector keeps only Perses labels.
+- target:
+    kind: NetworkPolicy
+    name: maas-api-allow-monitoring
+  patch: |-
+    - op: add
+      path: /spec/ingress/-
+      value:
+        from:
+          - namespaceSelector:
+              matchLabels:
+                kubernetes.io/metadata.name: redhat-ods-monitoring
+            podSelector:
+              matchLabels:
+                app.kubernetes.io/managed-by: perses-operator
+        ports:
+          - protocol: TCP
+            port: 8443
 - target:
     kind: NetworkPolicy
     name: payload-processing

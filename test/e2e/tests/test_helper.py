@@ -964,16 +964,30 @@ def _request_with_gateway_retry(method, url, retries=None, delay=None, deadline=
     return r
 
 
-def create_api_key_at(base_url: str, oc_token: str, name: str, *, subscription: str | None = None):
+def create_api_key_at(
+    base_url: str,
+    oc_token: str,
+    name: str,
+    *,
+    subscription: str | None = None,
+    expires_in: str | None = None,
+):
     """Create an API key against a maas-api base URL (any tenant's).
 
     Shared by the default-tenant helpers and the tenant-scoped maas-api
     callers. Retries empty 403 / Authorino AUTH_FAILURE while gateway
     AuthPolicy enforcement catches up.
+
+    Args:
+        expires_in: Optional duration string (e.g. "168h"). A tenant's
+            apiKeys.maxExpirationDays is only evaluated when the request
+            carries an expiry.
     """
     body = {"name": name}
     if subscription:
         body["subscription"] = subscription
+    if expires_in:
+        body["expiresIn"] = expires_in
 
     return _request_with_gateway_retry(
         requests.post,
@@ -1578,6 +1592,42 @@ def _post(url: str, payload: dict, headers: dict, timeout_sec: int = 45) -> requ
     )
 
 
+def assert_inference_response(response: requests.Response, *, min_bytes: int = 50) -> dict:
+    """
+    Assert a non-streaming chat/completions HTTP 200 carries parseable JSON with
+    non-empty completion text (``choices[0].message.content`` or ``choices[0].text``).
+    When ``usage.total_tokens`` is present it must be positive.
+    """
+    assert response.status_code == 200, (
+        f"expected HTTP 200, got {response.status_code}: {(response.text or '')[:500]}"
+    )
+    raw = response.content or b""
+    assert len(raw) >= min_bytes, (
+        f"HTTP 200 body shorter than {min_bytes} bytes (len={len(raw)})"
+    )
+    assert raw.strip(), "HTTP 200 returned an empty response body"
+    try:
+        data = response.json()
+    except json.JSONDecodeError as exc:
+        raise AssertionError(
+            f"HTTP 200 body is not valid JSON: {exc}; body={(response.text or '')[:500]}"
+        ) from exc
+    choices = data.get("choices") or []
+    assert choices, f"HTTP 200 JSON has no choices: {(response.text or '')[:500]}"
+    choice = choices[0]
+    text = choice.get("text")
+    if text is None:
+        message = choice.get("message") or {}
+        text = message.get("content")
+    assert isinstance(text, str) and text.strip(), (
+        f"HTTP 200 completion has empty text/message content: {(response.text or '')[:500]}"
+    )
+    usage = data.get("usage")
+    if isinstance(usage, dict) and "total_tokens" in usage:
+        assert usage["total_tokens"] > 0, f"usage.total_tokens must be > 0 when present: {usage}"
+    return data
+
+
 def chat(prompt: str, model_v1: str, headers: dict, model_name: str, *,
          stream: bool = False, max_tokens: Optional[int] = None):
     url = f"{model_v1}/chat/completions"
@@ -1610,9 +1660,19 @@ def assert_openai_sse_chat_stream(response: requests.Response) -> list[str]:
     assert events[-1] == OPENAI_SSE_DONE_LINE, f"stream did not end with [DONE]: {events[-3:]}"
     data_chunks = [e for e in events[:-1] if e.startswith("data: {")]
     assert data_chunks, f"stream carried no JSON data chunks: {events[:5]}"
+    aggregated: list[str] = []
     for chunk in data_chunks:
         payload = chunk[len("data: ") :]
-        json.loads(payload)
+        parsed = json.loads(payload)
+        for choice in parsed.get("choices") or []:
+            delta = choice.get("delta") or {}
+            if delta.get("content"):
+                aggregated.append(delta["content"])
+            if choice.get("text"):
+                aggregated.append(choice["text"])
+    assert "".join(aggregated).strip(), (
+        "streaming response carried no non-empty content in SSE data chunks"
+    )
     return events
 
 

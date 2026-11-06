@@ -13,6 +13,10 @@ import requests
 from grid_governance_fixtures import (
     GridGovernanceContext,
 )
+from grid_governance_fixtures import (
+    GridRetainedSubscriptionContext,
+    grid_retained_subscription_context,  # noqa: F401 - pytest fixture
+)
 from grid_governance_fixtures import grid_governance_context  # noqa: F401 - pytest fixture
 from grid_cross_tenant_fixtures import GridCrossTenantContext
 from grid_cross_tenant_fixtures import (
@@ -23,6 +27,7 @@ from grid_oidc_helpers import request_grid_token, request_tenant_b_token
 from test_helper import (
     MODEL_NAMESPACE,
     _decode_jwt_payload,
+    _delete_governance_and_wait,
     _request_with_gateway_retry,
     _ns,
     kubectl_curl,
@@ -383,6 +388,38 @@ class TestGridInternalAPIKeyValidation:
             "admin",
             "owner",
         }.isdisjoint(response)
+
+
+class TestGridSubscriptionProjection:
+    def test_grid_local_subscription_copy_delete_retains_shared_api_key(
+        self,
+        maas_api_internal_url: str,
+        grid_retained_subscription_context: GridRetainedSubscriptionContext,
+    ):
+        key = grid_retained_subscription_context.key
+
+        _, before_delete = _post_internal_json(
+            f"{maas_api_internal_url}/internal/v1/api-keys/validate",
+            {"key": key.secret},
+        )
+        assert before_delete["valid"] is True
+
+        _delete_governance_and_wait(
+            subscriptions=[
+                (
+                    grid_retained_subscription_context.subscription_name,
+                    _ns(),
+                )
+            ]
+        )
+
+        _, after_delete = _post_internal_json(
+            f"{maas_api_internal_url}/internal/v1/api-keys/validate",
+            {"key": key.secret},
+        )
+        assert after_delete["valid"] is True
+        assert after_delete["keyId"] == key.key_id
+        assert after_delete["subscription"] == key.subscription
 
 
 class TestGridInternalLifecycleBoundary:

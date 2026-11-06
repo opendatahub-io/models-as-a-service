@@ -88,6 +88,7 @@ from test_helper import (
     _get_cr,
     _get_subscriptions_for_model,
     _inference,
+    assert_inference_response,
     _maas_api_url,
     _ns,
     _poll_status,
@@ -2796,6 +2797,7 @@ class TestStatusReporting:
             log.info("Step 8: Verifying inference works with Active subscription...")
             resp = _poll_status(api_key, 200, path=TRLP_TEST_MODEL_PATH, model_name=TRLP_TEST_MODEL_ID, timeout=60)
             assert resp.status_code == 200, f"Expected 200 OK for Active subscription, got {resp.status_code}: {resp.text}"
+            assert_inference_response(resp)
             log.info("✅ Inference works with Active subscription after Kuadrant recovery")
 
             log.info("✅ TRLP validation e2e test complete")

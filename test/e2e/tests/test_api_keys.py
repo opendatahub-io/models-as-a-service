@@ -48,6 +48,7 @@ from test_helper import (
     MODEL_REF,
     SIMULATOR_SUBSCRIPTION,
     TIMEOUT,
+    assert_inference_response,
     _apply_cr,
     _create_api_key,
     _create_api_key_raw,
@@ -869,12 +870,7 @@ class TestAPIKeyModelInference:
         )
 
         assert r.status_code == 200, f"Expected 200, got {r.status_code}: {r.text}"
-        data = r.json()
-
-        # Verify response structure
-        assert "choices" in data, "Response should contain 'choices'"
-        assert len(data["choices"]) > 0, "Should have at least one choice"
-        assert "text" in data["choices"][0] or "message" in data["choices"][0], "Choice should have text or message"
+        data = assert_inference_response(r)
 
         print(f"[inference] Model access succeeded: {data.get('model')}, tokens={data.get('usage', {}).get('total_tokens')}")
 
@@ -1025,8 +1021,7 @@ class TestAPIKeyModelInference:
             pytest.skip("Chat completions endpoint not available for this model")
 
         if r.status_code == 200:
-            data = r.json()
-            assert "choices" in data
+            data = assert_inference_response(r)
             print(f"[inference] Chat completions succeeded: {data.get('model')}")
         else:
             # Some models may return different errors

@@ -2,6 +2,7 @@ package tlsprofile
 
 import (
 	"crypto/tls"
+	"fmt"
 
 	libgocrypto "github.com/openshift/library-go/pkg/crypto"
 )
@@ -34,12 +35,12 @@ func isTLS13Cipher(code uint16) bool {
 }
 
 // TLSConfigFromProfile converts a ProfileSpec into MinVersion and CipherSuites
-// suitable for crypto/tls.Config. Returns unsupported cipher names that could
-// not be mapped.
-func TLSConfigFromProfile(spec ProfileSpec) (uint16, []uint16, []string) {
+// suitable for crypto/tls.Config. Returns cipher names that cannot be mapped or
+// negotiated with the configured minimum version.
+func TLSConfigFromProfile(spec ProfileSpec) (uint16, []uint16, []string, error) {
 	minVer, ok := protocolVersion[spec.MinTLSVersion]
 	if !ok {
-		minVer = tls.VersionTLS12
+		return 0, nil, nil, fmt.Errorf("unrecognized minimum TLS version %q", spec.MinTLSVersion)
 	}
 
 	ciphers := make([]uint16, 0, len(spec.Ciphers))
@@ -52,7 +53,15 @@ func TLSConfigFromProfile(spec ProfileSpec) (uint16, []uint16, []string) {
 			unsupported = append(unsupported, name)
 			continue
 		}
+		if minVer >= tls.VersionTLS13 {
+			continue
+		}
 		if isTLS13Cipher(code) {
+			unsupported = append(unsupported, name)
+			continue
+		}
+		if !cipherSupportedAtMinVersion(code, minVer) {
+			unsupported = append(unsupported, name)
 			continue
 		}
 		if _, ok := seen[code]; ok {
@@ -62,8 +71,25 @@ func TLSConfigFromProfile(spec ProfileSpec) (uint16, []uint16, []string) {
 		ciphers = append(ciphers, code)
 	}
 
-	// When all profile ciphers are TLS 1.3 (Go manages those unconditionally) or
-	// unsupported, ciphers is empty. The caller should leave tls.Config.CipherSuites
-	// nil so Go applies its secure defaults for TLS 1.2 negotiation.
-	return minVer, ciphers, unsupported
+	if len(spec.Ciphers) > 0 && minVer < tls.VersionTLS13 && len(ciphers) == 0 {
+		return 0, nil, unsupported, fmt.Errorf(
+			"no configured cipher suites are usable with minimum TLS version %q", spec.MinTLSVersion)
+	}
+
+	return minVer, ciphers, unsupported, nil
+}
+
+func cipherSupportedAtMinVersion(code, minVersion uint16) bool {
+	for _, suite := range append(tls.CipherSuites(), tls.InsecureCipherSuites()...) {
+		if suite.ID != code {
+			continue
+		}
+		for _, version := range suite.SupportedVersions {
+			if version >= minVersion {
+				return true
+			}
+		}
+		return false
+	}
+	return false
 }

@@ -1,6 +1,7 @@
 package subscription_test
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/subscription"
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/token"
 )
 
 func TestSelectorCanonicalizeSubscription(t *testing.T) {
@@ -77,4 +79,70 @@ func TestSelectorCanonicalizeSubscription(t *testing.T) {
 			assert.Equal(t, test.want, got)
 		})
 	}
+}
+
+func TestSelectorResolveSubscriptionAdminScopes(t *testing.T) {
+	adminSubscription := createSubscription("subscription-a", nil, nil, 10, 1000, "", "")
+	require.NoError(t, unstructured.SetNestedField(
+		adminSubscription.Object,
+		"42c3e46f-2477-44d7-a85b-d3b43f6b31fa",
+		"spec", "organization", "id",
+	))
+	otherSubscription := createSubscription("subscription-b", nil, nil, 10, 1000, "", "")
+	require.NoError(t, unstructured.SetNestedField(
+		otherSubscription.Object,
+		"11111111-2222-3333-4444-555555555555",
+		"spec", "organization", "id",
+	))
+
+	selector := subscription.NewSelector(
+		logger.New(false),
+		&fakeLister{subscriptions: []*unstructured.Unstructured{
+			adminSubscription,
+			otherSubscription,
+		}},
+		nil,
+		nil,
+		subscription.WithTenantName("grid-tenant"),
+	)
+	identity := &token.VerifiedIdentity{
+		Source: "oidc",
+		Claims: token.VerifiedClaims{
+			Organizations: []token.OrganizationMembership{{
+				OrganizationID: "42c3e46f-2477-44d7-a85b-d3b43f6b31fa",
+				Roles:          []string{"admins"},
+			}},
+		},
+	}
+
+	scopes, err := selector.ResolveSubscriptionAdminScopes(identity)
+
+	require.NoError(t, err)
+	require.Len(t, scopes, 1)
+	assert.Equal(t, "grid-tenant", scopes[0].Tenant)
+	assert.Equal(t, "test-ns", scopes[0].Namespace)
+	assert.Equal(t, "subscription-a", scopes[0].Subscription)
+	assert.Equal(t, "42c3e46f-2477-44d7-a85b-d3b43f6b31fa", scopes[0].OrganizationID)
+
+	noAdminSelector := subscription.NewSelector(
+		logger.New(false),
+		&fakeLister{err: errors.New("subscription inventory must not be loaded")},
+		nil,
+		nil,
+		subscription.WithTenantName("grid-tenant"),
+	)
+	noAdminIdentity := &token.VerifiedIdentity{
+		Source: "oidc",
+		Claims: token.VerifiedClaims{
+			Organizations: []token.OrganizationMembership{{
+				OrganizationID: "42c3e46f-2477-44d7-a85b-d3b43f6b31fa",
+				Roles:          []string{"users"},
+			}},
+		},
+	}
+
+	scopes, err = noAdminSelector.ResolveSubscriptionAdminScopes(noAdminIdentity)
+
+	require.NoError(t, err)
+	assert.Empty(t, scopes)
 }
