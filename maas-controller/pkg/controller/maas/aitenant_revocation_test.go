@@ -40,11 +40,21 @@ func TestEnsureTenantAPIKeysRevoked_RetainsWhenExternalOwnerRequestsRetention(t 
 			},
 		},
 	}
+	tenantConfig := &maasv1alpha1.MaasTenantConfig{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      maasv1alpha1.MaasTenantConfigInstanceName,
+			Namespace: "ai-tenant-" + aitenant.Name,
+			Annotations: map[string]string{
+				aitenantNameAnnotation:      aitenant.Name,
+				aitenantNamespaceAnnotation: aitenant.Namespace,
+			},
+		},
+	}
 	recorder := events.NewFakeRecorder(1)
 	cl := fake.NewClientBuilder().
 		WithScheme(s).
-		WithStatusSubresource(&maasv1alpha1.AITenant{}).
-		WithObjects(aitenantRevocationOperandObjects(appNS, aitenant.Name, aitenant.DeepCopy())...).
+		WithStatusSubresource(&maasv1alpha1.AITenant{}, &maasv1alpha1.MaasTenantConfig{}).
+		WithObjects(aitenantRevocationOperandObjects(appNS, aitenant.Name, aitenant.DeepCopy(), tenantConfig)...).
 		Build()
 	r := &AITenantReconciler{
 		Client:       cl,
@@ -68,6 +78,14 @@ func TestEnsureTenantAPIKeysRevoked_RetainsWhenExternalOwnerRequestsRetention(t 
 	job := tenantAPIKeyRevocationJob(aitenant, appNS)
 	g.Expect(apierrors.IsNotFound(cl.Get(ctx, client.ObjectKeyFromObject(job), &batcv1.Job{}))).To(BeTrue())
 
+	var updatedTenantConfig maasv1alpha1.MaasTenantConfig
+	g.Expect(cl.Get(ctx, client.ObjectKeyFromObject(tenantConfig), &updatedTenantConfig)).To(Succeed())
+	tenantConfigCondition := apimeta.FindStatusCondition(updatedTenantConfig.Status.Conditions, maasTenantConfigAPIKeysRetainedCondition)
+	g.Expect(tenantConfigCondition).NotTo(BeNil())
+	g.Expect(tenantConfigCondition.Status).To(Equal(metav1.ConditionTrue))
+	g.Expect(tenantConfigCondition.Reason).To(Equal(maasTenantConfigAPIKeysRetainedReason))
+	g.Expect(tenantConfigCondition.Message).To(Equal(revocationOperandsRequestMarker(aitenant)))
+
 	select {
 	case event := <-recorder.Events:
 		g.Expect(event).To(ContainSubstring("Normal APIKeyCleanupSkipped"))
@@ -88,6 +106,7 @@ func TestAITenantDeletion_RetainsTenantAndSubscriptionKeysThroughFinalizers(t *t
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       tenantreconcile.DefaultAITenantName,
 			Namespace:  tenantreconcile.DefaultAITenantNamespace,
+			UID:        types.UID("retain-cascade-uid"),
 			Finalizers: []string{aitenantFinalizer},
 			Annotations: map[string]string{
 				retainAPIKeysOnDeleteAnnotation: "true",
@@ -114,9 +133,6 @@ func TestAITenantDeletion_RetainsTenantAndSubscriptionKeysThroughFinalizers(t *t
 			Name:       "projected-subscription",
 			Namespace:  tenantNS,
 			Finalizers: []string{maasSubscriptionFinalizer},
-			Annotations: map[string]string{
-				retainAPIKeysOnDeleteAnnotation: "true",
-			},
 		},
 	}
 	maasAPIDeployment := tenantTestUnstructured(tenantreconcile.GVKDeployment, appNS, tenantreconcile.MaaSAPIDeploymentName(""))
@@ -203,6 +219,50 @@ func TestRevocationOperandsRequestMarker(t *testing.T) {
 	g.Expect(revocationOperandsRequestMarker(&maasv1alpha1.AITenant{
 		ObjectMeta: metav1.ObjectMeta{UID: types.UID("tenant-uid")},
 	})).To(Equal("tenant-uid"))
+}
+
+func TestClearTenantConfigAPIKeysRetained(t *testing.T) {
+	g := NewWithT(t)
+	s := aitenantTestScheme(t)
+	ctx := context.Background()
+
+	aitenant := &maasv1alpha1.AITenant{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "team-recreated",
+			Namespace: tenantreconcile.DefaultAITenantNamespace,
+			UID:       types.UID("recreated-uid"),
+		},
+	}
+	tenantConfig := &maasv1alpha1.MaasTenantConfig{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      maasv1alpha1.MaasTenantConfigInstanceName,
+			Namespace: "ai-tenant-team-recreated",
+			Annotations: map[string]string{
+				aitenantNameAnnotation:      aitenant.Name,
+				aitenantNamespaceAnnotation: aitenant.Namespace,
+			},
+		},
+		Status: maasv1alpha1.MaasTenantConfigStatus{
+			Conditions: []metav1.Condition{{
+				Type:    maasTenantConfigAPIKeysRetainedCondition,
+				Status:  metav1.ConditionTrue,
+				Reason:  maasTenantConfigAPIKeysRetainedReason,
+				Message: "old-uid/2026-11-06T12:00:00Z",
+			}},
+		},
+	}
+	cl := fake.NewClientBuilder().
+		WithScheme(s).
+		WithStatusSubresource(&maasv1alpha1.MaasTenantConfig{}).
+		WithObjects(tenantConfig).
+		Build()
+	r := &AITenantReconciler{Client: cl, APIReader: cl, Scheme: s}
+
+	g.Expect(r.clearTenantConfigAPIKeysRetained(ctx, aitenant)).To(Succeed())
+
+	var updated maasv1alpha1.MaasTenantConfig
+	g.Expect(cl.Get(ctx, client.ObjectKeyFromObject(tenantConfig), &updated)).To(Succeed())
+	g.Expect(apimeta.FindStatusCondition(updated.Status.Conditions, maasTenantConfigAPIKeysRetainedCondition)).To(BeNil())
 }
 
 func TestRequestRevocationOperandsViaMaasTenantConfig_IdempotentPerDeletion(t *testing.T) {

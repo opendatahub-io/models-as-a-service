@@ -883,6 +883,9 @@ func (r *AITenantReconciler) ensureTenantConfig(ctx context.Context, aitenant *m
 		}
 		return false, false, err
 	}
+	if err := r.clearTenantConfigAPIKeysRetained(ctx, aitenant); err != nil {
+		return false, false, err
+	}
 	if err := r.markLegacyTenantDeprecated(ctx, aitenant, tenantNamespace); err != nil {
 		return false, false, err
 	}
