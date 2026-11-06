@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/tls"
 	"errors"
 	"flag"
 	"fmt"
@@ -27,6 +26,7 @@ import (
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/constant"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/handlers"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/lokiproxy"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/metrics"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/middleware"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/models"
@@ -389,6 +389,21 @@ func registerHandlers(
 	internalRoutes.DELETE("/tenants/:tenant/subscriptions/:subscription/api-keys", cleanupAuth, apiKeyHandler.RevokeSubscriptionAPIKeys)
 	internalRoutes.POST("/subscriptions/select", tokenHandler.RejectTrustedIdentityHeaders(), subscriptionHandler.SelectSubscription)
 
+	// Read-only Loki proxy (GET /v1/logs*). Only registered when
+	// LOKI_READ_ENDPOINT is configured; every query is restricted to the
+	// caller's organization and requires organization admin membership.
+	if cfg.LokiReadEndpoint != "" {
+		lokiHandler, err := lokiproxy.NewHandler(log, cfg.LokiReadEndpoint, cfg.LokiReadToken)
+		if err != nil {
+			return fmt.Errorf("failed to create Loki proxy handler: %w", err)
+		}
+		lokiRoutes := v1Routes.Group("", strictAuthMiddleware...)
+		lokiHandler.RegisterRoutes(lokiRoutes)
+		log.Info("Loki read proxy enabled", "upstream", cfg.LokiReadEndpoint)
+	} else {
+		log.Info("Loki read proxy disabled: LOKI_READ_ENDPOINT is not set")
+	}
+
 	return nil
 }
 
@@ -452,13 +467,13 @@ func setupTLSProfile(ctx context.Context, log *logger.Logger, cfg *config.Config
 		"minTLSVersion", profile.MinTLSVersion,
 		"tlsAdherence", settings.Adherence)
 
-	profileMinVersion, profileCipherSuites, unsupported := tlsprofile.TLSConfigFromProfile(profile)
+	profileMinVersion, profileCipherSuites, unsupported, err := tlsprofile.TLSConfigFromProfile(profile)
+	if err != nil {
+		return 0, nil, fmt.Errorf("applying cluster TLS profile: %w", err)
+	}
 	if len(unsupported) > 0 {
 		log.Warn("TLS profile contains ciphers not supported by this Go version (ignored)",
 			"unsupportedCiphers", unsupported)
-	}
-	if len(profileCipherSuites) == 0 && profileMinVersion < tls.VersionTLS13 {
-		log.Warn("TLS profile produced no TLS 1.2 cipher suites; Go defaults will be used for TLS 1.2 negotiation")
 	}
 
 	if watchSettings {
@@ -522,7 +537,7 @@ func fetchTLSSettingsWithRetry(ctx context.Context, log *logger.Logger, restConf
 			return tlsprofile.DefaultSettings(), false, nil
 		}
 
-		if apierrors.IsForbidden(err) {
+		if apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err) {
 			// Preserve the authorization error instead of retrying into a watcher
 			// whose informer can never sync. A 403 only proves missing RBAC when
 			// discovery confirmed the group is served; otherwise the group may be
@@ -530,10 +545,14 @@ func fetchTLSSettingsWithRetry(ctx context.Context, log *logger.Logger, restConf
 			if discoveryErr != nil {
 				return tlsprofile.DefaultSettings(), false, fmt.Errorf(
 					"cannot determine whether config.openshift.io is served: API discovery failed (%w) "+
-						"and the cluster TLS profile request was forbidden: %w", discoveryErr, err)
+						"and the cluster TLS profile request was denied: %w", discoveryErr, err)
 			}
 			return tlsprofile.DefaultSettings(), false, fmt.Errorf(
-				"cluster TLS profile is not readable (config.openshift.io is served but access is forbidden, check the maas-api RBAC): %w", err)
+				"cluster TLS profile is not readable: config.openshift.io is served, access is denied; check maas-api RBAC: %w",
+				err)
+		}
+		if tlsprofile.IsProfileValidationError(err) {
+			return tlsprofile.DefaultSettings(), false, fmt.Errorf("invalid cluster TLS profile: %w", err)
 		}
 
 		lastErr = err

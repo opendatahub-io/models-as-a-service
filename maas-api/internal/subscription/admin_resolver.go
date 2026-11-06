@@ -72,6 +72,52 @@ func (s *Selector) ResolveSubscriptionAdmin(identity *token.VerifiedIdentity, re
 	}, nil
 }
 
+// ResolveSubscriptionAdminScopes returns every subscription associated with an
+// organization administered by the verified identity. It does not infer admin
+// access from inference ownership or platform RBAC.
+func (s *Selector) ResolveSubscriptionAdminScopes(
+	identity *token.VerifiedIdentity,
+) ([]*AdminScope, error) {
+	if identity == nil || identity.Source != "oidc" {
+		return nil, nil
+	}
+	if !identityHasAnyOrganizationAdmin(identity) {
+		return nil, nil
+	}
+	if s.tenantName == "" {
+		return nil, &SubscriptionAdminError{
+			Code:    "internal_error",
+			Message: "tenant is not configured",
+		}
+	}
+
+	subscriptions, err := s.loadAdminSubscriptions()
+	if err != nil {
+		return nil, fmt.Errorf("failed to load subscriptions for administration: %w", err)
+	}
+
+	scopes := make([]*AdminScope, 0)
+	for _, candidate := range subscriptions {
+		if candidate.AssociatedOrganizationID == "" {
+			continue
+		}
+		organizationID, err := canonicalOrganizationID(candidate.AssociatedOrganizationID)
+		if err != nil {
+			continue
+		}
+		if !identityHasOrganizationAdmin(identity, organizationID) {
+			continue
+		}
+		scopes = append(scopes, &AdminScope{
+			Tenant:         s.tenantName,
+			Namespace:      candidate.Namespace,
+			Subscription:   candidate.Name,
+			OrganizationID: organizationID,
+		})
+	}
+	return scopes, nil
+}
+
 func (s *Selector) CanonicalizeSubscription(requestedSubscription string) (string, error) {
 	target, err := s.adminSubscriptionTarget(requestedSubscription)
 	if err != nil {
@@ -187,6 +233,18 @@ func identityHasOrganizationAdmin(identity *token.VerifiedIdentity, organization
 	}
 	for _, membership := range identity.Claims.Organizations {
 		if membership.OrganizationID == organizationID && slices.Contains(membership.Roles, organizationAdminRole) {
+			return true
+		}
+	}
+	return false
+}
+
+func identityHasAnyOrganizationAdmin(identity *token.VerifiedIdentity) bool {
+	if identity == nil || identity.Source != "oidc" {
+		return false
+	}
+	for _, membership := range identity.Claims.Organizations {
+		if slices.Contains(membership.Roles, organizationAdminRole) {
 			return true
 		}
 	}

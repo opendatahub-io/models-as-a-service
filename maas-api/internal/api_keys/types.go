@@ -95,7 +95,8 @@ type SearchFilters struct {
 	HasBeenUsed   *bool `json:"hasBeenUsed,omitempty"`   // true = used, false = never used
 
 	// Subscription filter
-	Subscription *string `json:"subscription,omitempty"` // Filter by bound subscription name
+	Subscription      *string  `json:"subscription,omitempty"` // Filter by bound subscription name
+	SubscriptionNames []string `json:"-"`
 
 	// Ephemeral key filter
 	IncludeEphemeral *bool `json:"includeEphemeral,omitempty"` // Include ephemeral keys in results (default: false)

@@ -109,6 +109,9 @@ type MaaSSubscriptionReconciler struct {
 
 const (
 	maasSubscriptionFinalizer = "maas.opendatahub.io/subscription-cleanup"
+	// retainAPIKeysOnDeleteAnnotation lets an external owner retain API keys
+	// when a projected MaaSSubscription copy is removed from one cluster.
+	retainAPIKeysOnDeleteAnnotation = "maas.opendatahub.io/retain-api-keys-on-delete" //nolint:gosec // Annotation name, not a credential.
 	// modelRefIndexKey is the field index key for looking up MaaSSubscriptions by model reference.
 	// The index value format is "namespace/name" of the model.
 	modelRefIndexKey = "spec.modelRef"
@@ -1186,6 +1189,17 @@ func (r *MaaSSubscriptionReconciler) handleDeletion(ctx context.Context, log log
 }
 
 func (r *MaaSSubscriptionReconciler) ensureSubscriptionAPIKeysRevoked(ctx context.Context, log logr.Logger, subscription *maasv1alpha1.MaaSSubscription) (bool, error) {
+	if subscription.Annotations[retainAPIKeysOnDeleteAnnotation] == "true" {
+		log.Info("Skipping subscription API-key cleanup because API keys are retained on delete",
+			"subscription", subscription.Namespace+"/"+subscription.Name)
+		if r.Recorder != nil {
+			r.Recorder.Eventf(subscription, nil, corev1.EventTypeNormal, "APIKeyCleanupSkipped", "InvalidateAPIKeys",
+				"Skipping API-key cleanup for MaaSSubscription %s/%s because API keys are retained on delete",
+				subscription.Namespace, subscription.Name)
+		}
+		return true, nil
+	}
+
 	if strings.TrimSpace(r.AppNamespace) == "" {
 		return false, errors.New("application namespace is required for MaaSSubscription API-key cleanup")
 	}

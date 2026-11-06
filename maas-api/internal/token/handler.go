@@ -10,6 +10,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/constant"
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/groupname"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 )
 
@@ -173,9 +174,13 @@ func (h *Handler) ExtractUserInfoOptional() gin.HandlerFunc {
 			if username == "" {
 				username = identity.Claims.Subject
 			}
-			groups := make([]string, 0, len(identity.Claims.Groups)+1)
+			claimGroups := identity.Claims.Groups
+			if !groupname.AllValid(claimGroups) {
+				claimGroups = nil
+			}
+			groups := make([]string, 0, len(claimGroups)+1)
 			groups = append(groups, "system:authenticated")
-			groups = append(groups, identity.Claims.Groups...)
+			groups = append(groups, claimGroups...)
 			c.Set("user", &UserContext{
 				Username: username,
 				Groups:   groups,
