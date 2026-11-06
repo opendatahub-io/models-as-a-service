@@ -12,3 +12,6 @@ GET /v1/model/{model-id}/subscriptions the response property `items/subscription
 # PR #1722: /v1/me has not been released yet. Non-OIDC authentication methods
 # do not provide an OIDC issuer claim, so `iss` is intentionally optional.
 GET /v1/me the response property `iss` became optional for the status `200`
+
+# OIDC claim flattening intentionally replaces the nested organization response with flat fields.
+GET /v1/me the response property `https://redhat.com/maas/orgs` was removed for the status `200`

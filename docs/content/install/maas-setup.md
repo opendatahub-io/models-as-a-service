@@ -78,9 +78,10 @@ primary and does not block validation.
 
 During rollout, monitor `maas_api_database_queries_total` to confirm local reads select the
 `read` pool, `maas_api_database_read_fallbacks_total` for unexpected primary traffic, and
-`maas_api_database_replication_lag_seconds` for replica lag. The `/health` endpoint
-reports whether the optional read pool is degraded, but it remains healthy because the
-writable primary can continue serving writes and API-key validation.
+`maas_api_database_replication_lag_seconds` for replica lag. The `/health/database`
+endpoint reports whether the optional read pool is degraded, while `/health` remains
+healthy because the writable primary can continue serving writes and API-key
+validation.
 
 !!! note "Development"
     For development, you can deploy a PostgreSQL instance and Secret using the setup script:

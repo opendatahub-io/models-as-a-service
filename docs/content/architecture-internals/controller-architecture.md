@@ -93,9 +93,9 @@ endpoint would either fail or create topology divergence.
 
 Local reads retry once on the writable primary when the read query fails. The fallback
 keeps API-key validation and key administration available during replica maintenance while
-making the unexpected primary traffic visible. The process health endpoint reports the read
-pool as degraded but remains healthy because an optional replica must not make the API
-instance unready.
+making the unexpected primary traffic visible. The dedicated `/health/database` endpoint
+reports the read pool as degraded, while the process `/health` endpoint remains healthy
+because an optional replica must not make the API instance unready.
 
 Metrics expose:
 

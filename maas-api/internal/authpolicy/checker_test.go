@@ -193,6 +193,32 @@ func TestAuthorizedModels(t *testing.T) {
 	}
 }
 
+func TestAuthorizedModelsExactGroupsPreserveTrailingSpaces(t *testing.T) {
+	checker := authpolicy.NewChecker(logger.New(false), &fakeLister{policies: []*unstructured.Unstructured{
+		createPolicy("with-space", nil, []string{"org/users "}, []map[string]string{{"name": "space-model", "namespace": "llm"}}),
+		createPolicy("without-space", nil, []string{"org/users"}, []map[string]string{{"name": "plain-model", "namespace": "llm"}}),
+	}})
+
+	models, err := checker.AuthorizedModels([]string{"org/users "}, "")
+	require.NoError(t, err)
+	assert.True(t, models[authpolicy.ModelKey{Namespace: "llm", Name: "space-model"}])
+	assert.False(t, models[authpolicy.ModelKey{Namespace: "llm", Name: "plain-model"}])
+}
+
+func TestAuthorizedModelsSeparateQualifiedGroupsByOrganization(t *testing.T) {
+	orgA := "42c3e46f-2477-44d7-a85b-d3b43f6b31fa"
+	orgB := "6a9f6e3e-0c4c-4d14-9a9b-2a26c1ebeea1"
+	checker := authpolicy.NewChecker(logger.New(false), &fakeLister{policies: []*unstructured.Unstructured{
+		createPolicy("org-a", nil, []string{orgA + "/users"}, []map[string]string{{"name": "model-a", "namespace": "llm"}}),
+		createPolicy("org-b", nil, []string{orgB + "/users"}, []map[string]string{{"name": "model-b", "namespace": "llm"}}),
+	}})
+
+	models, err := checker.AuthorizedModels([]string{orgA + "/users"}, "")
+	require.NoError(t, err)
+	assert.True(t, models[authpolicy.ModelKey{Namespace: "llm", Name: "model-a"}])
+	assert.False(t, models[authpolicy.ModelKey{Namespace: "llm", Name: "model-b"}])
+}
+
 func TestAuthorizedModels_NilLister(t *testing.T) {
 	log := logger.New(false)
 	checker := authpolicy.NewChecker(log, nil)
@@ -386,4 +412,41 @@ func TestModelAccessSubjectsListerError(t *testing.T) {
 		"42c3e46f-2477-44d7-a85b-d3b43f6b31fa",
 	)
 	require.Error(t, err)
+}
+
+func TestPolicyMatchesSubjectIsExactAcrossOrganizations(t *testing.T) {
+	log := logger.New(false)
+
+	orgA := "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+	orgB := "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+
+	policies := []*unstructured.Unstructured{
+		createPolicy("policy-org-a", nil, []string{orgA + "/team"}, []map[string]string{
+			{"name": "model-a", "namespace": "llm"},
+		}),
+		createPolicy("policy-org-b", nil, []string{orgB + "/team"}, []map[string]string{
+			{"name": "model-b", "namespace": "llm"},
+		}),
+	}
+
+	checker := authpolicy.NewChecker(log, &fakeLister{policies: policies})
+
+	// User in org A should only have access to model-a
+	userGroupsOrgA := []string{orgA + "/team"}
+	models, err := checker.AuthorizedModels(userGroupsOrgA, "alice")
+	require.NoError(t, err)
+
+	expectedOrgA := authpolicy.ModelKey{Namespace: "llm", Name: "model-a"}
+	unexpectedOrgB := authpolicy.ModelKey{Namespace: "llm", Name: "model-b"}
+
+	assert.True(t, models[expectedOrgA], "User in org A should have access to model-a")
+	assert.False(t, models[unexpectedOrgB], "User in org A should not have access to model-b")
+
+	// User in org B should only have access to model-b
+	userGroupsOrgB := []string{orgB + "/team"}
+	models, err = checker.AuthorizedModels(userGroupsOrgB, "bob")
+	require.NoError(t, err)
+
+	assert.True(t, models[unexpectedOrgB], "User in org B should have access to model-b")
+	assert.False(t, models[expectedOrgA], "User in org B should not have access to model-a")
 }
