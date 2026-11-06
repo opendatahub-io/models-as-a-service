@@ -223,9 +223,14 @@ def _wait_until_gated(url: str, api_key: str, timeout: int = RENDER_TIMEOUT) -> 
     wait_until helper. Disabling is eventually-consistent at the data plane (beyond the
     ConfigMap edit and ExtProc rollout), so a single check can catch a stale translated
     200. A transient gateway error (502/503/504) is not proof of gating, so keep polling
-    on those too."""
+    on those too.
 
-    def _gated() -> requests.Response | None:
+    wait_until accepts the first *truthy* return, but a requests.Response is falsy for a
+    non-2xx status (``Response.__bool__`` is ``.ok``) — so the gated 404 can't be the
+    sentinel. Return a bool and capture the response out of band."""
+    captured: dict[str, requests.Response] = {}
+
+    def _gated() -> bool:
         response = requests.post(
             url,
             headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
@@ -233,11 +238,11 @@ def _wait_until_gated(url: str, api_key: str, timeout: int = RENDER_TIMEOUT) -> 
             timeout=60,
             verify=TLS_VERIFY,
         )
-        if response.status_code in (502, 503, 504) or _is_translated(response):
-            return None
-        return response
+        captured["response"] = response
+        return response.status_code not in (502, 503, 504) and not _is_translated(response)
 
-    return wait_until(_gated, timeout, f"{url} stops serving translation", interval=POLL)
+    wait_until(_gated, timeout, f"{url} stops serving translation", interval=POLL)
+    return captured["response"]
 
 
 @pytest.fixture(scope="module")
