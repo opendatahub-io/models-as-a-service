@@ -23,6 +23,7 @@ type MockStore struct {
 
 type storedKey struct {
 	metadata   ApiKey
+	groups     []string
 	username   string
 	keyHash    string
 	expiresAt  time.Time
@@ -97,6 +98,7 @@ func (m *MockStore) AddKey(
 		},
 		username:  username,
 		keyHash:   keyHash,
+		groups:    userGroups,
 		expiresAt: expiresAtTime,
 		ephemeral: ephemeral,
 	}
@@ -438,6 +440,7 @@ func (m *MockStore) Get(ctx context.Context, keyID string) (*ApiKey, error) {
 
 	meta := k.metadata
 	meta.Username = k.username
+	meta.Groups = k.groups
 
 	// Compute status
 	now := time.Now().UTC()
@@ -475,6 +478,7 @@ func (m *MockStore) GetByHash(ctx context.Context, keyHash string) (*ApiKey, err
 
 			meta := k.metadata
 			meta.Username = k.username
+			meta.Groups = k.groups
 			if k.lastUsedAt != nil {
 				meta.LastUsedAt = k.lastUsedAt.Format(time.RFC3339)
 			}

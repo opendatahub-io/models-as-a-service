@@ -75,7 +75,7 @@ PKGS := $(foreach d,$(SRC_DIRS),$(d)/...)
 TEST_FLAGS ?= -race -coverprofile=coverage.out
 
 # The group-name pattern sync test reads files outside this module (the
-# maas-controller copy, the deploy-time kustomize patch, and the docs). Go's
+# maas-controller copy and the docs). Go's
 # test result cache cannot see those files, so the check runs with -count=1:
 # a cached result must never mask drift from a controller- or docs-only change.
 .PHONY: test-groupname-sync

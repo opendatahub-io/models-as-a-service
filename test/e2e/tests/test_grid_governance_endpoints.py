@@ -9,14 +9,13 @@ import uuid
 
 import pytest
 import requests
-
 from grid_governance_fixtures import (
     GridGovernanceContext,
+    grid_governance_context,  # noqa: F401 - pytest fixture
 )
-from grid_governance_fixtures import grid_governance_context  # noqa: F401 - pytest fixture
+from grid_inventory_fixtures import ORGANIZATION_A, ORGANIZATION_B
 from grid_oidc_helpers import request_grid_token
 from test_helper import _ns, _request_with_gateway_retry
-
 
 pytestmark = [
     pytest.mark.nightly,
@@ -251,13 +250,12 @@ class TestGridGovernanceAPIKeys:
         self, maas_api_base_url: str, grid_governance_context: GridGovernanceContext
     ):
         token = request_grid_token("grid_admin")
+        resources = grid_governance_context.resources
 
         response = _search_grid_api_keys(
             maas_api_base_url,
             token,
-            subscription=(
-                grid_governance_context.resources.other_organization_governance_subscription
-            ),
+            subscription=resources.other_organization_governance_subscription,
         )
         assert response.status_code == 200, (
             f"Grid admin must receive an empty result for another organization's "
@@ -394,13 +392,12 @@ class TestGridGovernanceAPIKeys:
         self, maas_api_base_url: str, grid_governance_context: GridGovernanceContext
     ):
         token = request_grid_token("grid_admin")
+        resources = grid_governance_context.resources
 
         response = _bulk_revoke_grid_api_keys(
             maas_api_base_url,
             token,
-            subscription=(
-                grid_governance_context.resources.other_organization_governance_subscription
-            ),
+            subscription=resources.other_organization_governance_subscription,
         )
         assert response.status_code == 403, (
             f"Grid admin must not bulk revoke another organization's subscription, "
@@ -494,23 +491,43 @@ class TestGridGovernanceIdentity:
             "family_name",
             "preferred_username",
             "groups",
-            "https://redhat.com/maas/orgs",
+            "org_id",
+            "org_name",
+            "roles",
         }
         assert identity["iss"]
         assert identity["sub"]
         assert identity["preferred_username"] == "grid_admin"
-        assert identity["https://redhat.com/maas/orgs"] == [
-            {
-                "organization_id": "42c3e46f-2477-44d7-a85b-d3b43f6b31fa",
-                "roles": ["admins"],
-            },
-            {
-                "organization_id": "53d4f57e-3588-55e8-b96c-4ec54a7c42fa",
-                "roles": ["users"],
-            },
-        ]
+        assert identity["groups"] == ["ai-grid-admins"]
+        assert identity["org_id"] == ORGANIZATION_A
+        assert identity["org_name"] == "coke"
+        assert identity["roles"] == ["admins"]
+        assert "https://redhat.com/maas/orgs" not in identity
 
-    def test_me_returns_empty_organizations_without_membership(
+    def test_me_returns_flat_identity_for_second_organization(
+        self, maas_api_base_url: str
+    ):
+        token = request_grid_token("grid_admin_b")
+
+        response = _request_with_gateway_retry(
+            requests.get,
+            f"{maas_api_base_url}/v1/me",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=30,
+        )
+        assert response.status_code == 200, (
+            f"GET /v1/me failed for Grid organization B admin: "
+            f"{response.status_code}"
+        )
+        identity = response.json()
+        assert identity["preferred_username"] == "grid_admin_b"
+        assert identity["groups"] == ["ai-grid-admins"]
+        assert identity["org_id"] == ORGANIZATION_B
+        assert identity["org_name"] == "org-b"
+        assert identity["roles"] == ["admins"]
+        assert "https://redhat.com/maas/orgs" not in identity
+
+    def test_me_omits_organization_claims_without_organization_identity(
         self, maas_api_base_url: str
     ):
         token = request_grid_token("grid_no_org")
@@ -535,10 +552,12 @@ class TestGridGovernanceIdentity:
             "family_name",
             "preferred_username",
             "groups",
-            "https://redhat.com/maas/orgs",
+            "org_id",
+            "org_name",
+            "roles",
         }
         assert identity["sub"]
-        assert identity.get("https://redhat.com/maas/orgs", []) == []
+        assert {"org_id", "org_name", "roles"}.isdisjoint(identity)
 
     def test_me_requires_verified_sso_identity(self, maas_api_base_url: str):
         response = _request_with_gateway_retry(
