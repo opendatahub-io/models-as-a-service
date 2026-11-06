@@ -63,7 +63,9 @@ from test_helper import (
 
 # Serial: the fixture restarts the shared echo-simulator pod and creating the
 # MaaSAuthPolicy regenerates the shared gateway AuthPolicy.
-pytestmark = [pytest.mark.xdist_group("echo_auth_leak"), pytest.mark.serial]
+# full_suite: off the smoke/group-test path (restarts a shared pod); still runs
+# in the regular serial pass.
+pytestmark = [pytest.mark.xdist_group("echo_auth_leak"), pytest.mark.serial, pytest.mark.full_suite]
 
 LOG_HTTP_FLAG = "--log-http"
 # KServe names the simulator Deployment after the LLMIS.
