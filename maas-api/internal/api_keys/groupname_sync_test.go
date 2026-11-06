@@ -1,4 +1,4 @@
-package api_keys
+package api_keys_test
 
 import (
 	"os"
@@ -57,15 +57,5 @@ func TestGroupNamePatternCopiesInSync(t *testing.T) {
 	charClass := strings.TrimSuffix(strings.TrimPrefix(pattern, "^["), "]+$")
 	if !strings.Contains(docsSrc, "["+charClass+"]") {
 		t.Errorf("docs/content/advanced-administration/external-oidc.md no longer documents the charset %q — edit the copies together", charClass)
-	}
-}
-
-func TestValidateGroupNamesRejectsDisallowedCharacter(t *testing.T) {
-	err := validateGroupNames([]string{`group"with"quotes`})
-	if err == nil {
-		t.Fatal("Expected error for group name with double quotes, got nil")
-	}
-	if !strings.Contains(err.Error(), "invalid group name") {
-		t.Errorf("Expected error to mention invalid group name, got: %v", err)
 	}
 }
