@@ -1089,6 +1089,160 @@ def bridge_tenant_owned_by_aitenant(case: dict[str, str]):
     return _predicate
 
 
+def _diagnostic_get(kind: str, name: str, namespace: Optional[str]) -> dict:
+    """Best-effort get for failure snapshots; never raises into the caller."""
+    try:
+        return get_json_or_none(kind, name, namespace) or {}
+    except Exception as exc:  # noqa: BLE001 - diagnostics must not hide the readiness failure
+        return {"diagnosticError": f"{type(exc).__name__}: {exc}"}
+
+
+def _diagnostic_deployment_logs(deployment: str, namespace: str, tail: int = 50) -> str:
+    """Best-effort tail of a deployment's pod logs; never raises into the caller."""
+    try:
+        result = _oc_run(["logs", f"deployment/{deployment}", "-n", namespace, f"--tail={tail}"], timeout=30)
+        if result.returncode == 0:
+            return result.stdout
+        return f"diagnosticError: {result.stderr.strip() or result.stdout.strip()}"
+    except Exception as exc:  # noqa: BLE001 - diagnostics must not hide the readiness failure
+        return f"diagnosticError: {type(exc).__name__}: {exc}"
+
+
+def _diagnostic_events(namespace: str, limit: int = 20) -> list[dict] | dict:
+    """Best-effort most recent events in *namespace*, oldest first."""
+    try:
+        result = _oc_run(
+            ["get", "events", "-n", namespace, "--sort-by=.lastTimestamp", "-o", "json"],
+            timeout=30,
+        )
+        if result.returncode != 0:
+            return {"diagnosticError": result.stderr.strip() or result.stdout.strip()}
+        items = json.loads(result.stdout).get("items") or []
+        compact = [
+            {
+                "lastTimestamp": ev.get("lastTimestamp") or ev.get("eventTime"),
+                "type": ev.get("type"),
+                "reason": ev.get("reason"),
+                "object": (ev.get("involvedObject") or {}).get("name"),
+                "message": ev.get("message"),
+            }
+            for ev in items[-limit:]
+        ]
+        return compact
+    except Exception as exc:  # noqa: BLE001 - diagnostics must not hide the readiness failure
+        return {"diagnosticError": f"{type(exc).__name__}: {exc}"}
+
+
+def _write_aitenant_bootstrap_failure_crs(
+    case: dict[str, str],
+    *,
+    aitenant: dict,
+    tenant_cfg: dict,
+    snapshot: dict,
+    deployment_logs: Optional[str] = None,
+    events: Optional[dict[str, Any]] = None,
+) -> Optional[str]:
+    """Persist companion CRs under ARTIFACTS_DIR before fixture cleanup deletes them.
+
+    Returns the output directory path when written, else None.
+    """
+    artifacts_dir = os.environ.get("ARTIFACTS_DIR")
+    if not artifacts_dir:
+        return None
+    out_dir = os.path.join(artifacts_dir, "failure-crs", case["tenant_label_name"])
+    try:
+        os.makedirs(out_dir, exist_ok=True)
+        with open(os.path.join(out_dir, "bootstrap-snapshot.json"), "w", encoding="utf-8") as handle:
+            json.dump(snapshot, handle, indent=2, sort_keys=True, default=str)
+        if aitenant and "diagnosticError" not in aitenant:
+            with open(os.path.join(out_dir, "aitenant.json"), "w", encoding="utf-8") as handle:
+                json.dump(aitenant, handle, indent=2, sort_keys=True, default=str)
+        if tenant_cfg and "diagnosticError" not in tenant_cfg:
+            with open(os.path.join(out_dir, "maastenantconfig.json"), "w", encoding="utf-8") as handle:
+                json.dump(tenant_cfg, handle, indent=2, sort_keys=True, default=str)
+        if deployment_logs is not None:
+            with open(os.path.join(out_dir, "maas-api-logs.txt"), "w", encoding="utf-8") as handle:
+                handle.write(deployment_logs)
+        for ns, ns_events in (events or {}).items():
+            with open(os.path.join(out_dir, f"events-{ns}.json"), "w", encoding="utf-8") as handle:
+                json.dump(ns_events, handle, indent=2, sort_keys=True, default=str)
+    except OSError as exc:
+        print(f"[diagnostics] failed to write AITenant bootstrap CRs to {out_dir}: {exc}")
+        return None
+    print(f"[diagnostics] AITenant bootstrap failure CRs written to {out_dir}")
+    return out_dir
+
+
+def _aitenant_bootstrap_diagnostics(case: dict[str, str]) -> str:
+    """Capture AITenant + MaasTenantConfig (+ maas-api) state for bootstrap waits.
+
+    Also writes full CR JSON under ``$ARTIFACTS_DIR/failure-crs/<tenant>/`` when
+    ARTIFACTS_DIR is set, so EXIT-trap must-gather still has the objects after
+    fixture cleanup deletes them.
+    """
+    names = per_tenant_maas_api_names(case["tenant_label_name"])
+    aitenant = _diagnostic_get(AITENANT_KIND, case["tenant_label_name"], AITENANT_NAMESPACE)
+    tenant_cfg = _diagnostic_get(TENANT_CONFIG_KIND, TENANT_CR_NAME, case["tenant_ns"])
+    deploy = _diagnostic_get("deployment", names["deployment"], INFRA_NAMESPACE)
+    route = _diagnostic_get("httproute", names["httproute"], INFRA_NAMESPACE)
+    tenant_ns = _diagnostic_get("namespace", case["tenant_ns"], None)
+
+    aitenant_status = aitenant.get("status") or {}
+    tenant_cfg_status = tenant_cfg.get("status") or {}
+    route_status = route.get("status") or {}
+    snapshot = {
+        "aitenant": {
+            "name": case["tenant_label_name"],
+            "namespace": AITENANT_NAMESPACE,
+            "phase": aitenant_status.get("phase"),
+            "conditions": aitenant_status.get("conditions"),
+            "gatewayRef": aitenant_status.get("gatewayRef"),
+            "tenantNamespace": aitenant_status.get("tenantNamespace"),
+            "diagnosticError": aitenant.get("diagnosticError"),
+        },
+        "maasTenantConfig": {
+            "name": TENANT_CR_NAME,
+            "namespace": case["tenant_ns"],
+            "phase": tenant_cfg_status.get("phase"),
+            "conditions": tenant_cfg_status.get("conditions"),
+            "labels": (tenant_cfg.get("metadata") or {}).get("labels"),
+            "diagnosticError": tenant_cfg.get("diagnosticError"),
+        },
+        "tenantNamespace": {
+            "labels": (tenant_ns.get("metadata") or {}).get("labels"),
+            "diagnosticError": tenant_ns.get("diagnosticError"),
+        },
+        "maasApiDeployment": {
+            "name": names["deployment"],
+            "namespace": INFRA_NAMESPACE,
+            "status": deploy.get("status"),
+            "diagnosticError": deploy.get("diagnosticError"),
+        },
+        "maasApiHttpRoute": {
+            "name": names["httproute"],
+            "namespace": INFRA_NAMESPACE,
+            "parents": route_status.get("parents"),
+            "diagnosticError": route.get("diagnosticError"),
+        },
+        "maasApiDeploymentLogs": _diagnostic_deployment_logs(names["deployment"], INFRA_NAMESPACE),
+        "recentEvents": {
+            case["tenant_ns"]: _diagnostic_events(case["tenant_ns"]),
+            INFRA_NAMESPACE: _diagnostic_events(INFRA_NAMESPACE),
+        },
+    }
+    artifact_dir = _write_aitenant_bootstrap_failure_crs(
+        case,
+        aitenant=aitenant,
+        tenant_cfg=tenant_cfg,
+        snapshot=snapshot,
+        deployment_logs=snapshot["maasApiDeploymentLogs"],
+        events=snapshot["recentEvents"],
+    )
+    if artifact_dir:
+        snapshot["artifactDir"] = artifact_dir
+    return json.dumps(snapshot, sort_keys=True, default=str)
+
+
 def bootstrap_aitenant_tenant(
     case: dict[str, str],
     *,
@@ -1106,23 +1260,28 @@ def bootstrap_aitenant_tenant(
         wait_for_gateway_programmed(case["gateway_name"])
         apply_gateway_route_fixture(case["gateway_name"], fixture_label=case["tenant_label_name"])
     apply_aitenant(case, external_oidc=external_oidc)
-    wait_for_json(AITENANT_KIND, case["tenant_label_name"], AITENANT_NAMESPACE, predicate=aitenant_ready)
-    wait_for_json(
-        "maastenantconfig",
-        TENANT_CR_NAME,
-        case["tenant_ns"],
-        predicate=bridge_tenant_owned_by_aitenant(case),
-    )
-    ensure_payload_processing_type_on_tenant_config(
-        case["tenant_ns"], payload_type=payload_processing_type
-    )
-    if not use_default_gateway:
-        apply_gateway_access_label(case["tenant_ns"], case["gateway_name"])
-        wait_for_httproute_accepted(
-            per_tenant_maas_api_names(case["tenant_label_name"])["httproute"],
-            INFRA_NAMESPACE,
-            case["gateway_name"],
+    try:
+        wait_for_json(AITENANT_KIND, case["tenant_label_name"], AITENANT_NAMESPACE, predicate=aitenant_ready)
+        wait_for_json(
+            TENANT_CONFIG_KIND,
+            TENANT_CR_NAME,
+            case["tenant_ns"],
+            predicate=bridge_tenant_owned_by_aitenant(case),
         )
+        ensure_payload_processing_type_on_tenant_config(
+            case["tenant_ns"], payload_type=payload_processing_type
+        )
+        if not use_default_gateway:
+            apply_gateway_access_label(case["tenant_ns"], case["gateway_name"])
+            wait_for_httproute_accepted(
+                per_tenant_maas_api_names(case["tenant_label_name"])["httproute"],
+                INFRA_NAMESPACE,
+                case["gateway_name"],
+            )
+    except AssertionError as exc:
+        raise AssertionError(
+            f"{exc}\nAITenant bootstrap snapshot: {_aitenant_bootstrap_diagnostics(case)}"
+        ) from None
 
 
 def apply_maas_auth_policy(name: str, namespace: str, model_ref: str = MODEL_REF, model_namespace: str = MODEL_NAMESPACE) -> None:
