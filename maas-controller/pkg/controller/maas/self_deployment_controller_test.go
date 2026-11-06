@@ -67,6 +67,11 @@ func lifecycleObservabilityDashboardsPath(t *testing.T) string {
 	return filepath.Join(filepath.Dir(testFile), "../../../../deployment/components/observability/observability/dashboards")
 }
 
+func lifecycleAuthDecisionsDashboardPath(t *testing.T) string {
+	t.Helper()
+	return filepath.Join(lifecycleObservabilityDashboardsPath(t), "auth-decisions")
+}
+
 func lifecycleTestUnstructured(gvk schema.GroupVersionKind, namespace, name string, finalizers ...string) *unstructured.Unstructured {
 	obj := &unstructured.Unstructured{}
 	obj.SetGroupVersionKind(gvk)
@@ -1385,6 +1390,136 @@ func TestEnsureUsageDashboard(t *testing.T) {
 			To(Succeed(), "PersesDashboard should exist when usageMetricsDashboard is enabled")
 		g.Expect(got.GetNamespace()).To(Equal(monitoringNS))
 	})
+}
+
+func TestEnsureAuthDecisionsDashboard(t *testing.T) {
+	const (
+		monitoringNS  = "redhat-ods-monitoring"
+		dashboardName = "dashboard-4-maas-auth-decisions-admin"
+	)
+
+	gvkPersesDashboard := schema.GroupVersionKind{
+		Group: "perses.dev", Version: "v1alpha1", Kind: "PersesDashboard",
+	}
+	authDashboardPath := lifecycleAuthDecisionsDashboardPath(t)
+
+	t.Run("applied when usageMetricsDashboard is disabled", func(t *testing.T) {
+		g := NewWithT(t)
+		s := lifecycleTestScheme(t)
+
+		cfg := &maasv1alpha1.Config{
+			ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName, UID: types.UID("cfg-uid")},
+			Spec:       maasv1alpha1.ConfigSpec{UsageMetricsDashboard: ptr.To(false)},
+		}
+
+		cl := newSSAFakeClientBuilder(s).WithStatusSubresource(&maasv1alpha1.Config{}).WithObjects(cfg).Build()
+		r := &LifecycleReconciler{
+			Client:                    cl,
+			Scheme:                    s,
+			MonitoringNamespace:       monitoringNS,
+			AuthDecisionDashboardPath: authDashboardPath,
+		}
+
+		err := r.ensureAuthDecisionsDashboard(context.Background(), ctrl.Log)
+		g.Expect(err).NotTo(HaveOccurred())
+
+		got := &unstructured.Unstructured{}
+		got.SetGroupVersionKind(gvkPersesDashboard)
+		g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: dashboardName, Namespace: monitoringNS}, got)).
+			To(Succeed(), "auth decisions dashboard must not inherit the usageMetricsDashboard gate")
+		g.Expect(got.GetNamespace()).To(Equal(monitoringNS))
+		g.Expect(got.GetOwnerReferences()).To(HaveLen(1))
+		g.Expect(got.GetOwnerReferences()[0].Kind).To(Equal("Config"))
+		g.Expect(got.GetOwnerReferences()[0].Controller).NotTo(BeNil())
+		g.Expect(*got.GetOwnerReferences()[0].Controller).To(BeTrue())
+	})
+
+	t.Run("skipped when manifests path is not configured", func(t *testing.T) {
+		g := NewWithT(t)
+		s := lifecycleTestScheme(t)
+
+		cfg := &maasv1alpha1.Config{
+			ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName, UID: types.UID("cfg-uid")},
+		}
+
+		cl := newSSAFakeClientBuilder(s).WithStatusSubresource(&maasv1alpha1.Config{}).WithObjects(cfg).Build()
+		r := &LifecycleReconciler{
+			Client:              cl,
+			Scheme:              s,
+			MonitoringNamespace: monitoringNS,
+		}
+
+		err := r.ensureAuthDecisionsDashboard(context.Background(), ctrl.Log)
+		g.Expect(err).NotTo(HaveOccurred())
+
+		got := &unstructured.Unstructured{}
+		got.SetGroupVersionKind(gvkPersesDashboard)
+		g.Expect(apierrors.IsNotFound(cl.Get(context.Background(), client.ObjectKey{Name: dashboardName, Namespace: monitoringNS}, got))).
+			To(BeTrue(), "no dashboard should be applied without a manifests path")
+	})
+
+	t.Run("skipped when Config does not exist", func(t *testing.T) {
+		g := NewWithT(t)
+		s := lifecycleTestScheme(t)
+
+		cl := newSSAFakeClientBuilder(s).WithStatusSubresource(&maasv1alpha1.Config{}).Build()
+		r := &LifecycleReconciler{
+			Client:                    cl,
+			Scheme:                    s,
+			MonitoringNamespace:       monitoringNS,
+			AuthDecisionDashboardPath: authDashboardPath,
+		}
+
+		err := r.ensureAuthDecisionsDashboard(context.Background(), ctrl.Log)
+		g.Expect(err).NotTo(HaveOccurred())
+
+		got := &unstructured.Unstructured{}
+		got.SetGroupVersionKind(gvkPersesDashboard)
+		g.Expect(apierrors.IsNotFound(cl.Get(context.Background(), client.ObjectKey{Name: dashboardName, Namespace: monitoringNS}, got))).
+			To(BeTrue(), "no dashboard should be applied before Config exists")
+	})
+}
+
+// TestEnsureObservability_AppliesAuthDashboardWithoutUsageGate is the regression guard for the
+// defect where the auth decisions dashboard shipped inside the usageMetricsDashboard bundle: on a
+// default install the gate is false, so the dashboard was never applied (and was deleted when the
+// gate was switched off). ensureObservability must apply it while leaving the usage dashboard off.
+func TestEnsureObservability_AppliesAuthDashboardWithoutUsageGate(t *testing.T) {
+	const (
+		monitoringNS       = "redhat-ods-monitoring"
+		authDashboardName  = "dashboard-4-maas-auth-decisions-admin"
+		usageDashboardName = "dashboard-3-maas-usage-admin"
+	)
+
+	g := NewWithT(t)
+	s := lifecycleTestScheme(t)
+
+	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: monitoringNS}}
+	cfg := &maasv1alpha1.Config{
+		ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName, UID: types.UID("cfg-uid")},
+		Spec:       maasv1alpha1.ConfigSpec{UsageMetricsDashboard: ptr.To(false)},
+	}
+
+	cl := newSSAFakeClientBuilder(s).WithStatusSubresource(&maasv1alpha1.Config{}).WithObjects(ns, cfg).Build()
+	r := &LifecycleReconciler{
+		Client:                     cl,
+		Scheme:                     s,
+		MonitoringNamespace:        monitoringNS,
+		ObservabilityManifestsPath: lifecycleObservabilityDashboardsPath(t),
+		AuthDecisionDashboardPath:  lifecycleAuthDecisionsDashboardPath(t),
+	}
+
+	g.Expect(r.ensureObservability(context.Background(), ctrl.Log)).To(Succeed())
+
+	auth := &unstructured.Unstructured{}
+	auth.SetGroupVersionKind(schema.GroupVersionKind{Group: "perses.dev", Version: "v1alpha1", Kind: "PersesDashboard"})
+	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: authDashboardName, Namespace: monitoringNS}, auth)).
+		To(Succeed(), "auth decisions dashboard should be applied with usageMetricsDashboard disabled")
+
+	usage := &unstructured.Unstructured{}
+	usage.SetGroupVersionKind(schema.GroupVersionKind{Group: "perses.dev", Version: "v1alpha1", Kind: "PersesDashboard"})
+	g.Expect(apierrors.IsNotFound(cl.Get(context.Background(), client.ObjectKey{Name: usageDashboardName, Namespace: monitoringNS}, usage))).
+		To(BeTrue(), "usage dashboard must remain gated by usageMetricsDashboard")
 }
 
 func TestEnsureObservability_EmptyMonitoringNamespace(t *testing.T) {
