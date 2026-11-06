@@ -55,6 +55,7 @@ from test_helper import (
     _wait_for_maas_subscription_phase,
     _wait_for_cr_absent,
     _wait_for_model_ready,
+    assert_openai_sse_chat_stream,
     chat,
 )
 
@@ -336,7 +337,7 @@ class TestEndpointPickerTraffic:
             _create_test_subscription(subscription, llmis, users=[sa_user], token_limit=100000)
             _wait_for_maas_auth_policy_phase(policy)
             _wait_for_maas_subscription_phase(subscription)
-            _wait_for_model_ready(llmis, namespace=MODEL_NAMESPACE, timeout=120)
+            _wait_for_model_ready(llmis, namespace=MODEL_NAMESPACE)
             api_key = _create_api_key(sa_token, name=f"e2e-epp-pool-{suffix}", subscription=subscription)
 
             # Config: every replica binds the model's route to its picker and sends the picker
@@ -385,13 +386,10 @@ class TestEndpointPickerTraffic:
             )
 
             with _chat(api_key, model, stream=True) as streamed:
-                assert streamed.status_code == 200, f"stream: {response_summary(streamed)}"
                 assert streamed.headers.get(EPP_RESPONSE_HEADER) == "true", (
                     f"stream skipped the endpoint picker: {dict(streamed.headers)}"
                 )
-                events = [line for line in streamed.iter_lines(decode_unicode=True) if line]
-            assert events and events[-1] == "data: [DONE]", f"stream did not finish: {events[-3:]}"
-            assert any(e.startswith("data: {") for e in events[:-1]), f"stream carried no chunks: {events}"
+                assert_openai_sse_chat_stream(streamed)
 
             authenticated = 2  # the plain and the streamed completion
 
@@ -417,4 +415,5 @@ class TestEndpointPickerTraffic:
             _wait_for_cr_absent("maassubscription", subscription)
             _wait_for_cr_absent("maasauthpolicy", policy)
             _wait_for_cr_absent("maasmodelref", llmis, namespace=MODEL_NAMESPACE)
+            # LLMIS teardown can lag the default 30s CR-absent wait under parallel load.
             _wait_for_cr_absent("llminferenceservice", llmis, namespace=MODEL_NAMESPACE, timeout=180)

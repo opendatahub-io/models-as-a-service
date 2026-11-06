@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/gin-gonic/gin"
 )
 
 // ParseDurationWithDays extends time.ParseDuration to support "d" (days) suffix
@@ -25,9 +27,37 @@ func ParseDurationWithDays(s string) (time.Duration, error) {
 
 // UserContext holds user information extracted from the token.
 type UserContext struct {
-	Username string   `json:"username"`
-	Groups   []string `json:"groups"`
-	Tenant   string   `json:"tenant"`
+	Username       string   `json:"username"`
+	Groups         []string `json:"groups"`
+	Tenant         string   `json:"tenant"`
+	OrganizationID string   `json:"organizationId,omitempty"`
+}
+
+const organizationIDContextKey = "organization_id"
+
+// SetOrganizationID stores the resolved subscription organization ID on the
+// request context for access logs and tracing.
+func SetOrganizationID(c *gin.Context, organizationID string) {
+	if strings.TrimSpace(organizationID) == "" {
+		return
+	}
+	c.Set(organizationIDContextKey, strings.TrimSpace(organizationID))
+}
+
+// OrganizationIDFromContext returns the authenticated user's organization ID or
+// the organization ID resolved during subscription selection.
+func OrganizationIDFromContext(c *gin.Context) string {
+	if user, ok := c.Get("user"); ok {
+		if userContext, ok := user.(*UserContext); ok && userContext.OrganizationID != "" {
+			return userContext.OrganizationID
+		}
+	}
+	if value, ok := c.Get(organizationIDContextKey); ok {
+		if organizationID, ok := value.(string); ok {
+			return organizationID
+		}
+	}
+	return ""
 }
 
 type Token struct {

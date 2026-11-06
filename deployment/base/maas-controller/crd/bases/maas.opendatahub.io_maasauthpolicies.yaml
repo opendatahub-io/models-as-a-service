@@ -94,12 +94,16 @@ spec:
                   grants access)
                 properties:
                   groups:
-                    description: Groups is a list of Kubernetes group names
+                    description: |-
+                      Groups is a list of identity group names that may access the referenced
+                      models. Names are matched exactly and are not Kubernetes object names.
                     items:
-                      description: GroupReference references a Kubernetes group
+                      description: GroupReference references an identity group by
+                        its opaque name.
                       properties:
                         name:
-                          description: Name is the name of the group
+                          description: Name is the opaque group name used for exact-match
+                            authorization.
                           type: string
                       required:
                       - name

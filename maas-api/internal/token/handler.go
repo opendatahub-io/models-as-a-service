@@ -10,6 +10,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/constant"
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/groupname"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 )
 
@@ -34,6 +35,10 @@ func ParseGroupsHeader(header string) ([]string, error) {
 	if header == "" {
 		return nil, errors.New("header is empty")
 	}
+	trimmed := strings.TrimSpace(header)
+	if trimmed == "[]" {
+		return []string{}, nil
+	}
 
 	var parsedGroups []string
 
@@ -41,7 +46,6 @@ func ParseGroupsHeader(header string) ([]string, error) {
 	if err := json.Unmarshal([]byte(header), &parsedGroups); err != nil {
 		// Fall back to bracket-wrapped space-separated format (e.g., [ai-eng platform]).
 		// Authorino's plain selector serializes arrays this way.
-		trimmed := strings.TrimSpace(header)
 		if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
 			inner := trimmed[1 : len(trimmed)-1]
 			parsedGroups = strings.Fields(inner)
@@ -52,8 +56,8 @@ func ParseGroupsHeader(header string) ([]string, error) {
 
 	var validGroups []string
 	for _, g := range parsedGroups {
-		if tg := strings.TrimSpace(g); tg != "" {
-			validGroups = append(validGroups, tg)
+		if g != "" {
+			validGroups = append(validGroups, g)
 		}
 	}
 
@@ -68,9 +72,17 @@ func ParseGroupsHeader(header string) ([]string, error) {
 func (h *Handler) ExtractUserInfo() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		requestLogger := h.logger.WithContext(c.Request.Context())
+		if value, exists := c.Get("verified_identity"); exists {
+			if !h.setUserContextFromVerifiedIdentity(c, value) {
+				return
+			}
+			c.Next()
+			return
+		}
 
 		username := strings.TrimSpace(c.GetHeader(constant.HeaderUsername))
 		groupHeader := c.GetHeader(constant.HeaderGroup)
+		organizationID := strings.TrimSpace(c.GetHeader(constant.HeaderOrganizationID))
 
 		// Validate required headers exist and are not empty
 		// Missing headers indicate a configuration issue with the auth policy (internal error)
@@ -122,15 +134,20 @@ func (h *Handler) ExtractUserInfo() gin.HandlerFunc {
 		// Create UserContext from headers and handler config.
 		// Tenant comes from TENANT_NAME env var set during maas-api deployment.
 		userContext := &UserContext{
-			Username: username,
-			Groups:   groups,
-			Tenant:   h.tenantName,
+			Username:       username,
+			Groups:         groups,
+			Tenant:         h.tenantName,
+			OrganizationID: organizationID,
 		}
 
-		requestLogger.Debug("Extracted user info from headers",
+		logFields := []any{
 			"username", logger.RedactValue(username),
 			"groups", groups,
-		)
+		}
+		if organizationID != "" {
+			logFields = append(logFields, "organization_id", organizationID)
+		}
+		requestLogger.Debug("Extracted user info from headers", logFields...)
 
 		c.Set("user", userContext)
 		c.Next()
@@ -141,48 +158,31 @@ func (h *Handler) ExtractUserInfo() gin.HandlerFunc {
 // that must remain accessible when no auth policy is active (e.g. no
 // LLMInferenceService deployed). When the identity headers are entirely absent
 // the middleware continues without setting a user context, letting the handler
-// decide what to return. If headers ARE present but malformed, it still aborts
-// so that real configuration errors are surfaced.
+// decide what to return. A verified identity takes precedence over legacy
+// headers. Otherwise, if headers ARE present but malformed, it still aborts so
+// that real configuration errors are surfaced.
 func (h *Handler) ExtractUserInfoOptional() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		requestLogger := h.logger.WithContext(c.Request.Context())
-
-		username := strings.TrimSpace(c.GetHeader(constant.HeaderUsername))
-		groupHeader := c.GetHeader(constant.HeaderGroup)
-
-		// When both identity headers are absent, continue without user context.
-		// This allows the handler to return a graceful response (e.g. empty list).
-		if username == "" && groupHeader == "" {
-			requestLogger.Debug("Auth identity headers not present, continuing without user context")
+		if value, exists := c.Get("verified_identity"); exists {
+			if !h.setUserContextFromVerifiedIdentity(c, value) {
+				return
+			}
 			c.Next()
 			return
 		}
 
-		// If only one header is present, that is a partial / broken auth config.
-		if username == "" {
-			requestLogger.Error("Missing or empty username header while group header is present",
-				"header", constant.HeaderUsername,
-			)
-			c.JSON(http.StatusInternalServerError, gin.H{
-				"error":         "Exception thrown while generating token",
-				"exceptionCode": "AUTH_FAILURE",
-				"refId":         "001",
-			})
-			c.Abort()
-			return
-		}
+		requestLogger := h.logger.WithContext(c.Request.Context())
 
-		if groupHeader == "" {
-			requestLogger.Error("Missing group header while username header is present",
-				"header", constant.HeaderGroup,
-				"username", logger.RedactValue(username),
-			)
-			c.JSON(http.StatusInternalServerError, gin.H{
-				"error":         "Exception thrown while generating token",
-				"exceptionCode": "AUTH_FAILURE",
-				"refId":         "002",
-			})
-			c.Abort()
+		username := strings.TrimSpace(c.GetHeader(constant.HeaderUsername))
+		groupHeader := c.GetHeader(constant.HeaderGroup)
+		organizationID := strings.TrimSpace(c.GetHeader(constant.HeaderOrganizationID))
+
+		// Incomplete legacy identity headers are treated as absent. This keeps
+		// a verified identity, when present, authoritative and lets handlers
+		// reject requests that have no usable identity.
+		if username == "" || groupHeader == "" {
+			requestLogger.Debug("Auth identity headers not present or incomplete, continuing without user context")
+			c.Next()
 			return
 		}
 
@@ -204,17 +204,58 @@ func (h *Handler) ExtractUserInfoOptional() gin.HandlerFunc {
 		}
 
 		userContext := &UserContext{
-			Username: username,
-			Groups:   groups,
-			Tenant:   h.tenantName,
+			Username:       username,
+			Groups:         groups,
+			Tenant:         h.tenantName,
+			OrganizationID: organizationID,
 		}
 
-		requestLogger.Debug("Extracted user info from headers",
+		logFields := []any{
 			"username", logger.RedactValue(username),
 			"groups", groups,
-		)
+		}
+		if organizationID != "" {
+			logFields = append(logFields, "organization_id", organizationID)
+		}
+		requestLogger.Debug("Extracted user info from headers", logFields...)
 
 		c.Set("user", userContext)
 		c.Next()
 	}
+}
+
+func (h *Handler) setUserContextFromVerifiedIdentity(c *gin.Context, value any) bool {
+	identity, ok := value.(*VerifiedIdentity)
+	if !ok || identity == nil {
+		requestLogger := h.logger.WithContext(c.Request.Context())
+		requestLogger.Error("Invalid verified identity context type")
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":         "Exception thrown while generating token",
+			"exceptionCode": "AUTH_FAILURE",
+			"refId":         "004",
+		})
+		c.Abort()
+		return false
+	}
+
+	groups, err := QualifiedGroups(identity)
+	if err != nil {
+		h.rejectIdentity(c, err)
+		return false
+	}
+	if !groupname.AllValid(identity.Claims.Groups) {
+		groups = nil
+	}
+	groups = append([]string{"system:authenticated"}, groups...)
+	username := identity.Claims.PreferredUsername
+	if username == "" {
+		username = identity.Claims.Subject
+	}
+	c.Set("user", &UserContext{
+		Username:       username,
+		Groups:         groups,
+		Tenant:         h.tenantName,
+		OrganizationID: identity.Claims.OrgID,
+	})
+	return true
 }

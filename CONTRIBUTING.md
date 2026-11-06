@@ -40,12 +40,37 @@ Thanks for your interest in contributing. This guide explains how to work with t
 ## Pull request process
 
 1. **Push** your branch to your fork and open a **pull request** against `main`.
-2. **Use semantic PR titles** so CI can accept the PR. Format: `type: subject` (subject not starting with a capital).
+2. **Use semantic PR titles** so CI can accept the PR. Format: `type: subject` or `type(scope): subject` (subject not starting with a capital, at most 60 characters in total).
    - Allowed **types:** `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, `revert`.
    - Examples: `feat: add TLS option for deploy script`, `fix: correct sourceNamespace for Kuadrant subscription`, `docs: update quickstart`.
    - Draft/WIP PRs can use the `draft` or `wip` label to skip title validation.
-3. **Keep changes focused** and ensure CI passes (see below).
-4. **Address review feedback** from [OWNERS](OWNERS); maintainers will approve and merge when ready.
+3. **Fill in the [PR template](.github/PULL_REQUEST_TEMPLATE.md).** Its comments say what each section needs.
+4. **Keep changes focused** and ensure CI passes (see below).
+5. **Address review feedback** from [OWNERS](OWNERS); maintainers will approve and merge when ready.
+
+### Approval policy (1 vs 2 reviewers)
+
+Applies to pull requests **into `main`** on upstream [`opendatahub-io/models-as-a-service`](https://github.com/opendatahub-io/models-as-a-service) (feature branches on the org repo). Fork PRs are out of scope.
+
+Workflow [`.github/workflows/approval-policy.yml`](.github/workflows/approval-policy.yml) publishes an **`approval-policy`** commit status from **which paths** changed (not from the PR title alone). The check is **advisory** until repo maintainers add **`approval-policy`** to the branch ruleset required checks; **Tide** merge requirements are unchanged until then. Only **Approve** reviews on the **current PR head commit** count toward the policy.
+
+**Lightweight — 1 approving review** (author excluded). Every changed file must fall in one or more of these buckets (any **individual** bucket or **combination**):
+
+| Bucket | Paths |
+|--------|--------|
+| **docs** | `docs/**`, root `README.md`, `CONTRIBUTING.md`, `AGENTS.md`, `CLAUDE.md` |
+| **ci** | `.github/**`, `.tekton/**`, `scripts/ci/**` |
+| **test** | `test/**`, any `*_test.go`, any `*/testdata/**` |
+
+Examples at **1 review:** docs only; CI workflows other than `approval-policy.yml`; E2E tests only; docs + other `.github/workflows`; docs + tests; docs + ci + tests.
+
+**Standard — 2 approving reviews** if **any** file is outside those buckets (e.g. `maas-api/`, `maas-controller/`, `deployment/`, `scripts/deploy.sh`), if a **rename** touches a production path (old or new name), if GitHub returns **3000** changed files (incomplete list), if the PR has **no changed files**, or if **`.github/workflows/approval-policy.yml`** is modified (so policy changes always need two reviewers).
+
+The workflow applies label `maas/policy-lightweight` or `maas/policy-standard` automatically.
+
+**Override (standard PRs only):** a maintainer may add the label **`override-approval-policy`** so a **standard** PR needs only **one** approving GitHub review for the **`approval-policy`** check (for example after a thorough review when a second reviewer is unavailable). Path classification is unchanged; only the required **Approve** count drops from 2 to 1. Restrict who can add this label in GitHub. Tide still requires **`approved`** and **`lgtm`** unless Prow is configured separately.
+
+Merge still requires OpenShift **Prow/Tide** (`approved` + `lgtm` and green **`tide`**). **Standard** PRs need **two** GitHub **Approve** reviews unless **`override-approval-policy`** is present; **lightweight** PRs need **one**.
 
 ## Release strategy
 

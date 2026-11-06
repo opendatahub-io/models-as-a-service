@@ -27,7 +27,7 @@ func AccessLogger(log *logger.Logger, cfg TenantLoggerConfig) gin.HandlerFunc {
 			}
 		}
 
-		log.WithContext(c.Request.Context()).Info("request completed",
+		fields := []any{
 			"method", c.Request.Method,
 			"path", c.Request.URL.Path,
 			"status", c.Writer.Status(),
@@ -38,6 +38,10 @@ func AccessLogger(log *logger.Logger, cfg TenantLoggerConfig) gin.HandlerFunc {
 			"tenant_namespace", cfg.TenantNamespace,
 			"gateway_name", cfg.GatewayName,
 			"auth_headers", logger.SensitiveHeadersSummaryForAccessLog(c.Request.Header),
-		)
+		}
+		if organizationID := token.OrganizationIDFromContext(c); organizationID != "" {
+			fields = append(fields, "organization_id", organizationID)
+		}
+		log.WithContext(c.Request.Context()).Info("request completed", fields...)
 	}
 }

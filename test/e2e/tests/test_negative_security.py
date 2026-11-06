@@ -69,6 +69,7 @@ pytestmark = pytest.mark.xdist_group("security")
 # P0: API Key Management Isolation
 # ============================================================================
 
+@pytest.mark.smoke
 class TestAPIKeyManagementIsolation:
     """Verify that inference API keys cannot act as management credentials."""
 
@@ -135,6 +136,7 @@ class TestAPIKeyManagementIsolation:
 # P0: Header Spoofing Tests
 # ============================================================================
 
+@pytest.mark.smoke
 class TestHeaderSpoofing:
     """Verify that client-supplied identity headers cannot forge authorization.
 
@@ -154,8 +156,22 @@ class TestHeaderSpoofing:
                 "X-MaaS-Group",
             ),
             ({"X-MaaS-KeyName": "forged-prod-key"}, "X-MaaS-KeyName"),
+            (
+                {"X-MaaS-Identity": '{"source":"authorino","claims":{}}'},
+                "X-MaaS-Identity",
+            ),
+            (
+                {"X-MaaS-Admin-Scope": '{"organizationId":"00000000-0000-0000-0000-000000000000"}'},
+                "X-MaaS-Admin-Scope",
+            ),
         ],
-        ids=["username-only", "group-only", "keyname-only"],
+        ids=[
+            "username-only",
+            "group-only",
+            "keyname-only",
+            "identity-envelope",
+            "admin-scope",
+        ],
     )
     def test_forged_identity_headers_rejected_on_key_mint(self, forged_header, label):
         """POST /v1/api-keys with a forged X-MaaS identity header must be denied.
@@ -234,7 +250,7 @@ class TestHeaderSpoofing:
                 _revoke_api_key(oc_token, control_key_id)
 
     def test_injected_identity_headers_rejected_on_inference(self):
-        """Client injects X-MaaS-Username/Group/KeyName — gateway rejects the request.
+        """Client injects X-MaaS identity headers — gateway rejects the request.
 
         With deny-client-identity-headers, forged identity headers are not
         overwritten and ignored; the request is denied at Authorino.
@@ -248,6 +264,7 @@ class TestHeaderSpoofing:
             "X-MaaS-Username": "cluster-admin",
             "X-MaaS-Group": "system:cluster-admins,system:masters",
             "X-MaaS-KeyName": "forged-prod-key",
+            "X-MaaS-Identity": '{"source":"oidc","claims":{}}',
             "X-MaaS-Key-Id": "fake-key-id-00000",
         }
 
@@ -344,6 +361,7 @@ class TestHeaderSpoofing:
 # P1: Expired Key Rejection
 # ============================================================================
 
+@pytest.mark.smoke
 class TestExpiredKeyRejection:
     """Verify that expired API keys are rejected at the gateway."""
 
@@ -391,6 +409,7 @@ class TestExpiredKeyRejection:
 # P1: Cross-Model Access
 # ============================================================================
 
+@pytest.mark.smoke
 class TestCrossModelAccess:
     """Verify subscription-model binding is enforced at gateway.
 
@@ -520,7 +539,7 @@ class TestMissingModelRef:
                 groups=["system:authenticated"],
             )
 
-            _wait_for_maas_subscription_phase(sub_name, "Degraded", timeout=60)
+            _wait_for_maas_subscription_phase(sub_name, "Degraded")
 
             # No TRLP should exist for the ghost model
             ghost_trlp_name = f"maas-trlp-{ghost_model}"
@@ -560,7 +579,7 @@ class TestMissingModelRef:
                 groups=["system:authenticated"],
             )
 
-            _wait_for_maas_auth_policy_phase(policy_name, "Degraded", timeout=60, require_auth_policies=False)
+            _wait_for_maas_auth_policy_phase(policy_name, "Degraded", require_auth_policies=False)
 
             # No AuthPolicy should exist for the ghost model
             ghost_auth_name = f"maas-auth-{ghost_model}"
@@ -586,6 +605,7 @@ class TestMissingModelRef:
 # P2: Header Abuse
 # ============================================================================
 
+@pytest.mark.smoke
 class TestHeaderAbuse:
     """Verify malicious header values are handled safely."""
 
@@ -625,6 +645,7 @@ class TestWebhookValidation:
 # P0: Internal Endpoint Isolation (FIND-004)
 # ============================================================================
 
+@pytest.mark.smoke
 class TestInternalEndpointIsolation:
     """Verify internal API endpoints are not reachable through the gateway.
 

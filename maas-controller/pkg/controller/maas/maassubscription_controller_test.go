@@ -277,6 +277,68 @@ func TestEnsureSubscriptionAPIKeysRevoked_SkipsWhenTenantConfigIsGone(t *testing
 	}
 }
 
+func TestEnsureSubscriptionAPIKeysRevoked_SkipsWhenRetainAnnotationSet(t *testing.T) {
+	const (
+		tenantNamespace = "team-a-maas"
+		appNamespace    = "odh-ai-gateway-infra"
+	)
+
+	subscription := newMaaSSubscription("sub-delete", tenantNamespace, "team-a", "llm", 100)
+	subscription.Annotations = map[string]string{
+		retainAPIKeysOnDeleteAnnotation: "true",
+	}
+	tenant := &maasv1alpha1.MaasTenantConfig{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      maasv1alpha1.MaasTenantConfigInstanceName,
+			Namespace: tenantNamespace,
+			Labels: map[string]string{
+				"maas.opendatahub.io/managed-by-aitenant": "true",
+				"maas.opendatahub.io/tenant-name":         "team-a",
+				"maas.opendatahub.io/tenant-namespace":    tenantNamespace,
+			},
+		},
+	}
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(&batcv1.Job{}).
+		WithObjects(subscription, tenant).
+		Build()
+	recorder := events.NewFakeRecorder(1)
+	r := &MaaSSubscriptionReconciler{
+		Client:       c,
+		APIReader:    c,
+		Scheme:       scheme,
+		AppNamespace: appNamespace,
+		Recorder:     recorder,
+	}
+
+	complete, err := r.ensureSubscriptionAPIKeysRevoked(context.Background(), ctrl.Log, subscription)
+	if err != nil {
+		t.Fatalf("ensureSubscriptionAPIKeysRevoked: %v", err)
+	}
+	if !complete {
+		t.Fatal("cleanup must be considered complete when the subscription retains its API keys")
+	}
+
+	jobs := &batcv1.JobList{}
+	if err := c.List(context.Background(), jobs); err != nil {
+		t.Fatalf("list cleanup Jobs: %v", err)
+	}
+	if len(jobs.Items) != 0 {
+		t.Fatalf("cleanup Jobs = %d, want 0", len(jobs.Items))
+	}
+
+	select {
+	case event := <-recorder.Events:
+		if !strings.Contains(event, "Normal APIKeyCleanupSkipped") {
+			t.Fatalf("event = %q, want Normal APIKeyCleanupSkipped", event)
+		}
+	default:
+		t.Fatal("expected a Normal event when API keys are retained")
+	}
+}
+
 // TestMaaSSubscriptionReconciler_DuplicateReconciliation verifies that reconciling
 // multiple subscriptions for the same model does not produce redundant TokenRateLimitPolicy updates.
 //
@@ -338,6 +400,129 @@ func TestMaaSSubscriptionReconciler_DuplicateReconciliation(t *testing.T) {
 		t.Errorf("redundant TokenRateLimitPolicy update: ResourceVersion changed from %s to %s; "+
 			"reconciling sub-b should not update the TokenRateLimitPolicy when content is identical to sub-a's reconciliation",
 			rvAfterA, rvAfterB)
+	}
+}
+
+func TestMaaSSubscriptionReconciler_MultipleSubscriptionsShareOrganization(t *testing.T) {
+	const (
+		modelName = "organization-model"
+		namespace = "default"
+		orgID     = "grid-org-a"
+	)
+
+	model := newMaaSModelRef(modelName, namespace, "ExternalModel", modelName)
+	route := newHTTPRoute("maas-"+modelName, namespace)
+	subA := newMaaSSubscription("organization-sub-a", namespace, "team-a", modelName, 100)
+	subB := newMaaSSubscription("organization-sub-b", namespace, "team-b", modelName, 200)
+	subA.Spec.Organization = &maasv1alpha1.SubscriptionOrganization{ID: orgID}
+	subB.Spec.Organization = &maasv1alpha1.SubscriptionOrganization{ID: orgID}
+	trlp := newPreexistingTRLP("maas-trlp-"+modelName, namespace, modelName, map[string]string{
+		"maas.opendatahub.io/subscriptions": strings.Join([]string{subA.Name, subB.Name}, ","),
+	})
+	if err := unstructured.SetNestedSlice(trlp.Object, []any{
+		map[string]any{"type": "Accepted", "status": "True"},
+	}, "status", "conditions"); err != nil {
+		t.Fatalf("Set TRLP accepted status: %v", err)
+	}
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(testRESTMapper()).
+		WithObjects(model, route, subA, subB, trlp).
+		WithStatusSubresource(&maasv1alpha1.MaaSSubscription{}).
+		WithIndex(&maasv1alpha1.MaaSSubscription{}, "spec.modelRef", subscriptionModelRefIndexer).
+		Build()
+
+	r := &MaaSSubscriptionReconciler{Client: c, APIReader: c, Scheme: scheme}
+	for _, name := range []string{subA.Name, subB.Name} {
+		req := ctrl.Request{NamespacedName: types.NamespacedName{Name: name, Namespace: namespace}}
+		if _, err := r.Reconcile(context.Background(), req); err != nil {
+			t.Fatalf("Reconcile %s: %v", name, err)
+		}
+	}
+
+	for _, name := range []string{subA.Name, subB.Name} {
+		var sub maasv1alpha1.MaaSSubscription
+		if err := c.Get(context.Background(), types.NamespacedName{Name: name, Namespace: namespace}, &sub); err != nil {
+			t.Fatalf("Get subscription %s: %v", name, err)
+		}
+		if sub.Spec.OrganizationID() != orgID {
+			t.Errorf("subscription %s organization = %q, want %q", name, sub.Spec.OrganizationID(), orgID)
+		}
+		if sub.Status.Phase != maasv1alpha1.PhaseActive {
+			t.Errorf("subscription %s phase = %q, want Active", name, sub.Status.Phase)
+		}
+	}
+}
+
+func TestMaaSSubscriptionReconciler_PreservesOrganizationWhenModelsAreUnhealthy(t *testing.T) {
+	const (
+		modelName = "organization-unhealthy-model"
+		namespace = "default"
+		orgID     = "grid-org-a"
+	)
+
+	tests := []struct {
+		name      string
+		model     *maasv1alpha1.MaaSModelRef
+		route     *gatewayapiv1.HTTPRoute
+		extraRef  maasv1alpha1.ModelSubscriptionRef
+		wantPhase maasv1alpha1.Phase
+	}{
+		{
+			name:      "failed",
+			wantPhase: maasv1alpha1.PhaseFailed,
+		},
+		{
+			name:      "degraded",
+			model:     newMaaSModelRef(modelName, namespace, "ExternalModel", modelName),
+			route:     newHTTPRoute("maas-"+modelName, namespace),
+			extraRef:  maasv1alpha1.ModelSubscriptionRef{Name: "missing-model", Namespace: namespace, TokenRateLimits: []maasv1alpha1.TokenRateLimit{{Limit: 100, Window: "1m"}}},
+			wantPhase: maasv1alpha1.PhaseDegraded,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sub := newMaaSSubscription("organization-"+tt.name, namespace, "team-a", modelName, 100)
+			sub.Spec.Organization = &maasv1alpha1.SubscriptionOrganization{ID: orgID}
+			if tt.extraRef.Name != "" {
+				sub.Spec.ModelRefs = append(sub.Spec.ModelRefs, tt.extraRef)
+			}
+
+			objects := []client.Object{sub}
+			if tt.model != nil {
+				objects = append(objects, tt.model)
+			}
+			if tt.route != nil {
+				objects = append(objects, tt.route)
+			}
+
+			c := fake.NewClientBuilder().
+				WithScheme(scheme).
+				WithRESTMapper(testRESTMapper()).
+				WithObjects(objects...).
+				WithStatusSubresource(&maasv1alpha1.MaaSSubscription{}).
+				WithIndex(&maasv1alpha1.MaaSSubscription{}, "spec.modelRef", subscriptionModelRefIndexer).
+				Build()
+
+			r := &MaaSSubscriptionReconciler{Client: c, APIReader: c, Scheme: scheme}
+			req := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(sub)}
+			if _, err := r.Reconcile(context.Background(), req); err != nil {
+				t.Fatalf("Reconcile: %v", err)
+			}
+
+			var got maasv1alpha1.MaaSSubscription
+			if err := c.Get(context.Background(), req.NamespacedName, &got); err != nil {
+				t.Fatalf("Get subscription: %v", err)
+			}
+			if got.Spec.OrganizationID() != orgID {
+				t.Errorf("organization = %q, want %q", got.Spec.OrganizationID(), orgID)
+			}
+			if got.Status.Phase != tt.wantPhase {
+				t.Errorf("phase = %q, want %q", got.Status.Phase, tt.wantPhase)
+			}
+		})
 	}
 }
 
@@ -1719,6 +1904,134 @@ func TestMaaSSubscriptionReconciler_StatusConflictWithDuplicateScanRequeues(t *t
 	assertCondition(t, got.Status.Conditions, ConditionSpecPriorityDuplicate, metav1.ConditionFalse, "NoDuplicatePeers")
 }
 
+// TestMaaSSubscriptionReconciler_TRLPUpdateRetriesOnConflict reproduces the Kuadrant
+// operator writing TokenRateLimitPolicy status between our read and our spec write.
+// The update path must re-read (bypassing the informer cache via APIReader) and retry
+// instead of failing the whole reconcile: a failed rebuild here delays subscription
+// churn convergence and keeps Kuadrant's Enforced condition stuck.
+func TestMaaSSubscriptionReconciler_TRLPUpdateRetriesOnConflict(t *testing.T) {
+	const (
+		namespace = "default"
+		subName   = "sub-a"
+		modelName = "llm"
+		trlpName  = "maas-trlp-" + modelName
+	)
+
+	model := newMaaSModelRef(modelName, namespace, "ExternalModel", modelName)
+	route := newHTTPRoute("maas-"+modelName, namespace)
+	sub := newMaaSSubscription(subName, namespace, "team-a", modelName, 100)
+	// A stale subscriptions annotation (and the sentinel targetRef) forces the
+	// reconcile through the TRLP update branch.
+	trlp := newPreexistingTRLP(trlpName, namespace, modelName, map[string]string{
+		"maas.opendatahub.io/subscriptions": "someone-else",
+	})
+
+	raced := false
+	cacheFresh := false // flips once the controller's own update lands (watch event refreshes the cache)
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(testRESTMapper()).
+		WithObjects(model, route, sub, trlp).
+		WithStatusSubresource(&maasv1alpha1.MaaSSubscription{}).
+		WithIndex(&maasv1alpha1.MaaSSubscription{}, "spec.modelRef", subscriptionModelRefIndexer).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Update: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+				u, ok := obj.(*unstructured.Unstructured)
+				if ok && u.GetKind() == "TokenRateLimitPolicy" {
+					if !raced {
+						raced = true
+						// Simulate the Kuadrant status updater winning the race:
+						// write status to the stored object so the controller's
+						// stale-copy update conflicts, exactly like a 409 against
+						// a resourceVersion bumped by another writer.
+						live := &unstructured.Unstructured{}
+						live.SetGroupVersionKind(u.GroupVersionKind())
+						if err := cl.Get(ctx, client.ObjectKeyFromObject(u), live); err != nil {
+							return err
+						}
+						if err := unstructured.SetNestedSlice(live.Object, []any{
+							map[string]any{"type": "Accepted", "status": "True"},
+							map[string]any{"type": "Enforced", "status": "False", "message": "simulated concurrent status write"},
+						}, "status", "conditions"); err != nil {
+							return err
+						}
+						if err := cl.Update(ctx, live); err != nil {
+							return err
+						}
+					}
+					err := cl.Update(ctx, obj, opts...)
+					if err == nil {
+						cacheFresh = true
+					}
+					return err
+				}
+				return cl.Update(ctx, obj, opts...)
+			},
+		}).
+		Build()
+
+	// Model the split between the controller's cached client and its APIReader:
+	// the cache keeps serving the pre-conflict TRLP (stale resourceVersion)
+	// until the controller's own update is observed, while the APIReader always
+	// sees live state. The retry must re-read through the APIReader or every
+	// retry conflicts again.
+	stale := &unstructured.Unstructured{}
+	stale.SetGroupVersionKind(trlp.GroupVersionKind())
+	if err := c.Get(t.Context(), types.NamespacedName{Name: trlpName, Namespace: namespace}, stale); err != nil {
+		t.Fatalf("seed stale TRLP read: %v", err)
+	}
+	cachedClient := &staleTRLPCacheReader{Client: c, stale: stale, fresh: &cacheFresh}
+
+	r := &MaaSSubscriptionReconciler{Client: cachedClient, APIReader: c, Scheme: scheme}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: subName, Namespace: namespace}}
+	if _, err := r.Reconcile(t.Context(), req); err != nil {
+		t.Fatalf("Reconcile error = %v, want TRLP update conflict to be retried successfully", err)
+	}
+	if !raced {
+		t.Fatal("interceptor never simulated a concurrent TRLP status write; test did not exercise the retry path")
+	}
+
+	got := &unstructured.Unstructured{}
+	got.SetGroupVersionKind(trlp.GroupVersionKind())
+	if err := c.Get(t.Context(), types.NamespacedName{Name: trlpName, Namespace: namespace}, got); err != nil {
+		t.Fatalf("Get TRLP: %v", err)
+	}
+	if ann := got.GetAnnotations()["maas.opendatahub.io/subscriptions"]; ann != namespace+"/"+subName {
+		t.Errorf("TRLP subscriptions annotation = %q, want %q (rebuild must land despite the conflict)", ann, namespace+"/"+subName)
+	}
+	// The retry re-reads the object, so the concurrent status write must survive.
+	conditions, found, err := unstructured.NestedSlice(got.Object, "status", "conditions")
+	if err != nil || !found || len(conditions) != 2 {
+		t.Errorf("TRLP status conditions = %v (found=%v, err=%v), want the simulated concurrent status write preserved", conditions, found, err)
+	}
+
+	gotSub := &maasv1alpha1.MaaSSubscription{}
+	if err := c.Get(t.Context(), req.NamespacedName, gotSub); err != nil {
+		t.Fatalf("Get subscription: %v", err)
+	}
+	if gotSub.Status.Phase != maasv1alpha1.PhaseActive {
+		t.Errorf("subscription phase = %q, want %q", gotSub.Status.Phase, maasv1alpha1.PhaseActive)
+	}
+}
+
+// staleTRLPCacheReader wraps a client the way the informer cache behaves for
+// TokenRateLimitPolicies in production: it keeps serving the snapshot taken
+// before a concurrent writer bumped the resourceVersion, while other kinds and
+// all writes pass through unchanged.
+type staleTRLPCacheReader struct {
+	client.Client
+	stale *unstructured.Unstructured
+	fresh *bool
+}
+
+func (s *staleTRLPCacheReader) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+	if u, ok := obj.(*unstructured.Unstructured); ok && u.GetKind() == "TokenRateLimitPolicy" && key.Name == s.stale.GetName() && !*s.fresh {
+		u.Object = s.stale.DeepCopy().Object
+		return nil
+	}
+	return s.Client.Get(ctx, key, obj, opts...)
+}
+
 func TestMaaSSubscriptionReconciler_StatusWriteFailureReturned(t *testing.T) {
 	conflict := apierrors.NewConflict(schema.GroupResource{Group: "maas.opendatahub.io", Resource: "maassubscriptions"}, "no-spec", errors.New("stale resource version"))
 	for _, statusErr := range []error{conflict, errors.New("status unavailable")} {
@@ -1747,12 +2060,24 @@ func TestMaaSSubscriptionReconciler_ReconcileErrorPreservedOnStatusFailure(t *te
 
 	// No valid models routes Reconcile through cleanupStaleTRLPs.
 	sub := newMaaSSubscription("sub-missing", "default", "team-a", "missing-model", 100)
-	funcs := failStatusUpdates(statusErr)
-	funcs.List = func(ctx context.Context, cl client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
-		if list.GetObjectKind().GroupVersionKind().Kind == "TokenRateLimitPolicyList" {
-			return listErr
-		}
-		return cl.List(ctx, list, opts...)
+	funcs := interceptor.Funcs{
+		// Allow the early sticky rateLimitIdentity status stamp (phase still
+		// empty); fail later status writes used for the reconcile-error path.
+		SubResourceUpdate: func(ctx context.Context, cl client.Client, subResource string, obj client.Object, opts ...client.SubResourceUpdateOption) error {
+			if subResource != "status" {
+				return cl.SubResource(subResource).Update(ctx, obj, opts...)
+			}
+			if sub, ok := obj.(*maasv1alpha1.MaaSSubscription); ok && sub.Status.Phase == "" {
+				return cl.Status().Update(ctx, obj, opts...)
+			}
+			return statusErr
+		},
+		List: func(ctx context.Context, cl client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+			if list.GetObjectKind().GroupVersionKind().Kind == "TokenRateLimitPolicyList" {
+				return listErr
+			}
+			return cl.List(ctx, list, opts...)
+		},
 	}
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).

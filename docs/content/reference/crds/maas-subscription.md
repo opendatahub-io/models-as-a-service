@@ -2,24 +2,33 @@
 
 Defines a subscription plan with per-model token rate limits. Creates Kuadrant TokenRateLimitPolicies enforced by Limitador. Must be created in the `models-as-a-service` namespace.
 
-When a `MaaSSubscription` is deleted, its finalizer waits for a subscription-scoped cleanup Job to soft-delete and invalidate only the API keys bound to that subscription. Keys for other subscriptions in the tenant are not affected. Cleanup failures keep the subscription in `Terminating`, are retried, and emit a Kubernetes Warning event.
+For AGC ExternalModels with per-gateway routes, each referenced MaaSModelRef reconciles a TokenRateLimitPolicy on its selected tenant route (in the model/route namespace). Policies keep existing names (`maas-trlp-<maasmodelref-name>`) and are labeled with the selected full gateway identity (`maas.opendatahub.io/gateway-namespace`, `maas.opendatahub.io/gateway-name`) for diagnostics and operational context.
+
+By default, when a `MaaSSubscription` is deleted, its finalizer waits for a subscription-scoped cleanup Job to soft-delete and invalidate only the API keys bound to that subscription. Keys for other subscriptions in the tenant are not affected. Cleanup failures keep the subscription in `Terminating`, are retried, and emit a Kubernetes Warning event. Set `maas.opendatahub.io/retain-api-keys-on-delete: "true"` to skip API-key revocation for a subscription copy managed by an external system that performs revocation for the authoritative deletion. The finalizer still completes its other cleanup.
 
 ## MaaSSubscriptionSpec
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| owner | OwnerSpec | Yes | Who owns this subscription |
+| owner | OwnerSpec | Yes | Users and groups entitled to select this subscription; not Kubernetes ownership or RBAC |
+| organization | SubscriptionOrganization | No | Stable organization association for delegated administration. `organization.id` is a non-empty string, may be set only once, and cannot be replaced or removed. It does not change inference access, and it is the authoritative source for subscription-scoped `organization_id` telemetry. |
 | modelRefs | []ModelSubscriptionRef | Yes | Models included with per-model token rate limits (each specifies `name` and `namespace`) |
-| tokenMetadata | TokenMetadata | No | Metadata for token attribution and metering |
+| tokenMetadata | TokenMetadata | No | Metadata for token attribution and metering. `tokenMetadata.organizationId` is the legacy fallback when `organization.id` is unset. |
 | priority | int32 | No | Subscription priority when user has multiple (higher = higher priority; default: 0) |
 | inferencePriority | int32 | No | Scheduling priority for inference requests made under this subscription (signed; higher = scheduled first, negative = below the scheduler default). Independent of `priority`, which only selects among subscriptions. Omitting the field creates no InferenceObjective and the scheduler applies priority `0`; setting it explicitly to `0` creates an InferenceObjective with priority `0`. |
+
+## SubscriptionOrganization
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| id | string | Yes | Non-empty organization identifier. Legacy subscriptions may gain this field once, after their existing key and history association has been verified. The association is then immutable. |
 
 ## OwnerSpec
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| groups | []GroupReference | No | Kubernetes group names that own this subscription |
-| users | []string | No | Kubernetes user names that own this subscription |
+| groups | []GroupReference | No | Identity group names entitled to select this subscription; matched exactly |
+| users | []string | No | Identity user names entitled to select this subscription; matched exactly |
 
 ## ModelSubscriptionRef
 
@@ -76,6 +85,7 @@ MaaSSubscription supports standard Kubernetes and OpenShift annotations for use 
 
 | Annotation | Description | Example |
 | ---------- | ----------- | ------- |
+| `maas.opendatahub.io/retain-api-keys-on-delete` | Skip subscription API-key revocation when this object is deleted; use only when an external owner revokes keys for the authoritative deletion | `"true"` |
 | `openshift.io/display-name` | Human-readable display name | `"Premium Subscription"` |
 | `openshift.io/description` | Free-text description | `"Premium-tier subscription with 1000 tokens/min rate limit"` |
 

@@ -74,6 +74,20 @@ spec:
                     minimum: 1
                     type: integer
                 type: object
+              apiTranslation:
+                description: |-
+                  APITranslation authorizes the API translation capabilities supported by
+                  the selected Praxis dataplane. Omission is equivalent to disabled for
+                  new tenants; the pointer preserves an explicit operator choice during
+                  IPP migration.
+                properties:
+                  enabled:
+                    description: |-
+                      Enabled permits only translation directions supported by the installed
+                      Praxis controller and ExtProc image. Omitted and false both disable
+                      translation for new tenants.
+                    type: boolean
+                type: object
               guardrails:
                 description: |-
                   Guardrails attaches reusable AIGuardrail policies at the MaaS tenant-config

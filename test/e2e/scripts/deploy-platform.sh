@@ -17,12 +17,16 @@ fi
 [[ "$(type -t apply_default_oidc_for_keycloak 2>/dev/null)" == "function" ]] || source "$PROJECT_ROOT/test/e2e/scripts/auth_utils.sh"
 
 # Env defaults (no-op if already set by orchestrator)
-DEPLOY_MODE="${DEPLOY_MODE:-kustomize}"
 INSECURE_HTTP="${INSECURE_HTTP:-false}"
 EXTERNAL_OIDC="${EXTERNAL_OIDC:-false}"
 SKIP_AUTH_CHECK="${SKIP_AUTH_CHECK:-true}"
 export POLICY_ENGINE="${POLICY_ENGINE:-rhcl}"
 export INGRESS_MODE="${INGRESS_MODE:-ocproute}"
+# External OIDC requires Authorino/RHCL; never permit callers to skip that
+# readiness gate for this deployment mode.
+if [[ "${EXTERNAL_OIDC}" == "true" ]]; then
+    SKIP_AUTH_CHECK=false
+fi
 AUTHORINO_NAMESPACE="${AUTHORINO_NAMESPACE:-$(resolve_authorino_namespace "${POLICY_ENGINE}")}"
 export AUTHORINO_NAMESPACE
 LLMISVC_CONTROLLER_CPU_REQUEST="${LLMISVC_CONTROLLER_CPU_REQUEST-1}"
@@ -68,24 +72,7 @@ deploy_maas_platform() {
     [[ -n "${MAAS_CONTROLLER_IMAGE:-}" ]] && echo "Using custom MaaS controller image: ${MAAS_CONTROLLER_IMAGE}"
     [[ -n "${OPERATOR_CATALOG:-}" ]] && echo "Using ODH catalog: ${OPERATOR_CATALOG}"
     [[ -n "${OPERATOR_IMAGE:-}" ]] && echo "Using custom ODH operator image: ${OPERATOR_IMAGE}"
-    [[ -n "${AI_GATEWAY_OPERATOR_IMAGE:-}" ]] && echo "Using custom ai-gateway-operator image: ${AI_GATEWAY_OPERATOR_IMAGE} (requires DEPLOY_MODE=operator)"
-    echo "Deployment mode: ${DEPLOY_MODE}"
-
-    echo "Installing cert-manager and LeaderWorkerSet operators..."
-    if ! bash "$PROJECT_ROOT/.github/hack/install-cert-manager-and-lws.sh"; then
-        echo "❌ ERROR: cert-manager/LWS installation failed"
-        exit 1
-    fi
-
-    if [[ "${DEPLOY_MODE}" == "kustomize" ]]; then
-        echo "Installing OpenDataHub operator..."
-        if ! bash "$PROJECT_ROOT/.github/hack/install-odh.sh"; then
-            echo "❌ ERROR: ODH installation failed"
-            exit 1
-        fi
-    else
-        echo "Skipping standalone ODH install (DEPLOY_MODE=${DEPLOY_MODE}; deploy.sh installs ODH + DSC directly)"
-    fi
+    [[ -n "${AI_GATEWAY_OPERATOR_IMAGE:-}" ]] && echo "Using custom ai-gateway-operator image: ${AI_GATEWAY_OPERATOR_IMAGE}"
 
     if [[ "${EXTERNAL_OIDC}" == "true" ]]; then
         echo "External OIDC enabled (Keycloak via deploy.sh --enable-keycloak, realm tenant-a defaults)..."
@@ -100,7 +87,7 @@ deploy_maas_platform() {
     export MODEL_NAMESPACE
     local deploy_cmd=(
         "$PROJECT_ROOT/scripts/deploy.sh"
-        --deployment-mode "${DEPLOY_MODE}"
+        --deployment-mode "${DEPLOY_MODE:-kustomize}"
         --policy-engine "${POLICY_ENGINE}"
     )
     [[ -n "${OPERATOR_CATALOG:-}" ]] && deploy_cmd+=(--operator-catalog "${OPERATOR_CATALOG}")

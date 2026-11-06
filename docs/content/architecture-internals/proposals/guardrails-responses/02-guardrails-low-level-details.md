@@ -607,14 +607,15 @@ request. No AIGatewayPolicy or MaaS HTTP configuration endpoint is needed initia
 
 ```text
 RENDER_CHECK_ID(namespace, guardrail, check) =
-    lowercase_hex(SHA-256(UTF-8(compact_JSON([namespace, guardrail, check]))))
+    lowercase_hex(SHA-256(UTF-8(namespace + ":" + guardrail + ":" + check)))
 
 header_name = "x-aigateway-guardrail-" + RENDER_CHECK_ID(namespace, guardrail, check)
 ```
 
-The inputs are the AIGuardrail's namespace, `metadata.name` and `spec.checks[].name` (not the NeMo config ID). Compact
-JSON has no separator whitespace; preserve the exact input strings. All consumers use the same encoding. In the YAML
-examples, `RENDER_CHECK_ID(<tenant-namespace>,guardrail,check)` denotes a compiler substitution using the shown
+The inputs are the AIGuardrail's namespace, `metadata.name` and `spec.checks[].name` (not the NeMo config ID). Join
+the exact input strings with `:` before hashing. Kubernetes resource and check names cannot contain `:`, so the
+encoding is unambiguous. All consumers use the same encoding. In the YAML examples,
+`RENDER_CHECK_ID(<tenant-namespace>,guardrail,check)` denotes a compiler substitution using the shown
 resource/check names. It is documentation notation, not a Praxis expression or a literal HTTP header name. Resolve the
 namespace placeholder and replace the whole expression with the digest before publishing configuration. There are N
 distinct headers for N configured checks, and repeated references to the same check reuse one header.
@@ -642,6 +643,12 @@ authorization output may set flags; caller copies are rejected. Praxis validates
 catalog before protected work; unknown or unavailable checks reject the request rather than disappear through
 nonmatching conditions. MaaS is responsible for producing the complete mandatory set: the gateway does not reconstruct
 MaaS policy to infer missing requirements. Guardrail flag presence alone is not evidence that authorization occurred.
+
+The initial MaaS API handoff exposes this selection as `subscription-info.selectedGuardrailChecks`, a sparse map in the
+JSON response. Each key is a check identifier computed using the SHA-256 formula defined above, and each selected check
+has the value `true`. A configured resolver returns an empty map when no checks apply. If a selected attachment cannot
+be resolved, the API returns `guardrail_unavailable` without a partial selection. This field does not create request
+headers; those remain a separate integration contract.
 
 **Revision consistency.** AI Gateway publishes the configured tenant catalog revision covering tenant identity and each
 configured AIGuardrail UID/generation, binding revision, check identity, phase and deterministic order. Runtime-only

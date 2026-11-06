@@ -1,3 +1,5 @@
+# Deprecated: rendered only when Config.spec.usageLogging is true.
+# When usageLogging is false or omitted, the controller renders dsci-managed instead.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
@@ -5,22 +7,45 @@ resources:
   - otel-collector.yaml
   - otel-collector-rbac.yaml
   - usage-logs-collector-egress-networkpolicy.yaml
-  - tenancy-proxy-rbac.yaml
-  - tenancy-proxy.yaml
-  - usage-tenancy-proxy-networkpolicy.yaml
-  - usage-logs-admin-dashboard.yaml
-  - usage-logs-dashboard.yaml
+  - dsci-managed
 
-configMapGenerator:
-  - name: usage-tenancy-proxy-source
-    namespace: opendatahub
-    files:
-      - proxy/main.py
-      - proxy/auth.py
-      - proxy/rewriter.py
-    options:
-      disableNameSuffixHash: true
-      labels:
-        app: usage-tenancy-proxy
-        app.kubernetes.io/managed-by: maas-controller
-        app.kubernetes.io/component: usage-tenancy-proxy
+patches:
+  - target:
+      group: apps
+      version: v1
+      kind: Deployment
+      name: usage-logs-tenancy-proxy
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: usage-logs-tenancy-proxy
+      spec:
+        template:
+          spec:
+            containers:
+            - name: proxy
+              env:
+              - name: LOKI_GATEWAY_SERVICE
+                value: usage-gateway-http
+  - target:
+      group: perses.dev
+      version: v1alpha1
+      kind: PersesDatasource
+      name: usage-logs-all
+    patch: |-
+      - op: replace
+        path: /spec/config/plugin/spec/proxy/spec/url
+        value: https://usage-gateway-http:8080/api/logs/v1/application
+      - op: replace
+        path: /spec/client/tls/caCert/name
+        value: usage-gateway-ca-bundle
+  - target:
+      group: networking.k8s.io
+      version: v1
+      kind: NetworkPolicy
+      name: usage-tenancy-proxy-egress-restrict
+    patch: |-
+      - op: replace
+        path: /spec/egress/2/to/0/podSelector/matchLabels/app.kubernetes.io~1instance
+        value: usage

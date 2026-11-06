@@ -18,7 +18,9 @@ Environment variables:
   This file uses no additional file-specific environment variables.
 """
 
+import json
 import logging
+import time
 
 import pytest
 import requests
@@ -43,6 +45,7 @@ from test_helper import (
     _get_auth_policies_authorizing_identity_for_model,
     _maas_api_url,
     _ns,
+    _is_transient_gateway_response,
     _request_with_gateway_retry,
     _sa_to_user,
     _wait_for_maas_auth_policy_phase,
@@ -52,6 +55,74 @@ from test_helper import (
 log = logging.getLogger(__name__)
 
 pytestmark = [pytest.mark.xdist_group("api_keys"), pytest.mark.worker_tenant]
+
+# Budget for the gateway AuthPolicy to finish propagating after a policy change.
+# Only used to ride out proxy 5xx; a settled gateway answers on the first try.
+AUTH_PROPAGATION_TIMEOUT = 60
+
+
+def _wait_for_subscription_in_list(
+    api_key,
+    subscription_name,
+    *,
+    path="/v1/subscriptions",
+    timeout=90,
+    poll_interval=5,
+):
+    """Poll a subscription list endpoint until subscription_name is listed.
+
+    maas-api builds subscription lists from an informer-backed cache, so a
+    subscription can be missing from the first response after discovery becomes Ready.
+    """
+    headers = {"Authorization": f"Bearer {api_key}"}
+    url = f"{_maas_api_url()}{path}"
+    deadline = time.time() + timeout
+    last_status = None
+    last_names = []
+    last_body = None
+
+    while time.time() < deadline:
+        try:
+            response = _request_with_gateway_retry(
+                requests.get,
+                url,
+                headers=headers,
+                deadline=deadline,
+            )
+        except TimeoutError:
+            break
+        last_status = response.status_code
+        last_body = (response.text or "")[:200]
+        if response.status_code != 200:
+            time.sleep(poll_interval)
+            continue
+
+        try:
+            data = response.json()
+        except (json.JSONDecodeError, ValueError) as exc:
+            raise AssertionError(
+                f"GET /v1/subscriptions returned invalid JSON: {exc}"
+            ) from exc
+        if not isinstance(data, list) or any(not isinstance(item, dict) for item in data):
+            raise AssertionError(
+                "GET /v1/subscriptions expected an array of subscription objects, "
+                f"got {type(data).__name__}"
+            )
+        last_names = [s.get("subscription_id_header") for s in data]
+        test_sub = next(
+            (s for s in data if s.get("subscription_id_header") == subscription_name),
+            None,
+        )
+        if test_sub is not None:
+            return data, test_sub
+
+        time.sleep(poll_interval)
+
+    raise AssertionError(
+        f"Expected subscription '{subscription_name}' in {path} "
+        f"within {timeout}s, but saw {last_names}. "
+        f"Last HTTP status: {last_status}, body: {last_body!r}"
+    )
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -163,6 +234,7 @@ def _validate_subscription_info_schema(sub):
 class TestListSubscriptions:
     """E2E tests for GET /v1/subscriptions."""
 
+    @pytest.mark.smoke
     def test_returns_accessible_subscriptions(self):
         """Authenticated user gets their accessible subscriptions."""
         sa_name = "e2e-list-subs-sa"
@@ -201,6 +273,7 @@ class TestListSubscriptions:
         finally:
             _delete_sa(sa_name, namespace=sa_ns)
 
+    @pytest.mark.smoke
     @pytest.mark.parametrize(
         "endpoint",
         [
@@ -212,7 +285,22 @@ class TestListSubscriptions:
     def test_unauthenticated_returns_401(self, endpoint):
         """Both subscription-list endpoints require authentication."""
         url = f"{_maas_api_url()}{endpoint}"
+        # While Envoy reloads the gateway AuthPolicy it answers requests with a
+        # proxy 5xx before the policy is loaded, which is indistinguishable from
+        # a real error on a single sample. Retry only proxy 5xx: a genuine 401
+        # passes immediately and a genuine server error still fails.
+        deadline = time.time() + AUTH_PROPAGATION_TIMEOUT
         r = requests.get(url, timeout=TIMEOUT, verify=TLS_VERIFY)
+        while (
+            r.status_code >= 500
+            and _is_transient_gateway_response(r)
+            and time.time() < deadline
+        ):
+            log.info(
+                "GET %s (no auth) -> %s while auth propagates, retrying", endpoint, r.status_code
+            )
+            time.sleep(5)
+            r = requests.get(url, timeout=TIMEOUT, verify=TLS_VERIFY)
         assert r.status_code == 401, f"Expected 401, got {r.status_code}: {r.text}"
         log.info("GET %s (no auth) -> %s", endpoint, r.status_code)
 
@@ -237,23 +325,7 @@ class TestListSubscriptions:
 
             _wait_for_subscription_discovery_ready(subscription_name, namespace=maas_ns)
 
-            url = f"{_maas_api_url()}/v1/subscriptions"
-            r = _request_with_gateway_retry(
-                requests.get,
-                url,
-                headers={"Authorization": f"Bearer {api_key}"},
-            )
-
-            assert r.status_code == 200
-            data = r.json()
-
-            # Find our test subscription
-            test_sub = next(
-                (s for s in data if s["subscription_id_header"] == subscription_name),
-                None,
-            )
-            assert test_sub is not None, \
-                f"Test subscription '{subscription_name}' not found in {[s['subscription_id_header'] for s in data]}"
+            _data, test_sub = _wait_for_subscription_in_list(api_key, subscription_name)
 
             # Validate model_refs
             assert len(test_sub["model_refs"]) >= 1, "Expected at least 1 model_ref"
@@ -328,22 +400,7 @@ class TestListSubscriptions:
             _wait_for_subscription_discovery_ready(subscription_name, namespace=maas_ns)
             _wait_for_maas_auth_policy_phase(auth_policy_name, namespace=maas_ns)
 
-            url = f"{_maas_api_url()}/v1/subscriptions"
-            r = _request_with_gateway_retry(
-                requests.get,
-                url,
-                headers={"Authorization": f"Bearer {api_key}"},
-            )
-
-            assert r.status_code == 200, f"Expected 200, got {r.status_code}: {r.text}"
-            data = r.json()
-
-            test_sub = next(
-                (s for s in data if s["subscription_id_header"] == subscription_name),
-                None,
-            )
-            assert test_sub is not None, \
-                f"Subscription '{subscription_name}' not found in {[s['subscription_id_header'] for s in data]}"
+            _data, test_sub = _wait_for_subscription_in_list(api_key, subscription_name)
 
             refs = test_sub.get("model_refs", [])
             assert len(refs) >= 1, "Expected at least 1 model_ref"
@@ -406,24 +463,13 @@ class TestListSubscriptionsForModel:
             _wait_for_maas_auth_policy_phase(ap_with_model, namespace=maas_ns)
             _wait_for_maas_auth_policy_phase(ap_without_model, namespace=maas_ns)
 
-            # Query for subscriptions that include DISTINCT_MODEL_REF
-            url = f"{_maas_api_url()}/v1/model/{DISTINCT_MODEL_REF}/subscriptions"
-            r = _request_with_gateway_retry(
-                requests.get,
-                url,
-                headers={"Authorization": f"Bearer {api_key}"},
+            model_path = f"/v1/model/{DISTINCT_MODEL_REF}/subscriptions"
+            data, _match_sub = _wait_for_subscription_in_list(
+                api_key,
+                sub_with_model,
+                path=model_path,
             )
-
-            assert r.status_code == 200, f"Expected 200, got {r.status_code}: {r.text}"
-
-            data = r.json()
-            assert isinstance(data, list), f"Expected array response, got {type(data).__name__}"
-
             sub_ids = [s["subscription_id_header"] for s in data]
-
-            # The matching subscription should be present
-            assert sub_with_model in sub_ids, \
-                f"Expected '{sub_with_model}' in results, got {sub_ids}"
 
             # The non-matching subscription should NOT be present
             assert sub_without_model not in sub_ids, \
@@ -509,22 +555,7 @@ class TestSubscriptionModelAccessFiltering:
 
             api_key = _create_api_key(sa_token, subscription=subscription_name)
 
-            url = f"{_maas_api_url()}/v1/subscriptions"
-            r = _request_with_gateway_retry(
-                requests.get,
-                url,
-                headers={"Authorization": f"Bearer {api_key}"},
-            )
-
-            assert r.status_code == 200
-            data = r.json()
-
-            test_sub = next(
-                (s for s in data if s["subscription_id_header"] == subscription_name),
-                None,
-            )
-            assert test_sub is not None, \
-                f"Test subscription '{subscription_name}' not found in {[s['subscription_id_header'] for s in data]}"
+            _data, test_sub = _wait_for_subscription_in_list(api_key, subscription_name)
 
             model_names = [ref["name"] for ref in test_sub["model_refs"]]
             assert MODEL_REF in model_names, \

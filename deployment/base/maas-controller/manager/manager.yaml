@@ -101,6 +101,12 @@ spec:
                 key: maas-discovery-replicas
                 name: maas-parameters
                 optional: true
+          - name: MAAS_DISCOVERY_LOG_LEVEL
+            valueFrom:
+              configMapKeyRef:
+                key: maas-discovery-log-level
+                name: maas-parameters
+                optional: true
           - name: MONITORING_NAMESPACE
             valueFrom:
               configMapKeyRef:

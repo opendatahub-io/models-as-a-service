@@ -58,7 +58,7 @@ jobs:
           cache: true
           cache-dependency-path: ${{ env.PROJECT_DIR }}/go.sum
 
-      - name: "Run govulncheck (non-blocking: GO-2026-5940 in kedacore/keda@v2.18.3 fixed in v2.20.0, blocked by controller-runtime pin)"
+      - name: Run govulncheck (non-blocking until Go toolchain is bumped)
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./... || true
 
   test:
@@ -76,7 +76,7 @@ jobs:
         run: make test
 
       - name: Upload coverage reports
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: maas-controller-coverage

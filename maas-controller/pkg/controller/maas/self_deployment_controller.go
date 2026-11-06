@@ -21,8 +21,10 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -31,7 +33,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	netwv1 "k8s.io/api/networking/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
-	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -59,8 +60,24 @@ import (
 // can strip it from older installs.
 const CleanupFinalizer = "maas.opendatahub.io/cleanup"
 
-// usageLogsCollectorName is the OpenTelemetryCollector resource for gateway usage logs.
-const usageLogsCollectorName = "usage-logs"
+// usageLogsCollectorClusterRoleBindingName grants the usage-logs collector write
+// access to application logs. It is removed when the collector CRD is unavailable
+// (CWE-863). Disabling usageLogging removes it with the rest of the usage-logs-only
+// resources.
+const usageLogsCollectorClusterRoleBindingName = "usage-collector-application-logs-write"
+
+// usageLogsDsciManagedKustomizeDir is the kustomization rendered when usageLogging is false or omitted.
+const usageLogsDsciManagedKustomizeDir = "dsci-managed"
+
+// usageLogsMaaSAPILokiDatasourceURL is the Perses datasource base URL for the
+// maas-api read-only Loki proxy (GET /v1/logs*). Hardcoded to the RHOAI
+// infra namespace for now; maas-api serves TLS on 8443 with a service-ca
+// signed serving cert. The multi-tenancy datasource appends ?only_user=true.
+const usageLogsMaaSAPILokiDatasourceURL = "https://maas-api.redhat-ai-gateway-infra.svc.cluster.local:8443/v1/logs"
+
+// usageLogsMaaSAPILokiCACertPath is the cluster service-ca bundle mounted in
+// every pod's service account volume; it verifies maas-api's serving cert.
+const usageLogsMaaSAPILokiCACertPath = "/var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt"
 
 // usageLogsTenancyProxyDeploymentName is the Deployment for the Loki query tenancy proxy.
 const usageLogsTenancyProxyDeploymentName = "usage-logs-tenancy-proxy"
@@ -85,15 +102,24 @@ type LifecycleReconciler struct {
 	DeploymentNS                string
 	TenantSubscriptionNamespace string
 	AITenantNamespace           string
+	GatewayName                 string
 	GatewayNamespace            string
 	ObservabilityManifestsPath  string
 	MonitoringNamespace         string
 	UsageLogsManifestPath       string
-	DiscoveryEnabled            bool
-	DiscoveryManifestPath       string
-	DiscoveryImage              string
-	DiscoveryNamespace          string
-	DiscoveryReplicas           *int32
+	// InfraNamespace is where maas-api runs; the usage-logs-loki Secret is
+	// looked up there to switch the Perses datasources to the maas-api Loki
+	// proxy (see ensureUsageLogs / patchPersesDatasourceMaaSAPILoki).
+	InfraNamespace        string
+	DiscoveryEnabled      bool
+	DiscoveryManifestPath string
+	DiscoveryImage        string
+	DiscoveryLogLevel     string
+	DiscoveryNamespace    string
+	DiscoveryReplicas     *int32
+
+	staleResourcesCleanupMu        sync.Mutex
+	staleResourcesCleanupCompleted bool
 }
 
 //+kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;update;patch
@@ -102,6 +128,7 @@ type LifecycleReconciler struct {
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=configs/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=maastenantconfigs,verbs=get;list;watch;update;patch
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=aitenants,verbs=get;list;watch;update;patch
+//+kubebuilder:rbac:groups=route.openshift.io,resources=routes,verbs=get;list;watch
 //+kubebuilder:rbac:groups=perses.dev,resources=persesdashboards;persesdatasources,verbs=get;list;watch;create;patch;delete
 //+kubebuilder:rbac:groups=opentelemetry.io,resources=opentelemetrycollectors,verbs=get;list;watch;create;patch;delete
 //+kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterrolebindings;rolebindings,verbs=get;list;watch;create;patch;delete
@@ -118,8 +145,15 @@ func (r *LifecycleReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
+	// Older versions left a finalizer on this controller's own Deployment. Remove it
+	// before any setup or teardown step can requeue or fail, so namespace deletion never
+	// waits for this controller to clean up its own workload.
+	if err := r.stripLegacyCleanupFinalizer(ctx, log, req.NamespacedName); err != nil {
+		return ctrl.Result{}, err
+	}
+
 	if dep.DeletionTimestamp.IsZero() {
-		// Strip before anything else so that, if teardown is requested below, Config
+		// Strip before any Config work below so that, if teardown is requested, Config
 		// deletion can never cascade-delete the Deployment via a stale ownerReference
 		// from a pre-self-teardown install.
 		if err := r.stripLegacyDeploymentConfigOwnerReference(ctx, log, req.NamespacedName); err != nil {
@@ -149,13 +183,14 @@ func (r *LifecycleReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		} else if res != nil {
 			return *res, nil
 		}
+		// Upgrade cleanup is independent of observability and other module setup.
+		if err := r.cleanupStaleResources(ctx, log); err != nil {
+			return ctrl.Result{}, err
+		}
 		if err := r.ensureObservability(ctx, log); err != nil {
 			return ctrl.Result{}, err
 		}
 		if err := r.ensureDiscoveryService(ctx, log); err != nil {
-			return ctrl.Result{}, err
-		}
-		if err := r.stripLegacyCleanupFinalizer(ctx, log, req.NamespacedName); err != nil {
 			return ctrl.Result{}, err
 		}
 		if cfg != nil {
@@ -169,10 +204,7 @@ func (r *LifecycleReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		return ctrl.Result{}, nil
 	}
 
-	// Terminating: remove legacy finalizer only so deletion is not blocked.
-	if err := r.stripLegacyCleanupFinalizer(ctx, log, req.NamespacedName); err != nil {
-		return ctrl.Result{}, err
-	}
+	// Terminating: the legacy finalizer was already stripped above.
 	return ctrl.Result{}, nil
 }
 
@@ -214,6 +246,11 @@ func (r *LifecycleReconciler) ensureDefaultAITenantReferencesConfig(ctx context.
 			return nil, nil
 		}
 		return nil, err
+	}
+	if !aitenant.DeletionTimestamp.IsZero() || aitenant.Status.Phase == "Terminating" {
+		log.V(1).Info("skipping Config owner reference on terminating default AITenant",
+			"namespace", r.AITenantNamespace)
+		return nil, nil
 	}
 	if aitenantReferencesConfig(&aitenant, &cfg) {
 		return nil, nil
@@ -374,6 +411,14 @@ func (r *LifecycleReconciler) ensureTenantReferencesConfig(ctx context.Context) 
 			return nil, nil
 		}
 		return nil, err
+	}
+	// Never link a terminating MaasTenantConfig to the current Config. Re-parenting it
+	// is wrong, and the patch fails when its namespace is already gone, which turns
+	// into a reconciler error loop during teardown.
+	if !tenant.DeletionTimestamp.IsZero() {
+		log.Info("default MaasTenantConfig is terminating; skipping Config owner reference link",
+			"namespace", r.TenantSubscriptionNamespace)
+		return nil, nil
 	}
 	if tenantReferencesConfig(&tenant, &cfg) {
 		return nil, nil
@@ -559,8 +604,10 @@ func (r *LifecycleReconciler) ensureUsageDashboard(ctx context.Context, log logr
 	return nil
 }
 
-// ensureUsageLogs deploys or removes OTel collector and RBAC for usage logging based on
-// the Config's usageLogging feature gate.
+// ensureUsageLogs deploys usage-log dashboards, the tenancy proxy, and related RBAC.
+// usageLogging true renders usage-logs. false and omitted render dsci-managed.
+// Objects rendered by both bundles are applied in place. Controller-owned objects
+// rendered only by the other bundle are deleted.
 func (r *LifecycleReconciler) ensureUsageLogs(ctx context.Context, log logr.Logger) error {
 	if r.UsageLogsManifestPath == "" {
 		log.Info("WARNING: Usage logs manifest path not configured; skipping usage logs")
@@ -575,13 +622,24 @@ func (r *LifecycleReconciler) ensureUsageLogs(ctx context.Context, log logr.Logg
 		return err
 	}
 
-	resources, err := tenantreconcile.RenderKustomize(r.UsageLogsManifestPath, r.MonitoringNamespace)
+	usageLogging := ptr.Deref(cfg.Spec.UsageLogging, false)
+	manifestPath := usageLogsKustomizeDir(r.UsageLogsManifestPath, usageLogging)
+	inactivePath := usageLogsKustomizeDir(r.UsageLogsManifestPath, !usageLogging)
+	resources, err := tenantreconcile.RenderKustomize(manifestPath, r.MonitoringNamespace)
 	if err != nil {
 		return fmt.Errorf("render usage logs: %w", err)
 	}
+	inactive, err := tenantreconcile.RenderKustomize(inactivePath, r.MonitoringNamespace)
+	if err != nil {
+		return fmt.Errorf("render inactive usage logs: %w", err)
+	}
 
-	if !ptr.Deref(cfg.Spec.UsageLogging, false) {
-		return r.deleteOwnedRenderedResources(ctx, log, cfg, resources, "usageLogging")
+	// The usage-logs-loki Secret in the infra namespace switches the Perses
+	// datasources from the LokiStack gateway / tenancy proxy to the maas-api
+	// Loki proxy. Absent secret keeps the rendered defaults.
+	maasAPILoki, err := r.maasAPILokiEnabled(ctx, log)
+	if err != nil {
+		return err
 	}
 
 	// Track if the collector is skipped due to missing CRD (CWE-863).
@@ -600,6 +658,11 @@ func (r *LifecycleReconciler) ensureUsageLogs(ctx context.Context, log logr.Logg
 		}
 		if err := patchPersesDatasourceURL(&res); err != nil {
 			return fmt.Errorf("patch %s %s: %w", res.GetKind(), res.GetName(), err)
+		}
+		if maasAPILoki {
+			if err := patchPersesDatasourceMaaSAPILoki(&res); err != nil {
+				return fmt.Errorf("patch %s %s: %w", res.GetKind(), res.GetName(), err)
+			}
 		}
 		if err := controllerutil.SetControllerReference(&cfg, &res, r.Scheme); err != nil {
 			return fmt.Errorf("set controller reference on %s %s: %w", res.GetKind(), res.GetName(), err)
@@ -627,7 +690,7 @@ func (r *LifecycleReconciler) ensureUsageLogs(ctx context.Context, log logr.Logg
 		}
 		crb := &unstructured.Unstructured{}
 		crb.SetGroupVersionKind(gvkClusterRoleBinding)
-		crb.SetName("usage-collector-application-logs-write")
+		crb.SetName(usageLogsCollectorClusterRoleBindingName)
 
 		if err := r.Get(ctx, client.ObjectKeyFromObject(crb), crb); err != nil {
 			if !apierrors.IsNotFound(err) {
@@ -641,7 +704,45 @@ func (r *LifecycleReconciler) ensureUsageLogs(ctx context.Context, log logr.Logg
 		}
 	}
 
+	// Delete controller-owned objects that only the inactive bundle renders.
+	// Shared objects stay and were updated by the apply above. Unowned objects
+	// with the same names are left in place.
+	if err := r.deleteOwnedRenderedResources(ctx, log, cfg, resourcesAbsentFrom(inactive, resources), "usageLogging"); err != nil {
+		return err
+	}
+
 	return nil
+}
+
+// resourcesAbsentFrom returns objects in have whose group, version, kind,
+// namespace, and name are not present in keep.
+func resourcesAbsentFrom(have, keep []unstructured.Unstructured) []unstructured.Unstructured {
+	present := make(map[string]struct{}, len(keep))
+	for _, obj := range keep {
+		present[renderedResourceID(obj)] = struct{}{}
+	}
+	stale := make([]unstructured.Unstructured, 0)
+	for _, obj := range have {
+		if _, ok := present[renderedResourceID(obj)]; ok {
+			continue
+		}
+		stale = append(stale, obj)
+	}
+	return stale
+}
+
+func renderedResourceID(obj unstructured.Unstructured) string {
+	gvk := obj.GroupVersionKind()
+	return strings.Join([]string{gvk.Group, gvk.Version, gvk.Kind, obj.GetNamespace(), obj.GetName()}, "/")
+}
+
+// usageLogsKustomizeDir selects the usage-logs kustomization.
+// usageLogging true uses the usage-logs directory; false and omitted use dsci-managed.
+func usageLogsKustomizeDir(base string, usageLogging bool) string {
+	if usageLogging {
+		return base
+	}
+	return filepath.Join(base, usageLogsDsciManagedKustomizeDir)
 }
 
 // deleteOwnedRenderedResources deletes resources from a rendered kustomize bundle
@@ -680,7 +781,7 @@ func (r *LifecycleReconciler) deleteOwnedRenderedResources(
 			}
 			return fmt.Errorf("delete %s %s/%s: %w", res.GetKind(), res.GetNamespace(), res.GetName(), err)
 		}
-		log.V(1).Info("deleted resource because feature is disabled",
+		log.V(1).Info("deleted controller-owned rendered resource",
 			"feature", disabledFeature,
 			"kind", res.GetKind(), "name", res.GetName(), "namespace", res.GetNamespace())
 	}
@@ -743,6 +844,71 @@ func patchPersesDatasourceURL(res *unstructured.Unstructured) error {
 			return fmt.Errorf("set datasource URL: %w", err)
 		}
 	}
+
+	return nil
+}
+
+// maasAPILokiEnabled reports whether the usage-logs-loki Secret exists in the
+// infra namespace, which switches the Perses datasources to the maas-api Loki
+// proxy. A missing InfraNamespace leaves the feature off.
+func (r *LifecycleReconciler) maasAPILokiEnabled(ctx context.Context, log logr.Logger) (bool, error) {
+	if r.InfraNamespace == "" {
+		return false, nil
+	}
+	secret := &corev1.Secret{}
+	if err := r.Get(ctx, client.ObjectKey{Namespace: r.InfraNamespace, Name: tenantreconcile.LokiReadSecretName}, secret); err != nil {
+		if apierrors.IsNotFound(err) {
+			log.V(1).Info("usage-logs-loki Secret not found; Perses datasources keep rendered defaults",
+				"name", tenantreconcile.LokiReadSecretName, "namespace", r.InfraNamespace)
+			return false, nil
+		}
+		return false, fmt.Errorf("get Secret %s/%s: %w", r.InfraNamespace, tenantreconcile.LokiReadSecretName, err)
+	}
+	log.Info("usage-logs-loki Secret present; switching Perses datasources to the maas-api Loki proxy")
+	return true, nil
+}
+
+// patchPersesDatasourceMaaSAPILoki repoints the usage-log Perses datasources at
+// the maas-api read-only Loki proxy when the usage-logs-loki Secret exists.
+// usage-logs-all keeps the organization-wide (admin) view; usage-logs-multi-tenancy
+// appends only_user=true for the caller-scoped view. The CA switches from a
+// ConfigMap bundle to the service-ca.crt file mounted in every pod, which
+// verifies maas-api's service-ca-signed serving certificate.
+func patchPersesDatasourceMaaSAPILoki(res *unstructured.Unstructured) error {
+	if res.GetKind() != "PersesDatasource" {
+		return nil
+	}
+
+	var onlyUser bool
+	switch res.GetName() {
+	case "usage-logs-all":
+	case "usage-logs-multi-tenancy":
+		onlyUser = true
+	default:
+		return nil
+	}
+
+	url := usageLogsMaaSAPILokiDatasourceURL
+	if onlyUser {
+		url += "?only_user=true"
+	}
+	if err := unstructured.SetNestedField(res.Object, url, "spec", "config", "plugin", "spec", "proxy", "spec", "url"); err != nil {
+		return fmt.Errorf("set datasource URL: %w", err)
+	}
+
+	// The remaining /loki/api/v1/* endpoint patterns are unchanged: the base
+	// URL's /v1/logs path prefix routes them through the maas-api Loki proxy.
+	caCert := map[string]any{
+		"type":     "file",
+		"certPath": usageLogsMaaSAPILokiCACertPath,
+	}
+	if err := unstructured.SetNestedMap(res.Object, caCert, "spec", "client", "tls", "caCert"); err != nil {
+		return fmt.Errorf("set datasource CA cert: %w", err)
+	}
+	// The service-ca file verifies the serving cert; drop any leftover
+	// configmap-specific fields and skip-verify flags on a best-effort basis.
+	unstructured.RemoveNestedField(res.Object, "spec", "client", "tls", "caCert", "name")
+	unstructured.RemoveNestedField(res.Object, "spec", "client", "tls", "insecureSkipVerify")
 
 	return nil
 }
@@ -1045,8 +1211,9 @@ func (r *LifecycleReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		).
 		// Re-reconcile when optional operator CRDs (e.g. Perses from COO) are installed
 		// so that resources previously skipped due to missing CRDs are applied immediately.
-		Watches(
-			&extv1.CustomResourceDefinition{},
+		// Metadata-only: avoids caching full CRD objects (50–200KB each with OpenAPI schemas).
+		WatchesMetadata(
+			crdPartialMetadata(),
 			handler.EnqueueRequestsFromMapFunc(func(_ context.Context, _ client.Object) []reconcile.Request {
 				return []reconcile.Request{{NamespacedName: types.NamespacedName{
 					Namespace: r.DeploymentNS,

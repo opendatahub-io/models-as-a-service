@@ -43,6 +43,9 @@ func praxisTestScheme(t *testing.T) *runtime.Scheme {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 	utilruntime.Must(maasv1alpha1.AddToScheme(scheme))
 	utilruntime.Must(gwapiv1.Install(scheme))
+	scheme.AddKnownTypeWithName(externalModelGVK, &unstructured.Unstructured{})
+	scheme.AddKnownTypeWithName(externalModelGVK.GroupVersion().WithKind("ExternalModelList"), &unstructured.UnstructuredList{})
+	scheme.AddKnownTypeWithName(externalProviderGVK, &unstructured.Unstructured{})
 	return scheme
 }
 
@@ -184,7 +187,8 @@ func TestRunPlatform_PraxisSkipsIPPApply(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.NotNil(t, result)
-	assert.False(t, result.DeploymentPending, "praxis tenant should not wait on IPP EnvoyFilter: %s", result.Detail)
+	assert.True(t, result.DeploymentPending, "praxis tenant must wait on shared EnvoyFilter even when SkipIPP")
+	assert.Contains(t, result.Detail, PayloadProcessingEnvoyFilterName(tenantName))
 
 	hasMaaSAPIDeployment := false
 	for _, res := range applied {
@@ -196,6 +200,60 @@ func TestRunPlatform_PraxisSkipsIPPApply(t *testing.T) {
 		}
 	}
 	assert.True(t, hasMaaSAPIDeployment, "expected maas-api Deployment to be applied")
+}
+
+func TestRunPlatform_PraxisReadyWithEnvoyFilter(t *testing.T) {
+	const (
+		tenantName = "praxis-team"
+		appNs      = "ai-tenant-praxis-team"
+		gwNS       = "openshift-ingress"
+		gwName     = "praxis-gateway"
+	)
+	scheme := praxisTestScheme(t)
+	tenant := praxisTenantConfig(appNs, tenantName)
+	tenant.Annotations[AnnotationPayloadProcessingStatus] = PayloadProcessingStatusCleanupComplete
+	mcfg := &maasv1alpha1.Config{
+		ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName, UID: types.UID("cfg-uid")},
+	}
+	gateway := &gwapiv1.Gateway{
+		ObjectMeta: metav1.ObjectMeta{Name: gwName, Namespace: gwNS},
+	}
+	priority := PayloadProcessingEnvoyFilterPriority
+	ef := payloadProcessingEnvoyFilter(gwNS, PayloadProcessingEnvoyFilterName(tenantName), gwName, &priority)
+	platformContext := PlatformContext{
+		GatewayRef: maasv1alpha1.TenantGatewayRef{Namespace: gwNS, Name: gwName},
+		SkipIPP:    true,
+		Source:     "aitenant",
+	}
+
+	var applied []appliedResource
+	cl := runPlatformTestClient(t, scheme, []client.Object{
+		mcfg, gateway, tenant, readyMaaSAPIDeployment(appNs, tenantName), ef,
+	}, &applied)
+
+	result, err := RunPlatform(
+		context.Background(),
+		logr.Discard(),
+		cl,
+		scheme,
+		tenant,
+		platformContext,
+		platformOverlayManifestPath(t),
+		appNs,
+		"controller-ns",
+		"https://kubernetes.default.svc",
+		"opendatahub",
+		mcfg,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.False(t, result.DeploymentPending, result.Detail)
+
+	for _, res := range applied {
+		if isIPPResource(res.gvk, res.name) {
+			t.Fatalf("unexpected IPP resource applied for praxis tenant: %s %s/%s", res.gvk.String(), res.namespace, res.name)
+		}
+	}
 }
 
 func TestRunPlatform_PraxisCleansUpExistingIPPResources(t *testing.T) {
@@ -265,6 +323,197 @@ func TestRunPlatform_PraxisCleansUpExistingIPPResources(t *testing.T) {
 	gotTenant := &maasv1alpha1.MaasTenantConfig{}
 	require.NoError(t, cl.Get(context.Background(), types.NamespacedName{Namespace: appNs, Name: maasv1alpha1.MaasTenantConfigInstanceName}, gotTenant))
 	assert.Equal(t, PayloadProcessingStatusCleanupComplete, gotTenant.Annotations[AnnotationPayloadProcessingStatus])
+}
+
+func TestRunPlatform_PraxisBlocksCleanupForNonStandardPluginsConfigMap(t *testing.T) {
+	const (
+		tenantName = "praxis-team"
+		appNs      = "ai-tenant-praxis-team"
+		gwNS       = "openshift-ingress"
+		gwName     = "praxis-gateway"
+	)
+	scheme := praxisTestScheme(t)
+	tenant := praxisTenantConfig(appNs, tenantName)
+	mcfg := &maasv1alpha1.Config{
+		ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName, UID: types.UID("cfg-uid")},
+	}
+	gateway := &gwapiv1.Gateway{
+		ObjectMeta: metav1.ObjectMeta{Name: gwName, Namespace: gwNS},
+	}
+	ippDeployment := unstructuredIPPObject(GVKDeployment, gwNS, PayloadProcessingDeploymentName(tenantName), nil)
+	setConfigControllerOwnerRef(ippDeployment, mcfg.UID)
+	pluginsCM := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      PayloadProcessingPluginsConfigMapForTenant(tenantName),
+			Namespace: gwNS,
+		},
+		Data: map[string]string{
+			ippPreProcessingConfigKey: defaultPreProcessingYAML,
+			ippProcessingConfigKey: `apiVersion: llm-d.ai/v1alpha1
+kind: PayloadProcessorConfig
+plugins:
+- type: custom-only
+profiles:
+- name: default
+  plugins:
+    request:
+    - pluginRef: custom-only
+    response: []
+`,
+		},
+	}
+	platformContext := PlatformContext{
+		GatewayRef: maasv1alpha1.TenantGatewayRef{Namespace: gwNS, Name: gwName},
+		SkipIPP:    true,
+		Source:     "aitenant",
+	}
+
+	cl := newSSAFakeClientBuilder(scheme).WithObjects(
+		mcfg, gateway, tenant, readyMaaSAPIDeployment(appNs, tenantName), ippDeployment, pluginsCM,
+	).Build()
+
+	result, err := RunPlatform(
+		context.Background(),
+		logr.Discard(),
+		cl,
+		scheme,
+		tenant,
+		platformContext,
+		platformOverlayManifestPath(t),
+		appNs,
+		"controller-ns",
+		"https://kubernetes.default.svc",
+		"opendatahub",
+		mcfg,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.True(t, result.DeploymentPending)
+	assert.Contains(t, result.Detail, AnnotationForcePayloadProcessingMigration)
+	require.NotEmpty(t, result.Warnings)
+	assert.Contains(t, result.Warnings[0], AnnotationForcePayloadProcessingMigration)
+
+	// IPP Deployment must remain until force annotation is applied.
+	dep := &unstructured.Unstructured{}
+	dep.SetGroupVersionKind(GVKDeployment)
+	require.NoError(t, cl.Get(context.Background(), types.NamespacedName{
+		Namespace: gwNS,
+		Name:      PayloadProcessingDeploymentName(tenantName),
+	}, dep))
+
+	// Non-IPP apply still runs while migration is blocked (maas-api stays ready).
+	apiDep := &appsv1.Deployment{}
+	require.NoError(t, cl.Get(context.Background(), types.NamespacedName{
+		Namespace: appNs,
+		Name:      MaaSAPIDeploymentName(tenantName),
+	}, apiDep))
+
+	gotTenant := &maasv1alpha1.MaasTenantConfig{}
+	require.NoError(t, cl.Get(context.Background(), types.NamespacedName{
+		Namespace: appNs,
+		Name:      maasv1alpha1.MaasTenantConfigInstanceName,
+	}, gotTenant))
+	assert.Equal(t, PayloadProcessingMigrationBlocked, gotTenant.Annotations[AnnotationPayloadProcessingMigration])
+	assert.Empty(t, gotTenant.Annotations[AnnotationPayloadProcessingStatus])
+}
+
+func TestRunPlatform_PraxisForceAnnotationUnblocksCleanup(t *testing.T) {
+	const (
+		tenantName = "praxis-team"
+		appNs      = "ai-tenant-praxis-team"
+		gwNS       = "openshift-ingress"
+		gwName     = "praxis-gateway"
+	)
+	scheme := praxisTestScheme(t)
+	tenant := praxisTenantConfig(appNs, tenantName)
+	// Simulate the reconcile after an operator applies the force annotation on a
+	// previously blocked tenant: blocked marker remains until cleanup succeeds.
+	tenant.Annotations[AnnotationPayloadProcessingMigration] = PayloadProcessingMigrationBlocked
+	tenant.Annotations[AnnotationForcePayloadProcessingMigration] = "true"
+	mcfg := &maasv1alpha1.Config{
+		ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName, UID: types.UID("cfg-uid")},
+	}
+	gateway := &gwapiv1.Gateway{
+		ObjectMeta: metav1.ObjectMeta{Name: gwName, Namespace: gwNS},
+	}
+	ippDeployment := unstructuredIPPObject(GVKDeployment, gwNS, PayloadProcessingDeploymentName(tenantName), nil)
+	setConfigControllerOwnerRef(ippDeployment, mcfg.UID)
+	pluginsCM := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      PayloadProcessingPluginsConfigMapForTenant(tenantName),
+			Namespace: gwNS,
+		},
+		Data: map[string]string{
+			ippPreProcessingConfigKey: defaultPreProcessingYAML,
+			ippProcessingConfigKey: `apiVersion: llm-d.ai/v1alpha1
+kind: PayloadProcessorConfig
+plugins:
+- type: custom-only
+profiles:
+- name: default
+  plugins:
+    request:
+    - pluginRef: custom-only
+    response: []
+`,
+		},
+	}
+	platformContext := PlatformContext{
+		GatewayRef: maasv1alpha1.TenantGatewayRef{Namespace: gwNS, Name: gwName},
+		SkipIPP:    true,
+		Source:     "aitenant",
+	}
+
+	cl := newSSAFakeClientBuilder(scheme).WithObjects(
+		mcfg, gateway, tenant, readyMaaSAPIDeployment(appNs, tenantName), ippDeployment, pluginsCM,
+	).Build()
+
+	result, err := RunPlatform(
+		context.Background(),
+		logr.Discard(),
+		cl,
+		scheme,
+		tenant,
+		platformContext,
+		platformOverlayManifestPath(t),
+		appNs,
+		"controller-ns",
+		"https://kubernetes.default.svc",
+		"opendatahub",
+		mcfg,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	dep := &unstructured.Unstructured{}
+	dep.SetGroupVersionKind(GVKDeployment)
+	err = cl.Get(context.Background(), types.NamespacedName{
+		Namespace: gwNS,
+		Name:      PayloadProcessingDeploymentName(tenantName),
+	}, dep)
+	require.True(t, apierrors.IsNotFound(err), "force annotation should allow IPP cleanup")
+
+	gotTenant := &maasv1alpha1.MaasTenantConfig{}
+	require.NoError(t, cl.Get(context.Background(), types.NamespacedName{
+		Namespace: appNs,
+		Name:      maasv1alpha1.MaasTenantConfigInstanceName,
+	}, gotTenant))
+	assert.Equal(t, PayloadProcessingStatusCleanupComplete, gotTenant.Annotations[AnnotationPayloadProcessingStatus])
+	assert.Empty(t, gotTenant.Annotations[AnnotationPayloadProcessingMigration],
+		"blocked migration annotation is cleared after successful cleanup")
+	// Force annotation is operator-managed and is not cleared by the controller.
+	assert.Equal(t, "true", gotTenant.Annotations[AnnotationForcePayloadProcessingMigration])
+	assert.Equal(t, APITranslationMigrationRiskForced, gotTenant.Annotations[AnnotationAPITranslationMigrationRisk])
+
+	// The accepted-risk warning must survive the one-shot ConfigMap cleanup and
+	// be present on later steady-state reconciles.
+	steadyResult, err := RunPlatform(
+		context.Background(), logr.Discard(), cl, scheme, gotTenant, platformContext,
+		platformOverlayManifestPath(t), appNs, "controller-ns", "https://kubernetes.default.svc", "opendatahub", mcfg,
+	)
+	require.NoError(t, err)
+	require.NotEmpty(t, steadyResult.Warnings)
+	require.Contains(t, steadyResult.Warnings[0], "forced migration accepts compatibility loss")
 }
 
 func TestRunPlatform_PraxisMigrationCleanupSkipsPraxisOwnedResources(t *testing.T) {
@@ -1018,23 +1267,118 @@ func TestRunPlatformDoesNotMarkCleanupCompleteWhileWriterPodRemains(t *testing.T
 
 func TestCleanupIPPExternalModelRoutes_IsNamespaceScoped(t *testing.T) {
 	const (
-		ns      = "llm"
-		infraNS = "maas-system"
+		ns        = "llm"
+		infraNS   = "maas-system"
+		unclaimed = "unclaimed"
 	)
 	route := ippOwnedExternalModelRoute(ns, "demo", types.UID("uid"))
 	sharedRoute := ippOwnedExternalModelRoute(infraNS, "shared", types.UID("shared-uid"))
+	unclaimedRoute := ippOwnedExternalModelRoute(unclaimed, "other", types.UID("other-uid"))
 	cl := fake.NewClientBuilder().WithScheme(praxisTestScheme(t)).WithObjects(
 		route,
 		sharedRoute,
+		unclaimedRoute,
 		ippExternalModel(ns, "demo", types.UID("uid")),
 		ippExternalModel(infraNS, "shared", types.UID("shared-uid")),
+		ippExternalModel(unclaimed, "other", types.UID("other-uid")),
 	).Build()
-	require.NoError(t, cleanupIPPExternalModelRoutes(context.Background(), cl, PlatformParams{AppNamespace: infraNS, ModelNamespace: ns}, logr.Discard()))
+	require.NoError(t, cleanupIPPExternalModelRoutes(context.Background(), cl, PlatformParams{TenantIdentifier: "tenant-a", AppNamespace: infraNS, ModelNamespace: ns}, logr.Discard()))
 
 	got := &unstructured.Unstructured{}
 	got.SetGroupVersionKind(GVKHTTPRoute)
 	assert.True(t, apierrors.IsNotFound(cl.Get(context.Background(), client.ObjectKey{Namespace: ns, Name: "demo"}, got)))
 	assert.NoError(t, cl.Get(context.Background(), client.ObjectKey{Namespace: infraNS, Name: "shared"}, got), "a model in shared infrastructure is not proven to belong exclusively to this tenant")
+	assert.NoError(t, cl.Get(context.Background(), client.ObjectKey{Namespace: unclaimed, Name: "other"}, got), "only the default tenant cleans up namespaces of no tenant")
+}
+
+func TestCleanupIPPExternalModelRoutes_DefaultTenantCoversNamespacesOfNoTenant(t *testing.T) {
+	const (
+		tenantNS = "models-as-a-service"
+		infraNS  = "maas-system"
+	)
+	objects := tenantNamespaceObjects([]string{tenantNS, "tenant-b"}, []string{"claimed"})
+	for _, namespace := range []string{tenantNS, "llm", "tenant-b", "claimed", infraNS} {
+		uid := types.UID(namespace + "-uid")
+		objects = append(objects, ippOwnedExternalModelRoute(namespace, "demo", uid), ippExternalModel(namespace, "demo", uid))
+	}
+	routeExists := func(cl client.Client, namespace string) bool {
+		got := &unstructured.Unstructured{}
+		got.SetGroupVersionKind(GVKHTTPRoute)
+		err := cl.Get(context.Background(), client.ObjectKey{Namespace: namespace, Name: "demo"}, got)
+		require.True(t, err == nil || apierrors.IsNotFound(err), "get route: %v", err)
+		return err == nil
+	}
+
+	cl := fake.NewClientBuilder().WithScheme(praxisTestScheme(t)).WithObjects(objects...).Build()
+	require.NoError(t, cleanupIPPExternalModelRoutes(context.Background(), cl, PlatformParams{AppNamespace: infraNS, ModelNamespace: tenantNS}, logr.Discard()))
+	for namespace, kept := range map[string]bool{tenantNS: false, "llm": false, "tenant-b": true, "claimed": true, infraNS: true} {
+		assert.Equal(t, kept, routeExists(cl, namespace), "route in %s", namespace)
+	}
+
+	// Another tenant cleans up only its own namespace.
+	cl = fake.NewClientBuilder().WithScheme(praxisTestScheme(t)).WithObjects(objects...).Build()
+	require.NoError(t, cleanupIPPExternalModelRoutes(context.Background(), cl, PlatformParams{TenantIdentifier: "tenant-b", AppNamespace: infraNS, ModelNamespace: "tenant-b"}, logr.Discard()))
+	for namespace, kept := range map[string]bool{"tenant-b": false, "llm": true} {
+		assert.Equal(t, kept, routeExists(cl, namespace), "route in %s", namespace)
+	}
+}
+
+// withParentGateway attaches the route to a Gateway.
+func withParentGateway(route *unstructured.Unstructured, namespace, name string) *unstructured.Unstructured {
+	route.Object["spec"] = map[string]any{"parentRefs": []any{map[string]any{
+		"group": "gateway.networking.k8s.io", "kind": "Gateway", "name": name, "namespace": namespace,
+	}}}
+	return route
+}
+
+// A tenant's IPP also routed models of other namespaces on the tenant's
+// Gateway, other tenants' included (RHOAIENG-102557). Those routes go with the
+// migration; routes on another Gateway, foreign-owned routes and the shared
+// infrastructure namespace are left alone.
+func TestCleanupIPPExternalModelRoutes_RemovesRoutesOnTenantGatewayElsewhere(t *testing.T) {
+	const (
+		tenantNS = "models-as-a-service"
+		infraNS  = "maas-system"
+		gwNS     = "openshift-ingress"
+	)
+	objects := tenantNamespaceObjects([]string{tenantNS, "tenant-b"}, nil)
+	route := func(namespace, name, gateway string, uid, ownerUID types.UID) {
+		objects = append(objects, withParentGateway(ippOwnedExternalModelRoute(namespace, name, ownerUID), gwNS, gateway), ippExternalModel(namespace, name, uid))
+	}
+	route("tenant-b", "on-default", "maas-default-gateway", "b-1", "b-1")
+	route("tenant-b", "on-own", "tenant-b", "b-2", "b-2")
+	route("tenant-b", "stale-owner", "maas-default-gateway", "b-3", "other-uid")
+	route(infraNS, "on-default", "maas-default-gateway", "i-1", "i-1")
+	route("llm", "on-tenant-b", "tenant-b", "l-1", "l-1")
+	routeExists := func(cl client.Client, namespace, name string) bool {
+		got := &unstructured.Unstructured{}
+		got.SetGroupVersionKind(GVKHTTPRoute)
+		err := cl.Get(context.Background(), client.ObjectKey{Namespace: namespace, Name: name}, got)
+		require.True(t, err == nil || apierrors.IsNotFound(err), "get route: %v", err)
+		return err == nil
+	}
+
+	cl := fake.NewClientBuilder().WithScheme(praxisTestScheme(t)).WithObjects(objects...).Build()
+	require.NoError(t, cleanupIPPExternalModelRoutes(context.Background(), cl, PlatformParams{
+		AppNamespace: infraNS, ModelNamespace: tenantNS, GatewayNamespace: gwNS, GatewayName: "maas-default-gateway",
+	}, logr.Discard()))
+	for key, kept := range map[string]bool{
+		"tenant-b/on-default": false, "tenant-b/on-own": true, "tenant-b/stale-owner": true,
+		infraNS + "/on-default": true,
+	} {
+		namespace, name, _ := strings.Cut(key, "/")
+		assert.Equal(t, kept, routeExists(cl, namespace, name), "route %s", key)
+	}
+
+	// Another tenant's migration removes its own Gateway's routes elsewhere.
+	cl = fake.NewClientBuilder().WithScheme(praxisTestScheme(t)).WithObjects(objects...).Build()
+	require.NoError(t, cleanupIPPExternalModelRoutes(context.Background(), cl, PlatformParams{
+		TenantIdentifier: "tenant-b", AppNamespace: infraNS, ModelNamespace: "tenant-b", GatewayNamespace: gwNS, GatewayName: "tenant-b",
+	}, logr.Discard()))
+	for key, kept := range map[string]bool{"llm/on-tenant-b": false, "tenant-b/on-own": false, "tenant-b/on-default": false, infraNS + "/on-default": true} {
+		namespace, name, _ := strings.Cut(key, "/")
+		assert.Equal(t, kept, routeExists(cl, namespace, name), "route %s", key)
+	}
 }
 
 func TestCleanupIPPExternalModelRoutesRequiresModelNamespace(t *testing.T) {
@@ -1086,4 +1430,80 @@ func TestCleanupIPPExternalModelRoutesPropagatesDeletePreconditionFailure(t *tes
 	got := &unstructured.Unstructured{}
 	got.SetGroupVersionKind(GVKHTTPRoute)
 	assert.NoError(t, cl.Get(context.Background(), client.ObjectKey{Namespace: ns, Name: route.GetName()}, got))
+}
+
+func ippProviderTransport(gvk schema.GroupVersionKind, namespace, provider string, uid types.UID, managedBy string) *unstructured.Unstructured {
+	obj := &unstructured.Unstructured{Object: map[string]any{
+		"metadata": map[string]any{
+			"name": provider, "namespace": namespace,
+			"labels": map[string]any{
+				"app.kubernetes.io/managed-by": managedBy,
+				ippExternalProviderLabel:       provider,
+			},
+			"ownerReferences": []any{map[string]any{
+				"apiVersion": "inference.opendatahub.io/v1alpha1", "kind": "ExternalProvider", "name": provider, "uid": string(uid), "controller": true,
+			}},
+		},
+	}}
+	obj.SetGroupVersionKind(gvk)
+	obj.SetUID(types.UID(strings.ToLower(gvk.Kind) + "-" + namespace + "-" + provider))
+	obj.SetResourceVersion("1")
+	return obj
+}
+
+func ippExternalProvider(namespace, name string, uid types.UID) *unstructured.Unstructured {
+	provider := &unstructured.Unstructured{Object: map[string]any{
+		"metadata": map[string]any{"name": name, "namespace": namespace, "uid": string(uid)},
+	}}
+	provider.SetGroupVersionKind(inferenceExternalProviderOwnerGVK)
+	return provider
+}
+
+func TestCleanupIPPExternalProviderTransport_DeletesOnlyIPPOwnedTransport(t *testing.T) {
+	const ns = "llm"
+	// The default tenant's IPP also served namespaces of no tenant.
+	params := PlatformParams{AppNamespace: "maas-system", ModelNamespace: "models-as-a-service", GatewayNamespace: "openshift-ingress"}
+	kinds := []schema.GroupVersionKind{GVKService, GVKServiceEntry, GVKDestinationRule}
+	objects := []client.Object{
+		ippExternalProvider(ns, "openai", "provider-uid"),
+		ippExternalProvider(ns, "recreated", "new-uid"),
+	}
+	for _, gvk := range kinds {
+		objects = append(objects,
+			ippProviderTransport(gvk, ns, "openai", "provider-uid", ippExternalProviderManagedBy),
+			// Owned by an earlier provider of the same name: not this one's.
+			ippProviderTransport(gvk, ns, "recreated", "old-uid", ippExternalProviderManagedBy),
+			// ai-gateway-controller's own transport for the provider.
+			ippProviderTransport(gvk, ns, "openai-agc", "provider-uid", aiGatewayControllerFieldOwner),
+		)
+	}
+	cl := fake.NewClientBuilder().WithScheme(praxisTestScheme(t)).WithObjects(objects...).Build()
+	require.NoError(t, cleanupIPPExternalProviderTransport(context.Background(), cl, params, logr.Discard()))
+
+	for _, gvk := range kinds {
+		got := &unstructured.Unstructured{}
+		got.SetGroupVersionKind(gvk)
+		assert.True(t, apierrors.IsNotFound(cl.Get(context.Background(), client.ObjectKey{Namespace: ns, Name: "openai"}, got)),
+			"IPP %s for provider openai remains", gvk.Kind)
+		assert.NoError(t, cl.Get(context.Background(), client.ObjectKey{Namespace: ns, Name: "recreated"}, got),
+			"%s owned by another provider UID was deleted", gvk.Kind)
+		assert.NoError(t, cl.Get(context.Background(), client.ObjectKey{Namespace: ns, Name: "openai-agc"}, got),
+			"%s not managed by IPP was deleted", gvk.Kind)
+	}
+}
+
+func TestCleanupIPPExternalProviderTransport_IsNamespaceScoped(t *testing.T) {
+	params := PlatformParams{AppNamespace: "maas-system", ModelNamespace: "team-a", GatewayNamespace: "openshift-ingress", TenantIdentifier: "team-a"}
+	cl := fake.NewClientBuilder().WithScheme(praxisTestScheme(t)).WithObjects(
+		ippExternalProvider("team-a", "openai", "a-uid"),
+		ippExternalProvider("llm", "openai", "llm-uid"),
+		ippProviderTransport(GVKServiceEntry, "team-a", "openai", "a-uid", ippExternalProviderManagedBy),
+		ippProviderTransport(GVKServiceEntry, "llm", "openai", "llm-uid", ippExternalProviderManagedBy),
+	).Build()
+	require.NoError(t, cleanupIPPExternalProviderTransport(context.Background(), cl, params, logr.Discard()))
+	got := &unstructured.Unstructured{}
+	got.SetGroupVersionKind(GVKServiceEntry)
+	assert.True(t, apierrors.IsNotFound(cl.Get(context.Background(), client.ObjectKey{Namespace: "team-a", Name: "openai"}, got)))
+	assert.NoError(t, cl.Get(context.Background(), client.ObjectKey{Namespace: "llm", Name: "openai"}, got),
+		"another tenant's cleanup must not touch namespaces outside its own")
 }

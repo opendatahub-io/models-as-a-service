@@ -21,6 +21,17 @@ const (
 	// other packages that need the same key must reference this constant.
 	AnnotationManaged = "opendatahub.io/managed"
 
+	// AnnotationGatewayBodyBufferLimitMB configures the experimental Envoy
+	// listener buffer limit for a MaaS Gateway. The value is expressed in MB.
+	AnnotationGatewayBodyBufferLimitMB = "maas.opendatahub.io/experimental-body-buffer-limit-mb"
+
+	// DefaultGatewayBodyBufferLimitMB is the large-response mitigation applied
+	// when the experimental Gateway annotation is absent.
+	DefaultGatewayBodyBufferLimitMB int64 = 64
+	// MaxGatewayBodyBufferLimitMB bounds the experimental setting.
+	MaxGatewayBodyBufferLimitMB               int64 = 64
+	GatewayBodyBufferLimitEnvoyFilterBaseName       = "maas-gateway-body-buffer-limit"
+
 	// AnnotationMaaSAPIReplicas overrides the maas-api Deployment replica count for a tenant.
 	// spec.maasApi.replicas takes precedence when both are set.
 	AnnotationMaaSAPIReplicas = "maas.opendatahub.io/maas-api-replicas"
@@ -41,11 +52,13 @@ const (
 	// swap handshake between maas-controller (legacy IPP) and ai-gateway-controller
 	// (praxis). It lives only on MaasTenantConfig — never mirrored to/from AITenant.
 	//
-	// From maas-controller's perspective only two values matter:
+	// From maas-controller's perspective these values matter:
 	//   - PayloadProcessingStatusCleanupComplete ("cleanup-complete"): clear to claim.
 	//     When legacy is selected, CAS-claim by deleting the annotation (back to absent)
-	//     then deploy. When praxis is selected (SkipIPP), this means we already finished
-	//     IPP cleanup and must not re-run it.
+	//     then deploy. When praxis is selected (SkipIPP), IPP cleanup is complete and
+	//     accepted API-translation migration risk warnings must remain visible.
+	//   - PayloadProcessingStatusSteady ("steady"): Praxis owns the pipeline; keep any
+	//     accepted API-translation migration risk warning visible without re-running cleanup.
 	//   - absent: legacy owns / may deploy when legacy is selected (existing tenants are
 	//     assumed to run legacy IPP). When praxis is selected, absent means we still need
 	//     to clean up legacy IPP and then write cleanup-complete.
@@ -65,6 +78,32 @@ const (
 	// PayloadProcessingStatusCleanupComplete means peer cleanup finished; the
 	// selected party may claim.
 	PayloadProcessingStatusCleanupComplete = "cleanup-complete"
+
+	// PayloadProcessingStatusSteady means Praxis owns and serves the tenant pipeline.
+	PayloadProcessingStatusSteady = "steady"
+
+	// AnnotationForcePayloadProcessingMigration is the operator opt-in that allows
+	// IPP→Praxis migration when the live payload-processing-plugins ConfigMap is
+	// non-standard (RHOAIENG-98846). Value must be "true".
+	AnnotationForcePayloadProcessingMigration = "maas.opendatahub.io/force-payload-processing-migration"
+
+	// AnnotationPayloadProcessingMigration surfaces migration-gate state on
+	// MaasTenantConfig. Value PayloadProcessingMigrationBlocked means automatic
+	// migration is paused until the force annotation is applied (or the
+	// ConfigMap is restored to a known-good baseline).
+	AnnotationPayloadProcessingMigration = "maas.opendatahub.io/payload-processing-migration"
+
+	// PayloadProcessingMigrationBlocked is the AnnotationPayloadProcessingMigration
+	// value when the plugins ConfigMap gate refuses automatic migration.
+	PayloadProcessingMigrationBlocked = "blocked"
+
+	// AnnotationAPITranslationMigrationRisk records an operator-accepted loss of
+	// legacy IPP behavior. It remains on MaasTenantConfig after one-shot cleanup
+	// so status can continue to describe an active compatibility risk.
+	AnnotationAPITranslationMigrationRisk = "maas.opendatahub.io/api-translation-migration-risk"
+
+	APITranslationMigrationRiskExplicitFalse = "explicit-false"
+	APITranslationMigrationRiskForced        = "forced"
 
 	// ComponentName is the ODH component label key suffix (app.opendatahub.io/<name>).
 	// This is the DSC component identifier, not a standalone CR kind.
@@ -135,6 +174,7 @@ const (
 	baseMaaSAPIServiceName                         = "maas-api"
 	baseMaaSAPIKeyCleanupScriptConfigMapName       = "maas-api-key-cleanup-script" //nolint:gosec // Kubernetes resource name, not a credential
 	baseMaaSAPIDeploymentNSNetworkPolicyName       = "maas-api-allow-deployment-ns"
+	baseMaaSAPIGatewayNetworkPolicyName            = "maas-api-allow-gateway"
 	baseMaaSAPIEgressRestrictNetworkPolicyName     = "maas-api-egress-restrict"
 	baseMaaSAPIServingCertName                     = "maas-api-serving-cert"
 	baseUsageLogsEnvoyFilterName                   = "maas-model-access-logs"
@@ -156,6 +196,18 @@ const (
 	MaaSDBSecretName             = "maas-db-config" //nolint:gosec // secret name reference, not a credential
 	MaaSDBSecretKey              = "DB_CONNECTION_URL"
 
+	// LokiReadSecretName is the Secret in the app namespace whose presence
+	// enables the maas-api read-only Loki proxy (GET /v1/logs*). Its absence
+	// leaves LOKI_READ_ENDPOINT unset, which disables the proxy.
+	LokiReadSecretName = "usage-logs-loki" //nolint:gosec // secret name reference, not a credential
+	// LokiReadSecretKey holds the Loki read API base URL injected as the
+	// LOKI_READ_ENDPOINT env var on the maas-api container.
+	LokiReadSecretKey = "LOKI_READ_ENDPOINT" //nolint:gosec // secret key reference, not a credential
+	// LokiReadTokenSecretKey holds the service account token injected as the
+	// LOKI_READ_TOKEN env var on the maas-api container (via secretKeyRef, so
+	// the token value never lands in the Deployment spec).
+	LokiReadTokenSecretKey = "LOKI_READ_TOKEN" //nolint:gosec // secret key reference, not a credential
+
 	// Condition types aligned with ODH internal/controller/status for DSC aggregation parity.
 	ConditionDependenciesAvailable      = "DependenciesAvailable"
 	ConditionMaaSPrerequisitesAvailable = "MaaSPrerequisitesAvailable"
@@ -163,6 +215,10 @@ const (
 	ConditionTypeDegraded               = "Degraded"
 	ReadyConditionType                  = "Ready"
 )
+
+// maasAPIDashboardDeploymentLabelValues lists deployment labels for pods that call maas-api
+// from the controller namespace (ODH/RHOAI dashboard + maas-ui BFF).
+var maasAPIDashboardDeploymentLabelValues = []string{"odh-dashboard", "rhods-dashboard", "maas-ui"}
 
 // GVKs used for post-render and readiness (mirrors opendatahub-operator/pkg/cluster/gvk selections).
 var (
@@ -172,6 +228,7 @@ var (
 	GVKAuthPolicy           = schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"}
 	GVKTokenRateLimitPolicy = schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1alpha1", Kind: "TokenRateLimitPolicy"}
 	GVKDestinationRule      = schema.GroupVersionKind{Group: "networking.istio.io", Version: "v1", Kind: "DestinationRule"}
+	GVKServiceEntry         = schema.GroupVersionKind{Group: "networking.istio.io", Version: "v1", Kind: "ServiceEntry"}
 	GVKTelemetryPolicy      = schema.GroupVersionKind{Group: "extensions.kuadrant.io", Version: "v1alpha1", Kind: "TelemetryPolicy"}
 	GVKEnvoyFilter          = schema.GroupVersionKind{Group: "networking.istio.io", Version: "v1alpha3", Kind: "EnvoyFilter"}
 	GVKIstioTelemetry       = schema.GroupVersionKind{Group: "telemetry.istio.io", Version: "v1", Kind: "Telemetry"}
@@ -214,6 +271,15 @@ func resourceNameForTenant(baseName, tenantID string) string {
 	return baseName + "-" + tenantID
 }
 
+// GatewayBodyBufferLimitEnvoyFilterName returns a stable name for the filter
+// serving one tenant Gateway. The default tenant keeps the historical name.
+func GatewayBodyBufferLimitEnvoyFilterName(tenantID string) string {
+	if tenantID == "" {
+		return GatewayBodyBufferLimitEnvoyFilterBaseName
+	}
+	return resourceNameForTenant("maas-gateway-buffer", tenantID)
+}
+
 func GatewayTokenRateLimitDefaultDenyPolicyName(tenantID string) string {
 	return resourceNameForTenant(baseGatewayTokenRateLimitDefaultDenyPolicyName, tenantID)
 }
@@ -232,6 +298,13 @@ func MaaSAPIKeyCleanupCronJobName(tenantID string) string {
 
 func GatewayDestinationRuleName(tenantID string) string {
 	return resourceNameForTenant(baseGatewayDestinationRuleName, tenantID)
+}
+
+func MaaSAPIGatewayNetworkPolicyName(tenantID string) string {
+	if tenantID == "" {
+		return baseMaaSAPIGatewayNetworkPolicyName + "--default"
+	}
+	return resourceNameForTenant(baseMaaSAPIGatewayNetworkPolicyName, tenantID)
 }
 
 func TelemetryPolicyName(tenantID string) string {

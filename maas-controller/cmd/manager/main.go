@@ -25,12 +25,14 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 
 	kservev1alpha2 "github.com/kserve/kserve/pkg/apis/serving/v1alpha2"
 	llmdv1alpha2 "github.com/llm-d/llm-d-router/apix/v1alpha2"
+	aigatewayv1alpha1 "github.com/opendatahub-io/ai-gateway-controller/api/aigateway/v1alpha1"
 	confv1 "github.com/openshift/api/config/v1"
 	utiltls "github.com/openshift/controller-runtime-common/pkg/tls"
 	appsv1 "k8s.io/api/apps/v1"
@@ -93,6 +95,7 @@ func init() {
 	utilruntime.Must(extv1.AddToScheme(scheme))
 	utilruntime.Must(kservev1alpha2.AddToScheme(scheme))
 	utilruntime.Must(gatewayapiv1.Install(scheme))
+	utilruntime.Must(aigatewayv1alpha1.AddToScheme(scheme))
 	utilruntime.Must(maasv1alpha1.AddToScheme(scheme))
 	utilruntime.Must(llmdv1alpha2.Install(scheme))
 	utilruntime.Must(confv1.Install(scheme))
@@ -809,6 +812,12 @@ func fetchTLSProfileWithRetry(ctx context.Context, c client.Client) (confv1.TLSP
 				confv1.TLSAdherencePolicyNoOpinion, false, nil
 		}
 
+		if errors.IsForbidden(err) || errors.IsUnauthorized(err) {
+			return *confv1.TLSProfiles[confv1.TLSProfileIntermediateType],
+				confv1.TLSAdherencePolicyNoOpinion, false,
+				fmt.Errorf("cluster TLS profile is not readable (check the maas-controller RBAC): %w", err)
+		}
+
 		if attempt < tlsProfileFetchMaxRetries-1 {
 			setupLog.Info("transient error fetching cluster TLS profile, retrying",
 				"error", err, "attempt", attempt+1, "maxRetries", tlsProfileFetchMaxRetries)
@@ -971,6 +980,28 @@ func parseReplicasEnv(envVar string) *int32 {
 	return &r
 }
 
+func envOrDefault(envVar, defaultVal string) string {
+	if v := os.Getenv(envVar); v != "" {
+		return v
+	}
+	return defaultVal
+}
+
+func discoveryLogLevelOrDefault(envVar, defaultVal string) string {
+	v := strings.ToLower(strings.TrimSpace(os.Getenv(envVar)))
+	if v == "" {
+		return defaultVal
+	}
+
+	switch v {
+	case "debug", "info", "warn", "error":
+		return v
+	default:
+		setupLog.Info("ignoring invalid discovery log level", "env", envVar, "value", v, "using", defaultVal)
+		return defaultVal
+	}
+}
+
 // resolveInfraNamespace determines the infrastructure namespace for maas-api and maas-db-config.
 // Note: PostgreSQL itself can be external (e.g., AWS RDS) - only maas-api and the connection secret deploy here.
 // If infraNs is "AUTO", derives the namespace from the controller namespace.
@@ -1065,6 +1096,10 @@ func setupWebhooks(mgr ctrl.Manager, aitenantNamespace, gatewayNamespace string)
 		AITenantNamespace: aitenantNamespace,
 	}).SetupWebhookWithManager(mgr); err != nil {
 		return fmt.Errorf("MaaSModelRef webhook: %w", err)
+	}
+
+	if err := (&webhook.ExternalModelValidator{}).SetupWebhookWithManager(mgr); err != nil {
+		return fmt.Errorf("ExternalModel webhook: %w", err)
 	}
 
 	return nil
@@ -1227,8 +1262,10 @@ func main() {
 	ctx, cancel := context.WithCancel(ctrl.SetupSignalHandler())
 
 	tlsConfig := mustLoadManagerTLSConfig(ctx, cfg)
+	profileTLSConfig := &tls.Config{}
+	tlsConfig.serverTLSOpt(profileTLSConfig)
 	nextProtosOpt := func(c *tls.Config) {
-		c.NextProtos = []string{"h2", "http/1.1"}
+		c.NextProtos = tlsNextProtos(profileTLSConfig.MinVersion, profileTLSConfig.CipherSuites)
 	}
 
 	metricsServerOptions := buildMetricsServerOptions(
@@ -1396,10 +1433,12 @@ func main() {
 		ObservabilityManifestsPath:  observabilityManifestsPath,
 		UsageLogsManifestPath:       usageLogsManifestPath,
 		MonitoringNamespace:         monitoringNamespace,
+		InfraNamespace:              infraNamespace,
 		GatewayNamespace:            gatewayNamespace,
 		DiscoveryEnabled:            os.Getenv("MAAS_DISCOVERY_ENABLED") == "true",
 		DiscoveryManifestPath:       discoveryManifestPath,
 		DiscoveryImage:              os.Getenv("RELATED_IMAGE_ODH_MAAS_DISCOVERY_IMAGE"),
+		DiscoveryLogLevel:           discoveryLogLevelOrDefault("MAAS_DISCOVERY_LOG_LEVEL", "info"),
 		DiscoveryNamespace:          controllerNamespace,
 		DiscoveryReplicas:           parseReplicasEnv("MAAS_DISCOVERY_REPLICAS"),
 	}).SetupWithManager(mgr); err != nil {
@@ -1433,4 +1472,16 @@ func main() {
 		setupLog.Error(err, "problem running manager")
 		os.Exit(1)
 	}
+}
+
+func tlsNextProtos(minVersion uint16, cipherSuites []uint16) []string {
+	if minVersion < tls.VersionTLS12 {
+		return []string{"http/1.1"}
+	}
+	if minVersion >= tls.VersionTLS13 || len(cipherSuites) == 0 ||
+		slices.Contains(cipherSuites, tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256) ||
+		slices.Contains(cipherSuites, tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256) {
+		return []string{"h2", "http/1.1"}
+	}
+	return []string{"http/1.1"}
 }

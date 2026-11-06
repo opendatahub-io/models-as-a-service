@@ -1,0 +1,42 @@
+# NetworkPolicy to allow the exact MaaS Gateway workload to communicate with
+# MaaS API for HTTP routing, load balancing, and trusted identity propagation.
+#
+# Security constraints:
+# - podSelector: Restricted to maas-api pods only (not all namespace pods)
+# - from: Only pods for the configured Gateway in openshift-ingress
+#
+# Background:
+# - ODH creates a default NetworkPolicy that blocks ingress from unlabeled namespaces
+# - openshift-ingress namespace doesn't have ODH labels
+# - This policy adds an exception for the exact Gateway workload to reach MaaS API
+#   on port 8443
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: maas-api-allow-gateway
+  labels:
+    app.opendatahub.io/modelsasservice: "true"
+    app.kubernetes.io/part-of: maas
+    app.kubernetes.io/component: networking
+spec:
+  # Apply only to maas-api pods (labels explicitly added to avoid kustomize transformer issues)
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: maas-api
+      app.kubernetes.io/component: api
+      app.kubernetes.io/part-of: models-as-a-service
+  policyTypes:
+    - Ingress
+  ingress:
+    # Allow only the exact Gateway workload. The controller patches this label to
+    # the tenant's Gateway name during rendering.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: openshift-ingress
+          podSelector:
+            matchLabels:
+              gateway.networking.k8s.io/gateway-name: maas-default-gateway
+      ports:
+        - protocol: TCP
+          port: 8443

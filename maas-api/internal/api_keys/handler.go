@@ -44,11 +44,18 @@ type AdminChecker interface {
 	IsAdmin(ctx context.Context, user *token.UserContext) (bool, error)
 }
 
+type SubscriptionAdminResolver interface {
+	ResolveSubscriptionAdmin(identity *token.VerifiedIdentity, requestedSubscription string) (*subscription.AdminScope, error)
+	ResolveSubscriptionAdminScopes(identity *token.VerifiedIdentity) ([]*subscription.AdminScope, error)
+	CanonicalizeSubscription(requestedSubscription string) (string, error)
+}
+
 type Handler struct {
-	service      *Service
-	logger       *logger.Logger
-	adminChecker AdminChecker
-	metrics      MetricsRecorder
+	service       *Service
+	logger        *logger.Logger
+	adminChecker  AdminChecker
+	adminResolver SubscriptionAdminResolver
+	metrics       MetricsRecorder
 }
 
 // MetricsRecorder is the subset of metrics.MetricsRecorder used by this handler.
@@ -71,24 +78,38 @@ func (h *Handler) withContext(c *gin.Context) *Handler {
 func (h *Handler) GetAPIKeyConfig(c *gin.Context) {
 	h = h.withContext(c)
 
+	if rejectAPIKeyManagement(c) {
+		return
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"max_expiration_days":      h.service.GetMaxExpirationDays(),
 		"ephemeral_max_expiration": constant.DefaultEphemeralKeyMaxExpiration.String(),
 	})
 }
 
-func NewHandler(log *logger.Logger, service *Service, adminChecker AdminChecker, metrics MetricsRecorder) *Handler {
+func NewHandler(
+	log *logger.Logger,
+	service *Service,
+	adminChecker AdminChecker,
+	metrics MetricsRecorder,
+	adminResolver SubscriptionAdminResolver,
+) *Handler {
 	if log == nil {
 		log = logger.Production()
 	}
 	if adminChecker == nil {
 		panic("adminChecker cannot be nil")
 	}
+	if adminResolver == nil {
+		panic("adminResolver cannot be nil")
+	}
 	return &Handler{
-		service:      service,
-		logger:       log,
-		adminChecker: adminChecker,
-		metrics:      metrics,
+		service:       service,
+		logger:        log,
+		adminChecker:  adminChecker,
+		adminResolver: adminResolver,
+		metrics:       metrics,
 	}
 }
 
@@ -129,17 +150,346 @@ func (h *Handler) isAdmin(ctx context.Context, user *token.UserContext) (bool, e
 	return h.adminChecker.IsAdmin(ctx, user)
 }
 
-// isAuthorizedForKey checks if the user is authorized to access the API key.
-// Tenant isolation is enforced unconditionally (even admins cannot cross tenants).
-// Within the same tenant, user is authorized if they own the key or are an admin.
-func (h *Handler) isAuthorizedForKey(ctx context.Context, user *token.UserContext, keyOwner string, keyTenant string) (bool, error) {
-	if user.Tenant != keyTenant {
-		return false, nil
+func (h *Handler) verifiedIdentity(c *gin.Context) (*token.VerifiedIdentity, bool) {
+	value, exists := c.Get("verified_identity")
+	if !exists {
+		return nil, true
 	}
-	if user.Username == keyOwner {
-		return true, nil
+	identity, ok := value.(*token.VerifiedIdentity)
+	if !ok || identity == nil {
+		return nil, false
 	}
-	return h.isAdmin(ctx, user)
+	return identity, true
+}
+
+func (h *Handler) resolveSubscriptionAdmin(
+	identity *token.VerifiedIdentity,
+	requestedSubscription string,
+	user *token.UserContext,
+) (*subscription.AdminScope, *subscription.SubscriptionAdminError, error) {
+	if h.adminResolver == nil {
+		return nil, nil, errors.New("subscription admin resolver is not configured")
+	}
+	if identity == nil || requestedSubscription == "" || user == nil {
+		return nil, nil, nil
+	}
+	scope, err := h.adminResolver.ResolveSubscriptionAdmin(identity, requestedSubscription)
+	if err != nil {
+		var adminErr *subscription.SubscriptionAdminError
+		if errors.As(err, &adminErr) {
+			return nil, adminErr, nil
+		}
+		return nil, nil, err
+	}
+	if scope == nil || scope.Tenant != user.Tenant || scope.Subscription == "" {
+		return nil, &subscription.SubscriptionAdminError{
+			Code:    "access_denied",
+			Message: "organization administration is denied",
+		}, nil
+	}
+	return scope, nil, nil
+}
+
+func (h *Handler) resolveSubscriptionAdminScopes(
+	identity *token.VerifiedIdentity,
+	user *token.UserContext,
+) ([]*subscription.AdminScope, *subscription.SubscriptionAdminError, error) {
+	if h.adminResolver == nil {
+		return nil, nil, errors.New("subscription admin resolver is not configured")
+	}
+	if identity == nil || user == nil {
+		return nil, nil, nil
+	}
+	scopes, err := h.adminResolver.ResolveSubscriptionAdminScopes(identity)
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, scope := range scopes {
+		if scope == nil || scope.Tenant != user.Tenant || scope.Subscription == "" {
+			return nil, &subscription.SubscriptionAdminError{
+				Code:    "access_denied",
+				Message: "organization administration is denied",
+			}, nil
+		}
+	}
+	return scopes, nil, nil
+}
+
+func (h *Handler) applySubscriptionAdminUnion(
+	identity *token.VerifiedIdentity,
+	user *token.UserContext,
+	targetUsername string,
+	filters *SearchFilters,
+) (bool, *delegatedAdminAuditEvent, *subscription.SubscriptionAdminError, error) {
+	scopes, adminErr, resolveErr := h.resolveSubscriptionAdminScopes(identity, user)
+	if resolveErr != nil || adminErr != nil {
+		return false, nil, adminErr, resolveErr
+	}
+	if len(scopes) == 0 {
+		return false, nil, nil, nil
+	}
+
+	subscriptionNames := make([]string, 0, len(scopes))
+	seenSubscriptions := make(map[string]struct{}, len(scopes))
+	for _, scope := range scopes {
+		if _, seen := seenSubscriptions[scope.Subscription]; seen {
+			continue
+		}
+		seenSubscriptions[scope.Subscription] = struct{}{}
+		subscriptionNames = append(subscriptionNames, scope.Subscription)
+	}
+	filters.SubscriptionNames = subscriptionNames
+	return true, &delegatedAdminAuditEvent{
+		Action:         "api-key-search",
+		Outcome:        "allowed",
+		User:           user,
+		Identity:       identity,
+		Scopes:         scopes,
+		TargetUsername: targetUsername,
+	}, nil, nil
+}
+
+func (h *Handler) applyExplicitSubscriptionAdmin(
+	identity *token.VerifiedIdentity,
+	user *token.UserContext,
+	targetUsername string,
+	requestedSubscription string,
+	filters *SearchFilters,
+) (bool, *delegatedAdminAuditEvent, error) {
+	scope, adminErr, resolveErr := h.resolveSubscriptionAdmin(identity, requestedSubscription, user)
+	if resolveErr != nil {
+		return false, nil, resolveErr
+	}
+	if scope != nil {
+		canonicalSubscription := scope.Subscription
+		filters.Subscription = &canonicalSubscription
+		return true, &delegatedAdminAuditEvent{
+			Action:         "api-key-search",
+			Outcome:        "allowed",
+			User:           user,
+			Identity:       identity,
+			Scope:          scope,
+			TargetUsername: targetUsername,
+		}, nil
+	}
+
+	audit := &delegatedAdminAuditEvent{
+		Action:             "api-key-search",
+		Outcome:            "denied",
+		Reason:             "subscription_admin_denied",
+		User:               user,
+		Identity:           identity,
+		TargetUsername:     targetUsername,
+		TargetSubscription: requestedSubscription,
+	}
+	if adminErr != nil {
+		audit.Reason = adminErr.Code
+	}
+	return false, audit, nil
+}
+
+func (h *Handler) canonicalizeSubscription(
+	requestedSubscription string,
+) (string, *subscription.SubscriptionAdminError, error) {
+	if h.adminResolver == nil {
+		return "", nil, errors.New("subscription admin resolver is not configured")
+	}
+	canonicalSubscription, err := h.adminResolver.CanonicalizeSubscription(requestedSubscription)
+	if err != nil {
+		var adminErr *subscription.SubscriptionAdminError
+		if errors.As(err, &adminErr) {
+			return "", adminErr, nil
+		}
+		return "", nil, err
+	}
+	if canonicalSubscription == "" {
+		return "", &subscription.SubscriptionAdminError{
+			Code:    "internal_error",
+			Message: "subscription canonicalization is invalid",
+		}, nil
+	}
+	return canonicalSubscription, nil, nil
+}
+
+type delegatedAdminAuditEvent struct {
+	AuthorizationPath  string
+	Action             string
+	Outcome            string
+	Reason             string
+	DryRun             bool
+	User               *token.UserContext
+	Identity           *token.VerifiedIdentity
+	Scope              *subscription.AdminScope
+	Scopes             []*subscription.AdminScope
+	KeyID              string
+	TargetUsername     string
+	TargetSubscription string
+}
+
+func delegatedAdminAuditFields(event delegatedAdminAuditEvent, requestID string) []any {
+	tenant := event.User.Tenant
+	namespace := ""
+	subscription := event.TargetSubscription
+	organizationID := ""
+	if event.Scope != nil {
+		tenant = event.Scope.Tenant
+		namespace = event.Scope.Namespace
+		subscription = event.Scope.Subscription
+		organizationID = event.Scope.OrganizationID
+	}
+
+	authorizationPath := event.AuthorizationPath
+	if authorizationPath == "" {
+		authorizationPath = "delegated-subscription-admin"
+	}
+
+	fields := []any{
+		"audit.action", event.Action,
+		"audit.authorizationPath", authorizationPath,
+		"audit.actor", logger.RedactValue(event.User.Username),
+		"audit.tenant", tenant,
+		"audit.scope", "subscription-admin",
+		"audit.outcome", event.Outcome,
+	}
+	if event.Identity != nil {
+		fields = append(fields,
+			"audit.actorIssuer", event.Identity.Claims.Issuer,
+			"audit.actorSubject", logger.RedactValue(event.Identity.Claims.Subject),
+		)
+	}
+	if namespace != "" {
+		fields = append(fields, "audit.namespace", namespace)
+	}
+	if subscription != "" {
+		fields = append(fields, "audit.targetSubscription", logger.RedactValue(subscription))
+	}
+	if organizationID != "" {
+		fields = append(fields, "audit.organizationId", organizationID)
+	}
+	if len(event.Scopes) > 0 {
+		subscriptions := make([]string, 0, len(event.Scopes))
+		organizationIDs := make([]string, 0, len(event.Scopes))
+		for _, scope := range event.Scopes {
+			if scope == nil {
+				continue
+			}
+			subscriptions = append(subscriptions, logger.RedactValue(scope.Subscription))
+			organizationIDs = append(organizationIDs, scope.OrganizationID)
+		}
+		fields = append(fields,
+			"audit.targetSubscriptions", subscriptions,
+			"audit.organizationIds", organizationIDs,
+		)
+	}
+	if event.TargetUsername != "" {
+		fields = append(fields, "audit.targetUser", logger.RedactValue(event.TargetUsername))
+	}
+	if event.KeyID != "" {
+		fields = append(fields, "audit.keyId", event.KeyID)
+	}
+	if event.Reason != "" {
+		fields = append(fields, "audit.reason", event.Reason)
+	}
+	if event.DryRun {
+		fields = append(fields, "audit.dryRun", true)
+	}
+	if requestID != "" {
+		fields = append(fields, "audit.requestId", requestID)
+	}
+	return fields
+}
+
+func (h *Handler) emitDelegatedAdminAudit(c *gin.Context, event *delegatedAdminAuditEvent) {
+	if event == nil {
+		return
+	}
+	h.reqLogger(c).Info("AUDIT delegated API key administration",
+		delegatedAdminAuditFields(*event, middleware.GetRequestID(c))...,
+	)
+}
+
+func (h *Handler) emitDelegatedAdminAuditResult(
+	c *gin.Context,
+	event *delegatedAdminAuditEvent,
+	outcome string,
+	reason string,
+) {
+	if event == nil {
+		return
+	}
+	if outcome != "" {
+		event.Outcome = outcome
+	}
+	if reason != "" {
+		event.Reason = reason
+	}
+	h.emitDelegatedAdminAudit(c, event)
+}
+
+func (h *Handler) isAuthorizedForKey(
+	ctx context.Context,
+	user *token.UserContext,
+	identity *token.VerifiedIdentity,
+	key *ApiKey,
+	action string,
+) (bool, *delegatedAdminAuditEvent, error) {
+	if user.Tenant != key.Tenant {
+		return false, nil, nil
+	}
+	if user.Username == key.Username {
+		return true, nil, nil
+	}
+	var delegatedAudit *delegatedAdminAuditEvent
+	if identity != nil && key.Subscription != "" {
+		scope, _, err := h.resolveSubscriptionAdmin(identity, key.Subscription, user)
+		if err != nil {
+			return false, &delegatedAdminAuditEvent{
+				Action:             action,
+				Outcome:            "error",
+				Reason:             "resolution_error",
+				User:               user,
+				Identity:           identity,
+				KeyID:              key.ID,
+				TargetUsername:     key.Username,
+				TargetSubscription: key.Subscription,
+			}, err
+		}
+		if scope != nil && scope.Subscription == key.Subscription {
+			return true, &delegatedAdminAuditEvent{
+				Action:         action,
+				Outcome:        "allowed",
+				User:           user,
+				Identity:       identity,
+				Scope:          scope,
+				KeyID:          key.ID,
+				TargetUsername: key.Username,
+			}, nil
+		}
+		delegatedAudit = &delegatedAdminAuditEvent{
+			Action:             action,
+			Outcome:            "denied",
+			Reason:             "subscription_scope_denied",
+			User:               user,
+			Identity:           identity,
+			KeyID:              key.ID,
+			TargetUsername:     key.Username,
+			TargetSubscription: key.Subscription,
+		}
+	}
+	isAdmin, err := h.isAdmin(ctx, user)
+	if err != nil {
+		if delegatedAudit != nil {
+			delegatedAudit.Outcome = "error"
+			delegatedAudit.Reason = "admin_status_error"
+		}
+		return false, delegatedAudit, err
+	}
+	if delegatedAudit != nil && isAdmin {
+		delegatedAudit.Outcome = "allowed"
+		delegatedAudit.Reason = "platform_admin_fallback"
+		delegatedAudit.AuthorizationPath = "platform-admin-fallback"
+	}
+	return isAdmin, delegatedAudit, nil
 }
 
 func (h *Handler) recordTokenMint(tenant, result string) {
@@ -151,6 +501,10 @@ func (h *Handler) recordTokenMint(tenant, result string) {
 func (h *Handler) GetAPIKey(c *gin.Context) {
 	h = h.withContext(c)
 
+	if rejectAPIKeyManagement(c) {
+		return
+	}
+
 	tokenID := c.Param("id")
 	if tokenID == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Token ID required"})
@@ -160,6 +514,11 @@ func (h *Handler) GetAPIKey(c *gin.Context) {
 	// Extract user context for authorization
 	user := h.getUserContext(c)
 	if user == nil {
+		return
+	}
+	identity, validIdentity := h.verifiedIdentity(c)
+	if !validIdentity {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Invalid verified identity context type"})
 		return
 	}
 
@@ -178,13 +537,15 @@ func (h *Handler) GetAPIKey(c *gin.Context) {
 	}
 
 	// Check authorization - user must be in same tenant and own the key or be admin
-	authorized, authErr := h.isAuthorizedForKey(c.Request.Context(), user, tok.Username, tok.Tenant)
+	authorized, delegatedAudit, authErr := h.isAuthorizedForKey(c.Request.Context(), user, identity, tok, "api-key-get")
 	if authErr != nil {
+		h.emitDelegatedAdminAudit(c, delegatedAudit)
 		h.logger.Error("Failed to check admin status", "error", authErr)
 		c.JSON(http.StatusNotFound, gin.H{"error": "API key not found"})
 		return
 	}
 	if !authorized {
+		h.emitDelegatedAdminAudit(c, delegatedAudit)
 		h.logger.Warn("Unauthorized API key access attempt",
 			"requestingUser", logger.RedactValue(user.Username),
 			"keyOwner", logger.RedactValue(tok.Username),
@@ -195,6 +556,7 @@ func (h *Handler) GetAPIKey(c *gin.Context) {
 		return
 	}
 
+	h.emitDelegatedAdminAudit(c, delegatedAudit)
 	c.JSON(http.StatusOK, tok)
 }
 
@@ -223,7 +585,7 @@ func (h *Handler) CreateAPIKey(c *gin.Context) {
 	// Reject them here, even if the gateway has already authenticated the key, so a
 	// subscription-scoped key cannot recover the broader permissions of the user and
 	// groups stored in its metadata or extend its own lifetime through a child key.
-	if isAPIKeyBearer(c.GetHeader("Authorization")) {
+	if hasAPIKeyCredential(c) {
 		h.recordTokenMint(h.service.GetTenantName(), "rejected")
 		c.JSON(http.StatusForbidden, gin.H{"error": "API keys cannot create API keys"})
 		return
@@ -298,7 +660,7 @@ func (h *Handler) CreateAPIKey(c *gin.Context) {
 	)
 	if err != nil {
 		h.logger.Error("Failed to create API key", "error", err)
-		if errors.Is(err, ErrExpirationNotPositive) || errors.Is(err, ErrExpirationExceedsMax) {
+		if errors.Is(err, ErrExpirationNotPositive) || errors.Is(err, ErrExpirationExceedsMax) || errors.Is(err, ErrInvalidGroupName) {
 			h.recordTokenMint(user.Tenant, "rejected")
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
@@ -349,8 +711,22 @@ func (h *Handler) CreateAPIKey(c *gin.Context) {
 }
 
 func isAPIKeyBearer(authorization string) bool {
-	scheme, credential, found := strings.Cut(strings.TrimSpace(authorization), " ")
-	return found && strings.EqualFold(scheme, "Bearer") && strings.HasPrefix(credential, KeyPrefix)
+	parts := strings.Fields(authorization)
+	return len(parts) > 1 && strings.EqualFold(parts[0], "Bearer") &&
+		strings.HasPrefix(strings.Join(parts[1:], " "), KeyPrefix)
+}
+
+func hasAPIKeyCredential(c *gin.Context) bool {
+	return isAPIKeyBearer(c.GetHeader("Authorization")) ||
+		strings.HasPrefix(strings.TrimSpace(c.GetHeader("X-API-Key")), KeyPrefix)
+}
+
+func rejectAPIKeyManagement(c *gin.Context) bool {
+	if !hasAPIKeyCredential(c) {
+		return false
+	}
+	c.JSON(http.StatusForbidden, gin.H{"error": "API keys cannot manage API keys"})
+	return true
 }
 
 // validateLabels validates the labels map for security and size constraints.
@@ -452,6 +828,10 @@ func (h *Handler) ValidateAPIKeyHandler(c *gin.Context) {
 func (h *Handler) RevokeAPIKey(c *gin.Context) {
 	h = h.withContext(c)
 
+	if rejectAPIKeyManagement(c) {
+		return
+	}
+
 	keyID := c.Param("id")
 	if keyID == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "API key ID required"})
@@ -461,6 +841,11 @@ func (h *Handler) RevokeAPIKey(c *gin.Context) {
 	// Extract user context for authorization
 	user := h.getUserContext(c)
 	if user == nil {
+		return
+	}
+	identity, validIdentity := h.verifiedIdentity(c)
+	if !validIdentity {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Invalid verified identity context type"})
 		return
 	}
 
@@ -477,13 +862,15 @@ func (h *Handler) RevokeAPIKey(c *gin.Context) {
 	}
 
 	// Check authorization - user must be in same tenant and own the key or be admin
-	authorized, authErr := h.isAuthorizedForKey(c.Request.Context(), user, keyMetadata.Username, keyMetadata.Tenant)
+	authorized, delegatedAudit, authErr := h.isAuthorizedForKey(c.Request.Context(), user, identity, keyMetadata, "api-key-revoke")
 	if authErr != nil {
+		h.emitDelegatedAdminAudit(c, delegatedAudit)
 		h.logger.Error("Failed to check admin status", "error", authErr)
 		c.JSON(http.StatusNotFound, gin.H{"error": "API key not found"})
 		return
 	}
 	if !authorized {
+		h.emitDelegatedAdminAudit(c, delegatedAudit)
 		h.logger.Warn("Unauthorized API key revocation attempt",
 			"requestingUser", logger.RedactValue(user.Username),
 			"keyOwner", logger.RedactValue(keyMetadata.Username),
@@ -496,6 +883,7 @@ func (h *Handler) RevokeAPIKey(c *gin.Context) {
 
 	// Perform the revocation
 	if err := h.service.RevokeAPIKey(c.Request.Context(), keyID); err != nil {
+		h.emitDelegatedAdminAuditResult(c, delegatedAudit, "error", "request_failed")
 		if errors.Is(err, ErrKeyNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "API key not found"})
 			return
@@ -508,14 +896,89 @@ func (h *Handler) RevokeAPIKey(c *gin.Context) {
 	h.reqLogger(c).Info("Revoked API key", "keyId", keyID, "revokedBy", logger.RedactValue(user.Username))
 
 	// Return the revoked key metadata (per OpenAPI spec)
+	if delegatedAudit != nil {
+		delegatedAudit.Outcome = "allowed"
+	}
 	revokedKey, err := h.service.GetAPIKey(c.Request.Context(), keyID)
 	if err != nil {
+		h.emitDelegatedAdminAuditResult(c, delegatedAudit, "allowed", "metadata_retrieval_failed")
 		h.logger.Error("Failed to retrieve revoked key", "error", err, "keyId", keyID)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Key revoked but failed to retrieve metadata"})
 		return
 	}
 
+	h.emitDelegatedAdminAudit(c, delegatedAudit)
 	c.JSON(http.StatusOK, revokedKey)
+}
+
+func applySearchAPIKeysDefaults(req *SearchAPIKeysRequest) {
+	if req.Filters == nil {
+		req.Filters = &SearchFilters{}
+	}
+	if req.Sort == nil {
+		req.Sort = &SortParams{
+			By:    DefaultSortBy,
+			Order: DefaultSortOrder,
+		}
+	}
+	if req.Pagination == nil {
+		req.Pagination = &PaginationParams{
+			Limit:  DefaultLimit,
+			Offset: 0,
+		}
+	}
+}
+
+func validateSearchAPIKeysRequest(c *gin.Context, req *SearchAPIKeysRequest) bool {
+	for _, status := range req.Filters.Status {
+		trimmed := strings.TrimSpace(status)
+		if !ValidStatuses[trimmed] {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": fmt.Sprintf("invalid status '%s': must be active, revoked, or expired", status),
+			})
+			return false
+		}
+	}
+
+	if req.Sort.By != "" && !ValidSortFields[req.Sort.By] {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "invalid sort.by: must be one of: created_at, expires_at, last_used_at, name",
+		})
+		return false
+	}
+
+	if req.Sort.Order != "" {
+		orderLower := strings.ToLower(strings.TrimSpace(req.Sort.Order))
+		if !ValidSortOrders[orderLower] {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": "invalid sort.order: must be asc or desc",
+			})
+			return false
+		}
+		req.Sort.Order = orderLower
+	}
+
+	if req.Pagination.Limit < 1 {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "pagination.limit must be at least 1",
+		})
+		return false
+	}
+	if req.Pagination.Limit > MaxLimit {
+		req.Pagination.Limit = MaxLimit
+	}
+	if req.Pagination.Offset < 0 {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "pagination.offset must be non-negative",
+		})
+		return false
+	}
+
+	if err := validateLabels(req.Filters.LabelsContain); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return false
+	}
+	return true
 }
 
 // SearchAPIKeys handles POST /v1/api-keys/search
@@ -524,6 +987,10 @@ func (h *Handler) RevokeAPIKey(c *gin.Context) {
 // an empty list is returned gracefully.
 func (h *Handler) SearchAPIKeys(c *gin.Context) {
 	h = h.withContext(c)
+
+	if rejectAPIKeyManagement(c) {
+		return
+	}
 
 	c.Header("Cache-Control", "no-store")
 	userContextVal, exists := c.Get("user")
@@ -550,99 +1017,145 @@ func (h *Handler) SearchAPIKeys(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Invalid user context type"})
 		return
 	}
-
-	// Apply defaults if not provided
-	if req.Filters == nil {
-		req.Filters = &SearchFilters{}
-	}
-	if req.Sort == nil {
-		req.Sort = &SortParams{
-			By:    DefaultSortBy,
-			Order: DefaultSortOrder,
-		}
-	}
-	if req.Pagination == nil {
-		req.Pagination = &PaginationParams{
-			Limit:  DefaultLimit,
-			Offset: 0,
-		}
+	identity, validIdentity := h.verifiedIdentity(c)
+	if !validIdentity {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Invalid verified identity context type"})
+		return
 	}
 
-	// Validate status values (if status not specified, all statuses are returned)
-	for _, status := range req.Filters.Status {
-		trimmed := strings.TrimSpace(status)
-		if !ValidStatuses[trimmed] {
+	applySearchAPIKeysDefaults(&req)
+	if !validateSearchAPIKeysRequest(c, &req) {
+		return
+	}
+
+	targetUsername := strings.TrimSpace(req.Filters.Username)
+	requestedSubscription := ""
+	if req.Filters.Subscription != nil {
+		requestedSubscription = strings.TrimSpace(*req.Filters.Subscription)
+		if requestedSubscription == "" {
+			req.Filters.Subscription = nil
+		}
+	}
+
+	delegatedAdmin := false
+	var delegatedAudit *delegatedAdminAuditEvent
+	var explicitResolveErr error
+	if identity != nil && requestedSubscription != "" {
+		delegatedAdmin, delegatedAudit, explicitResolveErr = h.applyExplicitSubscriptionAdmin(
+			identity,
+			user,
+			targetUsername,
+			requestedSubscription,
+			req.Filters,
+		)
+		if explicitResolveErr != nil {
+			h.logger.Error("Failed to resolve subscription administration", "error", explicitResolveErr)
+			h.emitDelegatedAdminAudit(c, &delegatedAdminAuditEvent{
+				Action:             "api-key-search",
+				Outcome:            "error",
+				Reason:             "resolution_error",
+				User:               user,
+				Identity:           identity,
+				TargetUsername:     targetUsername,
+				TargetSubscription: requestedSubscription,
+			})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to check authorization"})
+			return
+		}
+	}
+
+	isAdmin := false
+	if !delegatedAdmin {
+		var adminErr error
+		isAdmin, adminErr = h.isAdmin(c.Request.Context(), user)
+		if adminErr != nil {
+			h.logger.Error("Failed to check admin status", "error", adminErr)
+			h.emitDelegatedAdminAuditResult(c, delegatedAudit, "error", "admin_status_error")
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to check authorization"})
+			return
+		}
+	}
+
+	var unionAdminErr *subscription.SubscriptionAdminError
+	var unionResolveErr error
+	if identity != nil && requestedSubscription == "" && !isAdmin {
+		delegatedAdmin, delegatedAudit, unionAdminErr, unionResolveErr = h.applySubscriptionAdminUnion(
+			identity,
+			user,
+			targetUsername,
+			req.Filters,
+		)
+		if unionResolveErr != nil {
+			h.logger.Error("Failed to resolve subscription administration scopes", "error", unionResolveErr)
+			h.emitDelegatedAdminAudit(c, &delegatedAdminAuditEvent{
+				Action:         "api-key-search",
+				Outcome:        "error",
+				Reason:         "resolution_error",
+				User:           user,
+				Identity:       identity,
+				TargetUsername: targetUsername,
+			})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to check authorization"})
+			return
+		}
+		if unionAdminErr != nil {
+			h.emitDelegatedAdminAudit(c, &delegatedAdminAuditEvent{
+				Action:         "api-key-search",
+				Outcome:        "denied",
+				Reason:         unionAdminErr.Code,
+				User:           user,
+				Identity:       identity,
+				TargetUsername: targetUsername,
+			})
+			c.JSON(http.StatusForbidden, gin.H{"error": "Failed to check authorization"})
+			return
+		}
+	}
+
+	if !applySelfServiceSearchScope(delegatedAdmin, isAdmin, &targetUsername, user) {
+		h.emitDelegatedAdminAudit(c, delegatedAudit)
+		c.JSON(http.StatusForbidden, gin.H{
+			"error": "non-admin users can only search their own API keys",
+		})
+		return
+	}
+
+	if !delegatedAdmin && requestedSubscription != "" {
+		canonicalSubscription, adminErr, err := h.canonicalizeSubscription(requestedSubscription)
+		if err != nil {
+			h.logger.Error("Failed to canonicalize subscription", "error", err)
+			h.emitDelegatedAdminAuditResult(c, delegatedAudit, "error", "subscription_canonicalization_error")
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to check authorization"})
+			return
+		}
+		if adminErr != nil {
+			if !isAdmin {
+				h.emitDelegatedAdminAudit(c, delegatedAudit)
+				c.JSON(http.StatusOK, SearchAPIKeysResponse{
+					Object: "list",
+					Data:   []ApiKey{},
+				})
+				return
+			}
+			h.emitDelegatedAdminAuditResult(c, delegatedAudit, "error", "subscription_canonicalization_failed")
 			c.JSON(http.StatusBadRequest, gin.H{
-				"error": fmt.Sprintf("invalid status '%s': must be active, revoked, or expired", status),
+				"error": apiKeySubscriptionResolutionErrMsg,
+				"code":  apiKeySubscriptionResolutionErrCode,
 			})
 			return
 		}
-	}
-
-	// Determine target username for filtering
-	isAdmin, adminErr := h.isAdmin(c.Request.Context(), user)
-	if adminErr != nil {
-		h.logger.Error("Failed to check admin status", "error", adminErr)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to check authorization"})
-		return
-	}
-	targetUsername := req.Filters.Username
-
-	if !isAdmin {
-		// Regular user: can only search own keys
-		if targetUsername != "" && targetUsername != user.Username {
-			c.JSON(http.StatusForbidden, gin.H{
-				"error": "non-admin users can only search their own API keys",
-			})
-			return
+		req.Filters.Subscription = &canonicalSubscription
+		if delegatedAudit != nil {
+			delegatedAudit.TargetSubscription = canonicalSubscription
+			delegatedAudit.Outcome = "allowed"
+			if isAdmin {
+				delegatedAudit.Reason = "platform_admin_fallback"
+				delegatedAudit.AuthorizationPath = "platform-admin-fallback"
+			} else {
+				delegatedAudit.Reason = "owner_fallback"
+				delegatedAudit.AuthorizationPath = "owner-fallback"
+			}
 		}
-		// Force filter to user's own keys
-		targetUsername = user.Username
-	}
-	// Admin: if no username specified (empty string), search all users
-
-	// Validate sort parameters
-	if req.Sort.By != "" && !ValidSortFields[req.Sort.By] {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "invalid sort.by: must be one of: created_at, expires_at, last_used_at, name",
-		})
-		return
-	}
-
-	// Normalize and validate sort order (case-insensitive)
-	if req.Sort.Order != "" {
-		orderLower := strings.ToLower(strings.TrimSpace(req.Sort.Order))
-		if !ValidSortOrders[orderLower] {
-			c.JSON(http.StatusBadRequest, gin.H{
-				"error": "invalid sort.order: must be asc or desc",
-			})
-			return
-		}
-		req.Sort.Order = orderLower
-	}
-
-	// Validate pagination
-	if req.Pagination.Limit < 1 {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "pagination.limit must be at least 1",
-		})
-		return
-	}
-	if req.Pagination.Limit > MaxLimit {
-		// Silently cap at maximum (user-friendly)
-		req.Pagination.Limit = MaxLimit
-	}
-	if req.Pagination.Offset < 0 {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "pagination.offset must be non-negative",
-		})
-		return
-	}
-
-	// Validate the labels provided as a filter in the request.
-	if err := validateLabels(req.Filters.LabelsContain); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
 	}
 
 	// Call service layer (tenant scoping is mandatory)
@@ -659,6 +1172,7 @@ func (h *Handler) SearchAPIKeys(c *gin.Context) {
 			"error", err,
 			"username", logger.RedactValue(targetUsername),
 		)
+		h.emitDelegatedAdminAuditResult(c, delegatedAudit, "error", "request_failed")
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to search API keys"})
 		return
 	}
@@ -666,11 +1180,35 @@ func (h *Handler) SearchAPIKeys(c *gin.Context) {
 	// Build response
 	response := SearchAPIKeysResponse{
 		Object:  "list",
-		Data:    result.Keys,
+		Data:    searchKeys(result.Keys),
 		HasMore: result.HasMore,
 	}
 
+	h.emitDelegatedAdminAudit(c, delegatedAudit)
 	c.JSON(http.StatusOK, response)
+}
+
+func searchKeys(keys []ApiKey) []ApiKey {
+	if keys == nil {
+		return []ApiKey{}
+	}
+	return keys
+}
+
+func applySelfServiceSearchScope(
+	delegatedAdmin bool,
+	isAdmin bool,
+	targetUsername *string,
+	user *token.UserContext,
+) bool {
+	if delegatedAdmin || isAdmin {
+		return true
+	}
+	if *targetUsername != "" && *targetUsername != user.Username {
+		return false
+	}
+	*targetUsername = user.Username
+	return true
 }
 
 // CleanupExpiredEphemeralKeys handles POST /internal/v1/api-keys/cleanup
@@ -782,6 +1320,10 @@ func (h *Handler) emitLifecycleCleanupAudit(c *gin.Context, scope, tenant, subsc
 func (h *Handler) BulkRevokeAPIKeys(c *gin.Context) {
 	h = h.withContext(c)
 
+	if rejectAPIKeyManagement(c) {
+		return
+	}
+
 	var req BulkRevokeRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -802,19 +1344,68 @@ func (h *Handler) BulkRevokeAPIKeys(c *gin.Context) {
 	if user == nil {
 		return
 	}
+	identity, validIdentity := h.verifiedIdentity(c)
+	if !validIdentity {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Invalid verified identity context type"})
+		return
+	}
 
 	// Authorization rules:
 	// - Subscription-scoped revocation always requires admin
 	// - Username-scoped: users can revoke own keys, admins can revoke any user's keys
 	needsAdmin := req.Subscription != "" || (req.Username != "" && req.Username != user.Username)
-	if needsAdmin {
+	delegatedAdmin := false
+	var delegatedAudit *delegatedAdminAuditEvent
+	if needsAdmin && identity != nil && req.Subscription != "" {
+		scope, _, resolveErr := h.resolveSubscriptionAdmin(identity, req.Subscription, user)
+		if resolveErr != nil {
+			h.logger.Error("Failed to resolve subscription administration", "error", resolveErr)
+			h.emitDelegatedAdminAudit(c, &delegatedAdminAuditEvent{
+				Action:             "api-key-bulk-revoke",
+				Outcome:            "error",
+				Reason:             "resolution_error",
+				User:               user,
+				Identity:           identity,
+				TargetUsername:     req.Username,
+				TargetSubscription: req.Subscription,
+			})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to check authorization"})
+			return
+		}
+		if scope != nil {
+			req.Subscription = scope.Subscription
+			delegatedAdmin = true
+			delegatedAudit = &delegatedAdminAuditEvent{
+				Action:             "api-key-bulk-revoke",
+				Outcome:            "allowed",
+				User:               user,
+				Identity:           identity,
+				Scope:              scope,
+				TargetUsername:     req.Username,
+				TargetSubscription: req.Subscription,
+			}
+		} else {
+			delegatedAudit = &delegatedAdminAuditEvent{
+				Action:             "api-key-bulk-revoke",
+				Outcome:            "denied",
+				Reason:             "subscription_admin_denied",
+				User:               user,
+				Identity:           identity,
+				TargetUsername:     req.Username,
+				TargetSubscription: req.Subscription,
+			}
+		}
+	}
+	if needsAdmin && !delegatedAdmin {
 		isAdmin, adminErr := h.isAdmin(c.Request.Context(), user)
 		if adminErr != nil {
 			h.logger.Error("Failed to check admin status", "error", adminErr)
+			h.emitDelegatedAdminAuditResult(c, delegatedAudit, "error", "admin_status_error")
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to check authorization"})
 			return
 		}
 		if !isAdmin {
+			h.emitDelegatedAdminAudit(c, delegatedAudit)
 			h.logger.Warn("Unauthorized bulk revoke attempt",
 				"requestingUser", logger.RedactValue(user.Username),
 				"targetUser", logger.RedactValue(req.Username),
@@ -824,6 +1415,27 @@ func (h *Handler) BulkRevokeAPIKeys(c *gin.Context) {
 				"error": "Access denied: admin privileges required for this bulk revoke operation",
 			})
 			return
+		}
+		if req.Subscription != "" {
+			canonicalSubscription, adminErr, err := h.canonicalizeSubscription(req.Subscription)
+			if err != nil {
+				h.logger.Error("Failed to canonicalize subscription", "error", err)
+				h.emitDelegatedAdminAuditResult(c, delegatedAudit, "error", "subscription_canonicalization_error")
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to check authorization"})
+				return
+			}
+			if adminErr != nil {
+				h.emitDelegatedAdminAuditResult(c, delegatedAudit, "error", "subscription_canonicalization_failed")
+				c.JSON(http.StatusBadRequest, gin.H{"error": adminErr.Message})
+				return
+			}
+			req.Subscription = canonicalSubscription
+			if delegatedAudit != nil {
+				delegatedAudit.TargetSubscription = canonicalSubscription
+				delegatedAudit.Outcome = "allowed"
+				delegatedAudit.Reason = "platform_admin_fallback"
+				delegatedAudit.AuthorizationPath = "platform-admin-fallback"
+			}
 		}
 	}
 
@@ -835,6 +1447,7 @@ func (h *Handler) BulkRevokeAPIKeys(c *gin.Context) {
 		count, err := h.service.BulkRevokeAPIKeys(c.Request.Context(), req.Username, req.Subscription, user.Tenant, true)
 		if err != nil {
 			h.logger.Error("Dry-run bulk revoke failed", "error", err)
+			h.emitDelegatedAdminAuditResult(c, delegatedAudit, "error", "request_failed")
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to perform dry-run"})
 			return
 		}
@@ -845,6 +1458,10 @@ func (h *Handler) BulkRevokeAPIKeys(c *gin.Context) {
 			"actor", logger.RedactValue(user.Username),
 		)
 
+		if delegatedAudit != nil {
+			delegatedAudit.DryRun = true
+		}
+		h.emitDelegatedAdminAuditResult(c, delegatedAudit, "allowed", "")
 		c.JSON(http.StatusOK, BulkRevokeResponse{
 			RevokedCount: count,
 			Message:      fmt.Sprintf("Dry run: %d active key(s) would be revoked for %s", count, scopeDesc),
@@ -861,6 +1478,7 @@ func (h *Handler) BulkRevokeAPIKeys(c *gin.Context) {
 			"scope", logScope,
 			"requestingUser", logger.RedactValue(user.Username),
 		)
+		h.emitDelegatedAdminAuditResult(c, delegatedAudit, "error", "request_failed")
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to revoke API keys"})
 		return
 	}
@@ -873,6 +1491,7 @@ func (h *Handler) BulkRevokeAPIKeys(c *gin.Context) {
 
 	h.emitBulkRevokeAudit(c, user, req, count)
 
+	h.emitDelegatedAdminAudit(c, delegatedAudit)
 	c.JSON(http.StatusOK, BulkRevokeResponse{
 		RevokedCount: count,
 		Message:      fmt.Sprintf("Successfully revoked %d active API key(s) for %s", count, scopeDesc),

@@ -21,6 +21,7 @@ The controller automatically creates `AITenant/models-as-a-service` for the defa
 | rbac | AITenantRBACConfig | No | Deprecated compatibility field. Accepted but ignored; create standard Kubernetes RoleBindings instead. |
 
 `spec.rbac` remains in the served schema only for upgrade compatibility with existing manifests. New manifests should omit it. The controller does not create, update, or delete user-managed RoleBindings from this field.
+For `spec.oidc` field semantics, including audience and access-token-purpose checks, see [External OIDC Configuration](../../advanced-administration/external-oidc.md#configure-oidc).
 
 ---
 
@@ -30,7 +31,7 @@ For non-default tenants, the controller derives the tenant namespace from the `A
 
 Deleting an `AITenant` performs a cleanup of the tenant's MaaS state. The controller synchronously waits for a tenant cleanup Job to call the tenant maas-api internal endpoint, which soft-deletes and invalidates every API key for that tenant. Soft-deleted keys are retained for 90 days by default (configurable through `spec.apiKeys.deletionRetentionDays` on `MaasTenantConfig`, or `API_KEY_DELETION_RETENTION_DAYS` for a standalone maas-api) for audit and can never validate. The controller then deletes the bridge `MaasTenantConfig/default-tenant`, deletes tenant-scoped MaaS resources such as `MaaSSubscription` and `MaaSAuthPolicy`, removes per-tenant maas-api platform resources and AITenant-owned RBAC, and releases ownership metadata from the tenant namespace. The tenant namespace itself is not deleted, so non-MaaS user objects in that namespace remain. The shared Gateway object is never deleted or modified by `AITenant` reconciliation; tenant-scoped gateway AuthPolicy and claim resources are cleaned up during deletion.
 
-The `AITenant` stays in `Terminating` phase while MaaS resource finalizers run. If a cleanup step fails, it reports `Ready=False` with reason `DeletionBlocked`. A tenant namespace that is already terminating does not block AITenant cleanup.
+The `AITenant` stays in `Terminating` phase while MaaS resource finalizers run. If API-key revocation cannot run (for example the revocation Job fails), it reports `Ready=False` with reason `DeletionBlocked`. When revocation prerequisites (`maas-api`, `maas-api-cleanup` ServiceAccount) are missing but `Config/default` still exists, the controller requests `MaasTenantConfig` reconciliation so the tenant controller can restore operands before creating the Job. When prerequisites are permanently gone (for example `Config/default` was removed during platform teardown), the controller emits `APIKeyCleanupSkipped`, sets `APIKeysRevoked` with reason `RevocationOperandsUnavailable`, and continues deletion. That skip path does not call maas-api; keys may remain in the database until separately purged. A tenant namespace that is already terminating does not block AITenant cleanup.
 
 ---
 
@@ -59,6 +60,18 @@ The `MaasTenantConfig/default-tenant` object in each tenant namespace owns MaaS-
 | name | string | No | `metadata.name` | Name of the Gateway in the controller-configured Gateway namespace. |
 
 The Gateway namespace is controller configuration, not an `AITenant` spec field. The Gateway must already exist, normally after network or cluster administrator approval. The controller only reads the Gateway and reports the resolved reference in `status.gatewayRef`; it does not create, label, annotate, reconcile, adopt, or delete Gateway resources.
+
+### Experimental large-response buffer
+
+For large inference responses such as batched embeddings, MaaS applies a default `64 MB` Envoy listener buffer to the tenant Gateway. Platform administrators may override the experimental value with a Gateway annotation:
+
+```yaml
+metadata:
+  annotations:
+    maas.opendatahub.io/experimental-body-buffer-limit-mb: "64"
+```
+
+The value is an integer number of megabytes. Values from `1` through `64` are accepted; invalid or out-of-range values use the `64 MB` default. This annotation is experimental and may later move into the supported tenant configuration API.
 
 ---
 
@@ -95,6 +108,9 @@ spec:
   oidc:
     issuerUrl: "https://keycloak.example.com/realms/red-team"
     clientId: red-team-maas
+    audience: red-team-maas
+    accessTokenPurposeClaim: token_use
+    accessTokenPurpose: access
 ```
 
 ---

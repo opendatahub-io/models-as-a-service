@@ -56,6 +56,7 @@ References external AI/ML providers (e.g., OpenAI, Anthropic, Azure OpenAI).
 
 The controller:
 - Fetches the ExternalModel CR from the same namespace
+- For an ExternalModel that reports per-gateway status (`status.gateways`), uses the HTTPRoute of the tenant's gateway and never falls back to another gateway. A model attached to several gateways needs one MaaSModelRef per tenant with `spec.tenantRef`; without it, the MaaSModelRef fails as ambiguous
 - Validates the user-supplied HTTPRoute references the correct gateway
 - Derives `status.endpoint` from HTTPRoute hostnames or gateway addresses
 - Sets `status.phase` based on HTTPRoute acceptance

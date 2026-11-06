@@ -47,6 +47,13 @@ type MaasTenantConfig struct {
 
 // MaasTenantConfigSpec defines MaaS-owned tenant configuration.
 type MaasTenantConfigSpec struct {
+	// APITranslation authorizes the API translation capabilities supported by
+	// the selected Praxis dataplane. Omission is equivalent to disabled for
+	// new tenants; the pointer preserves an explicit operator choice during
+	// IPP migration.
+	// +optional
+	APITranslation *TenantAPITranslationConfig `json:"apiTranslation,omitempty"`
+
 	// APIKeys contains configuration for API key management.
 	// +kubebuilder:validation:Optional
 	APIKeys *TenantAPIKeysConfig `json:"apiKeys,omitempty"`
@@ -76,6 +83,17 @@ type MaasTenantConfigSpec struct {
 	// +listType=atomic
 	// +kubebuilder:validation:MaxItems=64
 	Guardrails []GuardrailAttachment `json:"guardrails,omitempty"`
+}
+
+// TenantAPITranslationConfig controls whether supported API translation is
+// permitted for this tenant. Enabled is a pointer so migration can distinguish
+// an omitted setting from an explicit false or true value.
+type TenantAPITranslationConfig struct {
+	// Enabled permits only translation directions supported by the installed
+	// Praxis controller and ExtProc image. Omitted and false both disable
+	// translation for new tenants.
+	// +optional
+	Enabled *bool `json:"enabled,omitempty"`
 }
 
 // MaasTenantConfigStatus defines the observed state of MaasTenantConfig.

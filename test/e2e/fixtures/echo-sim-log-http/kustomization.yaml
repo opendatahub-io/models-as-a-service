@@ -1,0 +1,34 @@
+# Opt-in debugging overlay: echo-sim with full HTTP logging.
+#
+# Deliberately NOT listed in ../kustomization.yaml. --log-http makes the
+# simulator log complete requests and responses including the Authorization
+# header, so a run writes live API keys into pod logs -- and CI archives pod
+# logs as artifacts. Apply this by hand when investigating what credentials
+# actually reach the backend, then revert.
+#
+#   kustomize build test/e2e/fixtures/echo-sim-log-http | kubectl apply -f -
+#   ... investigate ...
+#   kustomize build test/e2e/fixtures | kubectl apply -f -
+#
+# It renders the same LLMIS name as echo-sim, so the two are mutually exclusive
+# rather than additive -- applying one replaces the other.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../echo-sim
+
+patches:
+  # Append rather than replace: a JSON6902 add with a trailing "-" targets the
+  # end of the list, so this does not depend on the position of any existing
+  # argument. Kustomize has no schema for LLMInferenceService, so a strategic
+  # merge patch would replace the whole args list instead of merging it.
+  - target:
+      group: serving.kserve.io
+      version: v1alpha1
+      kind: LLMInferenceService
+      name: echo-simulator
+    patch: |-
+      - op: add
+        path: /spec/template/containers/0/args/-
+        value: --log-http

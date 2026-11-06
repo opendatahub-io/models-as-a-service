@@ -33,11 +33,60 @@ See [AITenant CRD](ai-tenant.md) for creating additional tenants.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
+| apiTranslation | TenantAPITranslationConfig | No | Permission for the API translation directions supported by the installed Praxis dataplane; default off |
 | apiKeys | TenantAPIKeysConfig | No | Configuration for API key management |
 | telemetry | TenantTelemetryConfig | No | Telemetry and metrics collection configuration |
 | maasApi | MaasAPIConfig | No | Replica count and resource configuration for the maas-api Deployment |
 | payloadProcessing | PayloadProcessingConfig | No | Replica count, autoscaling, and resource configuration for the payload-processing Deployment |
 | payloadPreProcessing | PayloadProcessingConfig | No | Replica count, autoscaling, and resource configuration for the payload-pre-processing Deployment |
+
+---
+
+## TenantAPITranslationConfig
+
+`spec.apiTranslation.enabled` permits only translation flows explicitly
+supported by the installed AI Gateway Controller and Praxis ExtProc image. It
+defaults to off when omitted. An omitted `enabled`, explicit `false`, and
+explicit `true` remain distinct inputs while maas-controller migrates a
+recognized RHOAI 3.5 IPP ConfigMap.
+
+This is a tenant permission for the translation flows supported by the
+installed dataplane; it does not choose a translator. The shared post-auth
+flow is **Anthropic Messages client → OpenAI Chat Completions backend**, scoped
+to `/v1/messages`. The ExternalModel flow is **OpenAI Chat Completions client
+→ selected Anthropic Messages provider**. For ExternalModels,
+`intelligent_route` selects the provider first, and that provider's trusted
+profile determines whether translation runs. An OpenAI-compatible provider
+remains pass-through.
+
+The currently qualified ExternalModel profiles are OpenAI `openai-chat`
+pass-through and Anthropic `messages` translation. The Anthropic profile
+requires this permission to be enabled. Azure OpenAI, Vertex AI, Bedrock, and
+custom provider or format combinations are not qualified by this runtime; an
+active unqualified binding fails reconciliation and retains the last-known
+serving route rather than being silently removed.
+
+The shared translator stays strict for Anthropic-only fields that Chat
+Completions cannot represent. Requests using `cache_control` prompt-caching
+markers or extended-thinking fields are rejected with a client error; this
+Phase 1 renderer does not opt into lossy feature removal. Claude Code may send
+those fields, so enabling the setting alone does not establish Claude Code
+compatibility.
+
+```yaml
+spec:
+  apiTranslation:
+    enabled: true
+```
+
+During an IPP → Praxis migration, an active Anthropic `messages` ExternalModel
+binding does not block cleanup while this field is `true`, whether an operator
+set it or maas-controller wrote it for a recognized RHOAI 3.5 IPP ConfigMap.
+Setting it to `false` is an explicit decision to accept the compatibility loss
+described in the [3.6 upgrade guide](../../migration/upgrade-to-3.6.md#ipp-praxis-api-translation-migration).
+It does not mean that a legacy transform was preserved, and it also turns off
+`targetModel` and provider `path` rewriting for every ExternalModel and the
+Anthropic `messages` profile.
 
 ---
 

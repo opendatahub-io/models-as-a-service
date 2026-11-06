@@ -2,9 +2,9 @@ package api_keys
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -16,12 +16,6 @@ import (
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/subscription"
 )
-
-// validGroupNamePattern matches Kubernetes/OpenShift group names.
-// Allows alphanumerics, colons (for system: prefixes), dots, underscores, hyphens, and spaces.
-// Rejects control characters, quotes, backslashes, and other unsafe characters
-// that could break JSON encoding in AuthPolicy CEL expressions (CWE-116/CWE-74 mitigation).
-var validGroupNamePattern = regexp.MustCompile(`^[a-zA-Z0-9:._ -]+$`)
 
 var (
 	ErrTenantRequired = errors.New("tenant is required")
@@ -111,13 +105,12 @@ func (s *Service) CreateAPIKey(
 	ctx context.Context, username string, userGroups []string, name, description string,
 	expiresIn *time.Duration, ephemeral bool, requestedSubscription string, tenant string, labels map[string]string,
 ) (*CreateAPIKeyResponse, error) {
-	// Validate group names against allowlist pattern (CWE-116/CWE-74 mitigation).
+	// Validate group names against the canonical allowlist (CWE-116/CWE-74 mitigation).
 	// AuthPolicy uses CEL to build JSON arrays from groups, and CEL lacks JSON escaping
 	// functions, so we reject any characters outside the safe allowlist on write.
-	for _, group := range userGroups {
-		if !validGroupNamePattern.MatchString(group) {
-			return nil, fmt.Errorf("group name %q contains invalid characters (only alphanumerics, colons, dots, underscores, hyphens, and spaces are allowed)", group)
-		}
+	// See groupname.go for the shared rule and its copies in maas-controller.
+	if err := validateGroupNames(userGroups); err != nil {
+		return nil, err
 	}
 
 	// Compute max expiration days once from config-or-default (CWE-613 mitigation).
@@ -294,6 +287,10 @@ func (s *Service) ValidateAPIKey(ctx context.Context, key string) (*ValidationRe
 	if groups == nil {
 		groups = []string{} // Return empty array if no groups stored
 	}
+	groupsJSON, err := json.Marshal(groups)
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode API key groups: %w", err)
+	}
 
 	// Fail closed: reject keys with no bound subscription (CWE-284)
 	// This prevents legacy keys, bad migrations, or manual writes with empty subscription
@@ -322,6 +319,7 @@ func (s *Service) ValidateAPIKey(ctx context.Context, key string) (*ValidationRe
 		KeyID:        metadata.ID,
 		KeyName:      metadata.Name,
 		Groups:       groups, // Original user groups for subscription-based authorization
+		GroupsJSON:   string(groupsJSON),
 		Subscription: metadata.Subscription,
 		Tenant:       metadata.Tenant,
 	}, nil

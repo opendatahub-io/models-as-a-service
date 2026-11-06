@@ -437,5 +437,5 @@ fairness identity, including when request priority is unset, and EPP applies the
 * [llm-d in-flight reclamation](https://github.com/llm-d/llm-d-router/blob/main/pkg/epp/flowcontrol/controller/internal/reclamation.go)
 * [MaaS subscription-selection metadata](https://github.com/opendatahub-io/models-as-a-service/blob/main/maas-api/internal/subscription/types.go)
 * [MaaS telemetry-label generation](https://github.com/opendatahub-io/models-as-a-service/blob/main/maas-controller/pkg/platform/tenantreconcile/postrender.go)
-* [MaaS structured usage logs](https://github.com/opendatahub-io/models-as-a-service/blob/main/deployment/components/observability/usage-logs/envoy-otel-access-log.yaml)
+* [MaaS structured usage logs](https://github.com/opendatahub-io/models-as-a-service/blob/main/deployment/components/observability/usage-logs/dsci-managed/envoy-otel-access-log.yaml)
 * [llm-d request-priority resolution](https://github.com/llm-d/llm-d-router/blob/main/pkg/epp/requestcontrol/director.go)

@@ -655,14 +655,15 @@ func TestMaaSModelRefReconciler_HTTPRouteRaceCondition(t *testing.T) {
 	r, c := newTestReconciler(model, llmisvc, sub, auth)
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: modelName, Namespace: ns}}
 
-	// --- Phase 1: Reconcile without HTTPRoute -> should enter Pending ---
+	// --- Phase 1: Reconcile without HTTPRoute -> should enter Pending, no timer ---
+	// The HTTPRoute watch re-enqueues this model when the route appears; no polling needed.
 
 	result, err := r.Reconcile(ctx, req)
 	if err != nil {
 		t.Fatalf("Reconcile (no HTTPRoute): %v", err)
 	}
 	if result.RequeueAfter != 0 {
-		t.Errorf("expected no requeue when HTTPRoute not found (watch handles it), got: %v", result)
+		t.Errorf("expected no timed re-check while HTTPRoute is missing (watch handles it), got: %v", result)
 	}
 
 	got := &maasv1alpha1.MaaSModelRef{}
@@ -694,6 +695,72 @@ func TestMaaSModelRefReconciler_HTTPRouteRaceCondition(t *testing.T) {
 		t.Errorf("Phase after HTTPRoute created = %q, want Ready", final.Status.Phase)
 	}
 	assertReadyCondition(t, final.Status.Conditions, metav1.ConditionTrue, "Reconciled")
+}
+
+// TestMaaSModelRefReconciler_RequeuesWhileBackendNotReady verifies that a model whose
+// backend is not yet ready is re-checked on a timer, and stops polling once ready.
+//
+// The LLMInferenceService watch normally delivers the Ready transition. The timer is a
+// backstop for the narrow window during dynamic (late-CRD) watch registration where an
+// event can be missed. The requeue fires only while runtimeReady is false, so models
+// that are intentionally not Ready (no governance, no HTTPRoute) do not get polled.
+func TestMaaSModelRefReconciler_RequeuesWhileBackendNotReady(t *testing.T) {
+	ctx := context.Background()
+	const (
+		modelName   = "test-model"
+		llmisvcName = "test-llmisvc"
+		ns          = "default"
+	)
+
+	llmisvc := newLLMISvc(llmisvcName, ns, corev1.ConditionFalse)
+	model := newMaaSModelRef(modelName, ns, "LLMInferenceService", llmisvcName)
+	sub := newMaaSSubscription("sub1", "admin-ns", "team-a", modelName, 100)
+	sub.Spec.ModelRefs[0].Namespace = ns
+	auth := newMaaSAuthPolicy("auth1", "admin-ns", "team-a",
+		maasv1alpha1.ModelRef{Name: modelName, Namespace: ns})
+	r, c := newTestReconciler(model, llmisvc, sub, auth, newLLMISvcRoute(llmisvcName, ns))
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: modelName, Namespace: ns}}
+
+	result, err := r.Reconcile(ctx, req)
+	if err != nil {
+		t.Fatalf("Reconcile (backend not ready): %v", err)
+	}
+	if result.RequeueAfter != backendNotReadyRequeueInterval {
+		t.Errorf("RequeueAfter = %v, want %v while the backend is not ready", result.RequeueAfter, backendNotReadyRequeueInterval)
+	}
+	notReady := &maasv1alpha1.MaaSModelRef{}
+	if err := c.Get(ctx, req.NamespacedName, notReady); err != nil {
+		t.Fatalf("Get after not-ready reconcile: %v", err)
+	}
+	if notReady.Status.Phase != "Unhealthy" {
+		t.Errorf("Phase = %q, want Unhealthy", notReady.Status.Phase)
+	}
+
+	// The backend becomes ready; the next reconcile must land on Ready and stop the timer.
+	backend := &kservev1alpha2.LLMInferenceService{}
+	if err := c.Get(ctx, client.ObjectKey{Name: llmisvcName, Namespace: ns}, backend); err != nil {
+		t.Fatalf("Get LLMInferenceService: %v", err)
+	}
+	backend.Status.Conditions = duckv1.Conditions{{Type: apis.ConditionReady, Status: corev1.ConditionTrue}}
+	if err := c.Update(ctx, backend); err != nil {
+		t.Fatalf("Update LLMInferenceService: %v", err)
+	}
+
+	result, err = r.Reconcile(ctx, req)
+	if err != nil {
+		t.Fatalf("Reconcile (backend ready): %v", err)
+	}
+	if result.RequeueAfter != 0 {
+		t.Errorf("RequeueAfter = %v, want 0 once the model is Ready", result.RequeueAfter)
+	}
+	ready := &maasv1alpha1.MaaSModelRef{}
+	if err := c.Get(ctx, req.NamespacedName, ready); err != nil {
+		t.Fatalf("Get after ready reconcile: %v", err)
+	}
+	if ready.Status.Phase != "Ready" {
+		t.Errorf("Phase = %q, want Ready", ready.Status.Phase)
+	}
+	assertReadyCondition(t, ready.Status.Conditions, metav1.ConditionTrue, "Reconciled")
 }
 
 // TestMaaSModelRefReconciler_DuplicateReconciliation verifies that reconciling the same
@@ -2090,6 +2157,87 @@ func TestCheckModelIdentityConflict_ConflictDetected(t *testing.T) {
 	assertRecordedEvent(t, recorder, "Warning ModelNameConflict")
 }
 
+// TestCheckModelIdentityConflict_PerTenantModelRefsNotConflicts verifies that
+// same-namespace modelRefs sharing an alias but resolving to different
+// tenants — the per-tenant modelRefs serving one shared model — are not
+// reported as identity conflicts.
+func TestCheckModelIdentityConflict_PerTenantModelRefsNotConflicts(t *testing.T) {
+	const sharedAlias = "shared-client-name"
+
+	modelA := &maasv1alpha1.MaaSModelRef{
+		ObjectMeta: metav1.ObjectMeta{Name: "shared-a", Namespace: "default", Generation: 1},
+		Status: maasv1alpha1.MaaSModelStatus{
+			ResolvedModelAlias: sharedAlias,
+			ResolvedTenantRef:  "tenant-a",
+		},
+	}
+	modelB := &maasv1alpha1.MaaSModelRef{
+		ObjectMeta: metav1.ObjectMeta{Name: "shared-b", Namespace: "default"},
+		Status: maasv1alpha1.MaaSModelStatus{
+			ResolvedModelAlias: sharedAlias,
+			ResolvedTenantRef:  "tenant-b",
+		},
+	}
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(modelA, modelB).
+		WithStatusSubresource(&maasv1alpha1.MaaSModelRef{}).
+		Build()
+	r := &MaaSModelRefReconciler{Client: c, Scheme: scheme}
+
+	for _, model := range []*maasv1alpha1.MaaSModelRef{modelA, modelB} {
+		r.checkModelIdentityConflict(context.Background(), ctrl.Log.WithName("test"), model)
+		cond := findCondition(model.Status.Conditions, ConditionModelIdentityUnique)
+		if cond == nil {
+			t.Fatalf("ModelIdentityUnique condition not set for %s", model.Name)
+		}
+		if cond.Status != metav1.ConditionTrue {
+			t.Errorf("%s: expected True for per-tenant modelRefs sharing an alias, got %v (%s)",
+				model.Name, cond.Status, cond.Message)
+		}
+	}
+}
+
+// TestCheckModelIdentityConflict_SameTenantSharedAliasIsConflict verifies the
+// tenant exclusion does not mask genuine collisions: same-tenant modelRefs
+// sharing an alias are still reported.
+func TestCheckModelIdentityConflict_SameTenantSharedAliasIsConflict(t *testing.T) {
+	const sharedAlias = "publishers/default/models/shared-model"
+
+	modelA := &maasv1alpha1.MaaSModelRef{
+		ObjectMeta: metav1.ObjectMeta{Name: "model-a", Namespace: "default", Generation: 1},
+		Status: maasv1alpha1.MaaSModelStatus{
+			ResolvedModelAlias: sharedAlias,
+			ResolvedTenantRef:  "tenant-a",
+		},
+	}
+	modelB := &maasv1alpha1.MaaSModelRef{
+		ObjectMeta: metav1.ObjectMeta{Name: "model-b", Namespace: "default"},
+		Status: maasv1alpha1.MaaSModelStatus{
+			ResolvedModelAlias: sharedAlias,
+			ResolvedTenantRef:  "tenant-a",
+		},
+	}
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(modelA, modelB).
+		WithStatusSubresource(&maasv1alpha1.MaaSModelRef{}).
+		Build()
+	r := &MaaSModelRefReconciler{Client: c, Scheme: scheme}
+
+	r.checkModelIdentityConflict(context.Background(), ctrl.Log.WithName("test"), modelA)
+
+	cond := findCondition(modelA.Status.Conditions, ConditionModelIdentityUnique)
+	if cond == nil {
+		t.Fatal("ModelIdentityUnique condition not set")
+	}
+	if cond.Status != metav1.ConditionFalse {
+		t.Errorf("expected False for same-tenant shared alias, got %v (%s)", cond.Status, cond.Message)
+	}
+}
+
 func TestCheckModelIdentityConflict_ConflictResolved(t *testing.T) {
 	model := &maasv1alpha1.MaaSModelRef{
 		ObjectMeta: metav1.ObjectMeta{Name: "model-a", Namespace: "default", Generation: 1},
@@ -2221,6 +2369,56 @@ func TestEnqueueSiblingsWithAlias(t *testing.T) {
 				if got[i] != name {
 					t.Errorf("enqueued[%d] = %q, want %q", i, got[i], name)
 				}
+			}
+		})
+	}
+}
+
+// A resolved-tenant change alone can flip a sibling's ModelIdentityUnique
+// condition while the alias stays the same, so the sibling watch must requeue
+// on ResolvedTenantRef changes too, not only alias changes.
+func TestSiblingConflictFieldsChanged(t *testing.T) {
+	base := func(alias, tenant string) *maasv1alpha1.MaaSModelRef {
+		return &maasv1alpha1.MaaSModelRef{
+			ObjectMeta: metav1.ObjectMeta{Name: "model-a", Namespace: "default"},
+			Status:     maasv1alpha1.MaaSModelStatus{ResolvedModelAlias: alias, ResolvedTenantRef: tenant},
+		}
+	}
+	tests := []struct {
+		name string
+		old  *maasv1alpha1.MaaSModelRef
+		new  *maasv1alpha1.MaaSModelRef
+		want bool
+	}{
+		{
+			name: "no change",
+			old:  base("alias-a", "tenant-a"),
+			new:  base("alias-a", "tenant-a"),
+			want: false,
+		},
+		{
+			name: "alias change",
+			old:  base("alias-a", "tenant-a"),
+			new:  base("alias-b", "tenant-a"),
+			want: true,
+		},
+		{
+			name: "tenant change with same alias",
+			old:  base("alias-a", "tenant-a"),
+			new:  base("alias-a", "tenant-b"),
+			want: true,
+		},
+		{
+			name: "tenant cleared",
+			old:  base("alias-a", "tenant-a"),
+			new:  base("alias-a", ""),
+			want: true,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := siblingConflictFieldsChanged(tc.old, tc.new); got != tc.want {
+				t.Errorf("siblingConflictFieldsChanged() = %v, want %v", got, tc.want)
 			}
 		})
 	}

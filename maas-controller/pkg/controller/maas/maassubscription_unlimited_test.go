@@ -287,11 +287,16 @@ func TestMaaSSubscriptionReconciler_AllUnlimited_ActivePhase(t *testing.T) {
 // The predicate must not depend on the order subscriptions are listed in, or
 // the TRLP would be rewritten between reconciles.
 func TestUnlimitedTokenLimit_PredicateOrderIsStable(t *testing.T) {
-	id := func(sub string) string {
-		return SubscriptionRateLimitID(ModelScopedSubscriptionKey(unlimitedTestNamespace, sub, unlimitedTestNamespace, unlimitedTestModel))
+	si := func(name string) subInfo {
+		return subInfo{
+			subNamespace: unlimitedTestNamespace,
+			subName:      name,
+			unlimited:    true,
+			modelScoped:  ModelScopedSubscriptionKey(unlimitedTestNamespace, name, unlimitedTestNamespace, unlimitedTestModel),
+		}
 	}
 
-	got := firstPredicate(t, unlimitedTokenLimit([]string{id("unl-b"), id("unl-a")}))
+	got := firstPredicate(t, unlimitedTokenLimit([]subInfo{si("unl-b"), si("unl-a")}))
 
 	if want := unlimitedTestPredicate("unl-a", "unl-b"); got != want {
 		t.Errorf("predicate = %q, want %q", got, want)

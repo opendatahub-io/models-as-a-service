@@ -109,8 +109,8 @@ How you remove resources depends on how they were applied. `./scripts/observabil
 
 | Deployment mode | How applied | Ownership | Cleanup |
 |-----------------|-------------|-----------|---------|
-| **Operator** (recommended) | Metrics Usage dashboard via `usageMetricsDashboard` on `Config`. Usage-log dashboards via `usageLogging` on `Config`. | Controller `ownerReference` on `Config` (`configs.maas.opendatahub.io/default`); field manager `maas-controller`. | Disable the matching Config flag; do not delete the CR by hand while the flag is true — the operator recreates it. See [Operator-managed dashboards](#operator-managed-dashboards) below. |
-| **Kustomize** (development) | `kustomize build` of `deployment/components/observability/observability/dashboards/` (and optionally `usage-logs/`). | Label `app.kubernetes.io/managed-by: maas-observability` on the metrics Usage dashboard. No `Config` controller reference. | Delete `dashboard-3-maas-usage-admin` by name. For usage-logs, set `usageLogging=false` when Config exists, wait until **every** overlay object with a Config controller owner is gone, then `kubectl delete -k`. |
+| **Operator** (recommended) | Metrics Usage dashboard via `usageMetricsDashboard` on `Config`. Usage-log dashboards are always reconciled while `Config/default` exists (`usageLogging` does not gate them). | Controller `ownerReference` on `Config` (`configs.maas.opendatahub.io/default`); field manager `maas-controller`. | Metrics Usage: set `usageMetricsDashboard=false`. Usage-log dashboards are recreated while the controller runs. See [Operator-managed dashboards](#operator-managed-dashboards) below. |
+| **Kustomize** (development) | `kustomize build` of `deployment/components/observability/observability/dashboards/` (and optionally `usage-logs/dsci-managed/`). | Label `app.kubernetes.io/managed-by: maas-observability` on the metrics Usage dashboard. No `Config` controller reference. | Delete `dashboard-3-maas-usage-admin` by name. For usage-logs, `kubectl delete -k` only sticks when the operator is not also reconciling those objects. |
 | **`install-observability.sh`** | TelemetryPolicy, Istio Telemetry, and the conditional monitors/rules in the table above. | `app.kubernetes.io/managed-by: maas-observability` on the kustomize base and gateway Service/ServiceMonitor. Limitador monitor and PrometheusRules do not all carry that label. | Delete the applied objects by name (see [Telemetry and ServiceMonitors](#telemetry-and-servicemonitors)). Dashboards are unaffected. |
 
 Identify operator-owned dashboards:
@@ -123,13 +123,26 @@ kubectl get persesdashboard -A -o json | jq -r '
 
 #### Operator-managed dashboards
 
+During upgrade, the MaaS controller removes the stale 3.4 metrics dashboard
+`dashboard-3-maas-usage-admin`, datasource `kuadrant-prometheus-datasource`, and
+ConfigMap `prometheus-web-tls-ca` from its applications namespace (for example,
+`redhat-ods-applications`). The dashboard is preserved when `spec.display.name`
+is `Usage (legacy)`, identifying the current opt-in metrics dashboard even when
+the applications and monitoring namespaces are the same. The obsolete datasource
+and ConfigMap are removed by name; resources with other names or in other
+namespaces are unaffected.
+
+The lifecycle reconciler runs general stale-resource cleanup before module setup,
+independently of monitoring configuration. Cleanup runs once successfully per
+controller lifetime. Concurrent reconciliations are serialized, failures are retried
+on subsequent reconciliation, and missing Perses APIs leave cleanup pending until
+they are available.
+
 Requires a running **maas-controller** (`LifecycleReconciler`), a `Config` instance, a monitoring namespace, and Perses CRDs (`PersesAvailable`). See [Setup](setup.md).
 
-```bash
-# Usage-log dashboards (dashboard-4, dashboard-5): operator deletes CRs it owns
-kubectl patch configs.maas.opendatahub.io default --type=merge \
-  -p '{"spec":{"usageLogging":false}}'
+Usage-log dashboards (`dashboard-4`, `dashboard-5`) are reconciled whenever `Config/default` exists. Setting `usageLogging` does not remove them. Deleting `Config/default` garbage-collects controller-owned copies.
 
+```bash
 # Metrics Usage dashboard (dashboard-3): operator deletes the CR it owns
 kubectl patch configs.maas.opendatahub.io default --type=merge \
   -p '{"spec":{"usageMetricsDashboard":false}}'
@@ -145,43 +158,9 @@ kubectl delete persesdashboard dashboard-3-maas-usage-admin -n opendatahub
 
 #### Usage-log resources
 
-Disable `usageLogging` when Config exists, wait until **every rendered overlay object** with a Config controller owner is gone, then delete leftovers.
+The controller applies `deployment/components/observability/usage-logs/dsci-managed/` while `Config/default` exists. When `spec.usageLogging` is `true`, it applies `usage-logs/` instead. Objects rendered by both overlays, including the tenancy proxy and usage-log dashboards, are updated in place. Controller-owned objects rendered only by the other overlay are deleted. `usage-logs/` includes `dsci-managed/` and adds the usage-logs collector, so turning `usageLogging` on creates that collector and its RBAC and network policies, and turning it off or omitting it removes those controller-owned objects. The per-tenant gateway EnvoyFilter is applied separately. Controller-owned objects from the selected overlay are recreated if deleted by hand, and are garbage-collected when `Config/default` is deleted.
 
-```bash
-set -euo pipefail
-
-overlay=deployment/components/observability/usage-logs
-manifests=$(mktemp)
-trap 'rm -f "$manifests"' EXIT
-kustomize build "$overlay" >"$manifests"
-
-if kubectl get configs.maas.opendatahub.io default -o name >/dev/null; then
-  kubectl patch configs.maas.opendatahub.io default --type=merge \
-    -p '{"spec":{"usageLogging":false}}'
-fi
-
-owned_usage_log_resources() {
-  kubectl get --ignore-not-found -f "$manifests" -o json | jq -r '
-    (.items // [.])[]
-    | select(.metadata.name != null)
-    | select([.metadata.ownerReferences[]? | select(.kind=="Config" and .controller==true)] | length > 0)
-    | "\(.kind)/\(.metadata.namespace // "-")/\(.metadata.name)"'
-}
-
-for _ in $(seq 1 30); do
-  left=$(owned_usage_log_resources)
-  [ -z "$left" ] && break
-  sleep 2
-done
-left=$(owned_usage_log_resources)
-if [ -n "$left" ]; then
-  echo "operator-owned usage-log resources still present; do not delete -k:"
-  echo "$left"
-  exit 1
-fi
-
-kubectl delete -k "$overlay"
-```
+`kubectl delete -k deployment/components/observability/usage-logs/dsci-managed` removes a development-only apply. Skip it while maas-controller is reconciling the same objects.
 
 #### Telemetry and ServiceMonitors
 
@@ -220,7 +199,8 @@ kubectl exec -n <namespace> <pod> -- curl localhost:<port>/metrics
 kubectl get servicemonitor -n <namespace> \
   -l 'monitoring.opendatahub.io/scrape=true'
 
-# 3. Verify ODH monitoring stack enabled
+# 3. Verify ODH monitoring stack enabled.
+#    MaasTenantConfig is Degraded for a missing stack only when Config.spec.usageMetricsDashboard is true and tenant telemetry is enabled.
 kubectl get maastenantconfig default-tenant -n models-as-a-service  -o json | jq '.status.conditions[] | select(.type=="Degraded" or .type=="MaaSPrerequisitesAvailable") | {type, status, message}'
 
 kubectl get dscinitialization default-dsci -o json | jq '.status.conditions[] | select(.type=="MonitoringReady" or .type=="MonitoringStackAvailable") | {type, status}'
@@ -240,9 +220,12 @@ curl -s -H "Authorization: Bearer $(oc whoami -t)" --get \
 ### Troubleshooting Dashboard Issues
 
 ```bash
-# 1. Confirm Perses is available (ODH/RHOAI observability console)
+# 1. Confirm Perses is available (ODH/RHOAI observability console).
+#    When tenant telemetry is enabled, MaasTenantConfig is Degraded unless PersesAvailable is True.
+#    When usageLogging is false, it is also Degraded unless UsageLogsCollectorAvailable
+#    is True. See Setup.
 kubectl get dscinitialization default-dsci -o json | \
-  jq '.status.conditions[] | select(.type=="PersesAvailable") | {type, status}'
+  jq '.status.conditions[] | select(.type=="PersesAvailable" or .type=="UsageLogsCollectorAvailable") | {type, status}'
 
 # 2. Confirm PersesDashboard CRs exist
 kubectl get persesdashboard -A | grep maas
@@ -282,7 +265,7 @@ curl -s -H "Authorization: Bearer $(oc whoami -t)" --get \
   jq '.data.result[] | {metric: .metric.__name__, series: .value[1]}'
 ```
 
-Watch: `authorized_hits_total{user!=""}`, `authorized_calls_total{user!=""}`, `istio_request_duration_milliseconds_bucket{subscription!=""}`.
+Watch: `authorized_hits_total{user!="",organization_id!="",tenant_name!="",tenant_namespace!="",subscription!=""}`, `authorized_calls_total{user!="",organization_id!="",tenant_name!="",tenant_namespace!="",subscription!=""}`, and `istio_request_duration_milliseconds_bucket{tenant_name!="",tenant_namespace!="",subscription!=""}`. Empty scope labels identify incomplete or unscopable series and must not be included in organization-specific claims.
 
 ### Regular Maintenance Tasks
 
@@ -307,6 +290,7 @@ Watch: `authorized_hits_total{user!=""}`, `authorized_calls_total{user!=""}`, `i
 | **Policy health metrics** | `kuadrant_policies_enforced`, `kuadrant_policies_total` not in RHCL 1.x | `limitador_up` and `datastore_partitioned` available now |
 | **maas-api metrics** | Requires HTTPS scrape + `/metrics` get RBAC | Use ServiceMonitor `maas-api-metrics` with bearer token; grant scrapers `nonResourceURLs: ["/metrics"]` get |
 | **PromQL `_total` suffix** | OTel prometheus receiver stores Limitador counters as `authorized_hits_total` (and the same for `authorized_calls` / `limited_calls`) | Query the `_total` names; Grafana panels that omit `_total` return no data |
+| **MaaS labels on `limited_calls_total`** | Limitador emits only `limitador_namespace` for this family | Use `authorized_hits_total` or `authorized_calls_total` for tenant/subscription/organization attribution |
 
 !!! note "Total vs Split"
     Total token consumption per user **is available** via `authorized_hits_total{user!=""}`. Input/output split at gateway requires wasm-shim to send two counter updates.
@@ -315,14 +299,13 @@ Watch: `authorized_hits_total{user!=""}`, `authorized_calls_total{user!=""}`, `i
 
 | Feature | Metric | Label |
 |---------|--------|-------|
-| **Latency per subscription** | `istio_request_duration_milliseconds_bucket` | `subscription` |
-| **Tokens per user** | `authorized_hits_total` | `user` |
-| **Tokens per subscription** | `authorized_hits_total` | `subscription` |
+| **Latency per subscription** | `istio_request_duration_milliseconds_bucket` | `subscription`, `tenant_namespace`, `tenant_name` |
+| **Tokens per user** | `authorized_hits_total` | `user`, `tenant_name`, `tenant_namespace`, `subscription` |
+| **Tokens per subscription** | `authorized_hits_total` | `subscription`, `tenant_namespace`, `tenant_name` |
 | **Tokens per model** | `authorized_hits_total` | `model` |
 | **Requests per user** | `authorized_calls_total` | `user` |
 | **Requests per subscription** | `authorized_calls_total` | `subscription` |
-| **Rate limited per user** | `limited_calls_total` | `user` |
-| **Rate limited per subscription** | `limited_calls_total` | `subscription` |
+| **Rate limited totals** | `limited_calls_total` | `limitador_namespace` only |
 
 ## Reporting Issues
 
