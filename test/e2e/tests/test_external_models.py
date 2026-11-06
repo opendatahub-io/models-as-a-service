@@ -1218,6 +1218,7 @@ def _cleanup_shared_provider_resources(setup: dict):
         raise RuntimeError("Shared-provider fixture cleanup failed: " + "; ".join(cleanup_errors))
 
 
+@pytest.mark.full_suite
 class TestSharedProviderMultiModel:
     """Verify two ExternalModels sharing one ExternalProvider both route correctly.
 
