@@ -4,13 +4,13 @@
 # =============================================================================
 # Clone the AIGC checkout and run deploy-ai-gateway-controller.sh so praxis can own
 # payload-processing. Intended for direct invocation or from prow_run_smoke_test.sh when
-# AI_GATEWAY_CONTROLLER_IMAGE is non-empty (prow defaults to AIGC :latest).
+# AI_GATEWAY_CONTROLLER_IMAGE is non-empty (prow uses the qualification digest).
 #
 # Env:
 #   AI_GATEWAY_CONTROLLER_IMAGE  Manager image (required; e.g. quay.io/.../odh-ai-gateway-controller:odh-stable)
 #   AIGC_GIT_URL                 Default: opendatahub-io/ai-gateway-controller
-#   AIGC_GIT_REF                 Default: main
-#   PRAXIS_EXTPROC_IMAGE         Optional; AIGC script defaults to odh-stable
+#   AIGC_GIT_REF                 Default: qualification source, paired with prow's image
+#   PRAXIS_EXTPROC_IMAGE         Optional; defaults to the qualified runtime digest
 #   GATEWAY_NAMESPACE, GATEWAY_NAME, DEPLOYMENT_NAMESPACE
 # =============================================================================
 
@@ -28,8 +28,13 @@ if [[ -z "${AI_GATEWAY_CONTROLLER_IMAGE:-}" ]]; then
 fi
 export AI_GATEWAY_CONTROLLER_IMAGE
 AIGC_GIT_URL="${AIGC_GIT_URL:-https://github.com/opendatahub-io/ai-gateway-controller.git}"
-AIGC_GIT_REF="${AIGC_GIT_REF:-main}"
-export PRAXIS_EXTPROC_IMAGE="${PRAXIS_EXTPROC_IMAGE:-quay.io/opendatahub/odh-praxis-extproc:odh-stable}"
+# Qualification dependency on ai-gateway-controller#210, rebased to include the
+# merged header guard in #146. Replace source and manager image pins together
+# with merged versions before merging this PR.
+AIGC_GIT_REF="${AIGC_GIT_REF:-dcfce30246043837a19547ab15d3d1eff9d6cf63}"
+# Match the controller's vendored Praxis revision (1632a345): its pre-auth
+# configuration requires metrics_auth support as well as provided TLS.
+export PRAXIS_EXTPROC_IMAGE="${PRAXIS_EXTPROC_IMAGE:-quay.io/opendatahub/odh-praxis-extproc@sha256:889a9f6e59b60ddc0165739869207a6bdd3e79b6d6a6b3ac09f0b3405f366dd3}"
 export GATEWAY_NAMESPACE="${GATEWAY_NAMESPACE:-openshift-ingress}"
 export GATEWAY_NAME="${GATEWAY_NAME:-maas-default-gateway}"
 export DEPLOYMENT_NAMESPACE="${DEPLOYMENT_NAMESPACE:-opendatahub}"

@@ -75,6 +75,8 @@ def _require_multitenancy_prerequisites():
     wait_for_json("namespace", AITENANT_NAMESPACE, timeout=180, interval=5)
 
 
+# These cases add/remove contributors to the shared default gateway's policies.
+@pytest.mark.serial
 class TestTenantNamespaceDiscovery:
     """S27 section 1 — tenant namespace discovery (S1 / PR #975)."""
 
@@ -381,6 +383,9 @@ class TestTenantDiscoveryDormantMode:
             patch_controller_tenant_namespace_discovery(enabled=True)
 
 
+# These policies contribute to the shared default gateway's AuthPolicy. Keep its
+# accepted/enforced assertions separate from other workers changing that policy.
+@pytest.mark.serial
 class TestLegacyDefaultNamespaceStillWorks:
     """Default tenant namespace continues to reconcile with discovery enabled."""
 

@@ -29,8 +29,8 @@
 #   MAAS_API_IMAGE - Custom MaaS API image (optional)
 #   MAAS_CONTROLLER_IMAGE - Custom MaaS controller image (optional)
 #   AI_GATEWAY_OPERATOR_IMAGE - Custom ai-gateway-operator image (optional)
-#   AI_GATEWAY_CONTROLLER_IMAGE - AIGC manager image; unset defaults to
-#                                quay.io/opendatahub/odh-ai-gateway-controller:latest (main after AIGC #91).
+#   AI_GATEWAY_CONTROLLER_IMAGE - AIGC manager image; unset uses the
+#                                qualification digest documented in test/e2e/README.md.
 #                                Set to empty to skip companion install.
 #   AIGC_GIT_URL / AIGC_GIT_REF - Optional overrides for deploy-aigc-companion.sh (defaults live in that script)
 #   DEPLOY_MODE - MaaS ownership mode (default: kustomize for presubmits)
@@ -97,10 +97,12 @@ EXTERNAL_OIDC=${EXTERNAL_OIDC:-false}
 export MAAS_API_IMAGE=${MAAS_API_IMAGE:-}
 export MAAS_CONTROLLER_IMAGE=${MAAS_CONTROLLER_IMAGE:-}
 export AI_GATEWAY_OPERATOR_IMAGE=${AI_GATEWAY_OPERATOR_IMAGE:-}
-# Default to AIGC main (Konflux :latest after AIGC #91). odh-stable lags that merge.
+# Qualification image: paired with AIGC_GIT_REF in deploy-aigc-companion.sh.
+# Includes the merged header guard (#146) and startup snapshot repair (#210).
+# Hold this PR until #210 merges, then pin its merged source and build together.
 # Unset → install companion; explicit empty → skip.
 if [[ -z "${AI_GATEWAY_CONTROLLER_IMAGE+x}" ]]; then
-    export AI_GATEWAY_CONTROLLER_IMAGE="quay.io/opendatahub/odh-ai-gateway-controller:latest"
+    export AI_GATEWAY_CONTROLLER_IMAGE="quay.io/opendatahub/odh-ai-gateway-controller@sha256:069ebcaccb03c4246b5b24c39804d989f30cc9e28e330e29e53cc07356a90fde"
 else
     export AI_GATEWAY_CONTROLLER_IMAGE
 fi

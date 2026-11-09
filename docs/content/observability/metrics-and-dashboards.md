@@ -7,11 +7,11 @@
 | Metric | Type | Labels | Use For |
 |--------|------|--------|---------|
 | `authorized_hits` | Counter | `user`, `tenant_name`, `tenant_namespace`, `subscription`, `model` | **Billing/Cost** - Total tokens consumed (input + output) |
-| `authorized_calls` | Counter | `user`, `tenant_name`, `tenant_namespace`, `subscription` | **API Usage** - Number of API calls allowed |
+| `authorized_calls` | Counter | `user`, `tenant_name`, `tenant_namespace`, `subscription`, `model` | **API Usage** - Number of API calls allowed |
 | `limited_calls` | Counter | `limitador_namespace` | **Rate Limiting** - Requests denied due to quotas |
 
 !!! note "`model` label availability"
-    `model` label is only available on `authorized_hits`. `limited_calls` does not carry MaaS producer-scope labels. Organization-specific queries must require nonempty `organization_id`, tenant, and subscription scope; empty values identify incomplete or unscopable series.
+    When `captureModelUsage` is enabled, the request-sourced `model` label can label token and allowed-request counters. It uses the limiter's canonical MaaSModelRef identity after subscription selection, with a path/header fallback before selection. `limited_calls` does not carry MaaS producer-scope labels. Organization-specific queries must require nonempty `organization_id`, tenant, and subscription scope; empty values identify incomplete or unscopable series. The `user` label requires `captureUser`; inspect emitted metrics when upgrading from deployments with response-sourced labels. See [telemetry label sources and cardinality](../advanced-administration/telemetry-defaults-and-cardinality.md#how-maas-telemetry-works).
 
 !!! note "Total tokens only"
     Token consumption is reported as total tokens (prompt + completion) per request. Input/output split requires upstream Kuadrant wasm-shim changes.

@@ -30,7 +30,9 @@ spec:
     - name: url
       value: https://github.com/opendatahub-io/odh-konflux-central.git
     - name: revision
-      value: main
+      # Draft qualification dependency: odh-konflux-central#761.
+      # Do not merge until it lands; replace with its merged commit before ready.
+      value: 02ecb2957daff53a9f8f482030aae8a1d27e6d37
     - name: pathInRepo
       value: integration-tests/models-as-a-service/pr-group-testing-pipeline.yaml
   taskRunTemplate:
@@ -56,8 +58,9 @@ spec:
         value: "{{target_branch}}"
     serviceAccountName: konflux-integration-runner
   timeouts:
-    pipeline: 4h0m0s
-    tasks: 3h
+    # Provisioning plus the test/diagnostic task must fit before the global cap.
+    pipeline: 6h
+    tasks: 5h
   workspaces:
   - name: git-auth
     secret:

@@ -31,11 +31,17 @@ Smoke helper only:
 ## Local prerequisites
 
 - OpenShift access (`oc` logged in)
-- From repo root: `cd test/e2e`, create venv, `pip install -r requirements.txt`
+- From repo root: `cd test/e2e`, create venv, `python -m pip install --require-hashes --no-deps -r requirements-lock.txt`
 - Most HTTP tests need `GATEWAY_HOST` (and often routes/API reachable). Full env list: `tests/test_helper.py` docstring.
 - Dual-listener AuthConfig regression tests are `@pytest.mark.serial` (pass 2 of `/group-test`). They use `E2E_MODEL_REF` / `E2E_MODEL_NAMESPACE`, `AUTHORINO_NAMESPACE` (default `kuadrant-system`), and `E2E_DUAL_LISTENER_WASM_STABILITY_WINDOW` (default 60s).
 
 ## Pytest modules
+
+The runtime runners and collection CI use the same hash-locked dependencies.
+When updating the lock file, run `PYTHONPATH=tests python -m pytest -q unit/`:
+the worker-affinity regression checks that grouped tests share one fixture while
+independent groups still run on different workers. Selecting `--dist=loadgroup`
+alone does not prove that a dependency combination honors the group markers.
 
 ```bash
 cd test/e2e && source .venv/bin/activate   # after setup above
@@ -148,6 +154,27 @@ CI runs `./test/e2e/scripts/prow_run_smoke_test.sh`, a thin orchestrator that se
 
 `run_e2e_tests.sh` can also be called directly on an existing cluster (env vars must be exported) or via `run-tests-quick.sh` which sets up the env and delegates to the same runner.
 
+The smoke deployment pins the controller source/image, Praxis runtime, and
+both group-test pipeline revisions for qualification. The controller includes
+the merged [header-guard fix](https://github.com/opendatahub-io/ai-gateway-controller/pull/146)
+and the startup repair under review in
+[ai-gateway-controller#210](https://github.com/opendatahub-io/ai-gateway-controller/pull/210).
+The header guard must remain in the reconciled shared configuration so caller
+credentials and MaaS identity headers do not reach model backends. The cluster
+lifetime and diagnostic budgets are under review in
+[odh-konflux-central#761](https://github.com/opendatahub-io/odh-konflux-central/pull/761).
+The runtime image must support the manifests vendored by the pinned controller,
+including `server.metrics_auth` and provided TLS. When changing this pair, run
+the actual runtime image's `--validate` command against the generated pre-auth,
+shared post-auth, and ExternalModel configurations, then verify gRPC readiness;
+controller compilation alone does not check runtime configuration compatibility.
+**Do not merge these open-review source pins.** After
+both dependencies merge, replace their source/pipeline revisions with merged
+commits and the controller image with its matching merged build, then rerun
+qualification before marking the PR ready. `AI_GATEWAY_CONTROLLER_IMAGE`,
+`AIGC_GIT_REF`, and `PRAXIS_EXTPROC_IMAGE` remain overridable; an explicitly empty
+controller image skips companion installation.
+
 Deployment uses **Red Hat Connectivity Link (RHCL)** from the cluster `redhat-operators` catalog (`POLICY_ENGINE=rhcl` by default, channel head unless `RHCL_STARTING_CSV` is set) into **`kuadrant-system`**. Reports are written to `ARTIFACT_DIR` when set.
 
 Multi-tenancy discovery tests run by default in `prow_run_smoke_test.sh`, which sets `ENABLE_TENANT_NAMESPACE_DISCOVERY=true` unless explicitly overridden and patches maas-controller before pytest. If set to `false`, `test_tenant_namespace_discovery.py` and `test_multi_tenant_integration.py` skip. When discovery is enabled, `test_namespace_scoping.py` skips (dormant-mode assumptions).
@@ -162,6 +189,14 @@ The multi-tenant external model suites (`test_tenant_external_model_*.py`) auto-
 - `TENANT_EXTERNAL_MODEL_LEGACY_IPP_E2E=true` — legacy IPP coexistence (serial; needs the MaaS IPP image pin containing the legacy-controller exclusion guard).
 
 Installed AGC/Praxis image and CRD-schema evidence for these suites is written to `ARTIFACTS_DIR/tenant-external-model-evidence-*.json` at session start (completion evidence for the multi-tenant external model scenarios).
+
+Failed external-model setup/call reports capture redacted processor status and
+logs before teardown. Each worker captures at most two distinct failing tests
+per session, with at most five bounded cluster requests per capture, so a
+processor outage cannot trigger a diagnostic request storm.
+
+Runner entrypoints reset retry logs and `flake-report.json` before each
+invocation. Use a separate `ARTIFACTS_DIR` for independent concurrent runs.
 
 External OIDC runs require `EXTERNAL_OIDC=true` and `OIDC_ISSUER_URL`, `OIDC_TOKEN_URL`, `OIDC_CLIENT_ID`, `OIDC_USERNAME`, `OIDC_PASSWORD` per your deploy/test setup.
 

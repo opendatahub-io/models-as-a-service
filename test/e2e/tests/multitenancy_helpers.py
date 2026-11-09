@@ -20,6 +20,7 @@ MULTITENANCY_PHASE_TIMEOUT = int(os.environ.get("E2E_MULTITENANCY_PHASE_TIMEOUT"
 MODEL_BACKEND_READY_TIMEOUT = int(os.environ.get("E2E_MODEL_BACKEND_READY_TIMEOUT", "300"))
 
 from test_helper import (
+    AITENANT_BOOTSTRAP_TIMEOUT,
     DEPLOYMENT_NAMESPACE,
     MAAS_API_DEPLOYMENT_NAMESPACE,
     MODEL_NAMESPACE,
@@ -1065,10 +1066,12 @@ def apply_aitenant(
 
 def aitenant_ready(obj: dict) -> bool:
     status = obj.get("status") or {}
-    if status.get("phase") != "Active":
+    metadata = obj.get("metadata") or {}
+    if not metadata.get("generation") or metadata.get("deletionTimestamp") or status.get("phase") != "Active":
         return False
     return any(
         cond.get("type") == "Ready" and cond.get("status") == "True"
+        and cond.get("observedGeneration") == metadata.get("generation")
         for cond in status.get("conditions") or []
     )
 
@@ -1106,7 +1109,6 @@ def bootstrap_aitenant_tenant(
         wait_for_gateway_programmed(case["gateway_name"])
         apply_gateway_route_fixture(case["gateway_name"], fixture_label=case["tenant_label_name"])
     apply_aitenant(case, external_oidc=external_oidc)
-    wait_for_json(AITENANT_KIND, case["tenant_label_name"], AITENANT_NAMESPACE, predicate=aitenant_ready)
     wait_for_json(
         "maastenantconfig",
         TENANT_CR_NAME,
@@ -1115,6 +1117,12 @@ def bootstrap_aitenant_tenant(
     )
     ensure_payload_processing_type_on_tenant_config(
         case["tenant_ns"], payload_type=payload_processing_type
+    )
+    # A new tenant starts maas-api/TLS and its dataplane; the generic 180s object wait
+    # expired during parallel controller bootstrap in maas-group-test-5xbws.
+    wait_for_json(
+        AITENANT_KIND, case["tenant_label_name"], AITENANT_NAMESPACE,
+        predicate=aitenant_ready, timeout=AITENANT_BOOTSTRAP_TIMEOUT,
     )
     if not use_default_gateway:
         apply_gateway_access_label(case["tenant_ns"], case["gateway_name"])
@@ -1402,11 +1410,49 @@ def per_tenant_ipp_names(tenant_name: str) -> dict[str, str]:
     }
 
 
-def wait_for_per_tenant_ipp_ready(case: dict[str, str], *, timeout: int = 240) -> dict[str, str]:
-    """Wait until tenant-scoped IPP Deployments and EnvoyFilter exist in the gateway namespace."""
+def payload_processing_rollout_ready(obj: dict, payload_type: str) -> bool:
+    """Require the selected backend's current rollout, rather than an old ready stack.
+
+    IPP and Praxis share deployment names. During a switch, Available=True can
+    still describe the previous backend while its controller is cleaning up.
+    """
+    metadata = obj.get("metadata") or {}
+    spec = obj.get("spec") or {}
+    status = obj.get("status") or {}
+    replicas = spec.get("replicas", 1)
+    if metadata.get("deletionTimestamp") or replicas < 1:
+        return False
+    if status.get("observedGeneration", 0) < metadata.get("generation", 1):
+        return False
+    if any(status.get(key, 0) != replicas for key in ("replicas", "updatedReplicas", "availableReplicas")):
+        return False
+    containers = ((spec.get("template") or {}).get("spec") or {}).get("containers") or []
+    if not containers or not containers[0].get("image"):
+        return False
+    container = containers[0]
+    praxis = _uses_praxis(container["image"], " ".join(container.get("args") or []))
+    return praxis if payload_type == PAYLOAD_PROCESSING_TYPE_PRAXIS else not praxis
+
+
+def wait_for_per_tenant_ipp_ready(
+    case: dict[str, str], *, timeout: int = 240, payload_type: Optional[str] = None
+) -> dict[str, str]:
+    """Wait for tenant processing deployments and their gateway EnvoyFilter.
+
+    With payload_type, also reject the old backend and an unfinished rollout.
+    """
+    if payload_type not in (None, PAYLOAD_PROCESSING_TYPE_IPP, PAYLOAD_PROCESSING_TYPE_PRAXIS):
+        raise ValueError(f"unsupported payload-processing type: {payload_type}")
     names = per_tenant_ipp_names(case["tenant_label_name"])
-    wait_for_deployment_available(names["processing_deployment"], GATEWAY_NAMESPACE, timeout=timeout)
-    wait_for_deployment_available(names["pre_processing_deployment"], GATEWAY_NAMESPACE, timeout=timeout)
+    for key in ("processing_deployment", "pre_processing_deployment"):
+        if payload_type is None:
+            wait_for_deployment_available(names[key], GATEWAY_NAMESPACE, timeout=timeout)
+        else:
+            wait_for_json(
+                "deployment", names[key], GATEWAY_NAMESPACE,
+                predicate=lambda obj: payload_processing_rollout_ready(obj, payload_type),
+                timeout=timeout,
+            )
     wait_for_json("envoyfilter", names["envoyfilter"], GATEWAY_NAMESPACE, timeout=timeout)
     return names
 
@@ -1458,6 +1504,14 @@ def deployment_log_snapshot(
     return ""
 
 
+def _uses_praxis(image: str, args: str) -> bool:
+    return (
+        "odh-praxis-extproc" in image
+        or "praxis-extproc" in image
+        or "/etc/praxis/extproc.yaml" in args
+    )
+
+
 def extproc_deployment_uses_praxis(
     deployment_name: str,
     namespace: str = GATEWAY_NAMESPACE,
@@ -1491,11 +1545,7 @@ def extproc_deployment_uses_praxis(
         return False
     image = (image_result.stdout or "").strip()
     args = (args_result.stdout or "").strip() if args_result.returncode == 0 else ""
-    return (
-        "odh-praxis-extproc" in image
-        or "praxis-extproc" in image
-        or "/etc/praxis/extproc.yaml" in args
-    )
+    return _uses_praxis(image, args)
 
 
 def ipp_logs_show_recent_activity(log_text: str) -> bool:

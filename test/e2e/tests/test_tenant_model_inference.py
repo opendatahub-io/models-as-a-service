@@ -370,8 +370,10 @@ class TestTenantGatewayNegativeSecurity:
         case = tenant_inference_cases[tenant_index]
         gateway_url = _get_tenant_gateway_url(case["gateway_name"])
         url = _tenant_chat_completions_url(gateway_url, case["model_path"])
-        response = requests.post(
+        response = _request_with_gateway_retry(
+            requests.post,
             url,
+            auth_denial_is_transient=False,
             headers={
                 "Content-Type": "application/json",
                 "Authorization": "Bearer sk-oai-e2e-invalid-not-a-real-key",
