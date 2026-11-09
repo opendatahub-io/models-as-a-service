@@ -11,7 +11,9 @@ import pytest
 import requests
 from grid_governance_fixtures import (
     GridGovernanceContext,
+    create_governance_api_key,
     grid_governance_context,  # noqa: F401 - pytest fixture
+    revoke_governance_api_key,
 )
 from grid_inventory_fixtures import ORGANIZATION_A, ORGANIZATION_B
 from grid_oidc_helpers import request_grid_token
@@ -440,18 +442,76 @@ class TestGridGovernanceAPIKeys:
         assert inspection.status_code == 200
         assert inspection.json()["status"] == "revoked"
 
-    def test_grid_admin_username_only_bulk_revoke_is_denied(
+    def test_grid_admin_username_only_bulk_revoke_stays_in_organization(
         self, maas_api_base_url: str, grid_governance_context: GridGovernanceContext
     ):
         token = request_grid_token("grid_admin")
+        key = create_governance_api_key(
+            maas_api_base_url,
+            "alice_lead",
+            grid_governance_context.resources.governance_subscription,
+            suffix=uuid.uuid4().hex[:8],
+        )
+
+        try:
+            owner_token = request_grid_token("alice_lead")
+            initial_statuses = []
+            for key_id in (grid_governance_context.keys[0].key_id, key.key_id):
+                inspection = _request_with_gateway_retry(
+                    requests.get,
+                    f"{maas_api_base_url}/v1/api-keys/{key_id}",
+                    headers={"Authorization": f"Bearer {owner_token}"},
+                    timeout=30,
+                )
+                assert inspection.status_code == 200
+                initial_statuses.append(inspection.json()["status"])
+
+            response = _bulk_revoke_grid_api_keys(
+                maas_api_base_url,
+                token,
+                username="alice_lead",
+            )
+            assert response.status_code == 200, (
+                f"Grid admin username-only bulk revoke failed: "
+                f"{response.status_code} {response.text}"
+            )
+            expected_active_count = sum(
+                status == "active" for status in initial_statuses
+            )
+            assert response.json()["revokedCount"] == expected_active_count
+
+            inspection = _request_with_gateway_retry(
+                requests.get,
+                f"{maas_api_base_url}/v1/api-keys/{key.key_id}",
+                headers={"Authorization": f"Bearer {owner_token}"},
+                timeout=30,
+            )
+            assert inspection.status_code == 200
+            assert inspection.json()["status"] == "revoked"
+
+            inspection = _request_with_gateway_retry(
+                requests.get,
+                f"{maas_api_base_url}/v1/api-keys/{grid_governance_context.keys[2].key_id}",
+                headers={"Authorization": f"Bearer {owner_token}"},
+                timeout=30,
+            )
+            assert inspection.status_code == 200
+            assert inspection.json()["status"] == "active"
+        finally:
+            revoke_governance_api_key(maas_api_base_url, key)
+
+    def test_non_admin_username_only_bulk_revoke_is_denied(
+        self, maas_api_base_url: str, grid_governance_context: GridGovernanceContext
+    ):
+        token = request_grid_token("alice_lead")
 
         response = _bulk_revoke_grid_api_keys(
             maas_api_base_url,
             token,
-            username="alice_lead",
+            username="bob_sre",
         )
         assert response.status_code == 403, (
-            f"Grid admin username-only bulk revoke must be denied, got "
+            f"Non-admin username-only bulk revoke must be denied, got "
             f"{response.status_code} {response.text}"
         )
 
@@ -516,8 +576,7 @@ class TestGridGovernanceIdentity:
             timeout=30,
         )
         assert response.status_code == 200, (
-            f"GET /v1/me failed for Grid organization B admin: "
-            f"{response.status_code}"
+            f"GET /v1/me failed for Grid organization B admin: {response.status_code}"
         )
         identity = response.json()
         assert identity["preferred_username"] == "grid_admin_b"
