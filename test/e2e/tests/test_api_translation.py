@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import json
 import logging
-import time
 
 import pytest
 import requests
@@ -25,15 +24,17 @@ from multitenancy_helpers import (
     GATEWAY_NAMESPACE,
     TLS_VERIFY,
     _oc_run,
+    extproc_deployment_uses_praxis,
     redact_sensitive,
     wait_until,
 )
 from test_helper import (
     MODEL_CANONICAL_ID,
     SIMULATOR_SUBSCRIPTION,
-    _create_api_key_raw,
+    _create_api_key_with_id,
     _gateway_url,
     _get_cluster_token,
+    _ns,
     _request_with_gateway_retry,
     _revoke_api_key,
     _wait_for_gateway_auth_enforced,
@@ -43,7 +44,8 @@ log = logging.getLogger(__name__)
 
 pytestmark = [pytest.mark.xdist_group("tenant_ipp"), pytest.mark.api_translation, pytest.mark.full_suite]
 
-DEFAULT_TENANT_NS = "models-as-a-service"
+
+DEFAULT_TENANT_NS = _ns()
 TENANT_CONFIG = "maastenantconfig"
 DEFAULT_TENANT = "default-tenant"
 PLUGINS_CONFIGMAP = "payload-processing-plugins"
@@ -101,20 +103,35 @@ def _wait_translator_state(present: bool, timeout: int = RENDER_TIMEOUT) -> bool
     is the barrier that makes the subsequent rollout meaningful: without it, oc rollout
     status can race ahead of the controller and report the pre-toggle generation as
     already complete."""
-    deadline = time.time() + timeout
-    while time.time() < deadline:
+
+    def _reconciled() -> bool:
         try:
-            if _plugins_have_translator() == present:
-                return True
+            return _plugins_have_translator() == present
         except RuntimeError:
-            pass  # transient read failure: keep polling rather than trust an unread state
-        time.sleep(POLL)
-    return False
+            return False  # transient read failure: keep polling rather than trust an unread state
+
+    try:
+        return bool(
+            wait_until(
+                _reconciled,
+                timeout,
+                f"translator chain {'present' if present else 'absent'} in {PLUGINS_CONFIGMAP}",
+                interval=POLL,
+            )
+        )
+    except AssertionError:
+        return False
 
 
 def _rollout_extproc() -> None:
-    # The ExtProc applies the (dis)enabled translator chain on rollout; the
-    # ConfigMap change alone does not take effect for in-flight traffic.
+    restart = _oc_run(
+        ["rollout", "restart", f"deployment/{EXTPROC_DEPLOYMENT}", "-n", GATEWAY_NAMESPACE],
+        timeout=60,
+    )
+    if restart.returncode != 0:
+        raise RuntimeError(
+            f"Failed to restart {EXTPROC_DEPLOYMENT}: {(restart.stderr or restart.stdout).strip()}"
+        )
     _oc_run(
         ["rollout", "status", f"deployment/{EXTPROC_DEPLOYMENT}", "-n", GATEWAY_NAMESPACE,
          f"--timeout={ROLLOUT_TIMEOUT}s"],
@@ -124,10 +141,8 @@ def _rollout_extproc() -> None:
 
 def _apply_api_translation(enabled: bool | None, *, gate: bool = False) -> bool:
     _set_api_translation(enabled)
-    # Wait for the controller to reconcile the toggle (keys present on enable, absent on
-    # disable) before rolling the ExtProc, so the rollout waits for the post-toggle
-    # generation rather than racing the controller. A restored-to-omitted state (None)
-    # is treated as disabled for the translator-chain barrier.
+    # Wait for the controller to reconcile the toggle before rolling the ext_proc,
+    # so the rollout targets the post-toggle generation instead of racing it.
     reconciled = _wait_translator_state(present=bool(enabled))
     if enabled and gate and not reconciled:
         return False
@@ -143,27 +158,18 @@ def _post(
     stream: bool = False,
     auth_denial_is_transient: bool = True,
 ) -> requests.Response:
-    """POST to the gateway via the shared retry helper (transient 5xx / empty-401-403 /
-    connection errors), plus a route-propagation 404 retry on top — a just-enabled route
-    (SSE included) can 404 briefly. Negative tests that expect a denial pass
-    ``auth_denial_is_transient=False`` so an empty 401/403 is the answer, not a retry."""
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-    for attempt in range(1, GATEWAY_RETRIES + 1):
-        response = _request_with_gateway_retry(
-            requests.post,
-            url,
-            headers=headers,
-            json=body,
-            stream=stream,
-            retries=GATEWAY_RETRIES,
-            delay=GATEWAY_RETRY_DELAY,
-            auth_denial_is_transient=auth_denial_is_transient,
-        )
-        if response.status_code == 404 and attempt < GATEWAY_RETRIES:
-            time.sleep(GATEWAY_RETRY_DELAY)
-            continue
-        return response
-    return response
+    return _request_with_gateway_retry(
+        requests.post,
+        url,
+        headers=headers,
+        json=body,
+        stream=stream,
+        retries=GATEWAY_RETRIES,
+        delay=GATEWAY_RETRY_DELAY,
+        auth_denial_is_transient=auth_denial_is_transient,
+        extra_transient_statuses=(404,),
+    )
 
 
 def _anthropic_body(stream: bool = False) -> dict:
@@ -190,17 +196,10 @@ def _sse_event_names(response: requests.Response) -> list[str]:
 
 
 def _create_default_api_key() -> tuple[str, str | None]:
-    """Create the shared API key and return (key, id). Uses the retrying helper so a
-    transient 403 while gateway AuthPolicy enforcement is still propagating does not
-    fail the module; the id lets the fixture revoke the key on teardown."""
-    response = _create_api_key_raw(_get_cluster_token(), "e2e-apitranslation", SIMULATOR_SUBSCRIPTION)
-    assert response.status_code in (200, 201), (
-        f"Failed to create API key: {response.status_code} {redact_sensitive(response.text)}"
-    )
-    data = response.json()
-    key = data.get("key")
-    assert key, f"API key missing: {redact_sensitive(data)}"
-    return key, data.get("id")
+    """Create the shared API key and return (key, id) via the shared
+    ``_create_api_key_with_id`` helper (retries transient gateway/AuthPolicy
+    propagation errors); the id lets the fixture revoke the key on teardown."""
+    return _create_api_key_with_id(_get_cluster_token(), "e2e-apitranslation", SIMULATOR_SUBSCRIPTION)
 
 
 def _is_well_formed_anthropic(body: dict) -> bool:
@@ -262,11 +261,19 @@ def api_translation_env():
 
 @pytest.fixture
 def translation_on(api_translation_env):
-    """Enable apiTranslation and wait for the ExtProc to render the translator
-    chain. Skips the test if the deployed image cannot render it."""
+    """Enable apiTranslation and wait for the ExtProc to render the translator chain.
+
+    Skip only when praxis-extproc isn't the dataplane (not this test's scenario);
+    fail if it is but the chain never renders, so a regression isn't skipped."""
+    if not extproc_deployment_uses_praxis(EXTPROC_DEPLOYMENT):
+        pytest.skip("default tenant payload-processing is not praxis-extproc")
     log.info("Enabling apiTranslation on %s/%s", DEFAULT_TENANT_NS, DEFAULT_TENANT)
     if not _apply_api_translation(True, gate=True):
-        pytest.skip("deployed Praxis/ExtProc image did not render the apiTranslation chain")
+        pytest.fail(
+            "apiTranslation enabled on a praxis-extproc dataplane but the translator chain "
+            f"({', '.join(TRANSLATOR_KEYS)}) never rendered in {PLUGINS_CONFIGMAP} "
+            f"within {RENDER_TIMEOUT}s"
+        )
     return api_translation_env["api_key"]
 
 
@@ -305,6 +312,10 @@ class TestApiTranslation:
         assert stream.status_code == 200, f"translation SSE failed: {stream.status_code}"
         names = _sse_event_names(stream)
         assert "message_start" in names and "message_stop" in names, f"expected Anthropic SSE events, got {names}"
+        # content_block_delta carries the generated text under the Anthropic streaming
+        # contract; without it a gateway that drops all deltas would still pass the
+        # envelope checks above, so require at least one.
+        assert "content_block_delta" in names, f"expected generated content deltas, got {names}"
 
     @pytest.mark.serial
     def test_gated_when_disabled(self, translation_off):
