@@ -883,6 +883,9 @@ func (r *AITenantReconciler) ensureTenantConfig(ctx context.Context, aitenant *m
 		}
 		return false, false, err
 	}
+	if err := r.clearTenantConfigAPIKeysRetained(ctx, aitenant); err != nil {
+		return false, false, err
+	}
 	if err := r.markLegacyTenantDeprecated(ctx, aitenant, tenantNamespace); err != nil {
 		return false, false, err
 	}
@@ -1384,6 +1387,9 @@ func (r *AITenantReconciler) deleteTenantGatewayAuthPolicy(ctx context.Context, 
 func (r *AITenantReconciler) ensureTenantAPIKeysRevoked(ctx context.Context, aitenant *maasv1alpha1.AITenant) (bool, error) {
 	if tenantAPIKeysRevoked(aitenant) {
 		return true, nil
+	}
+	if aitenant.Annotations[retainAPIKeysOnDeleteAnnotation] == "true" {
+		return r.retainTenantAPIKeys(ctx, aitenant)
 	}
 	if strings.TrimSpace(r.AppNamespace) == "" {
 		return false, errors.New("app namespace is required to revoke tenant API keys")
