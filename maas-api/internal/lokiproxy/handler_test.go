@@ -128,6 +128,41 @@ func TestProxyQueryRangeEnforcesOrganizationMatcher(t *testing.T) {
 	require.NotContains(t, matchers, `organization_id="other-org"`)
 }
 
+func TestProxyQueryInstantEnforcesOrganizationMatcher(t *testing.T) {
+	router, record := newRouter(t, "/api/logs/v1/application")
+
+	w := lokiRequest(t, router, http.MethodGet,
+		"/v1/logs/loki/api/v1/query?query="+url.QueryEscape(`sum(count_over_time({app="api", organization_id="other-org"}[5m]))`)+"&time=1234567890", adminGroups())
+
+	require.Equal(t, http.StatusOK, w.Code)
+	require.Equal(t, http.MethodGet, record.method)
+	require.Equal(t, "/api/logs/v1/application/loki/api/v1/query", record.path)
+	require.Equal(t, "1234567890", record.query.Get("time"))
+
+	matchers := selectorMatchers(t, record.query.Get("query"))
+	require.Contains(t, matchers, `organization_id="1234"`)
+	require.NotContains(t, matchers, `organization_id="other-org"`)
+}
+
+func TestProxyQueryInstantOnlyUserEnforcesMatchers(t *testing.T) {
+	router, record := newRouter(t, "")
+
+	w := lokiRequest(t, router, http.MethodGet,
+		"/v1/logs/loki/api/v1/query?only_user=true&query="+
+			url.QueryEscape(`sum(count_over_time({app="api", organization_id="other-org", user_id="victim"}[5m]))`),
+		userGroups())
+
+	require.Equal(t, http.StatusOK, w.Code)
+	require.Equal(t, "/loki/api/v1/query", record.path)
+	require.NotContains(t, record.query, "only_user")
+
+	matchers := selectorMatchers(t, record.query.Get("query"))
+	require.Contains(t, matchers, `organization_id="1234"`)
+	require.Contains(t, matchers, `user_id="admin@example.com"`)
+	require.NotContains(t, matchers, `organization_id="other-org"`)
+	require.NotContains(t, matchers, `user_id="victim"`)
+}
+
 func TestProxyLabelsInjectsSelectorWhenQueryAbsent(t *testing.T) {
 	router, record := newRouter(t, "")
 
@@ -166,6 +201,9 @@ func TestProxyRejectsInvalidQuery(t *testing.T) {
 	router, _ := newRouter(t, "")
 
 	w := lokiRequest(t, router, http.MethodGet, "/v1/logs/loki/api/v1/query_range?query="+url.QueryEscape(`{app=`), adminGroups())
+	require.Equal(t, http.StatusBadRequest, w.Code)
+
+	w = lokiRequest(t, router, http.MethodGet, "/v1/logs/loki/api/v1/query?query="+url.QueryEscape(`{app=`), adminGroups())
 	require.Equal(t, http.StatusBadRequest, w.Code)
 }
 
@@ -316,6 +354,8 @@ func TestProxyRejectsNonGetAndUnknownPaths(t *testing.T) {
 
 	// Only GET is accepted.
 	w := lokiRequest(t, router, http.MethodPost, "/v1/logs/loki/api/v1/query_range?query=%7B%7D", adminGroups())
+	require.Equal(t, http.StatusNotFound, w.Code)
+	w = lokiRequest(t, router, http.MethodPost, "/v1/logs/loki/api/v1/query?query=%7B%7D", adminGroups())
 	require.Equal(t, http.StatusNotFound, w.Code)
 
 	// Only the registered read endpoints are proxied.
