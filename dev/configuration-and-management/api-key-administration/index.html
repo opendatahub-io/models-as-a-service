@@ -3700,7 +3700,7 @@
 <p>Deleting an <code>AITenant</code> invalidates all of its API keys. Deleting a <code>MaaSSubscription</code> invalidates only keys bound to that subscription. These operations are performed through internal maas-api endpoints and are gated by Kubernetes finalizers, so a transient maas-api outage causes deletion to retry instead of leaving credentials usable.</p>
 <p>Lifecycle-invalidated rows, including regular and ephemeral keys, are soft-deleted with a 90-day retention period by default, matching the tenancy architecture decision record. Set <code>spec.apiKeys.deletionRetentionDays</code> on <code>MaasTenantConfig</code> for an operator-managed tenant, or set <code>API_KEY_DELETION_RETENTION_DAYS</code> on a standalone maas-api deployment. The regular internal cleanup CronJob still removes expired ephemeral keys after its 30-minute grace period, but never removes lifecycle-invalidated rows; those rows are physically removed only after the configured retention period. Active regular keys remain until manually revoked. Each lifecycle cleanup emits a structured audit log containing the tenant, scope, deleted-key count, timestamp, and controller initiator.</p>
 <h2 id="bulk-key-revocation">Bulk Key Revocation</h2>
-<p>Platform administrators can bulk revoke API keys by <strong>user</strong>, by <strong>subscription</strong>, or both. A verified SSO organization administrator can revoke keys only for an explicit MaaS Subscription that is associated with an organization they administer. A <strong>dry-run</strong> mode is available to preview how many keys would be revoked before committing.</p>
+<p>Platform administrators can bulk revoke API keys by <strong>user</strong>, by <strong>subscription</strong>, or both. A verified SSO organization administrator can revoke another user's keys only within MaaS Subscriptions associated with an organization they administer; a username-only request is automatically constrained to that administered subscription set. A <strong>dry-run</strong> mode is available to preview how many keys would be revoked before committing.</p>
 <h2 id="organization-association-and-subscription-names">Organization Association and Subscription Names</h2>
 <p>API keys remain bound to the user who created them and to the <code>(MaaS Tenant, subscription name)</code> pair. MaaS does not add a runtime registry that distinguishes multiple incarnations of the same subscription name.</p>
 <p><code>MaaSSubscription.spec.organization.id</code> is an optional, non-empty string and a stable association for delegated administration. A legacy subscription can gain the field once, only after an administrator or provisioning process has verified that the existing keys and history really belong to that organization. After the field is set, it cannot be changed or removed. Omitting it preserves legacy behavior and grants no organization-administration permission. Organization administration does not grant inference access, API-key creation, or model access; owners and MaaSAuthPolicy subjects continue to control those paths independently. When set, the stable organization ID is the authoritative source for subscription-scoped <code>organization_id</code> telemetry; <code>tokenMetadata.organizationId</code> remains the legacy fallback.</p>
@@ -3770,7 +3770,7 @@
 <tr>
 <td><code>username</code></td>
 <td>Optional (at least one of <code>username</code> or <code>subscription</code> must be provided)</td>
-<td>Target user whose keys should be revoked. Regular users can only specify their own username; specifying another user requires admin privileges.</td>
+<td>Target user whose keys should be revoked. Regular users can only specify their own username; specifying another user requires platform-admin or organization-admin authorization.</td>
 </tr>
 <tr>
 <td><code>subscription</code></td>
@@ -3787,7 +3787,7 @@
 <h3 id="authorization">Authorization</h3>
 <div class="admonition warning">
 <p class="admonition-title">Administrative privilege required</p>
-<p>Subscription-scoped revocation requires platform-admin authorization or delegated subscription-admin authorization. Cross-user revocation requires platform-admin authorization, or delegated subscription-admin authorization when an explicit subscription is supplied. Regular users can only revoke their own keys via <code>DELETE /v1/api-keys/{id}</code> or bulk revoke with their own username. A delegated administrator cannot use a username-only request to revoke keys across subscriptions.</p>
+<p>Subscription-scoped revocation requires platform-admin authorization or delegated subscription-admin authorization. Cross-user revocation requires platform-admin authorization, or delegated organization-admin authorization. A username-only delegated request is constrained to subscriptions in the administrator's organization and cannot affect another organization. Regular users can only revoke their own keys via <code>DELETE /v1/api-keys/{id}</code> or bulk revoke with their own username.</p>
 </div>
 <h3 id="use-cases">Use Cases</h3>
 <ul>
@@ -3871,7 +3871,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="October 28, 2026 21:16:37 UTC">October 28, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="November 9, 2026 17:27:15 UTC">November 9, 2026</span>
   </span>
 
     
