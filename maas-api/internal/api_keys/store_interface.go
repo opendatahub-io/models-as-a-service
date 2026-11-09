@@ -81,6 +81,17 @@ type MetadataStore interface {
 	// non-empty.
 	BulkRevoke(ctx context.Context, username, subscription, tenant string, dryRun bool) (int, error)
 
+	// BulkRevokeBySubscriptions revokes or counts active keys for one user across
+	// the supplied subscriptions. The subscription list is an internal delegated
+	// administrator scope and must not be client-controlled.
+	BulkRevokeBySubscriptions(
+		ctx context.Context,
+		username string,
+		subscriptions []string,
+		tenant string,
+		dryRun bool,
+	) (int, error)
+
 	// InvalidateTenant marks all active tokens within a tenant as revoked.
 	// All matching keys are soft-deleted for retention; active keys are revoked.
 	// Returns the count of rows newly soft-deleted.
