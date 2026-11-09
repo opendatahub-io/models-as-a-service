@@ -140,9 +140,8 @@ def tenant_b_external_oidc_from_env() -> Optional[dict[str, str]]:
     }
 
 
-def redact_sensitive(value: Any, *, max_length: int = 300) -> str:
-    """Return a short string safe enough for CI assertion messages."""
-    text = str(value)
+def _redact_sensitive_text(text: str) -> str:
+    """Apply sensitive-value and JSON/single-quoted field redactions, no truncation."""
     for pattern in SENSITIVE_VALUE_PATTERNS:
         text = pattern.sub("<redacted>", text)
     text = re.sub(
@@ -157,6 +156,12 @@ def redact_sensitive(value: Any, *, max_length: int = 300) -> str:
         text,
         flags=re.IGNORECASE,
     )
+    return text
+
+
+def redact_sensitive(value: Any, *, max_length: int = 300) -> str:
+    """Return a short string safe enough for CI assertion messages."""
+    text = _redact_sensitive_text(str(value))
     if len(text) > max_length:
         return f"{text[:max_length]}...<truncated>"
     return text
@@ -1120,34 +1125,47 @@ def _diagnostic_get(kind: str, name: str, namespace: Optional[str]) -> dict:
         return {"diagnosticError": f"{type(exc).__name__}: {exc}"}
 
 
-def _diagnostic_deployment_logs(deployment: str, namespace: str, tail: int = 50) -> str:
-    """Best-effort tail of a deployment's pod logs; never raises into the caller."""
+def _diagnostic_deployment_logs(deployment: str, namespace: str, tail: int = 200) -> str:
+    """Best-effort tail of a deployment's pod logs, redacted; never raises."""
     try:
         result = _oc_run(["logs", f"deployment/{deployment}", "-n", namespace, f"--tail={tail}"], timeout=30)
         if result.returncode == 0:
-            return result.stdout
-        return f"diagnosticError: {result.stderr.strip() or result.stdout.strip()}"
+            return _redact_sensitive_text(result.stdout)
+        return f"diagnosticError: {_redact_sensitive_text(result.stderr.strip() or result.stdout.strip())}"
     except Exception as exc:  # noqa: BLE001 - diagnostics must not hide the readiness failure
         return f"diagnosticError: {type(exc).__name__}: {exc}"
 
 
+def _event_timestamp(ev: dict) -> str:
+    """Best timestamp for ordering: lastTimestamp, then eventTime, then series.lastObservedTime."""
+    return (
+        ev.get("lastTimestamp")
+        or ev.get("eventTime")
+        or ((ev.get("series") or {}).get("lastObservedTime"))
+        or ""
+    )
+
+
 def _diagnostic_events(namespace: str, limit: int = 20) -> list[dict] | dict:
-    """Best-effort most recent events in *namespace*, oldest first."""
+    """Best-effort most recent events in *namespace*, oldest first, redacted."""
     try:
         result = _oc_run(
-            ["get", "events", "-n", namespace, "--sort-by=.lastTimestamp", "-o", "json"],
+            ["get", "events", "-n", namespace, "-o", "json"],
             timeout=30,
         )
         if result.returncode != 0:
-            return {"diagnosticError": result.stderr.strip() or result.stdout.strip()}
+            return {"diagnosticError": _redact_sensitive_text(result.stderr.strip() or result.stdout.strip())}
         items = json.loads(result.stdout).get("items") or []
+        # Sort client-side: events with no lastTimestamp (e.g. series-only
+        # events) sort arbitrarily under --sort-by and would drop newer items.
+        items.sort(key=_event_timestamp)
         compact = [
             {
-                "lastTimestamp": ev.get("lastTimestamp") or ev.get("eventTime"),
+                "lastTimestamp": _event_timestamp(ev) or None,
                 "type": ev.get("type"),
                 "reason": ev.get("reason"),
                 "object": (ev.get("involvedObject") or {}).get("name"),
-                "message": ev.get("message"),
+                "message": _redact_sensitive_text(ev.get("message") or ""),
             }
             for ev in items[-limit:]
         ]
@@ -1175,20 +1193,21 @@ def _write_aitenant_bootstrap_failure_crs(
     out_dir = os.path.join(artifacts_dir, "failure-crs", case["tenant_label_name"])
     try:
         os.makedirs(out_dir, exist_ok=True)
-        with open(os.path.join(out_dir, "bootstrap-snapshot.json"), "w", encoding="utf-8") as handle:
-            json.dump(snapshot, handle, indent=2, sort_keys=True, default=str)
+
+        def _write_redacted(filename: str, payload: Any) -> None:
+            with open(os.path.join(out_dir, filename), "w", encoding="utf-8") as handle:
+                handle.write(_redact_sensitive_text(json.dumps(payload, indent=2, sort_keys=True, default=str)))
+
+        _write_redacted("bootstrap-snapshot.json", snapshot)
         if aitenant and "diagnosticError" not in aitenant:
-            with open(os.path.join(out_dir, "aitenant.json"), "w", encoding="utf-8") as handle:
-                json.dump(aitenant, handle, indent=2, sort_keys=True, default=str)
+            _write_redacted("aitenant.json", aitenant)
         if tenant_cfg and "diagnosticError" not in tenant_cfg:
-            with open(os.path.join(out_dir, "maastenantconfig.json"), "w", encoding="utf-8") as handle:
-                json.dump(tenant_cfg, handle, indent=2, sort_keys=True, default=str)
+            _write_redacted("maastenantconfig.json", tenant_cfg)
         if deployment_logs is not None:
             with open(os.path.join(out_dir, "maas-api-logs.txt"), "w", encoding="utf-8") as handle:
                 handle.write(deployment_logs)
         for ns, ns_events in (events or {}).items():
-            with open(os.path.join(out_dir, f"events-{ns}.json"), "w", encoding="utf-8") as handle:
-                json.dump(ns_events, handle, indent=2, sort_keys=True, default=str)
+            _write_redacted(f"events-{ns}.json", ns_events)
     except OSError as exc:
         print(f"[diagnostics] failed to write AITenant bootstrap CRs to {out_dir}: {exc}")
         return None
@@ -1263,7 +1282,7 @@ def _aitenant_bootstrap_diagnostics(case: dict[str, str]) -> str:
     )
     if artifact_dir:
         snapshot["artifactDir"] = artifact_dir
-    return json.dumps(snapshot, sort_keys=True, default=str)
+    return _redact_sensitive_text(json.dumps(snapshot, sort_keys=True, default=str))
 
 
 def bootstrap_aitenant_tenant(
