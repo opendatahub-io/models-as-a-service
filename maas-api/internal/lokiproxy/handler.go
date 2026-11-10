@@ -1,6 +1,9 @@
 package lokiproxy
 
 import (
+	"crypto/tls"
+	"crypto/x509"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -59,7 +62,12 @@ type Handler struct {
 // (LOKI_READ_ENDPOINT, e.g. https://loki-gateway.example.svc:8080/api/logs/v1/application).
 // token (LOKI_READ_TOKEN) is sent as the Authorization: Bearer credential on
 // every proxied upstream request; when empty no Authorization header is sent.
-func NewHandler(log *logger.Logger, endpoint, token string) (*Handler, error) {
+// caPEM (LOKI_READ_CA) is a certificate bundle appended to (never replacing)
+// the system trust pool used for upstream requests; when empty the system
+// pool alone is used. A non-empty caPEM from which no certificate can be
+// parsed is rejected so a corrupt bundle fails loudly at startup instead of
+// half-verifying some chains.
+func NewHandler(log *logger.Logger, endpoint, token, caPEM string) (*Handler, error) {
 	if log == nil {
 		log = logger.Production()
 	}
@@ -77,11 +85,29 @@ func NewHandler(log *logger.Logger, endpoint, token string) (*Handler, error) {
 		return nil, fmt.Errorf("invalid Loki read endpoint %q: host is required", endpoint)
 	}
 
+	client := &http.Client{Timeout: proxyTimeout}
+	if ca := strings.TrimSpace(caPEM); ca != "" {
+		pool, err := x509.SystemCertPool()
+		if err != nil {
+			return nil, fmt.Errorf("load system CA pool for Loki read proxy: %w", err)
+		}
+		if !pool.AppendCertsFromPEM([]byte(ca)) {
+			return nil, errors.New("invalid Loki read CA bundle (LOKI_READ_CA): no PEM certificate could be parsed")
+		}
+		base, ok := http.DefaultTransport.(*http.Transport)
+		if !ok {
+			base = &http.Transport{}
+		}
+		transport := base.Clone()
+		transport.TLSClientConfig = &tls.Config{RootCAs: pool}
+		client.Transport = transport
+	}
+
 	return &Handler{
 		logger:   log,
 		upstream: upstream,
 		token:    strings.TrimSpace(token),
-		client:   &http.Client{Timeout: proxyTimeout},
+		client:   client,
 	}, nil
 }
 
