@@ -13,6 +13,16 @@ updates:
         update-types:
           - "minor"
           - "patch"
+        exclude-patterns:
+          - "k8s.io/*"
+          - "sigs.k8s.io/*"
+      # The k8s ecosystem (apimachinery, client-go, controller-runtime,
+      # structured-merge-diff, ...) must move as an aligned set; bumping one
+      # library alone misaligns the module graph and fails to compile.
+      kubernetes:
+        patterns:
+          - "k8s.io/*"
+          - "sigs.k8s.io/*"
 
   - package-ecosystem: "gomod"
     directory: "/maas-api"
@@ -27,6 +37,16 @@ updates:
         update-types:
           - "minor"
           - "patch"
+        exclude-patterns:
+          - "k8s.io/*"
+          - "sigs.k8s.io/*"
+      # The k8s ecosystem (apimachinery, client-go, controller-runtime,
+      # structured-merge-diff, ...) must move as an aligned set; bumping one
+      # library alone misaligns the module graph and fails to compile.
+      kubernetes:
+        patterns:
+          - "k8s.io/*"
+          - "sigs.k8s.io/*"
 
   - package-ecosystem: "github-actions"
     directory: "/"
