@@ -1316,11 +1316,11 @@ func TestMaaSAuthPolicyReconciler_CachingConfiguration(t *testing.T) {
 			}
 
 			// Verify apiKeyValidation has cache key (on gateway policy)
-			apiKeyValCacheKey, found, err := unstructured.NestedString(gwPolicy.Object, "spec", "defaults", "rules", "metadata", "apiKeyValidation", "cache", "key", "selector")
+			apiKeyValCacheKey, found, err := unstructured.NestedString(gwPolicy.Object, "spec", "defaults", "rules", "metadata", "apiKeyValidation", "cache", "key", "expression")
 			if err != nil || !found {
-				t.Errorf("apiKeyValidation cache.key.selector missing: found=%v err=%v", found, err)
+				t.Errorf("apiKeyValidation cache.key.expression missing: found=%v err=%v", found, err)
 			} else if apiKeyValCacheKey == "" {
-				t.Errorf("apiKeyValidation cache.key.selector is empty")
+				t.Errorf("apiKeyValidation cache.key.expression is empty")
 			}
 
 			// Verify subscription-info metadata has cache with correct TTL (on gateway policy)
@@ -1356,25 +1356,25 @@ func TestMaaSAuthPolicyReconciler_CachingConfiguration(t *testing.T) {
 			}
 
 			// Verify cache keys are present and non-empty (on gateway policy)
-			authValidCacheKey, found, err := unstructured.NestedString(gwPolicy.Object, "spec", "defaults", "rules", "authorization", "auth-valid", "cache", "key", "selector")
+			authValidCacheKey, found, err := unstructured.NestedString(gwPolicy.Object, "spec", "defaults", "rules", "authorization", "auth-valid", "cache", "key", "expression")
 			if err != nil || !found {
-				t.Errorf("auth-valid cache.key.selector missing: found=%v err=%v", found, err)
+				t.Errorf("auth-valid cache.key.expression missing: found=%v err=%v", found, err)
 			} else if authValidCacheKey == "" {
-				t.Errorf("auth-valid cache.key.selector is empty")
+				t.Errorf("auth-valid cache.key.expression is empty")
 			}
 
-			subValidCacheKey, found, err := unstructured.NestedString(gwPolicy.Object, "spec", "defaults", "rules", "authorization", "subscription-valid", "cache", "key", "selector")
+			subValidCacheKey, found, err := unstructured.NestedString(gwPolicy.Object, "spec", "defaults", "rules", "authorization", "subscription-valid", "cache", "key", "expression")
 			if err != nil || !found {
-				t.Errorf("subscription-valid cache.key.selector missing: found=%v err=%v", found, err)
+				t.Errorf("subscription-valid cache.key.expression missing: found=%v err=%v", found, err)
 			} else if subValidCacheKey == "" {
-				t.Errorf("subscription-valid cache.key.selector is empty")
+				t.Errorf("subscription-valid cache.key.expression is empty")
 			}
 
-			groupMembershipCacheKey, found, err := unstructured.NestedString(gwPolicy.Object, "spec", "defaults", "rules", "authorization", "require-group-membership", "cache", "key", "selector")
+			groupMembershipCacheKey, found, err := unstructured.NestedString(gwPolicy.Object, "spec", "defaults", "rules", "authorization", "require-group-membership", "cache", "key", "expression")
 			if err != nil || !found {
-				t.Errorf("require-group-membership cache.key.selector missing: found=%v err=%v", found, err)
+				t.Errorf("require-group-membership cache.key.expression missing: found=%v err=%v", found, err)
 			} else if groupMembershipCacheKey == "" {
-				t.Errorf("require-group-membership cache.key.selector is empty")
+				t.Errorf("require-group-membership cache.key.expression is empty")
 			}
 		})
 	}
@@ -1500,7 +1500,7 @@ func TestMaaSAuthPolicyReconciler_CacheKeyIsolation(t *testing.T) {
 	t.Run("apiKeyValidation includes API key", func(t *testing.T) {
 		assertCacheKeyContains(t, gwPolicy,
 			[]string{`replace("Bearer ", "")`},
-			"spec", "defaults", "rules", "metadata", "apiKeyValidation", "cache", "key", "selector",
+			"spec", "defaults", "rules", "metadata", "apiKeyValidation", "cache", "key", "expression",
 		)
 	})
 
@@ -1508,7 +1508,7 @@ func TestMaaSAuthPolicyReconciler_CacheKeyIsolation(t *testing.T) {
 	t.Run("subscription-info includes username, groups, model", func(t *testing.T) {
 		key := assertCacheKeyContains(t, gwPolicy,
 			[]string{"userId", "username", "groups", "join"},
-			"spec", "defaults", "rules", "metadata", "subscription-info", "cache", "key", "selector",
+			"spec", "defaults", "rules", "metadata", "subscription-info", "cache", "key", "expression",
 		)
 		// Model identity is dynamic via CEL (X-Gateway-Model-Name header or path extraction).
 		if !contains(key, "x-gateway-model-name") && !contains(key, "request.path") {
@@ -1520,7 +1520,7 @@ func TestMaaSAuthPolicyReconciler_CacheKeyIsolation(t *testing.T) {
 	t.Run("auth-valid includes API key identity and model", func(t *testing.T) {
 		key := assertCacheKeyContains(t, gwPolicy,
 			nil,
-			"spec", "defaults", "rules", "authorization", "auth-valid", "cache", "key", "selector",
+			"spec", "defaults", "rules", "authorization", "auth-valid", "cache", "key", "expression",
 		)
 		if !contains(key, "api-key") {
 			t.Errorf("auth-valid cache key must include api-key prefix, got: %s", key)
@@ -1537,11 +1537,11 @@ func TestMaaSAuthPolicyReconciler_CacheKeyIsolation(t *testing.T) {
 	t.Run("subscription-valid matches subscription-info key", func(t *testing.T) {
 		subValidKey := assertCacheKeyContains(t, gwPolicy,
 			[]string{"userId", "username", "groups"},
-			"spec", "defaults", "rules", "authorization", "subscription-valid", "cache", "key", "selector",
+			"spec", "defaults", "rules", "authorization", "subscription-valid", "cache", "key", "expression",
 		)
 		subInfoKey := assertCacheKeyContains(t, gwPolicy,
 			nil,
-			"spec", "defaults", "rules", "metadata", "subscription-info", "cache", "key", "selector",
+			"spec", "defaults", "rules", "metadata", "subscription-info", "cache", "key", "expression",
 		)
 		if subValidKey != subInfoKey {
 			t.Errorf("subscription-valid cache key should match subscription-info for cache coherence\nsubscription-valid: %s\nsubscription-info:  %s", subValidKey, subInfoKey)
@@ -1555,10 +1555,10 @@ func TestMaaSAuthPolicyReconciler_CacheKeyIsolation(t *testing.T) {
 	t.Run("require-group-membership matches subscription-info cache key", func(t *testing.T) {
 		key := assertCacheKeyContains(t, gwPolicy,
 			[]string{"username", "groups", "join"},
-			"spec", "defaults", "rules", "authorization", "require-group-membership", "cache", "key", "selector",
+			"spec", "defaults", "rules", "authorization", "require-group-membership", "cache", "key", "expression",
 		)
 		subInfoKey, _, _ := unstructured.NestedString(gwPolicy.Object,
-			"spec", "defaults", "rules", "metadata", "subscription-info", "cache", "key", "selector",
+			"spec", "defaults", "rules", "metadata", "subscription-info", "cache", "key", "expression",
 		)
 		if key != subInfoKey {
 			t.Errorf("require-group-membership cache key should match subscription-info for cache coherence\nrequire-group-membership: %s\nsubscription-info:        %s", key, subInfoKey)
@@ -1623,15 +1623,15 @@ func TestMaaSAuthPolicyReconciler_CacheKeyOrganizationIsolation(t *testing.T) {
 			"groups":             groups,
 		}}
 	}
-	selector := subscriptionGatewayCacheKeySelector()
-	keyA := evaluateGatewayCELString(t, selector, makeAuth(organizationA, []any{"users"}))
-	keyB := evaluateGatewayCELString(t, selector, makeAuth(organizationB, []any{"users"}))
+	expression := subscriptionGatewayCacheKeyExpression()
+	keyA := evaluateGatewayCELString(t, expression, makeAuth(organizationA, []any{"users"}))
+	keyB := evaluateGatewayCELString(t, expression, makeAuth(organizationB, []any{"users"}))
 	if keyA == keyB {
 		t.Fatalf("cache key is shared across organizations for equal groups: %q", keyA)
 	}
 
-	emptyKeyA := evaluateGatewayCELString(t, selector, makeAuth(organizationA, []any{}))
-	emptyKeyB := evaluateGatewayCELString(t, selector, makeAuth(organizationB, []any{}))
+	emptyKeyA := evaluateGatewayCELString(t, expression, makeAuth(organizationA, []any{}))
+	emptyKeyB := evaluateGatewayCELString(t, expression, makeAuth(organizationB, []any{}))
 	if emptyKeyA == emptyKeyB {
 		t.Fatalf("cache key is shared across organizations with empty groups: %q", emptyKeyA)
 	}
@@ -1650,9 +1650,9 @@ func TestSubscriptionCacheKeySeparatesOpaqueGroupsAndMatchingModes(t *testing.T)
 			"identity": map[string]any{},
 		}
 	}
-	selector := subscriptionGatewayCacheKeySelector()
-	commaGroup := evaluateGatewayCELString(t, selector, makeAuth([]any{"a,b"}))
-	twoGroups := evaluateGatewayCELString(t, selector, makeAuth([]any{"a", "b"}))
+	expression := subscriptionGatewayCacheKeyExpression()
+	commaGroup := evaluateGatewayCELString(t, expression, makeAuth([]any{"a,b"}))
+	twoGroups := evaluateGatewayCELString(t, expression, makeAuth([]any{"a", "b"}))
 	if commaGroup == twoGroups {
 		t.Fatalf("cache key collides for one comma group and two groups: %q", commaGroup)
 	}
@@ -1747,9 +1747,9 @@ func TestMaaSAuthPolicyReconciler_CacheKeyModelIsolation(t *testing.T) {
 		name string
 		path []string
 	}{
-		{"subscription-info", []string{"spec", "defaults", "rules", "metadata", "subscription-info", "cache", "key", "selector"}},
-		{"auth-valid", []string{"spec", "defaults", "rules", "authorization", "auth-valid", "cache", "key", "selector"}},
-		{"subscription-valid", []string{"spec", "defaults", "rules", "authorization", "subscription-valid", "cache", "key", "selector"}},
+		{"subscription-info", []string{"spec", "defaults", "rules", "metadata", "subscription-info", "cache", "key", "expression"}},
+		{"auth-valid", []string{"spec", "defaults", "rules", "authorization", "auth-valid", "cache", "key", "expression"}},
+		{"subscription-valid", []string{"spec", "defaults", "rules", "authorization", "subscription-valid", "cache", "key", "expression"}},
 	}
 
 	for _, eval := range gatewayEvaluators {
@@ -1766,13 +1766,13 @@ func TestMaaSAuthPolicyReconciler_CacheKeyModelIsolation(t *testing.T) {
 	}
 
 	t.Run("require-group-membership matches subscription-info cache key", func(t *testing.T) {
-		groupPath := []string{"spec", "defaults", "rules", "authorization", "require-group-membership", "cache", "key", "selector"}
+		groupPath := []string{"spec", "defaults", "rules", "authorization", "require-group-membership", "cache", "key", "expression"}
 		groupKey, found, err := unstructured.NestedString(gwPolicy.Object, groupPath...)
 		if err != nil || !found {
 			t.Fatalf("gateway require-group-membership cache key missing: found=%v err=%v", found, err)
 		}
 		subInfoKey, _, _ := unstructured.NestedString(gwPolicy.Object,
-			"spec", "defaults", "rules", "metadata", "subscription-info", "cache", "key", "selector",
+			"spec", "defaults", "rules", "metadata", "subscription-info", "cache", "key", "expression",
 		)
 		if groupKey != subInfoKey {
 			t.Errorf("require-group-membership cache key should match subscription-info\nrequire-group-membership: %s\nsubscription-info:        %s", groupKey, subInfoKey)
@@ -2216,7 +2216,7 @@ func TestBuildGatewayAuthPolicySpec_SubscriptionHeaderInjection(t *testing.T) {
 	}
 
 	cacheKey := nestedStringRequired(t, obj,
-		"spec", "defaults", "rules", "metadata", "subscription-info", "cache", "key", "selector")
+		"spec", "defaults", "rules", "metadata", "subscription-info", "cache", "key", "expression")
 	if !strings.Contains(cacheKey, wantSelection) {
 		t.Errorf("subscription-info cache key must include the client header selection, got %q", cacheKey)
 	}
@@ -4001,25 +4001,25 @@ func TestMaaSAuthPolicyReconciler_ReconcileErrorPreservedOnStatusFailure(t *test
 }
 
 func TestCacheKeyKeepsIdentityDiscriminatorsWithoutExactGroups(t *testing.T) {
-	cacheKeySelector := subscriptionGatewayCacheKeySelector()
+	cacheKeyExpression := subscriptionGatewayCacheKeyExpression()
 
-	if !strings.Contains(cacheKeySelector, `"api-key"`) {
-		t.Errorf("cache key missing identity-source discriminator (api-key): %s", cacheKeySelector)
+	if !strings.Contains(cacheKeyExpression, `"api-key"`) {
+		t.Errorf("cache key missing identity-source discriminator (api-key): %s", cacheKeyExpression)
 	}
-	if !strings.Contains(cacheKeySelector, `"oidc"`) {
-		t.Errorf("cache key missing identity-source discriminator (oidc): %s", cacheKeySelector)
+	if !strings.Contains(cacheKeyExpression, `"oidc"`) {
+		t.Errorf("cache key missing identity-source discriminator (oidc): %s", cacheKeyExpression)
 	}
-	if !strings.Contains(cacheKeySelector, `"token-review"`) {
-		t.Errorf("cache key missing identity-source discriminator (token-review): %s", cacheKeySelector)
+	if !strings.Contains(cacheKeyExpression, `"token-review"`) {
+		t.Errorf("cache key missing identity-source discriminator (token-review): %s", cacheKeyExpression)
 	}
-	if !strings.Contains(cacheKeySelector, `keyId`) {
-		t.Errorf("cache key missing API-key ID term: %s", cacheKeySelector)
+	if !strings.Contains(cacheKeyExpression, `keyId`) {
+		t.Errorf("cache key missing API-key ID term: %s", cacheKeyExpression)
 	}
-	if strings.Contains(cacheKeySelector, "exactGroups") {
-		t.Errorf("cache key contains exactGroups term (should be removed): %s", cacheKeySelector)
+	if strings.Contains(cacheKeyExpression, "exactGroups") {
+		t.Errorf("cache key contains exactGroups term (should be removed): %s", cacheKeyExpression)
 	}
-	if strings.Contains(cacheKeySelector, "celExactGroups") {
-		t.Errorf("cache key contains celExactGroups term (should be removed): %s", cacheKeySelector)
+	if strings.Contains(cacheKeyExpression, "celExactGroups") {
+		t.Errorf("cache key contains celExactGroups term (should be removed): %s", cacheKeyExpression)
 	}
 }
 

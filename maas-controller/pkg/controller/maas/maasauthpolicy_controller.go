@@ -379,7 +379,7 @@ func (r *MaaSAuthPolicyReconciler) hasLegacyModelAuthPolicy(ctx context.Context,
 	return false, nil
 }
 
-// CEL sub-expressions reused across Authorino cache-key selectors.
+// CEL sub-expressions reused across Authorino cache-key expressions.
 // These handle API keys, OIDC tokens, and Kubernetes tokens.
 const (
 	// celUserID extracts user ID from API key, OIDC, or K8s token
@@ -504,9 +504,9 @@ const maasGatewayAuthPolicyName = "maas-gateway-auth"
 // favor of maas-gateway-auth. Kept only for upgrade cleanup of stale cluster resources.
 const legacyGatewayDefaultAuthPolicyName = "gateway-default-auth"
 
-// subscriptionGatewayCacheKeySelector builds a collision-safe key for gateway-level selection.
+// subscriptionGatewayCacheKeyExpression builds a collision-safe key for gateway-level selection.
 // It length-prefixes every value so opaque group names cannot collide with separators.
-func subscriptionGatewayCacheKeySelector() string {
+func subscriptionGatewayCacheKeyExpression() string {
 	//nolint:gosec // CEL expression, not a credential
 	apiKey := `(has(auth.metadata) && has(auth.metadata.apiKeyValidation))`
 	identitySource := `(` + apiKey + ` ? "api-key" : (has(auth.identity.iss) ? "oidc" : "token-review"))`
@@ -991,7 +991,7 @@ allow {
 			},
 			"cache": map[string]any{
 				"key": map[string]any{
-					"selector": authValidCacheKey,
+					"expression": authValidCacheKey,
 				},
 				"ttl": r.authzCacheTTL(),
 			},
@@ -1015,7 +1015,7 @@ allow {
 			},
 			"cache": map[string]any{
 				"key": map[string]any{
-					"selector": subscriptionGatewayCacheKeySelector(),
+					"expression": subscriptionGatewayCacheKeyExpression(),
 				},
 				"ttl": r.authzCacheTTL(),
 			},
@@ -1033,7 +1033,7 @@ allow {
 			},
 			"cache": map[string]any{
 				"key": map[string]any{
-					"selector": subscriptionGatewayCacheKeySelector(),
+					"expression": subscriptionGatewayCacheKeyExpression(),
 				},
 				"ttl": r.authzCacheTTL(),
 			},
@@ -1210,7 +1210,7 @@ allow {
 				},
 				"cache": map[string]any{
 					"key": map[string]any{
-						"selector": `auth.identity.replace("Bearer ", "")`,
+						"expression": `auth.identity.replace("Bearer ", "")`,
 					},
 					"ttl": r.MetadataCacheTTL,
 				},
@@ -1233,7 +1233,7 @@ allow {
 				},
 				"cache": map[string]any{
 					"key": map[string]any{
-						"selector": subscriptionGatewayCacheKeySelector(),
+						"expression": subscriptionGatewayCacheKeyExpression(),
 					},
 					"ttl": r.MetadataCacheTTL,
 				},

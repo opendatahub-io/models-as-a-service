@@ -123,14 +123,14 @@ func TestRequireGroupMembershipCacheKey(t *testing.T) {
 	if !ok {
 		t.Fatalf("cache must have key config")
 	}
-	selector, ok := key["selector"].(string)
+	expression, ok := key["expression"].(string)
 	if !ok {
-		t.Fatalf("cache key must have selector")
+		t.Fatalf("cache key must have expression")
 	}
 
-	expectedSelector := subscriptionGatewayCacheKeySelector()
-	if selector != expectedSelector {
-		t.Fatalf("cache key selector = %q, want %q (subscriptionGatewayCacheKeySelector)", selector, expectedSelector)
+	expectedExpression := subscriptionGatewayCacheKeyExpression()
+	if expression != expectedExpression {
+		t.Fatalf("cache key expression = %q, want %q (subscriptionGatewayCacheKeyExpression)", expression, expectedExpression)
 	}
 }
 
