@@ -48,6 +48,48 @@ updates:
           - "k8s.io/*"
           - "sigs.k8s.io/*"
 
+  - package-ecosystem: "gomod"
+    directory: "/maas-discovery"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+    groups:
+      minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
+        exclude-patterns:
+          - "k8s.io/*"
+          - "sigs.k8s.io/*"
+      kubernetes:
+        patterns:
+          - "k8s.io/*"
+          - "sigs.k8s.io/*"
+
+  - package-ecosystem: "gomod"
+    directory: "/maas-common"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+    groups:
+      minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
+        exclude-patterns:
+          - "k8s.io/*"
+          - "sigs.k8s.io/*"
+      kubernetes:
+        patterns:
+          - "k8s.io/*"
+          - "sigs.k8s.io/*"
+
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
