@@ -18,7 +18,7 @@ import (
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/token"
 )
 
-const testOrganizationID = "1234"
+const testOrganizationID = "42c3e46f-2477-44d7-a85b-d3b43f6b31fa"
 const testUsername = "admin@example.com"
 
 type upstreamRecord struct {
@@ -48,9 +48,10 @@ func newUpstream(t *testing.T, status int, body string) (*httptest.Server, *upst
 }
 
 // newRouter builds a router that mirrors the production middleware chain for
-// the Loki proxy: the trusted identity headers are parsed into the user
-// context, then the proxy routes are registered. pathPrefix is appended to the
-// fake upstream's URL to exercise base-path concatenation.
+// the Loki proxy: the gateway-verified identity envelope is parsed first, then
+// the trusted identity headers are parsed into the user context, then the
+// proxy routes are registered. pathPrefix is appended to the fake upstream's
+// URL to exercise base-path concatenation.
 func newRouter(t *testing.T, pathPrefix string) (*gin.Engine, *upstreamRecord) {
 	t.Helper()
 
@@ -63,32 +64,38 @@ func newRouter(t *testing.T, pathPrefix string) (*gin.Engine, *upstreamRecord) {
 	require.NoError(t, err)
 
 	router := gin.New()
-	v1 := router.Group("/v1", tokenHandler.ExtractUserInfo())
+	v1 := router.Group("/v1", tokenHandler.ExtractVerifiedIdentityOptional(), tokenHandler.ExtractUserInfo())
 	lokiHandler.RegisterRoutes(v1)
 
 	return router, record
 }
 
-// lokiRequest issues a request with the trusted auth-gateway identity headers.
-func lokiRequest(t *testing.T, router *gin.Engine, method, target, groups string) *httptest.ResponseRecorder {
+// lokiRequest issues a request with the trusted gateway identity envelope.
+func lokiRequest(t *testing.T, router *gin.Engine, method, target, identity string) *httptest.ResponseRecorder {
 	t.Helper()
 
 	req := httptest.NewRequest(method, target, nil)
-	req.Header.Set(constant.HeaderUsername, testUsername)
-	req.Header.Set(constant.HeaderGroup, groups)
-	req.Header.Set(constant.HeaderOrganizationID, testOrganizationID)
+	req.Header.Set(constant.HeaderIdentity, identity)
 
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 	return w
 }
 
-func adminGroups() string {
-	return `["` + testOrganizationID + `/ai-grid-admins", "other-group"]`
+// identityEnvelope builds a verified OIDC identity envelope for the test
+// organization with the given roles JSON array.
+func identityEnvelope(roles string) string {
+	return `{"source":"oidc","claims":{"iss":"https://issuer.example.com","sub":"admin-subject","aud":"maas-api","azp":"maas-client","preferred_username":"` +
+		testUsername + `","groups":["ai-grid-users"],"org_id":"` +
+		testOrganizationID + `","roles":` + roles + `}}`
 }
 
-func userGroups() string {
-	return `["` + testOrganizationID + `/ai-grid-users", "other-group"]`
+func adminIdentity() string {
+	return identityEnvelope(`["admins"]`)
+}
+
+func userIdentity() string {
+	return identityEnvelope(`[]`)
 }
 
 // selectorMatchers parses a LogQL expression and returns the matchers of every
@@ -115,7 +122,7 @@ func TestProxyQueryRangeEnforcesOrganizationMatcher(t *testing.T) {
 	router, record := newRouter(t, "/api/logs/v1/application")
 
 	w := lokiRequest(t, router, http.MethodGet,
-		"/v1/logs/loki/api/v1/query_range?query="+url.QueryEscape(`{app="api", organization_id="other-org"}`)+"&limit=100", adminGroups())
+		"/v1/logs/loki/api/v1/query_range?query="+url.QueryEscape(`{app="api", organization_id="other-org"}`)+"&limit=100", adminIdentity())
 
 	require.Equal(t, http.StatusOK, w.Code)
 	require.JSONEq(t, `{"status":"success"}`, w.Body.String())
@@ -124,7 +131,7 @@ func TestProxyQueryRangeEnforcesOrganizationMatcher(t *testing.T) {
 	require.Equal(t, "100", record.query.Get("limit"))
 
 	matchers := selectorMatchers(t, record.query.Get("query"))
-	require.Contains(t, matchers, `organization_id="1234"`)
+	require.Contains(t, matchers, `organization_id="`+testOrganizationID+`"`)
 	require.NotContains(t, matchers, `organization_id="other-org"`)
 }
 
@@ -132,7 +139,7 @@ func TestProxyQueryInstantEnforcesOrganizationMatcher(t *testing.T) {
 	router, record := newRouter(t, "/api/logs/v1/application")
 
 	w := lokiRequest(t, router, http.MethodGet,
-		"/v1/logs/loki/api/v1/query?query="+url.QueryEscape(`sum(count_over_time({app="api", organization_id="other-org"}[5m]))`)+"&time=1234567890", adminGroups())
+		"/v1/logs/loki/api/v1/query?query="+url.QueryEscape(`sum(count_over_time({app="api", organization_id="other-org"}[5m]))`)+"&time=1234567890", adminIdentity())
 
 	require.Equal(t, http.StatusOK, w.Code)
 	require.Equal(t, http.MethodGet, record.method)
@@ -140,7 +147,7 @@ func TestProxyQueryInstantEnforcesOrganizationMatcher(t *testing.T) {
 	require.Equal(t, "1234567890", record.query.Get("time"))
 
 	matchers := selectorMatchers(t, record.query.Get("query"))
-	require.Contains(t, matchers, `organization_id="1234"`)
+	require.Contains(t, matchers, `organization_id="`+testOrganizationID+`"`)
 	require.NotContains(t, matchers, `organization_id="other-org"`)
 }
 
@@ -150,14 +157,14 @@ func TestProxyQueryInstantOnlyUserEnforcesMatchers(t *testing.T) {
 	w := lokiRequest(t, router, http.MethodGet,
 		"/v1/logs/loki/api/v1/query?only_user=true&query="+
 			url.QueryEscape(`sum(count_over_time({app="api", organization_id="other-org", user_id="victim"}[5m]))`),
-		userGroups())
+		userIdentity())
 
 	require.Equal(t, http.StatusOK, w.Code)
 	require.Equal(t, "/loki/api/v1/query", record.path)
 	require.NotContains(t, record.query, "only_user")
 
 	matchers := selectorMatchers(t, record.query.Get("query"))
-	require.Contains(t, matchers, `organization_id="1234"`)
+	require.Contains(t, matchers, `organization_id="`+testOrganizationID+`"`)
 	require.Contains(t, matchers, `user_id="admin@example.com"`)
 	require.NotContains(t, matchers, `organization_id="other-org"`)
 	require.NotContains(t, matchers, `user_id="victim"`)
@@ -166,44 +173,44 @@ func TestProxyQueryInstantOnlyUserEnforcesMatchers(t *testing.T) {
 func TestProxyLabelsInjectsSelectorWhenQueryAbsent(t *testing.T) {
 	router, record := newRouter(t, "")
 
-	w := lokiRequest(t, router, http.MethodGet, "/v1/logs/loki/api/v1/labels?start=1", adminGroups())
+	w := lokiRequest(t, router, http.MethodGet, "/v1/logs/loki/api/v1/labels?start=1", adminIdentity())
 
 	require.Equal(t, http.StatusOK, w.Code)
 	require.Equal(t, "/loki/api/v1/labels", record.path)
 	require.Equal(t, "1", record.query.Get("start"))
-	require.Equal(t, []string{`organization_id="1234"`}, selectorMatchers(t, record.query.Get("query")))
+	require.Equal(t, []string{`organization_id="` + testOrganizationID + `"`}, selectorMatchers(t, record.query.Get("query")))
 }
 
 func TestProxyLabelValues(t *testing.T) {
 	router, record := newRouter(t, "")
 
 	w := lokiRequest(t, router, http.MethodGet, "/v1/logs/loki/api/v1/label/organization_id/values?query="+
-		url.QueryEscape(`{organization_id="other"}`), adminGroups())
+		url.QueryEscape(`{organization_id="other"}`), adminIdentity())
 
 	require.Equal(t, http.StatusOK, w.Code)
 	require.Equal(t, "/loki/api/v1/label/organization_id/values", record.path)
-	require.Equal(t, []string{`organization_id="1234"`}, selectorMatchers(t, record.query.Get("query")))
+	require.Equal(t, []string{`organization_id="` + testOrganizationID + `"`}, selectorMatchers(t, record.query.Get("query")))
 }
 
 func TestProxyRejectsInvalidLabelName(t *testing.T) {
 	router, _ := newRouter(t, "")
 
 	// Invalid label name characters are rejected by the handler.
-	w := lokiRequest(t, router, http.MethodGet, "/v1/logs/loki/api/v1/label/bad!name/values", adminGroups())
+	w := lokiRequest(t, router, http.MethodGet, "/v1/logs/loki/api/v1/label/bad!name/values", adminIdentity())
 	require.Equal(t, http.StatusBadRequest, w.Code)
 
 	// Path traversal in the label name does not match the route at all.
-	w = lokiRequest(t, router, http.MethodGet, "/v1/logs/loki/api/v1/label/..%2Frules/values", adminGroups())
+	w = lokiRequest(t, router, http.MethodGet, "/v1/logs/loki/api/v1/label/..%2Frules/values", adminIdentity())
 	require.Equal(t, http.StatusNotFound, w.Code)
 }
 
 func TestProxyRejectsInvalidQuery(t *testing.T) {
 	router, _ := newRouter(t, "")
 
-	w := lokiRequest(t, router, http.MethodGet, "/v1/logs/loki/api/v1/query_range?query="+url.QueryEscape(`{app=`), adminGroups())
+	w := lokiRequest(t, router, http.MethodGet, "/v1/logs/loki/api/v1/query_range?query="+url.QueryEscape(`{app=`), adminIdentity())
 	require.Equal(t, http.StatusBadRequest, w.Code)
 
-	w = lokiRequest(t, router, http.MethodGet, "/v1/logs/loki/api/v1/query?query="+url.QueryEscape(`{app=`), adminGroups())
+	w = lokiRequest(t, router, http.MethodGet, "/v1/logs/loki/api/v1/query?query="+url.QueryEscape(`{app=`), adminIdentity())
 	require.Equal(t, http.StatusBadRequest, w.Code)
 }
 
@@ -212,45 +219,45 @@ func TestProxyOnlyUserAuthzMatrix(t *testing.T) {
 
 	tt := []struct {
 		desc     string
-		groups   string
+		identity string
 		onlyUser string
 		expected int
 	}{
 		{
 			desc:     "admin without flag is authorized",
-			groups:   adminGroups(),
+			identity: adminIdentity(),
 			onlyUser: "",
 			expected: http.StatusOK,
 		},
 		{
 			desc:     "admin with flag is authorized and self-scoped",
-			groups:   adminGroups(),
+			identity: adminIdentity(),
 			onlyUser: "true",
 			expected: http.StatusOK,
 		},
 		{
-			desc:     "ai-grid-users member with flag is authorized",
-			groups:   userGroups(),
+			desc:     "organization user with flag is authorized",
+			identity: userIdentity(),
 			onlyUser: "true",
 			expected: http.StatusOK,
 		},
 		{
-			desc:     "ai-grid-users member without flag is rejected",
-			groups:   userGroups(),
+			desc:     "organization user without flag is rejected",
+			identity: userIdentity(),
 			onlyUser: "",
 			expected: http.StatusForbidden,
 		},
 		{
-			desc:     "member of neither group is rejected without flag",
-			groups:   `["some-other-group"]`,
+			desc:     "unknown role without flag is rejected",
+			identity: identityEnvelope(`["owner"]`),
 			onlyUser: "",
 			expected: http.StatusForbidden,
 		},
 		{
-			desc:     "member of neither group is rejected with flag",
-			groups:   `["some-other-group"]`,
+			desc:     "unknown role with flag is authorized as organization member",
+			identity: identityEnvelope(`["owner"]`),
 			onlyUser: "true",
-			expected: http.StatusForbidden,
+			expected: http.StatusOK,
 		},
 	}
 
@@ -262,7 +269,7 @@ func TestProxyOnlyUserAuthzMatrix(t *testing.T) {
 			if tc.onlyUser != "" {
 				target += "&only_user=" + tc.onlyUser
 			}
-			w := lokiRequest(t, router, http.MethodGet, target, tc.groups)
+			w := lokiRequest(t, router, http.MethodGet, target, tc.identity)
 
 			require.Equal(t, tc.expected, w.Code)
 			if tc.expected == http.StatusOK {
@@ -279,13 +286,13 @@ func TestProxyOnlyUserInjectsUserAndOrganizationMatchers(t *testing.T) {
 
 	w := lokiRequest(t, router, http.MethodGet,
 		"/v1/logs/loki/api/v1/query_range?only_user=true&query="+url.QueryEscape(`{app="api", organization_id="other-org", user_id="victim"}`),
-		userGroups())
+		userIdentity())
 
 	require.Equal(t, http.StatusOK, w.Code)
 	require.NotContains(t, record.query, "only_user", "only_user must not be forwarded upstream")
 
 	matchers := selectorMatchers(t, record.query.Get("query"))
-	require.Contains(t, matchers, `organization_id="1234"`)
+	require.Contains(t, matchers, `organization_id="`+testOrganizationID+`"`)
 	require.Contains(t, matchers, `user_id="admin@example.com"`)
 	require.NotContains(t, matchers, `organization_id="other-org"`)
 	require.NotContains(t, matchers, `user_id="victim"`)
@@ -294,10 +301,10 @@ func TestProxyOnlyUserInjectsUserAndOrganizationMatchers(t *testing.T) {
 func TestProxyOnlyUserInjectsSelectorWhenQueryAbsent(t *testing.T) {
 	router, record := newRouter(t, "")
 
-	w := lokiRequest(t, router, http.MethodGet, "/v1/logs/loki/api/v1/labels?only_user=true&start=1", userGroups())
+	w := lokiRequest(t, router, http.MethodGet, "/v1/logs/loki/api/v1/labels?only_user=true&start=1", userIdentity())
 
 	require.Equal(t, http.StatusOK, w.Code)
-	require.Equal(t, []string{`organization_id="1234"`, `user_id="admin@example.com"`}, selectorMatchers(t, record.query.Get("query")))
+	require.Equal(t, []string{`organization_id="` + testOrganizationID + `"`, `user_id="admin@example.com"`}, selectorMatchers(t, record.query.Get("query")))
 }
 
 func TestProxyOnlyUserAdminKeepsOrganizationWideViewWithoutFlag(t *testing.T) {
@@ -307,11 +314,11 @@ func TestProxyOnlyUserAdminKeepsOrganizationWideViewWithoutFlag(t *testing.T) {
 	// organization matcher is injected.
 	w := lokiRequest(t, router, http.MethodGet,
 		"/v1/logs/loki/api/v1/query_range?query="+url.QueryEscape(`{user_id="someone-else"}`),
-		adminGroups())
+		adminIdentity())
 
 	require.Equal(t, http.StatusOK, w.Code)
 	matchers := selectorMatchers(t, record.query.Get("query"))
-	require.Contains(t, matchers, `organization_id="1234"`)
+	require.Contains(t, matchers, `organization_id="`+testOrganizationID+`"`)
 	require.Contains(t, matchers, `user_id="someone-else"`)
 	require.NotContains(t, matchers, `user_id="admin@example.com"`)
 }
@@ -319,7 +326,7 @@ func TestProxyOnlyUserAdminKeepsOrganizationWideViewWithoutFlag(t *testing.T) {
 func TestProxyOnlyUserInvalidFlagValue(t *testing.T) {
 	router, record := newRouter(t, "")
 
-	w := lokiRequest(t, router, http.MethodGet, "/v1/logs/loki/api/v1/query_range?only_user=yes&query=%7B%7D", adminGroups())
+	w := lokiRequest(t, router, http.MethodGet, "/v1/logs/loki/api/v1/query_range?only_user=yes&query=%7B%7D", adminIdentity())
 
 	require.Equal(t, http.StatusBadRequest, w.Code)
 	require.Empty(t, record.path, "upstream must not be called")
@@ -329,7 +336,7 @@ func TestProxyRejectsNonAdmin(t *testing.T) {
 	router, record := newRouter(t, "")
 
 	w := lokiRequest(t, router, http.MethodGet, "/v1/logs/loki/api/v1/query_range?query="+url.QueryEscape(`{app="api"}`),
-		`["some-other-group"]`)
+		userIdentity())
 
 	require.Equal(t, http.StatusForbidden, w.Code)
 	require.Empty(t, record.path, "upstream must not be called")
@@ -340,7 +347,7 @@ func TestProxyRejectsMissingOrganization(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/logs/loki/api/v1/query_range?query=%7B%7D", nil)
 	req.Header.Set(constant.HeaderUsername, "admin@example.com")
-	req.Header.Set(constant.HeaderGroup, adminGroups())
+	req.Header.Set(constant.HeaderGroup, `["ai-grid-users"]`)
 
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
@@ -353,19 +360,19 @@ func TestProxyRejectsNonGetAndUnknownPaths(t *testing.T) {
 	router, record := newRouter(t, "")
 
 	// Only GET is accepted.
-	w := lokiRequest(t, router, http.MethodPost, "/v1/logs/loki/api/v1/query_range?query=%7B%7D", adminGroups())
+	w := lokiRequest(t, router, http.MethodPost, "/v1/logs/loki/api/v1/query_range?query=%7B%7D", adminIdentity())
 	require.Equal(t, http.StatusNotFound, w.Code)
-	w = lokiRequest(t, router, http.MethodPost, "/v1/logs/loki/api/v1/query?query=%7B%7D", adminGroups())
+	w = lokiRequest(t, router, http.MethodPost, "/v1/logs/loki/api/v1/query?query=%7B%7D", adminIdentity())
 	require.Equal(t, http.StatusNotFound, w.Code)
 
 	// Only the registered read endpoints are proxied.
-	w = lokiRequest(t, router, http.MethodGet, "/v1/logs/loki/api/v1/series?match=%7B%7D", adminGroups())
+	w = lokiRequest(t, router, http.MethodGet, "/v1/logs/loki/api/v1/series?match=%7B%7D", adminIdentity())
 	require.Equal(t, http.StatusNotFound, w.Code)
 
-	w = lokiRequest(t, router, http.MethodGet, "/v1/logs/loki/api/v1/tail?query=%7B%7D", adminGroups())
+	w = lokiRequest(t, router, http.MethodGet, "/v1/logs/loki/api/v1/tail?query=%7B%7D", adminIdentity())
 	require.Equal(t, http.StatusNotFound, w.Code)
 
-	w = lokiRequest(t, router, http.MethodGet, "/v1/logs/loki/api/prom/query", adminGroups())
+	w = lokiRequest(t, router, http.MethodGet, "/v1/logs/loki/api/prom/query", adminIdentity())
 	require.Equal(t, http.StatusNotFound, w.Code)
 
 	require.Empty(t, record.path, "upstream must not be called")
@@ -386,9 +393,9 @@ func TestProxyPassesThroughUpstreamError(t *testing.T) {
 	require.NoError(t, err)
 
 	router := gin.New()
-	lokiHandler.RegisterRoutes(router.Group("/v1", tokenHandler.ExtractUserInfo()))
+	lokiHandler.RegisterRoutes(router.Group("/v1", tokenHandler.ExtractVerifiedIdentityOptional(), tokenHandler.ExtractUserInfo()))
 
-	w := lokiRequest(t, router, http.MethodGet, "/v1/logs/loki/api/v1/query_range?query=%7B%7D", adminGroups())
+	w := lokiRequest(t, router, http.MethodGet, "/v1/logs/loki/api/v1/query_range?query=%7B%7D", adminIdentity())
 
 	require.Equal(t, http.StatusInternalServerError, w.Code)
 	require.JSONEq(t, `{"status":"error"}`, w.Body.String())
@@ -418,9 +425,9 @@ func TestProxyInjectsUpstreamBearerToken(t *testing.T) {
 	require.NoError(t, err)
 
 	router := gin.New()
-	lokiHandler.RegisterRoutes(router.Group("/v1", tokenHandler.ExtractUserInfo()))
+	lokiHandler.RegisterRoutes(router.Group("/v1", tokenHandler.ExtractVerifiedIdentityOptional(), tokenHandler.ExtractUserInfo()))
 
-	w := lokiRequest(t, router, http.MethodGet, "/v1/logs/loki/api/v1/query_range?query=%7B%7D", adminGroups())
+	w := lokiRequest(t, router, http.MethodGet, "/v1/logs/loki/api/v1/query_range?query=%7B%7D", adminIdentity())
 
 	require.Equal(t, http.StatusOK, w.Code)
 	require.Equal(t, "Bearer sa-token-123", record.authorization)
@@ -436,9 +443,9 @@ func TestProxyWithoutTokenSendsNoAuthorizationHeader(t *testing.T) {
 	require.NoError(t, err)
 
 	router := gin.New()
-	lokiHandler.RegisterRoutes(router.Group("/v1", tokenHandler.ExtractUserInfo()))
+	lokiHandler.RegisterRoutes(router.Group("/v1", tokenHandler.ExtractVerifiedIdentityOptional(), tokenHandler.ExtractUserInfo()))
 
-	w := lokiRequest(t, router, http.MethodGet, "/v1/logs/loki/api/v1/query_range?query=%7B%7D", adminGroups())
+	w := lokiRequest(t, router, http.MethodGet, "/v1/logs/loki/api/v1/query_range?query=%7B%7D", adminIdentity())
 
 	require.Equal(t, http.StatusOK, w.Code)
 	require.Empty(t, record.authorization)

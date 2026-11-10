@@ -25,15 +25,10 @@ const (
 	// userLabel is the Loki label carrying the user that produced a log line.
 	userLabel = "user_id"
 
-	// adminGroupSuffix is appended to the organization ID to derive the
-	// organization admin group ($org_id/ai-grid-admins per the AI Grid
-	// convention).
-	adminGroupSuffix = "/ai-grid-admins"
-
-	// userGroupSuffix is appended to the organization ID to derive the
-	// organization user group ($org_id/ai-grid-users per the AI Grid
-	// convention).
-	userGroupSuffix = "/ai-grid-users"
+	// adminRole is the only organization role that grants administrative
+	// authority in the AI Grid identity contract (ODH-ADR shared-OIDC
+	// identity). Unknown roles never grant authority.
+	adminRole = "admins"
 
 	// onlyUserParam narrows the query to the calling user's own logs (see
 	// authorize). It is consumed by the proxy and never forwarded upstream.
@@ -148,14 +143,12 @@ func isDigit(r rune) bool {
 }
 
 // authorize resolves the caller's organization from the auth context and
-// verifies group membership according to the requested view. Without the
-// only_user flag the caller must be a member of the organization admin group
-// ($org_id/ai-grid-admins) and gets organization-wide visibility. With the
-// flag the caller must be a member of the organization user group
-// ($org_id/ai-grid-users) — or the admin group, since admins need both views —
-// and the returned username restricts results to the caller's own logs. It
-// writes the error response and returns false when the request must not be
-// proxied.
+// verifies the organization admin role according to the requested view.
+// Without the only_user flag the caller must carry the admins role for the
+// organization in the gateway-verified identity and gets organization-wide
+// visibility. With the flag any organization member is authorized and the
+// returned username restricts results to the caller's own logs. It writes the
+// error response and returns false when the request must not be proxied.
 func (h *Handler) authorize(c *gin.Context, onlyUser bool) (string, string, bool) {
 	requestLogger := h.requestLogger(c)
 
@@ -181,26 +174,12 @@ func (h *Handler) authorize(c *gin.Context, onlyUser bool) (string, string, bool
 		return "", "", false
 	}
 
-	adminGroup := user.OrganizationID + adminGroupSuffix
-	isAdmin := containsGroup(user.Groups, adminGroup)
+	isAdmin := hasOrganizationAdminRole(verifiedIdentity(c), user.OrganizationID)
 
 	if onlyUser {
-		// The user view accepts both organization users and admins, but always
-		// restricts results to the caller's own user_id (injected below).
-		userGroup := user.OrganizationID + userGroupSuffix
-		if !isAdmin && !containsGroup(user.Groups, userGroup) {
-			requestLogger.Warn("Rejected Loki proxy request from user outside the organization user group",
-				"username", logger.RedactValue(user.Username),
-			)
-			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
-				"error":             "forbidden",
-				"exceptionCode":     "AUTHZ_FAILURE",
-				"error_description": "organization membership is required",
-			})
-			return "", "", false
-		}
-
-		// The user_id label on usage logs carries the value of X-MaaS-Username
+		// The user view is available to every organization member, but always
+		// restricts results to the caller's own user_id (injected below). The
+		// user_id label on usage logs carries the value of X-MaaS-Username
 		// (injected by the usage-logs EnvoyFilter), so the matcher must use the
 		// username from the trusted auth-gateway header. ExtractUserInfo
 		// guarantees it is present.
@@ -208,13 +187,13 @@ func (h *Handler) authorize(c *gin.Context, onlyUser bool) (string, string, bool
 	}
 
 	if !isAdmin {
-		requestLogger.Warn("Rejected Loki proxy request from non-admin user",
+		requestLogger.Warn("Rejected Loki proxy request from user without the organization admin role",
 			"username", logger.RedactValue(user.Username),
 		)
 		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
 			"error":             "forbidden",
 			"exceptionCode":     "AUTHZ_FAILURE",
-			"error_description": "organization admin membership is required",
+			"error_description": "organization admin role is required",
 		})
 		return "", "", false
 	}
@@ -331,6 +310,28 @@ func (h *Handler) requestLogger(c *gin.Context) *logger.Logger {
 	return h.logger.WithContext(c.Request.Context())
 }
 
-func containsGroup(groups []string, group string) bool {
-	return slices.Contains(groups, group)
+// verifiedIdentity returns the gateway-verified OIDC identity from the request
+// context, or nil when the gateway did not inject one. A value of an unexpected
+// type is treated as absent so authorization fails closed.
+func verifiedIdentity(c *gin.Context) *token.VerifiedIdentity {
+	value, ok := c.Get("verified_identity")
+	if !ok {
+		return nil
+	}
+	identity, ok := value.(*token.VerifiedIdentity)
+	if !ok {
+		return nil
+	}
+	return identity
+}
+
+// hasOrganizationAdminRole reports whether the verified identity is an OIDC
+// identity scoped to the given organization that carries the admins role.
+// Groups never grant administrative authority, and unknown roles do not count
+// as admins.
+func hasOrganizationAdminRole(identity *token.VerifiedIdentity, organizationID string) bool {
+	return identity != nil &&
+		identity.Source == "oidc" &&
+		identity.Claims.OrgID == organizationID &&
+		slices.Contains(identity.Claims.Roles, adminRole)
 }
