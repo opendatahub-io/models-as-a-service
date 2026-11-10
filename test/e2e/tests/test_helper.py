@@ -43,6 +43,9 @@ Environment variables (all optional unless noted):
   - E2E_TRLP_TEST_MODEL_REF: TRLP test model ref (default: e2e-trlp-test-simulated)                                                                                                   
   - E2E_TRLP_TEST_MODEL_PATH: Path to TRLP test model (default: /llm/e2e-trlp-test-simulated)
   - E2E_TRLP_TEST_MODEL_ID: Model ID for TRLP test model (default: test/e2e-trlp-test-model)
+  - E2E_SLOW_STREAM_MODEL_REF: Paced streaming model ref (default: e2e-slow-stream-simulated)
+  - E2E_SLOW_STREAM_MODEL_PATH: Path to paced streaming model (default: /llm/e2e-slow-stream-simulated)
+  - E2E_SLOW_STREAM_MODEL_ID: Model ID for paced streaming model (default: test/e2e-slow-stream-model)
   - E2E_GATEWAY_AUTH_POLICY_NAME: Gateway Kuadrant AuthPolicy name (default: maas-gateway-auth)
   - E2E_GATEWAY_PROPAGATION_RETRIES: Retries for empty 401/403 / AUTH_FAILURE / proxy 500/503 (default: 6)
   - E2E_GATEWAY_PROPAGATION_DELAY: Delay between gateway retries in seconds (default: 5)
@@ -366,6 +369,10 @@ EMBEDDING_MODEL_CANONICAL_ID = os.environ.get(
     "E2E_EMBEDDING_MODEL_CANONICAL_ID",
     f"publishers/{MODEL_NAMESPACE}/models/{EMBEDDING_MODEL_NAME}",
 )
+# Paced simulator (fixtures/slow-stream): 2s to first token, then 100ms/token.
+SLOW_STREAM_MODEL_REF = os.environ.get("E2E_SLOW_STREAM_MODEL_REF", "e2e-slow-stream-simulated")
+SLOW_STREAM_MODEL_PATH = os.environ.get("E2E_SLOW_STREAM_MODEL_PATH", "/llm/e2e-slow-stream-simulated")
+SLOW_STREAM_MODEL_ID = os.environ.get("E2E_SLOW_STREAM_MODEL_ID", "test/e2e-slow-stream-model")
 
 
 # ---------------------------------------------------------------------------
@@ -1677,12 +1684,51 @@ def chat(prompt: str, model_v1: str, headers: dict, model_name: str, *,
 OPENAI_SSE_DONE_LINE = "data: [DONE]"
 
 
-def assert_openai_sse_chat_stream(response: requests.Response) -> list[str]:
+def assert_openai_sse_chat_stream(
+    response: requests.Response,
+    *,
+    min_inter_chunk_gap_sec: Optional[float] = None,
+    min_first_data_sec: Optional[float] = None,
+    started_at: Optional[float] = None,
+) -> list[str]:
     """
     Given a streaming chat/completions Response (stream=True), assert OpenAI-style SSE:
     HTTP 200, text/event-stream, multiple parseable data: JSON chunks, and data: [DONE].
     Returns non-empty event lines (including the terminal [DONE] line).
+
+    Timings are measured per line as it is read off the socket, so they reflect when
+    the client could act on each token -- not when the model finished.
+
+    min_inter_chunk_gap_sec:
+        Assert the response body is delivered incrementally: the *largest* gap between
+        consecutive ``data:`` chunks must be at least this long, meaning the client had
+        to wait for the next chunk at least once instead of receiving everything at
+        completion. A proxy that buffers the whole response (ext_proc
+        ``response_body_mode: BUFFERED``) delivers every chunk in one burst, so every
+        gap collapses to ~0 no matter how long generation took -- that is what
+        distinguishes real streaming from a stream-shaped single burst.
+
+        The largest gap rather than the first-to-last span, so the assertion does not
+        depend on how many tokens the backend produces or on how fast it generates
+        when tokens are batched: intermediaries coalesce writes, so some gaps are ~0
+        even while the body is streamed. A buffered body has no gap at all. Requires at
+        least 3 chunks to be meaningful; pass ``None`` (default) to skip, which is what
+        every caller on a fast backend must do -- see ``min_first_data_sec``.
+
+    min_first_data_sec:
+        Assert the first ``data:`` chunk did not arrive earlier than this, measured from
+        ``started_at`` when given. Only useful alongside ``min_inter_chunk_gap_sec``, to
+        prove the backend really is paced: without it a backend that generates
+        instantly fails the gap assertion and looks like a buffering regression.
+
+    started_at:
+        ``time.monotonic()`` from before the request was issued, used as the zero point
+        for the timings. Pass it whenever ``min_first_data_sec`` is set: the gateway
+        holds the response headers until the first body bytes arrive, so ``stream=True``
+        does not return until TTFT and the first chunk then reads at ~0s against this
+        function's own start.
     """
+    start = started_at if started_at is not None else time.monotonic()
     assert response.status_code == 200, (
         f"expected streaming HTTP 200, got {response.status_code}: {(response.text or '')[:500]}"
     )
@@ -1690,7 +1736,14 @@ def assert_openai_sse_chat_stream(response: requests.Response) -> list[str]:
     assert "text/event-stream" in content_type, (
         f"expected text/event-stream, got content-type={content_type!r}"
     )
-    events = [line for line in response.iter_lines(decode_unicode=True) if line]
+    events: list[str] = []
+    data_times: list[float] = []
+    for line in response.iter_lines(decode_unicode=True):
+        if not line:
+            continue
+        if line.startswith("data: {"):
+            data_times.append(time.monotonic() - start)
+        events.append(line)
     assert events, "streaming response contained no SSE lines"
     assert events[-1] == OPENAI_SSE_DONE_LINE, f"stream did not end with [DONE]: {events[-3:]}"
     data_chunks = [e for e in events[:-1] if e.startswith("data: {")]
@@ -1708,6 +1761,41 @@ def assert_openai_sse_chat_stream(response: requests.Response) -> list[str]:
     assert "".join(aggregated).strip(), (
         "streaming response carried no non-empty content in SSE data chunks"
     )
+
+    if min_first_data_sec is not None:
+        assert data_times, "stream carried no timed data chunks"
+        assert data_times[0] >= min_first_data_sec, (
+            f"first SSE data chunk arrived after {data_times[0]:.3f}s, expected "
+            f">= {min_first_data_sec:.3f}s. The backend is not paced, so this test "
+            "cannot tell streaming from buffering -- check the simulator args of the "
+            "paced fixture (fixtures/slow-stream) before reading the gap assertion."
+        )
+
+    if min_inter_chunk_gap_sec is not None:
+        assert len(data_times) >= 3, (
+            f"stream carried only {len(data_times)} data chunk(s), cannot measure "
+            "inter-chunk delivery gaps"
+        )
+        gaps = [b - a for a, b in zip(data_times, data_times[1:])]
+        largest_gap = max(gaps)
+        log.info(
+            "[sse] %d data chunks over %.3fs (first at %.3fs), largest gap %.3fs",
+            len(data_times),
+            data_times[-1] - data_times[0],
+            data_times[0],
+            largest_gap,
+        )
+        assert largest_gap >= min_inter_chunk_gap_sec, (
+            f"SSE response was delivered in a single burst: the largest gap between "
+            f"{len(data_times)} data chunks was {largest_gap:.3f}s, expected "
+            f">= {min_inter_chunk_gap_sec:.3f}s (chunks arrived at "
+            f"{[round(t, 3) for t in data_times][:8]}...). The client could not act on "
+            "a token until generation completed, so something in front of the model is "
+            "buffering the response body. Check response_body_mode on the "
+            "payload-processing ext_proc filter (BUFFERED holds the body until the "
+            "whole response exists; STREAMED forwards it as it is generated)."
+        )
+
     return events
 
 

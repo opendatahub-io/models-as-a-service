@@ -17,6 +17,7 @@ resources:
   - embedding     # Embedding model (validates /v1/embeddings, TRLP, default-deny)
   - echo-sim      # Echo-mode sim (validates large mirrored I/O and credential leaks)
   - external-token-limit # LLMIS-only backend for ExternalModel token-rate enforcement
+  - slow-stream   # Paced sim (validates SSE is streamed, not buffered, through the gateway)
 
 # E2E-only: enable the simulator's optional full HTTP request/response logging so tests
 # can assert on headers the backend actually received. Scoped to this e2e
