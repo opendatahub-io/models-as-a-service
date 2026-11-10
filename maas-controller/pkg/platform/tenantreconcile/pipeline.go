@@ -236,7 +236,9 @@ func RunPlatformWithReader(
 // token value never lands in the Deployment spec, and rotations are picked up
 // on pod restart without a reconcile). A missing token key keeps the proxy
 // enabled without upstream authentication and records a warning, since the
-// upstream may not require it.
+// upstream may not require it. A missing LOKI_READ_CA key is not a warning:
+// maas-api then trusts only the system pool, which is correct when the
+// upstream certificate is publicly trusted.
 func resolveLokiReadEndpoint(ctx context.Context, c client.Client, appNs string, params *PlatformParams, log logr.Logger) error {
 	secret := &corev1.Secret{}
 	err := c.Get(ctx, types.NamespacedName{Namespace: appNs, Name: LokiReadSecretName}, secret)
@@ -271,7 +273,17 @@ func resolveLokiReadEndpoint(ctx context.Context, c client.Client, appNs string,
 			"Secret '%s' in namespace '%s' is missing key '%s'; the maas-api Loki proxy sends no Authorization header upstream",
 			LokiReadSecretName, appNs, LokiReadTokenSecretKey))
 	}
-	log.Info("maas-api Loki read proxy enabled", "endpoint", endpoint, "tokenInjected", params.LokiReadTokenFromSecret)
+	// A missing CA key is not a warning: maas-api then trusts only the system
+	// pool, which is correct for fleets whose upstream certificate is publicly
+	// trusted.
+	if strings.TrimSpace(string(secret.Data[LokiReadCASecretKey])) != "" {
+		params.LokiReadCAFromSecret = true
+	} else {
+		log.V(1).Info("usage-logs-loki Secret has no CA key; maas-api Loki proxy uses the system trust pool only",
+			"name", LokiReadSecretName, "namespace", appNs, "key", LokiReadCASecretKey)
+	}
+	log.Info("maas-api Loki read proxy enabled", "endpoint", endpoint,
+		"tokenInjected", params.LokiReadTokenFromSecret, "caInjected", params.LokiReadCAFromSecret)
 	return nil
 }
 
