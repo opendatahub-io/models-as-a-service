@@ -181,16 +181,19 @@ func TestRunPlatformPersistsResponseTranslationBeforeCleanupAndRetriesAfterFailu
 
 func TestRunPlatformGatesOnlyUnsupportedExternalModelHandoffs(t *testing.T) {
 	for _, test := range []struct {
-		name      string
-		apiFormat string
-		provider  string
-		setting   *bool
-		wantBlock bool
+		name         string
+		apiFormat    string
+		provider     string
+		setting      *bool
+		wantBlock    bool
+		acceptedRisk bool
 	}{
-		{name: "Anthropic provider blocks pure-default cleanup", apiFormat: "messages", provider: "anthropic", wantBlock: true},
-		{name: "explicit false accepts compatibility risk", apiFormat: "messages", provider: "anthropic", setting: migrationBoolPtr(false)},
+		{name: "Anthropic Messages migrates with the translation intent pure-default records", apiFormat: "messages", provider: "anthropic"},
+		{name: "Anthropic Messages migrates with explicit translation", apiFormat: "messages", provider: "anthropic", setting: migrationBoolPtr(true)},
+		{name: "explicit false accepts compatibility risk", apiFormat: "messages", provider: "anthropic", setting: migrationBoolPtr(false), acceptedRisk: true},
 		{name: "OpenAI provider Chat Completions passthrough remains migratable", apiFormat: "openai-chat", provider: "openai"},
 		{name: "Azure OpenAI wire format still requires compatibility review", apiFormat: "openai-chat", provider: "azure", wantBlock: true},
+		{name: "Azure OpenAI stays blocked with translation on", apiFormat: "openai-chat", provider: "azure-openai", setting: migrationBoolPtr(true), wantBlock: true},
 		{name: "Vertex OpenAI wire format still requires compatibility review", apiFormat: "openai-chat", provider: "vertex", wantBlock: true},
 		{name: "Bedrock OpenAI wire format still requires compatibility review", apiFormat: "openai-chat", provider: "aws-bedrock", wantBlock: true},
 	} {
@@ -231,6 +234,10 @@ func TestRunPlatformGatesOnlyUnsupportedExternalModelHandoffs(t *testing.T) {
 			if test.wantBlock {
 				require.True(t, result.DeploymentPending)
 				require.Contains(t, result.Detail, "cannot preserve OpenAI Chat Completions")
+				// The force annotation keeps translation on; explicit false also
+				// breaks targetModel and path rewriting for every ExternalModel.
+				require.Contains(t, result.Detail, AnnotationForcePayloadProcessingMigration+"=true after reviewing the risk: API translation stays on, so only the listed bindings lose IPP parity")
+				require.Contains(t, result.Detail, "spec.apiTranslation.enabled=false instead also turns off targetModel and path rewriting for every ExternalModel")
 				require.NoError(t, err, "blocked migration must keep the IPP ConfigMap")
 				stored := &maasv1alpha1.MaasTenantConfig{}
 				require.NoError(t, base.Get(context.Background(), client.ObjectKeyFromObject(tenant), stored))
@@ -242,9 +249,18 @@ func TestRunPlatformGatesOnlyUnsupportedExternalModelHandoffs(t *testing.T) {
 				return
 			}
 			require.True(t, apierrors.IsNotFound(err), "safe or explicitly accepted handoff should finish cleanup")
-			if test.setting != nil {
+			if !test.acceptedRisk {
+				require.Empty(t, result.Warnings, "a supported handoff must not report a compatibility loss")
+				stored := &maasv1alpha1.MaasTenantConfig{}
+				require.NoError(t, base.Get(context.Background(), client.ObjectKeyFromObject(tenant), stored))
+				require.Empty(t, stored.Annotations[AnnotationAPITranslationMigrationRisk])
+				// Translation stays on, so ai-gateway-controller serves the Anthropic binding.
+				require.NotNil(t, stored.Spec.APITranslation)
+				require.True(t, *stored.Spec.APITranslation.Enabled)
+			} else {
 				require.NotEmpty(t, result.Warnings)
 				require.Contains(t, result.Warnings[0], "accepts this compatibility loss")
+				require.Contains(t, result.Warnings[0], "turns off targetModel and path rewriting for every ExternalModel")
 				stored := &maasv1alpha1.MaasTenantConfig{}
 				require.NoError(t, base.Get(context.Background(), client.ObjectKeyFromObject(tenant), stored))
 				require.Equal(t, APITranslationMigrationRiskExplicitFalse, stored.Annotations[AnnotationAPITranslationMigrationRisk])
@@ -347,9 +363,9 @@ func TestRunPlatformUsesLiveReaderBeforeIPPTranslationCleanup(t *testing.T) {
 	gatewayObj := &gwapiv1.Gateway{ObjectMeta: metav1.ObjectMeta{Name: gateway, Namespace: gatewayNS}}
 	readyAPI := readyMaaSAPIDeployment(appNS, tenantName)
 	staleModel := legacyTranslationModel(appNS, "external-model", "openai-chat", gateway, gatewayNS, nil)
-	liveModel := legacyTranslationModel(appNS, "external-model", "messages", gateway, gatewayNS, nil)
+	liveModel := legacyTranslationModel(appNS, "external-model", "openai-chat", gateway, gatewayNS, nil)
 	staleProvider := legacyTranslationProvider(appNS, "external-model-provider", "openai")
-	liveProvider := legacyTranslationProvider(appNS, "external-model-provider", "anthropic")
+	liveProvider := legacyTranslationProvider(appNS, "external-model-provider", "azure-openai")
 
 	cachedClient := newSSAFakeClientBuilder(scheme).WithObjects(
 		config, gatewayObj, tenant, readyAPI, plugins, deployment, staleModel, staleProvider,
@@ -367,7 +383,7 @@ func TestRunPlatformUsesLiveReaderBeforeIPPTranslationCleanup(t *testing.T) {
 	require.Contains(t, result.Detail, "cannot preserve OpenAI Chat Completions")
 	remaining := &corev1.ConfigMap{}
 	require.NoError(t, cachedClient.Get(context.Background(), client.ObjectKeyFromObject(plugins), remaining),
-		"the live messages binding must keep the IPP ConfigMap even when the cached ExternalModel is stale")
+		"the live Azure binding must keep the IPP ConfigMap even when the cached ExternalProvider is stale")
 }
 
 type translationCleanupClient struct {
