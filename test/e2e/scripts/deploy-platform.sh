@@ -149,6 +149,11 @@ deploy_maas_platform() {
 
     raise_llmisvc_controller_cpu
 
+    # Consumer portal enablement (stand-in maas-portal Service + auth proxy
+    # credentials Secret). On by default in OIDC lanes (MAAS_PORTAL defaults
+    # to EXTERNAL_OIDC); see deploy-maas-portal.sh.
+    bash "${PROJECT_ROOT}/test/e2e/scripts/deploy-maas-portal.sh"
+
     if [[ "${SKIP_AUTH_CHECK:-true}" == "true" ]]; then
         echo "⚠️  WARNING: Skipping Authorino readiness check (SKIP_AUTH_CHECK=true)"
     else
