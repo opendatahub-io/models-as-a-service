@@ -352,6 +352,21 @@ func (s *Service) BulkRevokeAPIKeys(ctx context.Context, username, subscription,
 	return s.store.BulkRevoke(ctx, username, subscription, tenant, dryRun)
 }
 
+// BulkRevokeAPIKeysBySubscriptions revokes all active keys for a user within a
+// resolved delegated-administrator subscription scope.
+func (s *Service) BulkRevokeAPIKeysBySubscriptions(
+	ctx context.Context,
+	username string,
+	subscriptions []string,
+	tenant string,
+	dryRun bool,
+) (int, error) {
+	if username == "" || len(subscriptions) == 0 {
+		return 0, errors.New("username and at least one subscription are required")
+	}
+	return s.store.BulkRevokeBySubscriptions(ctx, username, subscriptions, tenant, dryRun)
+}
+
 // RevokeTenantAPIKeys revokes all active keys for a tenant.
 // Returns count of revoked keys.
 func (s *Service) RevokeTenantAPIKeys(ctx context.Context, tenant string) (int, error) {

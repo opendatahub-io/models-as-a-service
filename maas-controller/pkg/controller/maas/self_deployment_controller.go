@@ -1159,7 +1159,19 @@ func formatTenantList(tenants []string, maxItems int) string {
 	return strings.Join(tenants[:maxItems], ", ") + fmt.Sprintf(" (and %d more)", len(tenants)-maxItems)
 }
 
-// SetupWithManager registers the controller to watch only the maas-controller Deployment.
+// enqueueLokiReadSecret schedules the lifecycle reconcile when the Secret that
+// switches the shared Perses datasources changes in the infrastructure namespace.
+func (r *LifecycleReconciler) enqueueLokiReadSecret(_ context.Context, obj client.Object) []reconcile.Request {
+	if r.InfraNamespace == "" || obj.GetNamespace() != r.InfraNamespace || obj.GetName() != tenantreconcile.LokiReadSecretName {
+		return nil
+	}
+	return []reconcile.Request{{NamespacedName: types.NamespacedName{
+		Namespace: r.DeploymentNS,
+		Name:      r.DeploymentName,
+	}}}
+}
+
+// SetupWithManager registers the lifecycle controller and its platform resource watches.
 func (r *LifecycleReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	selfOnly := predicate.NewPredicateFuncs(func(o client.Object) bool {
 		return o.GetName() == r.DeploymentName && o.GetNamespace() == r.DeploymentNS
@@ -1179,6 +1191,10 @@ func (r *LifecycleReconciler) SetupWithManager(mgr ctrl.Manager) error {
 
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&appsv1.Deployment{}, builder.WithPredicates(selfOnly)).
+		Watches(
+			&corev1.Secret{},
+			handler.EnqueueRequestsFromMapFunc(r.enqueueLokiReadSecret),
+		).
 		Watches(
 			&maasv1alpha1.Config{},
 			handler.EnqueueRequestsFromMapFunc(func(_ context.Context, _ client.Object) []reconcile.Request {
