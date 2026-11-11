@@ -20,6 +20,15 @@ Red Hat OpenShift AI (RHOAI). MaaS is installed by enabling it in the DataScienc
     [Troubleshooting #16](troubleshooting.md#16-management-endpoints-return-auth_failure-on-rhcl-v140)
     for diagnosis.
 
+!!! warning "RHOAI 3.6 — use RHCL v1.5"
+    For RHOAI 3.6, use **RHCL v1.5.0+** (OLM channel `stable-1.5`). On RHCL 1.4.x,
+    including the 1.4.3 that the default `stable` channel installs, a provider error
+    response without token usage can hang for a caller with two or more
+    MaaSSubscriptions while a TokenRateLimitPolicy is active
+    ([Kuadrant/wasm-shim#425](https://github.com/Kuadrant/wasm-shim/issues/425)).
+    The 1.4 backport is not merged, and `stable-1.4` (1.4.4) is not a confirmed fix.
+    When upgrading, switch the RHCL Subscription channel to `stable-1.5`.
+
 !!! note "Other Kubernetes flavors"
     Other Kubernetes flavors (e.g., upstream Kubernetes, other distributions) are currently being validated.
 
@@ -113,6 +122,28 @@ spec:
   tenants:
     mode: openshift-logging
 ```
+
+!!! note "AI Grid deployments"
+    For AI Grid deployments using the MaaS API Loki read proxy, add
+    `organization_id` and `user_id` to the existing
+    `spec.limits.global.otlp.streamLabels.resourceAttributes` list in the
+    `LokiStack` spec:
+
+    ```yaml
+    streamLabels:
+      resourceAttributes:
+        # Keep the existing resource attributes and add these entries.
+        - name: organization_id
+        - name: user_id
+    ```
+
+    The collector must also export both fields as OTLP resource attributes.
+    If it uses the `groupbyattrs` processor, include both fields in
+    `groupbyattrs.keys`. The proxy requires indexed stream labels for its
+    organization and user filters to match logs. These changes affect newly
+    ingested logs; existing logs retain their original label configuration.
+    See [Logs-based usage dashboards](../observability/setup.md#logs-based-usage-dashboards)
+    for identity capture settings.
 
 ## GenAI Studio
 

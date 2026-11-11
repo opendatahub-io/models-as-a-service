@@ -486,6 +486,11 @@ func TestApplyPlatformParamsWithRenderedOverlay(t *testing.T) {
 	assert.Equal(t, params.PayloadProcessingImage, requireContainerImage(t, payloadBeforeDeployment, "spec", "template", "spec", "containers"))
 	assert.Equal(t, PayloadPreProcessingDeploymentName(tenantID), requirePodTemplateLabel(t, payloadBeforeDeployment, LabelTenantInstance))
 	assertDeploymentSelectorLabelAbsent(t, payloadBeforeDeployment, LabelTenantInstance)
+	// The pre-auth IPP runs the same binary and is scoped like the post-auth one.
+	assert.Equal(t, params.GatewayNamespace, requireEnvVarValue(t, payloadBeforeDeployment, PayloadPreProcessingName, "GATEWAY_NAMESPACE"))
+	assert.Equal(t, params.GatewayName, requireEnvVarValue(t, payloadBeforeDeployment, PayloadPreProcessingName, "GATEWAY_NAME"))
+	assert.Equal(t, params.SubscriptionNamespace, requireEnvVarValue(t, payloadBeforeDeployment, PayloadPreProcessingName, "TENANT_NAMESPACE"))
+	assertEnvVarAbsent(t, payloadBeforeDeployment, PayloadPreProcessingName, "DISABLE_EXTERNAL_MODEL_CONTROLLER")
 
 	payloadBeforeService := requireResource(t, resources, GVKService, PayloadPreProcessingServiceName(tenantID))
 	assert.Equal(t, params.GatewayNamespace, payloadBeforeService.GetNamespace())
@@ -881,6 +886,11 @@ func TestApplyPlatformParamsWithRenderedOverlay_AITenant(t *testing.T) {
 
 	payloadBeforeDeployment := requireResource(t, resources, GVKDeployment, "payload-pre-processing-redteam")
 	assert.Equal(t, "payload-pre-processing-redteam", requireDeploymentSelectorLabel(t, payloadBeforeDeployment, LabelTenantInstance))
+	assert.Equal(t, "gateway-ns", requireEnvVarValue(t, payloadBeforeDeployment, PayloadPreProcessingName, "GATEWAY_NAMESPACE"))
+	assert.Equal(t, "redteam-gateway", requireEnvVarValue(t, payloadBeforeDeployment, PayloadPreProcessingName, "GATEWAY_NAME"))
+	assert.Equal(t, "ai-tenant-redteam", requireEnvVarValue(t, payloadBeforeDeployment, PayloadPreProcessingName, "TENANT_NAMESPACE"))
+	// The pre-auth IPP of a non-default tenant must not run the cluster-wide ExternalModel controller either.
+	assert.Equal(t, "true", requireEnvVarValue(t, payloadBeforeDeployment, PayloadPreProcessingName, "DISABLE_EXTERNAL_MODEL_CONTROLLER"))
 
 	gatewayPolicy := requireResource(t, resources, GVKNetworkPolicy, MaaSAPIGatewayNetworkPolicyName("redteam"))
 	gatewayTargetSelector, found, err := unstructured.NestedMap(gatewayPolicy.Object, "spec", "podSelector")

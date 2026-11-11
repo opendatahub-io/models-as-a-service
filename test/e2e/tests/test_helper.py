@@ -871,7 +871,9 @@ def _is_connect_failure(exc: requests.exceptions.ConnectionError) -> bool:
     return isinstance(reason, NewConnectionError)
 
 
-def _request_with_gateway_retry(method, url, retries=None, delay=None, deadline=None, **kwargs):
+def _request_with_gateway_retry(
+    method, url, retries=None, delay=None, deadline=None, extra_transient_statuses=None, **kwargs
+):
     """Make an HTTP request, retrying transient gateway/auth propagation errors.
 
     See ``_is_transient_gateway_response`` for retryable status/body patterns.
@@ -880,6 +882,11 @@ def _request_with_gateway_retry(method, url, retries=None, delay=None, deadline=
 
     Pass ``auth_denial_is_transient=False`` (keyword) for negative tests that
     expect a 401/403: an empty denial is then the answer rather than a flake.
+
+    Pass ``extra_transient_statuses`` (e.g. ``(404,)``) to additionally retry
+    those statuses — used by callers that just toggled a gateway route and must
+    tolerate a brief propagation 404. Default is empty, so other callers (incl.
+    negative tests asserting 404) are unaffected.
 
     When ``deadline`` is set (Unix timestamp), each request timeout, retry delay,
     and gateway-enforcement wait is clamped to the remaining time so polling loops
@@ -894,6 +901,8 @@ def _request_with_gateway_retry(method, url, retries=None, delay=None, deadline=
     timeout = kwargs.pop("timeout", TIMEOUT)
     verify = kwargs.pop("verify", TLS_VERIFY)
     auth_denial_is_transient = kwargs.pop("auth_denial_is_transient", True)
+
+    extra_transient_statuses = extra_transient_statuses or ()
     r = None
     for attempt in range(1, retries + 1):
         if deadline is not None:
@@ -929,8 +938,8 @@ def _request_with_gateway_retry(method, url, retries=None, delay=None, deadline=
             _is_transient_gateway_response(
                 r, auth_denial_is_transient=auth_denial_is_transient
             )
-            and attempt < retries
-        ):
+            or r.status_code in extra_transient_statuses
+        ) and attempt < retries:
             _record_transient_retry(r, attempt, retries)
             log.info(
                 "Gateway returned %d (attempt %d/%d, body_kind=%s), retrying in %ds...",
@@ -964,16 +973,30 @@ def _request_with_gateway_retry(method, url, retries=None, delay=None, deadline=
     return r
 
 
-def create_api_key_at(base_url: str, oc_token: str, name: str, *, subscription: str | None = None):
+def create_api_key_at(
+    base_url: str,
+    oc_token: str,
+    name: str,
+    *,
+    subscription: str | None = None,
+    expires_in: str | None = None,
+):
     """Create an API key against a maas-api base URL (any tenant's).
 
     Shared by the default-tenant helpers and the tenant-scoped maas-api
     callers. Retries empty 403 / Authorino AUTH_FAILURE while gateway
     AuthPolicy enforcement catches up.
+
+    Args:
+        expires_in: Optional duration string (e.g. "168h"). A tenant's
+            apiKeys.maxExpirationDays is only evaluated when the request
+            carries an expiry.
     """
     body = {"name": name}
     if subscription:
         body["subscription"] = subscription
+    if expires_in:
+        body["expiresIn"] = expires_in
 
     return _request_with_gateway_retry(
         requests.post,
@@ -1008,8 +1031,15 @@ def _create_api_key_raw(oc_token: str, name: str = None, subscription: str = Non
     return create_api_key_at(_maas_api_url(), oc_token, key_name, subscription=subscription)
 
 
-def _create_api_key(oc_token: str, name: str = None, subscription: str = None) -> str:
-    """Create an API key using the MaaS API and return the plaintext key.
+def _create_api_key_with_id(
+    oc_token: str, name: str | None = None, subscription: str | None = None
+) -> tuple[str, str | None]:
+    """Create an API key using the MaaS API and return ``(plaintext key, key id)``.
+
+    Single source of truth for default-tenant key creation: retries transient
+    gateway/AuthPolicy-propagation errors via ``_create_api_key_raw`` and raises a
+    descriptive error otherwise. The id lets callers revoke the key on teardown;
+    use ``_create_api_key`` when only the plaintext key is needed.
 
     Args:
         oc_token: OC token for authentication with maas-api
@@ -1017,7 +1047,8 @@ def _create_api_key(oc_token: str, name: str = None, subscription: str = None) -
         subscription: Optional MaaSSubscription name to bind (highest-priority auto-bind if omitted)
 
     Returns:
-        The plaintext API key (sk-oai-xxx format)
+        Tuple of the plaintext API key (sk-oai-xxx format) and its id (may be None
+        if the response omits it).
     """
     r = _create_api_key_raw(oc_token, name, subscription)
     if r.status_code not in (200, 201):
@@ -1033,6 +1064,24 @@ def _create_api_key(oc_token: str, name: str = None, subscription: str = None) -
         raise RuntimeError(f"API key response missing 'key' field: {data}")
 
     log.info("Created API key '%s' bound to subscription '%s'", name, subscription)
+    return api_key, data.get("id")
+
+
+def _create_api_key(oc_token: str, name: str = None, subscription: str = None) -> str:
+    """Create an API key using the MaaS API and return the plaintext key.
+
+    Thin wrapper over ``_create_api_key_with_id`` for callers that do not need the
+    key id.
+
+    Args:
+        oc_token: OC token for authentication with maas-api
+        name: Optional name for the key (auto-generated if not provided)
+        subscription: Optional MaaSSubscription name to bind (highest-priority auto-bind if omitted)
+
+    Returns:
+        The plaintext API key (sk-oai-xxx format)
+    """
+    api_key, _ = _create_api_key_with_id(oc_token, name, subscription)
     return api_key
 
 
@@ -1421,6 +1470,8 @@ def _create_test_subscription(
     model_namespace=MODEL_NAMESPACE,
     unlimited=False,
     inference_priority=None,
+    organization_id=None,
+    token_metadata_org_id=None,
 ):
     """Create a MaaSSubscription CR for testing.
 
@@ -1436,6 +1487,8 @@ def _create_test_subscription(
         model_namespace: Namespace containing the referenced MaaSModelRefs
         unlimited: Grant access without a token budget; token_limit and window are ignored
         inference_priority: Optional spec.inferencePriority (llm-d flow-control priority)
+        organization_id: Stable spec.organization.id association
+        token_metadata_org_id: Legacy attribution ID, only for migration/precedence tests
     """
     namespace = namespace or _ns()
     if not isinstance(model_refs, list):
@@ -1462,6 +1515,10 @@ def _create_test_subscription(
         spec["priority"] = int(priority)
     if inference_priority is not None:
         spec["inferencePriority"] = int(inference_priority)
+    if organization_id is not None:
+        spec["organization"] = {"id": organization_id}
+    if token_metadata_org_id is not None:
+        spec["tokenMetadata"] = {"organizationId": token_metadata_org_id}
 
     log.info("Creating MaaSSubscription: %s", name)
     _apply_cr(
@@ -1570,6 +1627,42 @@ def _post(url: str, payload: dict, headers: dict, timeout_sec: int = 45) -> requ
     )
 
 
+def assert_inference_response(response: requests.Response, *, min_bytes: int = 50) -> dict:
+    """
+    Assert a non-streaming chat/completions HTTP 200 carries parseable JSON with
+    non-empty completion text (``choices[0].message.content`` or ``choices[0].text``).
+    When ``usage.total_tokens`` is present it must be positive.
+    """
+    assert response.status_code == 200, (
+        f"expected HTTP 200, got {response.status_code}: {(response.text or '')[:500]}"
+    )
+    raw = response.content or b""
+    assert len(raw) >= min_bytes, (
+        f"HTTP 200 body shorter than {min_bytes} bytes (len={len(raw)})"
+    )
+    assert raw.strip(), "HTTP 200 returned an empty response body"
+    try:
+        data = response.json()
+    except json.JSONDecodeError as exc:
+        raise AssertionError(
+            f"HTTP 200 body is not valid JSON: {exc}; body={(response.text or '')[:500]}"
+        ) from exc
+    choices = data.get("choices") or []
+    assert choices, f"HTTP 200 JSON has no choices: {(response.text or '')[:500]}"
+    choice = choices[0]
+    text = choice.get("text")
+    if text is None:
+        message = choice.get("message") or {}
+        text = message.get("content")
+    assert isinstance(text, str) and text.strip(), (
+        f"HTTP 200 completion has empty text/message content: {(response.text or '')[:500]}"
+    )
+    usage = data.get("usage")
+    if isinstance(usage, dict) and "total_tokens" in usage:
+        assert usage["total_tokens"] > 0, f"usage.total_tokens must be > 0 when present: {usage}"
+    return data
+
+
 def chat(prompt: str, model_v1: str, headers: dict, model_name: str, *,
          stream: bool = False, max_tokens: Optional[int] = None):
     url = f"{model_v1}/chat/completions"
@@ -1602,9 +1695,19 @@ def assert_openai_sse_chat_stream(response: requests.Response) -> list[str]:
     assert events[-1] == OPENAI_SSE_DONE_LINE, f"stream did not end with [DONE]: {events[-3:]}"
     data_chunks = [e for e in events[:-1] if e.startswith("data: {")]
     assert data_chunks, f"stream carried no JSON data chunks: {events[:5]}"
+    aggregated: list[str] = []
     for chunk in data_chunks:
         payload = chunk[len("data: ") :]
-        json.loads(payload)
+        parsed = json.loads(payload)
+        for choice in parsed.get("choices") or []:
+            delta = choice.get("delta") or {}
+            if delta.get("content"):
+                aggregated.append(delta["content"])
+            if choice.get("text"):
+                aggregated.append(choice["text"])
+    assert "".join(aggregated).strip(), (
+        "streaming response carried no non-empty content in SSE data chunks"
+    )
     return events
 
 

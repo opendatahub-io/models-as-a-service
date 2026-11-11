@@ -11,11 +11,15 @@ const managementIdentityRoutePredicate = `request.path == "/v1/me" ||
 request.path == "/maas-api/v1/me" ||
 request.path == "/v1/subscriptions" ||
 request.path.startsWith("/v1/subscriptions/") ||
-request.path.startsWith("/v1/model/") && request.path.endsWith("/subscriptions") ||
-request.path.startsWith("/v1/api-keys") ||
-request.path.startsWith("/maas-api/v1/subscriptions") ||
-request.path.startsWith("/maas-api/v1/model/") && request.path.endsWith("/subscriptions") ||
-request.path.startsWith("/maas-api/v1/api-keys")`
+	request.path == "/v1/models" ||
+	request.path.startsWith("/v1/model/") && request.path.endsWith("/subscriptions") ||
+	request.path.startsWith("/v1/api-keys") ||
+	request.path.startsWith("/v1/logs") ||
+	request.path.startsWith("/maas-api/v1/subscriptions") ||
+	request.path == "/maas-api/v1/models" ||
+	request.path.startsWith("/maas-api/v1/model/") && request.path.endsWith("/subscriptions") ||
+	request.path.startsWith("/maas-api/v1/api-keys") ||
+	request.path.startsWith("/maas-api/v1/logs")`
 
 // verifiedIdentityClaims lists the claims carried in the trusted identity
 // envelope, in the order they appear in the generated CEL map.
@@ -37,7 +41,6 @@ var verifiedIdentityClaims = []struct {
 	{name: "preferred_username", expression: `has(auth.identity.preferred_username) ? auth.identity.preferred_username : ""`},
 	{name: "email", expression: `has(auth.identity.email) ? auth.identity.email : ""`},
 	{name: "groups", expression: `has(auth.identity.groups) ? auth.identity.groups : []`},
-	{name: "https://redhat.com/maas/orgs", expression: `"https://redhat.com/maas/orgs" in auth.identity ? auth.identity["https://redhat.com/maas/orgs"] : []`},
 }
 
 // verifiedIdentityClaimsExpression builds one CEL map literal for the claims
@@ -49,7 +52,22 @@ func verifiedIdentityClaimsExpression() string {
 	for _, claim := range verifiedIdentityClaims {
 		entries = append(entries, strconv.Quote(claim.name)+": "+claim.expression)
 	}
-	return "{" + strings.Join(entries, ", ") + "}"
+
+	organizationEntries := append([]string{}, entries...)
+	for _, claim := range []struct {
+		name       string
+		expression string
+	}{
+		{name: "org_id", expression: `auth.identity["org_id"]`},
+		{name: "org_name", expression: `"org_name" in auth.identity ? auth.identity["org_name"] : ""`},
+		{name: "roles", expression: `"roles" in auth.identity ? auth.identity["roles"] : []`},
+	} {
+		organizationEntries = append(organizationEntries, strconv.Quote(claim.name)+": "+claim.expression)
+	}
+
+	baseClaims := "{" + strings.Join(entries, ", ") + "}"
+	organizationClaims := "{" + strings.Join(organizationEntries, ", ") + "}"
+	return `"org_id" in auth.identity ? ` + organizationClaims + " : " + baseClaims
 }
 
 // verifiedIdentityHeader returns Authorino's JSON response configuration for
