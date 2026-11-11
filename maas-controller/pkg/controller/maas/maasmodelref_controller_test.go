@@ -1573,7 +1573,7 @@ func TestExternalModel_Reconcile_GatewayStopsAcceptingReportsReason(t *testing.T
 	}
 
 	got := reconcileModel()
-	assertCondition(t, got.Status.Conditions, maasv1alpha1.ConditionRuntimeReady, metav1.ConditionTrue, string(maasv1alpha1.ReasonRuntimeHealthy))
+	assertCondition(t, got.Status.Conditions, maasv1alpha1.ConditionRuntimeReady, metav1.ConditionUnknown, string(maasv1alpha1.ReasonUnknown))
 
 	setAccepted(metav1.Condition{
 		Status:  metav1.ConditionFalse,
@@ -1585,7 +1585,7 @@ func TestExternalModel_Reconcile_GatewayStopsAcceptingReportsReason(t *testing.T
 
 	setAccepted(metav1.Condition{Status: metav1.ConditionTrue, Reason: string(gatewayapiv1.RouteReasonAccepted)})
 	got = reconcileModel()
-	assertCondition(t, got.Status.Conditions, maasv1alpha1.ConditionRuntimeReady, metav1.ConditionTrue, string(maasv1alpha1.ReasonRuntimeHealthy))
+	assertCondition(t, got.Status.Conditions, maasv1alpha1.ConditionRuntimeReady, metav1.ConditionUnknown, string(maasv1alpha1.ReasonUnknown))
 }
 
 func TestExternalModel_Reconcile_RuntimeReadyFromGatewayStatus(t *testing.T) {
@@ -1660,9 +1660,9 @@ func TestExternalModel_Reconcile_RuntimeReadyFromGatewayStatus(t *testing.T) {
 				onListener("http", gatewayParent(notAllowed)),
 				onListener("https", gatewayParent(accepted(metav1.ConditionTrue, gatewayapiv1.RouteReasonAccepted, ""))),
 			},
-			wantStatus:  metav1.ConditionTrue,
-			wantReason:  maasv1alpha1.ReasonRuntimeHealthy,
-			wantMessage: "Backend is healthy",
+			wantStatus:  metav1.ConditionUnknown,
+			wantReason:  maasv1alpha1.ReasonUnknown,
+			wantMessage: "The route to the external provider is accepted; MaaS does not observe the backend's health",
 		},
 	}
 	for _, tt := range tests {

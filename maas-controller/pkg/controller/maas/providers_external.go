@@ -377,6 +377,9 @@ func (h *externalModelHandler) Status(ctx context.Context, log logr.Logger, mode
 	return endpoint, true, nil
 }
 
+// observesRuntime is false: an accepted route says nothing about the external backend behind it.
+func (h *externalModelHandler) observesRuntime() bool { return false }
+
 // NotReadyReason reports the gateway's rejection of the model's HTTPRoute, if ReconcileRoute found one.
 func (h *externalModelHandler) NotReadyReason() (maasv1alpha1.ConditionReason, string) {
 	return h.notReadyReason, h.notReadyMessage

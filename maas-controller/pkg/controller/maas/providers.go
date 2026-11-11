@@ -48,6 +48,12 @@ type RouteResolver interface {
 	HTTPRouteForModel(ctx context.Context, c client.Reader, model *maasv1alpha1.MaaSModelRef) (routeName, routeNamespace string, err error)
 }
 
+// runtimeObserver is implemented by a handler whose ready Status does not observe the backend
+// itself, so a ready result is recorded as RuntimeReady Unknown rather than healthy.
+type runtimeObserver interface {
+	observesRuntime() bool
+}
+
 // BackendHandler encapsulates kind-specific behavior for a MaaSModelRef.
 // The MaaSModelRef reconciler calls these in order; it does not switch on kind.
 type BackendHandler interface {

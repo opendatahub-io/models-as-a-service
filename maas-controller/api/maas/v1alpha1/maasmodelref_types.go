@@ -108,7 +108,8 @@ type ModelReference struct {
 //     MaaSSubscription + MaaSAuthPolicy pairing. No admin CR names, namespaces,
 //     or UIDs appear in any status field.
 //   - RuntimeReady: whether the model backend is healthy and serving, independent
-//     of governance state.
+//     of governance state. Unknown when MaaS does not observe the backend, as for
+//     an external model whose route is accepted.
 //   - ModelIdentityUnique: whether this model's ResolvedModelAlias collides with
 //     another MaaSModelRef in the same namespace resolving to the same tenant.
 //     False on a collision — body-based routing cannot disambiguate two
@@ -169,7 +170,7 @@ type MaaSModelStatus struct {
 	// Condition types include:
 	//   - Ready: overall readiness (governance + runtime).
 	//   - GovernanceAttached: active MaaSSubscription + MaaSAuthPolicy pairing exists.
-	//   - RuntimeReady: backend is healthy and serving.
+	//   - RuntimeReady: backend is healthy and serving; Unknown when MaaS does not observe it.
 	//   - ModelIdentityUnique: no other MaaSModelRef in this namespace resolves to the
 	//     same model alias and the same tenant (see MaaSModelStatus doc for details).
 	// +optional

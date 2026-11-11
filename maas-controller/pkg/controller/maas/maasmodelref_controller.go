@@ -250,7 +250,9 @@ func (r *MaaSModelRefReconciler) Reconcile(ctx context.Context, req ctrl.Request
 
 	governed := r.checkGovernanceAttached(ctx, model)
 	r.setGovernanceCondition(model, governed)
-	if runtimeReady {
+	if observer, ok := handler.(runtimeObserver); runtimeReady && ok && !observer.observesRuntime() {
+		markRuntimeNotObserved(model)
+	} else if runtimeReady {
 		markRuntimeReady(model)
 	} else {
 		reason, message := handler.NotReadyReason()
@@ -330,6 +332,12 @@ func (r *MaaSModelRefReconciler) setGovernanceCondition(model *maasv1alpha1.MaaS
 // markRuntimeReady records a healthy backend on RuntimeReady.
 func markRuntimeReady(model *maasv1alpha1.MaaSModelRef) {
 	setRuntimeReadyCondition(model, metav1.ConditionTrue, maasv1alpha1.ReasonRuntimeHealthy, "Backend is healthy")
+}
+
+// markRuntimeNotObserved records a backend whose route is accepted and whose health MaaS does not observe.
+func markRuntimeNotObserved(model *maasv1alpha1.MaaSModelRef) {
+	setRuntimeReadyCondition(model, metav1.ConditionUnknown, maasv1alpha1.ReasonUnknown,
+		"The route to the external provider is accepted; MaaS does not observe the backend's health")
 }
 
 // markRuntimeNotReady records why the backend is not ready on RuntimeReady; an empty

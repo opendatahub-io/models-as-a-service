@@ -341,6 +341,10 @@ func TestExternalModel_ReadyFollowsRouteAccepted(t *testing.T) {
 	if got.Status.Phase != "Ready" {
 		t.Errorf("Phase after route accepted = %q, want Ready", got.Status.Phase)
 	}
+	// An accepted route says nothing about the backend behind it, so the phase is Ready while
+	// RuntimeReady stays Unknown rather than claiming a healthy backend.
+	assertCondition(t, got.Status.Conditions, maasv1alpha1.ConditionRuntimeReady, metav1.ConditionUnknown, string(maasv1alpha1.ReasonUnknown))
+	assertReadyCondition(t, got.Status.Conditions, metav1.ConditionTrue, "Reconciled")
 	if got.Status.Endpoint != "https://maas.example.com" {
 		t.Errorf("Endpoint = %q, want %q", got.Status.Endpoint, "https://maas.example.com")
 	}

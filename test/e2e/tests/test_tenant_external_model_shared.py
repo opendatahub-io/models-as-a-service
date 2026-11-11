@@ -433,8 +433,8 @@ class TestSharedModelAmbiguousModelRef:
     def test_pinned_model_refs_stay_ready(self, shared_env, ambiguous_stack):
         """The per-tenant modelRefs pinning spec.tenantRef are unaffected by
         their ambiguous sibling: each resolves its own tenant's attachment
-        (RuntimeReady, resolvedTenantRef and serving gateway set to its own
-        tenant) with no ambiguity error.
+        (an accepted route, so RuntimeReady Unknown, and resolvedTenantRef and
+        serving gateway set to its own tenant) with no ambiguity error.
 
         Full phase-Ready additionally needs a governance pairing and unique
         model identities (RHOAIENG-101609 — two per-tenant refs for one
@@ -459,10 +459,13 @@ class TestSharedModelAmbiguousModelRef:
                 conditions = {
                     c.get("type"): c for c in status.get("conditions") or []
                 }
+                # The route is accepted; MaaS does not observe an external backend's health.
                 runtime = conditions.get("RuntimeReady")
-                assert runtime is not None and runtime.get("status") == "True", (
-                    f"pinned modelRef {ref_name} runtime not ready: {redact_sensitive(status)}"
-                )
+                assert (
+                    runtime is not None
+                    and runtime.get("status") == "Unknown"
+                    and runtime.get("reason") == "Unknown"
+                ), f"pinned modelRef {ref_name} route not accepted: {redact_sensitive(status)}"
                 assert status.get("resolvedTenantRef") == case["tenant_label_name"], (
                     f"pinned modelRef {ref_name} resolved tenant "
                     f"{status.get('resolvedTenantRef')!r}, expected "
@@ -479,7 +482,7 @@ class TestSharedModelAmbiguousModelRef:
                 _check,
                 TENANT_EXTERNAL_MODEL_READY_TIMEOUT,
                 f"pinned MaaSModelRef {model['namespace']}/{ref_name} resolving tenant "
-                f"{case['tenant_label_name']} (RuntimeReady, own gateway)",
+                f"{case['tenant_label_name']} (route accepted, own gateway)",
             )
 
 

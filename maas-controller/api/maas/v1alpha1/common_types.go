@@ -36,7 +36,8 @@ const (
 	ConditionGovernanceAttached = "GovernanceAttached"
 
 	// ConditionRuntimeReady indicates whether the model's backend
-	// (routes, gateways, inference service) is healthy and serving.
+	// (routes, gateways, inference service) is healthy and serving. Unknown when
+	// MaaS does not observe the backend, as for an external model whose route is accepted.
 	ConditionRuntimeReady = "RuntimeReady"
 )
 
