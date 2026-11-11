@@ -123,6 +123,12 @@ type Config struct {
 	// header upstream.
 	LokiReadToken string
 
+	// LokiReadCA is a PEM bundle appended to the system trust pool for proxied
+	// upstream Loki requests (LOKI_READ_CA, sourced from the usage-logs-loki
+	// Secret). When empty only the system pool is used; a non-empty value that
+	// is not parseable PEM is a startup-fatal configuration error.
+	LokiReadCA string
+
 	// OTELEndpoint is the OTLP gRPC endpoint for trace export (e.g., "localhost:4317").
 	// Tracing is disabled when empty.
 	OTELEndpoint string
@@ -196,6 +202,7 @@ func Load() *Config {
 		DiscoveryEnableHTTP2:        discoveryEnableHTTP2,
 		LokiReadEndpoint:            env.GetString("LOKI_READ_ENDPOINT", ""),
 		LokiReadToken:               env.GetString("LOKI_READ_TOKEN", ""),
+		LokiReadCA:                  env.GetString("LOKI_READ_CA", ""),
 		OTELEndpoint:                env.GetString("OTEL_EXPORTER_OTLP_ENDPOINT", ""),
 		OTELInsecure:                otelInsecure,
 		OTELSampleRate:              otelSampleRate,
