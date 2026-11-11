@@ -55,6 +55,13 @@ linters:
       min-complexity: 30
     importas:
       alias:
+        # Explicit entries first: the generic k8s.io/api regex below maps both
+        # authentication/v1 and authorization/v1 to authv1, which collides in
+        # files that import both.
+        - pkg: k8s.io/api/authentication/v1
+          alias: authv1
+        - pkg: k8s.io/api/authorization/v1
+          alias: authzv1
         - pkg: k8s.io/api/(\w{1,4})\w*/(v[\w\d]+)
           alias: $1$2
         - pkg: github.com/openshift/api/(\w{1,4})\w*/(v[\w\d]+)

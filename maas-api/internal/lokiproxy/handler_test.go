@@ -1,6 +1,7 @@
 package lokiproxy_test
 
 import (
+	"encoding/pem"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -60,7 +61,7 @@ func newRouter(t *testing.T, pathPrefix string) (*gin.Engine, *upstreamRecord) {
 	upstream, record := newUpstream(t, http.StatusOK, `{"status":"success"}`)
 
 	tokenHandler := token.NewHandler(logger.Production(), "test-tenant")
-	lokiHandler, err := lokiproxy.NewHandler(logger.Production(), upstream.URL+pathPrefix, "")
+	lokiHandler, err := lokiproxy.NewHandler(logger.Production(), upstream.URL+pathPrefix, "", "")
 	require.NoError(t, err)
 
 	router := gin.New()
@@ -389,7 +390,7 @@ func TestProxyPassesThroughUpstreamError(t *testing.T) {
 	t.Cleanup(upstream.Close)
 
 	tokenHandler := token.NewHandler(logger.Production(), "test-tenant")
-	lokiHandler, err := lokiproxy.NewHandler(logger.Production(), upstream.URL, "")
+	lokiHandler, err := lokiproxy.NewHandler(logger.Production(), upstream.URL, "", "")
 	require.NoError(t, err)
 
 	router := gin.New()
@@ -402,16 +403,16 @@ func TestProxyPassesThroughUpstreamError(t *testing.T) {
 }
 
 func TestNewHandlerValidatesEndpoint(t *testing.T) {
-	_, err := lokiproxy.NewHandler(logger.Production(), "", "")
+	_, err := lokiproxy.NewHandler(logger.Production(), "", "", "")
 	require.Error(t, err)
 
-	_, err = lokiproxy.NewHandler(logger.Production(), "not-a-url", "")
+	_, err = lokiproxy.NewHandler(logger.Production(), "not-a-url", "", "")
 	require.Error(t, err)
 
-	_, err = lokiproxy.NewHandler(logger.Production(), "ftp://loki.example", "")
+	_, err = lokiproxy.NewHandler(logger.Production(), "ftp://loki.example", "", "")
 	require.Error(t, err)
 
-	_, err = lokiproxy.NewHandler(logger.Production(), "https://loki.example/api/logs/v1/application", "")
+	_, err = lokiproxy.NewHandler(logger.Production(), "https://loki.example/api/logs/v1/application", "", "")
 	require.NoError(t, err)
 }
 
@@ -421,7 +422,7 @@ func TestProxyInjectsUpstreamBearerToken(t *testing.T) {
 	upstream, record := newUpstream(t, http.StatusOK, `{"status":"success"}`)
 
 	tokenHandler := token.NewHandler(logger.Production(), "test-tenant")
-	lokiHandler, err := lokiproxy.NewHandler(logger.Production(), upstream.URL, "sa-token-123")
+	lokiHandler, err := lokiproxy.NewHandler(logger.Production(), upstream.URL, "sa-token-123", "")
 	require.NoError(t, err)
 
 	router := gin.New()
@@ -439,7 +440,7 @@ func TestProxyWithoutTokenSendsNoAuthorizationHeader(t *testing.T) {
 	upstream, record := newUpstream(t, http.StatusOK, `{"status":"success"}`)
 
 	tokenHandler := token.NewHandler(logger.Production(), "test-tenant")
-	lokiHandler, err := lokiproxy.NewHandler(logger.Production(), upstream.URL, "")
+	lokiHandler, err := lokiproxy.NewHandler(logger.Production(), upstream.URL, "", "")
 	require.NoError(t, err)
 
 	router := gin.New()
@@ -449,4 +450,56 @@ func TestProxyWithoutTokenSendsNoAuthorizationHeader(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, w.Code)
 	require.Empty(t, record.authorization)
+}
+
+func TestNewHandlerRejectsMalformedCA(t *testing.T) {
+	_, err := lokiproxy.NewHandler(logger.Production(), "https://loki.example", "", "not a pem bundle")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "LOKI_READ_CA")
+
+	// Whitespace-only is treated as absent: system pool only, no error.
+	_, err = lokiproxy.NewHandler(logger.Production(), "https://loki.example", "", "  \n\t")
+	require.NoError(t, err)
+}
+
+// TestProxyCAAppendedToSystemPool verifies that a PEM bundle passed as
+// LOKI_READ_CA is appended to (not replacing) the system trust pool: the
+// proxy reaches a TLS upstream whose certificate is trusted only through the
+// supplied bundle.
+func TestProxyCAAppendedToSystemPool(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	record := &upstreamRecord{}
+	tlsServer := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		record.method = r.Method
+		record.path = r.URL.Path
+		record.query = r.URL.Query()
+		record.authorization = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, `{"status":"success"}`)
+	}))
+	t.Cleanup(tlsServer.Close)
+
+	// The self-signed test certificate is not in the system trust store.
+	cert := tlsServer.TLS.Certificates[0]
+	caPEM := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Certificate[0]}))
+
+	// Without the CA the TLS handshake fails and the proxy answers 502.
+	tokenHandler := token.NewHandler(logger.Production(), "test-tenant")
+	withoutCA, err := lokiproxy.NewHandler(logger.Production(), tlsServer.URL, "", "")
+	require.NoError(t, err)
+	router := gin.New()
+	withoutCA.RegisterRoutes(router.Group("/v1", tokenHandler.ExtractVerifiedIdentityOptional(), tokenHandler.ExtractUserInfo()))
+	w := lokiRequest(t, router, http.MethodGet, "/v1/logs/loki/api/v1/query_range?query=%7B%7D", adminIdentity())
+	require.Equal(t, http.StatusBadGateway, w.Code)
+
+	// With the CA appended to the system pool the upstream is reachable.
+	withCA, err := lokiproxy.NewHandler(logger.Production(), tlsServer.URL, "", caPEM)
+	require.NoError(t, err)
+	router = gin.New()
+	withCA.RegisterRoutes(router.Group("/v1", tokenHandler.ExtractVerifiedIdentityOptional(), tokenHandler.ExtractUserInfo()))
+	w = lokiRequest(t, router, http.MethodGet, "/v1/logs/loki/api/v1/query_range?query=%7B%7D", adminIdentity())
+	require.Equal(t, http.StatusOK, w.Code)
+	require.Equal(t, "/loki/api/v1/query_range", record.path)
 }

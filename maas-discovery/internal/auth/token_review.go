@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	authenticationv1 "k8s.io/api/authentication/v1"
-	authorizationv1 "k8s.io/api/authorization/v1"
+	authv1 "k8s.io/api/authentication/v1"
+	authzv1 "k8s.io/api/authorization/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 )
@@ -48,8 +48,8 @@ func TokenReviewMiddleware(log *slog.Logger, kubeClient kubernetes.Interface, ai
 
 		token := strings.TrimPrefix(authHeader, "Bearer ")
 
-		tr := &authenticationv1.TokenReview{
-			Spec: authenticationv1.TokenReviewSpec{Token: token},
+		tr := &authv1.TokenReview{
+			Spec: authv1.TokenReviewSpec{Token: token},
 		}
 		result, err := kubeClient.AuthenticationV1().TokenReviews().Create(ctx, tr, metav1.CreateOptions{})
 		if err != nil {
@@ -75,11 +75,11 @@ func TokenReviewMiddleware(log *slog.Logger, kubeClient kubernetes.Interface, ai
 		username := result.Status.User.Username
 		groups := result.Status.User.Groups
 
-		sar := &authorizationv1.SubjectAccessReview{
-			Spec: authorizationv1.SubjectAccessReviewSpec{
+		sar := &authzv1.SubjectAccessReview{
+			Spec: authzv1.SubjectAccessReviewSpec{
 				User:   username,
 				Groups: groups,
-				ResourceAttributes: &authorizationv1.ResourceAttributes{
+				ResourceAttributes: &authzv1.ResourceAttributes{
 					Group:    "authorization.k8s.io",
 					Resource: "selfsubjectaccessreviews",
 					Verb:     "create",
@@ -110,11 +110,11 @@ func TokenReviewMiddleware(log *slog.Logger, kubeClient kubernetes.Interface, ai
 
 		isAdmin := false
 		if aitenantNamespace != "" {
-			adminSAR := &authorizationv1.SubjectAccessReview{
-				Spec: authorizationv1.SubjectAccessReviewSpec{
+			adminSAR := &authzv1.SubjectAccessReview{
+				Spec: authzv1.SubjectAccessReviewSpec{
 					User:   username,
 					Groups: groups,
-					ResourceAttributes: &authorizationv1.ResourceAttributes{
+					ResourceAttributes: &authzv1.ResourceAttributes{
 						Namespace: aitenantNamespace,
 						Verb:      "list",
 						Group:     "maas.opendatahub.io",
