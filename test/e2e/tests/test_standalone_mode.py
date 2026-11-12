@@ -21,6 +21,7 @@ pytestmark = [
         reason="STANDALONE_MAAS_API_URL is not set",
     ),
     pytest.mark.xdist_group("standalone"),
+    pytest.mark.full_suite,
 ]
 
 IDENTITY_HEADERS = {

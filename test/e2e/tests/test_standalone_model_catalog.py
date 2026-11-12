@@ -20,6 +20,7 @@ pytestmark = [
         reason="standalone model catalog phase is not enabled",
     ),
     pytest.mark.xdist_group("standalone"),
+    pytest.mark.full_suite,
 ]
 
 IDENTITY_HEADERS = {
