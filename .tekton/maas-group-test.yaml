@@ -26,7 +26,7 @@ spec:
     value: 'false'
   # Validation for opendatahub-io/odh-konflux-central#764 — rebased on main; revert after merge.
   - name: odh-konflux-central-revision
-    value: 18af3f7aa1766ba98bac77fc983fb69ec0c02f59
+    value: f03e93ec762fe82e63666724e6178789c5e36bfc
   - name: odh-konflux-central-git-url
     value: https://github.com/somya-bhatnagar/odh-konflux-central.git
   pipelineRef:
@@ -35,7 +35,7 @@ spec:
     - name: url
       value: https://github.com/somya-bhatnagar/odh-konflux-central.git
     - name: revision
-      value: 18af3f7aa1766ba98bac77fc983fb69ec0c02f59
+      value: f03e93ec762fe82e63666724e6178789c5e36bfc
     - name: pathInRepo
       value: integration-tests/models-as-a-service/pr-group-testing-pipeline.yaml
   taskRunTemplate:
