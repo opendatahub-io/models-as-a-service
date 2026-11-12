@@ -36,7 +36,6 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	"knative.dev/pkg/kmeta"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -861,27 +860,16 @@ func (llmisvcRouterStatusChangedPredicate) Update(e event.UpdateEvent) bool {
 	if e.ObjectOld == nil || e.ObjectNew == nil {
 		return true
 	}
-	if oldObj, ok := e.ObjectOld.(*kservev1alpha2.LLMInferenceService); ok {
-		newObj, ok := e.ObjectNew.(*kservev1alpha2.LLMInferenceService)
-		if !ok {
-			return true
-		}
-		return !equality.Semantic.DeepEqual(oldObj.Status.Router, newObj.Status.Router) ||
-			llmisvcReadyStatus(oldObj) != llmisvcReadyStatus(newObj)
-	}
-	// Dynamic watches registered after the CRD appears deliver unstructured objects.
-	oldU, ok := e.ObjectOld.(*unstructured.Unstructured)
+	oldObj, ok := e.ObjectOld.(*kservev1alpha2.LLMInferenceService)
 	if !ok {
 		return true
 	}
-	newU, ok := e.ObjectNew.(*unstructured.Unstructured)
+	newObj, ok := e.ObjectNew.(*kservev1alpha2.LLMInferenceService)
 	if !ok {
 		return true
 	}
-	oldRouter, _, _ := unstructured.NestedFieldNoCopy(oldU.Object, "status", "router")
-	newRouter, _, _ := unstructured.NestedFieldNoCopy(newU.Object, "status", "router")
-	return !equality.Semantic.DeepEqual(oldRouter, newRouter) ||
-		unstructuredLLMIsvcReadyStatus(oldU) != unstructuredLLMIsvcReadyStatus(newU)
+	return !equality.Semantic.DeepEqual(oldObj.Status.Router, newObj.Status.Router) ||
+		llmisvcReadyStatus(oldObj) != llmisvcReadyStatus(newObj)
 }
 
 // mapInferenceObjectiveToSubscription maps a generated InferenceObjective to the

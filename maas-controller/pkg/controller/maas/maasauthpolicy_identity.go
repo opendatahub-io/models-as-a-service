@@ -11,11 +11,15 @@ const managementIdentityRoutePredicate = `request.path == "/v1/me" ||
 request.path == "/maas-api/v1/me" ||
 request.path == "/v1/subscriptions" ||
 request.path.startsWith("/v1/subscriptions/") ||
-request.path.startsWith("/v1/model/") && request.path.endsWith("/subscriptions") ||
-request.path.startsWith("/v1/api-keys") ||
-request.path.startsWith("/maas-api/v1/subscriptions") ||
-request.path.startsWith("/maas-api/v1/model/") && request.path.endsWith("/subscriptions") ||
-request.path.startsWith("/maas-api/v1/api-keys")`
+	request.path == "/v1/models" ||
+	request.path.startsWith("/v1/model/") && request.path.endsWith("/subscriptions") ||
+	request.path.startsWith("/v1/api-keys") ||
+	request.path.startsWith("/v1/logs") ||
+	request.path.startsWith("/maas-api/v1/subscriptions") ||
+	request.path == "/maas-api/v1/models" ||
+	request.path.startsWith("/maas-api/v1/model/") && request.path.endsWith("/subscriptions") ||
+	request.path.startsWith("/maas-api/v1/api-keys") ||
+	request.path.startsWith("/maas-api/v1/logs")`
 
 // verifiedIdentityClaims lists the claims carried in the trusted identity
 // envelope, in the order they appear in the generated CEL map.
@@ -37,7 +41,6 @@ var verifiedIdentityClaims = []struct {
 	{name: "preferred_username", expression: `has(auth.identity.preferred_username) ? auth.identity.preferred_username : ""`},
 	{name: "email", expression: `has(auth.identity.email) ? auth.identity.email : ""`},
 	{name: "groups", expression: `has(auth.identity.groups) ? auth.identity.groups : []`},
-	{name: "https://redhat.com/maas/orgs", expression: `"https://redhat.com/maas/orgs" in auth.identity ? auth.identity["https://redhat.com/maas/orgs"] : []`},
 }
 
 // verifiedIdentityClaimsExpression builds one CEL map literal for the claims
@@ -49,15 +52,30 @@ func verifiedIdentityClaimsExpression() string {
 	for _, claim := range verifiedIdentityClaims {
 		entries = append(entries, strconv.Quote(claim.name)+": "+claim.expression)
 	}
-	return "{" + strings.Join(entries, ", ") + "}"
+
+	organizationEntries := append([]string{}, entries...)
+	for _, claim := range []struct {
+		name       string
+		expression string
+	}{
+		{name: "org_id", expression: `auth.identity["org_id"]`},
+		{name: "org_name", expression: `"org_name" in auth.identity ? auth.identity["org_name"] : ""`},
+		{name: "roles", expression: `"roles" in auth.identity ? auth.identity["roles"] : []`},
+	} {
+		organizationEntries = append(organizationEntries, strconv.Quote(claim.name)+": "+claim.expression)
+	}
+
+	baseClaims := "{" + strings.Join(entries, ", ") + "}"
+	organizationClaims := "{" + strings.Join(organizationEntries, ", ") + "}"
+	return `"org_id" in auth.identity ? ` + organizationClaims + " : " + baseClaims
 }
 
 // verifiedIdentityHeader returns Authorino's JSON response configuration for
-// the trusted identity transport. The predicate defaults to false so partial
-// or legacy configurations never inject organization claims.
+// the trusted identity transport. The predicate defaults to false so a missing
+// OIDC configuration never injects organization claims.
 func verifiedIdentityHeader(oidc *oidcConfig, notAPIKeyPredicate string) map[string]any {
 	predicate := "false"
-	if strictIdentityContractConfigured(oidc) {
+	if verifiedIdentityContractConfigured(oidc) {
 		predicate = "(" + managementIdentityRoutePredicate + ") && (" + externalOIDCPredicate(notAPIKeyPredicate) + ")"
 	}
 
@@ -76,16 +94,13 @@ func verifiedIdentityHeader(oidc *oidcConfig, notAPIKeyPredicate string) map[str
 	}
 }
 
-func strictIdentityContractConfigured(oidc *oidcConfig) bool {
-	// Do not propagate organization identity unless every binding dimension is
-	// configured. Missing issuer, client, audience, or access-token purpose
-	// would weaken the trust contract while still carrying claims downstream.
+func verifiedIdentityContractConfigured(oidc *oidcConfig) bool {
+	// Require the core issuer and client binding dimensions. Audience and
+	// access-token-purpose checks are optional authorization constraints and
+	// must not disable identity propagation for legacy OIDC deployments.
 	return oidc != nil &&
 		oidc.IssuerURL != "" &&
-		oidc.ClientID != "" &&
-		oidc.Audience != "" &&
-		oidc.AccessTokenPurposeClaim != "" &&
-		oidc.AccessTokenPurpose != ""
+		oidc.ClientID != ""
 }
 
 func externalOIDCPredicate(notAPIKeyPredicate string) string {

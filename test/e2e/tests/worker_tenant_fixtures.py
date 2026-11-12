@@ -21,13 +21,13 @@ from multitenancy_helpers import (
     apply_gateway_access_label,
     bootstrap_aitenant_tenant,
     cleanup_discovery_case,
+    gateway_route_host,
     new_named_tenant_case,
     per_tenant_gateway_policy_names,
     require_aitenant_crd,
     wait_for_deployment_available,
     wait_for_gateway_authpolicy_ready,
     wait_for_llmisvc_backend_ready,
-    wait_for_route_admitted,
 )
 from test_helper import (
     PREMIUM_SIMULATOR_SUBSCRIPTION,
@@ -150,11 +150,7 @@ def build_worker_tenant_case(worker_suffix: str) -> WorkerTenantContext:
 
 
 def _route_host(case: dict[str, str]) -> str:
-    route = wait_for_route_admitted(f"{case['gateway_name']}-route")
-    host = route.get("spec", {}).get("host")
-    if not host:
-        raise RuntimeError(f"Route {case['gateway_name']}-route missing spec.host")
-    return host
+    return gateway_route_host(case["gateway_name"])
 
 
 def _apply_baseline_stack(context: WorkerTenantContext) -> None:
@@ -221,10 +217,11 @@ def _apply_baseline_stack(context: WorkerTenantContext) -> None:
     _wait_for_maas_auth_policy_phase(
         context.policy_name,
         namespace=context.tenant_namespace,
-        timeout=int(os.environ.get("E2E_AUTHPOLICY_PHASE_TIMEOUT", "120")),
         require_auth_policies=False,
         require_enforced=False,
     )
+    # Worker bootstrap stands up free + premium models at once; subscription Active
+    # can exceed the 120s default while both TRLPs sync under parallel xdist.
     _wait_for_maas_subscription_phase(
         context.subscription_name,
         namespace=context.tenant_namespace,
@@ -233,10 +230,10 @@ def _apply_baseline_stack(context: WorkerTenantContext) -> None:
     _wait_for_maas_auth_policy_phase(
         "premium-simulator-access",
         namespace=context.tenant_namespace,
-        timeout=int(os.environ.get("E2E_AUTHPOLICY_PHASE_TIMEOUT", "120")),
         require_auth_policies=False,
         require_enforced=False,
     )
+    # Same dual-model bootstrap budget as the free-tier subscription above.
     _wait_for_maas_subscription_phase(
         context.premium_subscription_name,
         namespace=context.tenant_namespace,
@@ -303,8 +300,22 @@ def ensure_worker_models(
     context: WorkerTenantContext,
     model_refs: tuple[str, ...],
 ) -> None:
-    """Provision optional worker models immediately before a module needs them."""
+    """Provision worker models immediately before a module needs them.
+
+    Idempotent: everything is applied rather than created, so calling this for
+    the baseline ``model_ref`` re-heals a backend that drifted (or was removed
+    by another test on the same worker) since the session bootstrap waited on
+    it.
+
+    Readiness is the caller's business, as everywhere else in the suite: an
+    optional model (``distinct``, ``unconfigured``, ``embedding``) stays
+    ``Pending`` until a test pairs it with governance, so callers that need a
+    model ``Ready`` wait for it with ``_wait_for_model_ready`` once they have
+    created the subscription or auth policy that makes it so.
+    """
     aliases = {
+        context.model_ref: f"e2e/{context.model_ref}",
+        context.premium_model_ref: f"e2e/{context.premium_model_ref}",
         context.distinct_model_ref: f"e2e/{context.distinct_model_ref}",
         context.distinct_model_2_ref: f"e2e/{context.distinct_model_2_ref}",
         context.unconfigured_model_ref: f"e2e/{context.unconfigured_model_ref}",
@@ -313,7 +324,7 @@ def ensure_worker_models(
     timeout = MODEL_BACKEND_READY_TIMEOUT
     for model_ref in model_refs:
         if model_ref not in aliases:
-            raise ValueError(f"unsupported optional worker model {model_ref!r}")
+            raise ValueError(f"unsupported worker model {model_ref!r}")
         _create_llmis(
             model_ref,
             context.model_namespace,

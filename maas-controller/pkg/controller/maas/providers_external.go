@@ -421,10 +421,27 @@ func (h *externalModelHandler) GetModelEndpoint(ctx context.Context, log logr.Lo
 	return "", fmt.Errorf("unable to determine endpoint: gateway %s/%s has no hostname or addresses", gatewayNS, gatewayName)
 }
 
-// ResolveModelAlias returns the ExternalModel CR name, which is the model identity
-// clients send in the body for BBR requests. This matches what /v1/models returns
-// (spec.modelRef.name for ExternalModel-backed MaaSModelRefs).
+// ResolveModelAlias returns the model identity clients use in requests: the
+// ExternalModel's client-facing spec.modelName when set, otherwise the
+// ExternalModel CR name. The gateway serves the model at
+// /{namespace}/{client-facing name} and body-routed requests carry the same
+// name, so the alias must match it. GET /v1/models returns the same identity.
 func (h *externalModelHandler) ResolveModelAlias(ctx context.Context, log logr.Logger, model *maasv1alpha1.MaaSModelRef) (string, error) {
+	key := types.NamespacedName{Name: model.Spec.ModelRef.Name, Namespace: model.Namespace}
+	inferenceEM := &unstructured.Unstructured{}
+	inferenceEM.SetGroupVersionKind(inferenceExternalModelGVK)
+	err := h.r.Get(ctx, key, inferenceEM)
+	if apierrors.IsNotFound(err) || apimeta.IsNoMatchError(err) {
+		// Not-yet-created or legacy maas.opendatahub.io ExternalModel: there
+		// is no client-facing name to honor, so the CR name is the identity.
+		return model.Spec.ModelRef.Name, nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("failed to get ExternalModel %s: %w", model.Spec.ModelRef.Name, err)
+	}
+	if modelName, found, _ := unstructured.NestedString(inferenceEM.Object, "spec", "modelName"); found && modelName != "" {
+		return modelName, nil
+	}
 	return model.Spec.ModelRef.Name, nil
 }
 
