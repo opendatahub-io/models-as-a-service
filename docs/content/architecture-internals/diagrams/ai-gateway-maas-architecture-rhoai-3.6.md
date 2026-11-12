@@ -77,8 +77,8 @@ graph TB
         Envoy[Envoy Proxy<br/>Gateway]:::proxy
 
         subgraph ExtProc["Praxis ExtProc"]
-            PreProc[payload-pre-processing<br/>pre-auth · fail-open]:::service
-            PostProc[payload-processing<br/>post-auth · fail-closed]:::service
+            PreProc[payload-pre-processing<br/>pre-processing · fail-open]:::service
+            PostProc[payload-processing<br/>payload-processing · fail-closed]:::service
         end
 
         MaaSAPI[maas-api<br/>per-tenant]:::service
@@ -178,8 +178,8 @@ graph TB
 | **AI Gateway Controller** | Reconciles ExternalModel/ExternalProvider; installs per-tenant Praxis ExtProc; publishes routing overlay | AI Gateway Operator |
 | **MaaS Controller** | Manages tenant lifecycle, subscriptions, auth policies; self-deploys maas-api per tenant; creates InferenceObjective per subscription | AI Gateway Operator |
 | **maas-api** | Per-tenant HTTP API for model listing, API key CRUD, subscription queries | MaaS Controller |
-| **Envoy Proxy (Gateway)** | Ingress gateway with ExtProc filter chain for pre-auth and post-auth processing | Platform (Istio/Gateway API) |
-| **Praxis ExtProc (IPP)** | Two-stage Envoy ExtProc: pre-auth (model extraction, fail-open) and post-auth (full pipeline, fail-closed) | AI Gateway Controller |
+| **Envoy Proxy (Gateway)** | Ingress gateway with ExtProc filter chain for pre-processing and payload-processing | Platform (Istio/Gateway API) |
+| **Praxis ExtProc (IPP)** | Two-stage Envoy ExtProc: pre-processing (model extraction, fail-open) and payload-processing (full pipeline, fail-closed) | AI Gateway Controller |
 | **llm-d Router (EPP)** | Endpoint Picker — intelligent routing engine using ext-proc; KV-cache-aware, priority-driven pod selection | llm-d deployment (InferencePool) |
 | **vLLM Model Servers** | Prefill and Decode pods serving LLM inference; disaggregated P/D architecture | KServe / LLMInferenceService |
 | **P/D Sidecar** | Per-decode-pod reverse proxy orchestrating disaggregated prefill→decode KV transfer | Co-deployed with decode pods |
