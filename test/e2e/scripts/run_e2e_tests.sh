@@ -377,20 +377,6 @@ run_pytest_pass() {
     return 1
 }
 
-# Serial tests scale the Kuadrant operator and maas-controller to 0, which
-# replaces the pods that ran during the parallel pass along with their restart
-# history and previous-container logs. Snapshot them first. Best-effort.
-snapshot_parallel_pass_pods() (
-    # shellcheck source=auth_utils.sh
-    source "$SCRIPT_DIR/auth_utils.sh"
-    local ns
-    for ns in "${RHCL_NAMESPACE:-kuadrant-system}" "$DEPLOYMENT_NAMESPACE"; do
-        if kubectl get namespace "$ns" &>/dev/null; then
-            collect_namespace_pod_logs "$ns" "$ARTIFACTS_DIR/pod-logs-after-parallel/$ns"
-        fi
-    done
-)
-
 run_limitador_pass() {
     local workers="${E2E_LIMITADOR_WORKERS:-1}"
     if ! [[ "$workers" =~ ^[1-9][0-9]*$ ]]; then
@@ -474,7 +460,6 @@ elif [[ "$limitador_triage" == "true" ]]; then
     # neither one is allowed to be skipped because the other failed.
     echo "Running E2E tests (Limitador triage only: -m '${_limitador_marker}' then -m '${_serial_marker}'; the broad parallel pass is skipped)"
     run_limitador_pass
-    snapshot_parallel_pass_pods || echo "WARNING: failed to snapshot pods after the triage pass"
     run_serial_pass
 elif [[ "$serial_only" == "true" ]]; then
     echo "Running E2E tests (serial pass only, -m '${_serial_marker}')"
@@ -492,7 +477,6 @@ elif [[ "$E2E_PARALLEL_WORKERS" -le 1 ]]; then
         -m "${_parallel_marker}"; then
         parallel_rc=1
     fi
-    snapshot_parallel_pass_pods || echo "WARNING: failed to snapshot pods after the parallel pass"
     maybe_run_serial_pass
     maybe_run_nightly_pass
 else
@@ -507,7 +491,6 @@ else
         -m "${_parallel_marker}"; then
         parallel_rc=1
     fi
-    snapshot_parallel_pass_pods || echo "WARNING: failed to snapshot pods after the parallel pass"
     maybe_run_serial_pass
     maybe_run_nightly_pass
 fi
