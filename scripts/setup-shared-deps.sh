@@ -243,15 +243,6 @@ spec:
       interval: 45m
 EOF
 
-      cat <<EOF | kubectl apply -f -
-apiVersion: operators.coreos.com/v1
-kind: OperatorGroup
-metadata:
-  name: kuadrant-operator-group
-  namespace: $kuadrant_ns
-spec: {}
-EOF
-
       HELM_SETS+=(
         --set dependencies.rhcl.olm.name=kuadrant-operator
         --set "dependencies.rhcl.olm.source=${kuadrant_catalog}"
