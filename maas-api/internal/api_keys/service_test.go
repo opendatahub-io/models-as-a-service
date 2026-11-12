@@ -19,6 +19,8 @@ import (
 
 type serviceTestSubSelector struct{}
 
+func (serviceTestSubSelector) Enabled() bool { return true }
+
 func (serviceTestSubSelector) Select(_ []string, _ string, requested string, _ string) (*subscription.SelectResponse, error) {
 	if requested != "" {
 		return &subscription.SelectResponse{Name: requested, Phase: "Active"}, nil
@@ -946,6 +948,8 @@ type subSelectorStub struct {
 	highestName string
 }
 
+func (s subSelectorStub) Enabled() bool { return true }
+
 func (s subSelectorStub) Select(_ []string, _ string, requested string, _ string) (*subscription.SelectResponse, error) {
 	if s.selectErr != nil {
 		return nil, s.selectErr
@@ -1287,6 +1291,8 @@ func (m *mockHealthSelector) Select(_ []string, _ string, _ string, _ string) (*
 	}
 	return resp, nil
 }
+
+func (m *mockHealthSelector) Enabled() bool { return true }
 
 func (m *mockHealthSelector) SelectHighestPriority(_ []string, _ string) (*subscription.SelectResponse, error) {
 	return m.Select(nil, "", "", "")

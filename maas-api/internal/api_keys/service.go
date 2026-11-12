@@ -19,11 +19,12 @@ import (
 var (
 	ErrTenantRequired        = errors.New("tenant is required")
 	ErrTenantMismatch        = errors.New("tenant mismatch")
-	ErrSubscriptionsDisabled = errors.New("subscriptions are disabled in standalone mode")
+	ErrSubscriptionsDisabled = subscription.ErrSubscriptionsDisabled
 )
 
 // SubscriptionSelector resolves which MaaSSubscription to bind when minting an API key.
 type SubscriptionSelector interface {
+	Enabled() bool
 	Select(groups []string, username string, requestedSubscription string, requestedModel string) (*subscription.SelectResponse, error)
 	SelectHighestPriority(groups []string, username string) (*subscription.SelectResponse, error)
 }
@@ -63,6 +64,9 @@ func NewService(store MetadataStore, cfg *config.Config, sub SubscriptionSelecto
 func NewServiceWithLogger(store MetadataStore, cfg *config.Config, sub SubscriptionSelector, log *logger.Logger) *Service {
 	if log == nil {
 		log = logger.Production()
+	}
+	if sub == nil {
+		sub = subscription.DisabledSelector{}
 	}
 
 	debounceTTL := 60 * time.Second
@@ -332,8 +336,18 @@ func (s *Service) ValidateAPIKey(ctx context.Context, key string) (*ValidationRe
 	}, nil
 }
 
-func (s *Service) subscriptionsEnforced() bool {
+// SubscriptionsEnforced reports whether API keys must be bound to a
+// MaaSSubscription. A configured selector is authoritative; the config mode is
+// only the fallback for services built without one.
+func (s *Service) SubscriptionsEnforced() bool {
+	if s.subSelector != nil {
+		return s.subSelector.Enabled()
+	}
 	return s.config == nil || s.config.SubscriptionMode != config.SubscriptionModeStandalone
+}
+
+func (s *Service) subscriptionsEnforced() bool {
+	return s.SubscriptionsEnforced()
 }
 
 // RevokeAPIKey revokes a specific permanent API key.

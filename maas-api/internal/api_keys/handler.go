@@ -45,6 +45,7 @@ type AdminChecker interface {
 }
 
 type SubscriptionAdminResolver interface {
+	Enabled() bool
 	ResolveSubscriptionAdmin(identity *token.VerifiedIdentity, requestedSubscription string) (*subscription.AdminScope, error)
 	CanonicalizeSubscription(requestedSubscription string) (string, error)
 }
@@ -101,7 +102,7 @@ func NewHandler(
 		panic("adminChecker cannot be nil")
 	}
 	if adminResolver == nil {
-		panic("adminResolver cannot be nil")
+		adminResolver = subscription.DisabledSelector{}
 	}
 	return &Handler{
 		service:       service,
@@ -545,7 +546,8 @@ func (h *Handler) CreateAPIKey(c *gin.Context) {
 	)
 	if err != nil {
 		h.logger.Error("Failed to create API key", "error", err)
-		if errors.Is(err, ErrExpirationNotPositive) || errors.Is(err, ErrExpirationExceedsMax) || errors.Is(err, ErrInvalidGroupName) {
+		if errors.Is(err, ErrExpirationNotPositive) || errors.Is(err, ErrExpirationExceedsMax) || errors.Is(err, ErrInvalidGroupName) ||
+			errors.Is(err, ErrSubscriptionsDisabled) {
 			h.recordTokenMint(user.Tenant, "rejected")
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
@@ -918,6 +920,10 @@ func (h *Handler) SearchAPIKeys(c *gin.Context) {
 	if req.Filters.Subscription != nil {
 		requestedSubscription = strings.TrimSpace(*req.Filters.Subscription)
 	}
+	if requestedSubscription != "" && !h.adminResolver.Enabled() {
+		c.JSON(http.StatusBadRequest, gin.H{"error": ErrSubscriptionsDisabled.Error()})
+		return
+	}
 
 	delegatedAdmin := false
 	var delegatedAudit *delegatedAdminAuditEvent
@@ -1182,6 +1188,10 @@ func (h *Handler) BulkRevokeAPIKeys(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": "at least one of username or subscription is required",
 		})
+		return
+	}
+	if req.Subscription != "" && !h.adminResolver.Enabled() {
+		c.JSON(http.StatusBadRequest, gin.H{"error": ErrSubscriptionsDisabled.Error()})
 		return
 	}
 

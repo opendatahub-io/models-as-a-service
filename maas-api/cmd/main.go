@@ -83,7 +83,10 @@ func serve() error {
 
 	metricsRegistry := prometheus.NewRegistry()
 
-	cluster, err := config.NewClusterConfig(cfg.AITenantNamespace, cfg.MaaSSubscriptionNamespace, constant.DefaultResyncPeriod, cfg.SARCacheMaxSize, metricsRegistry, log)
+	cluster, err := config.NewClusterConfig(
+		cfg.SubscriptionMode, cfg.AITenantNamespace, cfg.MaaSSubscriptionNamespace,
+		constant.DefaultResyncPeriod, cfg.SARCacheMaxSize, metricsRegistry, log,
+	)
 	if err != nil {
 		return fmt.Errorf("failed to create cluster config: %w", err)
 	}
@@ -276,10 +279,10 @@ func registerHandlers(
 
 	v1Routes := router.Group("/v1")
 
-	authPolicyChecker := authpolicy.NewChecker(log, cluster.MaaSAuthPolicyLister)
-	var subscriptionSelector *subscription.Selector
+	var subscriptionBackend subscription.Backend = subscription.DisabledSelector{}
 	if cfg.SubscriptionMode == config.SubscriptionModeEnforced {
-		subscriptionSelector = subscription.NewSelector(log, cluster.MaaSSubscriptionLister, cluster.MaaSModelRefLister, authPolicyChecker,
+		authPolicyChecker := authpolicy.NewChecker(log, cluster.MaaSAuthPolicyLister)
+		subscriptionBackend = subscription.NewSelector(log, cluster.MaaSSubscriptionLister, cluster.MaaSModelRefLister, authPolicyChecker,
 			subscription.WithTenantName(cfg.TenantName),
 			subscription.WithSubscriptionNamespace(cfg.MaaSSubscriptionNamespace),
 			subscription.WithGuardrailPlanResolver(subscription.NewGuardrailPlanResolver(
@@ -314,17 +317,17 @@ func registerHandlers(
 	}
 
 	tokenHandler := token.NewHandler(log, cfg.TenantName)
-	modelsHandler := handlers.NewModelsHandler(log, modelManager, subscriptionSelector, cluster.MaaSModelRefLister, metricsRecorder)
-	subscriptionHandler := subscription.NewHandler(log, subscriptionSelector, metricsRecorder)
+	modelsHandler := handlers.NewModelsHandler(log, modelManager, subscriptionBackend, cluster.MaaSModelRefLister, metricsRecorder)
+	subscriptionHandler := subscription.NewHandler(log, subscriptionBackend, metricsRecorder)
 
-	apiKeyService := api_keys.NewServiceWithLogger(store, cfg, subscriptionSelector, log)
+	apiKeyService := api_keys.NewServiceWithLogger(store, cfg, subscriptionBackend, log)
 	apiKeyService.StartDebounceCleanup(ctx)
 	apiKeyHandler := api_keys.NewHandler(
 		log,
 		apiKeyService,
 		cluster.AdminChecker,
 		metricsRecorder,
-		subscriptionSelector,
+		subscriptionBackend,
 	)
 
 	tenantLogCfg := middleware.TenantLoggerConfig{

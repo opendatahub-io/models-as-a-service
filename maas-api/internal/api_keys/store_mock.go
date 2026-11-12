@@ -45,6 +45,10 @@ var _ MetadataStore = (*MockStore)(nil)
 // Keys can be permanent (expiresAt=nil) or expiring (expiresAt set).
 // ephemeral marks the key as short-lived for programmatic use.
 // Note: keyPrefix is NOT stored (security - reduces brute-force attack surface).
+//
+// AddKey intentionally accepts an empty subscription; Service.CreateAPIKey is
+// the single production caller and enforces the subscription policy before this
+// call. ValidateAPIKey still rejects unbound keys in enforced mode.
 func (m *MockStore) AddKey(
 	ctx context.Context,
 	username,

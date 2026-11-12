@@ -173,6 +173,10 @@ func queryReadRowsWithFallback[T any](
 // AddKey commits to the writable primary. When a read replica is configured, GetByHash
 // may not see the new key until replication catches up; that not-found result is not
 // retried on the primary because doing so would hide replica divergence.
+//
+// AddKey intentionally accepts an empty subscription. Service.CreateAPIKey is the
+// only production caller and enforces the subscription policy before this call;
+// ValidateAPIKey still rejects unbound keys in enforced mode.
 func (s *PostgresStore) AddKey(
 	ctx context.Context, username, keyID, keyHash, name, description string, userGroups []string, subscription string, tenant string, expiresAt *time.Time, ephemeral bool,
 	labels map[string]string,

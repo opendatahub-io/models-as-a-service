@@ -33,10 +33,19 @@ func (h *ModelsHandler) withContext(c *gin.Context) *ModelsHandler {
 	return &requestHandler
 }
 
+// ModelsSubscriptionSelector is the subscription selection surface used by
+// GET /v1/models. Both the live Selector and the disabled standalone
+// implementation satisfy it.
+type ModelsSubscriptionSelector interface {
+	Enabled() bool
+	GetAllAccessible(groups []string, username string) ([]*subscription.SelectResponse, error)
+	Select(groups []string, username string, requestedSubscription string, requestedModel string) (*subscription.SelectResponse, error)
+}
+
 // ModelsHandler handles model-related endpoints.
 type ModelsHandler struct {
 	modelMgr             *models.Manager
-	subscriptionSelector *subscription.Selector
+	subscriptionSelector ModelsSubscriptionSelector
 	logger               *logger.Logger
 	maasModelRefLister   models.MaaSModelRefLister
 	metrics              MetricsRecorder
@@ -47,12 +56,15 @@ type ModelsHandler struct {
 func NewModelsHandler(
 	log *logger.Logger,
 	modelMgr *models.Manager,
-	subscriptionSelector *subscription.Selector,
+	subscriptionSelector ModelsSubscriptionSelector,
 	maasModelRefLister models.MaaSModelRefLister,
 	metrics MetricsRecorder,
 ) *ModelsHandler {
 	if log == nil {
 		log = logger.Production()
+	}
+	if subscriptionSelector == nil {
+		subscriptionSelector = subscription.DisabledSelector{}
 	}
 	return &ModelsHandler{
 		modelMgr:             modelMgr,
@@ -73,50 +85,29 @@ func (h *ModelsHandler) selectSubscriptionsForListing(
 ) ([]*subscription.SelectResponse, bool) {
 	if returnAllModels {
 		// User token authentication - return all models across all accessible subscriptions
-		if h.subscriptionSelector != nil {
-			allSubs, err := h.subscriptionSelector.GetAllAccessible(userContext.Groups, userContext.Username)
-			if err != nil {
-				h.logger.Error("Failed to get all accessible subscriptions", "error", err)
-				c.JSON(http.StatusInternalServerError, gin.H{
-					"error": gin.H{
-						"message": "Failed to get subscriptions",
-						"type":    "server_error",
-					}})
-				return nil, true
-			}
-			h.logger.Debug("User token - returning models from all accessible subscriptions", "subscriptionCount", len(allSubs))
-			return allSubs, false
+		allSubs, err := h.subscriptionSelector.GetAllAccessible(userContext.Groups, userContext.Username)
+		if err != nil {
+			h.logger.Error("Failed to get all accessible subscriptions", "error", err)
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error": gin.H{
+					"message": "Failed to get subscriptions",
+					"type":    "server_error",
+				}})
+			return nil, true
 		}
-		// No selector configured - cannot return all models
-		h.logger.Debug("Subscription selector not configured")
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": gin.H{
-				"message": "Subscription system not configured",
-				"type":    "server_error",
-			}})
-		return nil, true
+		h.logger.Debug("User token - returning models from all accessible subscriptions", "subscriptionCount", len(allSubs))
+		return allSubs, false
 	}
 
 	// API key authentication - filter by the subscription bound to the key
-	if h.subscriptionSelector != nil {
-		//nolint:unqueryvet,nolintlint // Select is a method, not a SQL query
-		result, err := h.subscriptionSelector.Select(userContext.Groups, userContext.Username, requestedSubscription, "")
-		if err != nil {
-			h.handleSubscriptionSelectionError(c, err)
-			return nil, true
-		}
-		h.logger.Debug("API key - filtering by subscription", "subscription", result.Name)
-		return []*subscription.SelectResponse{result}, false
+	//nolint:unqueryvet,nolintlint // Select is a method, not a SQL query
+	result, err := h.subscriptionSelector.Select(userContext.Groups, userContext.Username, requestedSubscription, "")
+	if err != nil {
+		h.handleSubscriptionSelectionError(c, err)
+		return nil, true
 	}
-
-	// If no selector configured and no subscription header provided, return empty
-	// (don't create synthetic subscription metadata)
-	if requestedSubscription == "" {
-		return nil, false
-	}
-
-	// Use the requested subscription header as-is (for legacy deployments without subscription selector)
-	return []*subscription.SelectResponse{{Name: requestedSubscription}}, false
+	h.logger.Debug("API key - filtering by subscription", "subscription", result.Name)
+	return []*subscription.SelectResponse{result}, false
 }
 
 // handleSubscriptionSelectionError handles errors from subscription selection and sends appropriate HTTP responses.
@@ -228,10 +219,6 @@ func (h *ModelsHandler) extractAndValidateAuth(c *gin.Context) (string, string, 
 
 // getUserContextIfNeeded retrieves user context from the request if subscription selector is configured.
 func (h *ModelsHandler) getUserContextIfNeeded(c *gin.Context) (*token.UserContext, error) {
-	if h.subscriptionSelector == nil {
-		return nil, nil
-	}
-
 	userContextVal, exists := c.Get("user")
 	if !exists {
 		h.logger.Error("User context not found - ExtractUserInfo middleware not called")
@@ -266,6 +253,10 @@ func (h *ModelsHandler) aggregateModelsFromSubscriptions(
 	subscriptionsToUse []*subscription.SelectResponse,
 	authHeader string,
 ) []models.Model {
+	if h.modelMgr == nil {
+		return models.FilterReadyModels(list)
+	}
+
 	type modelKey struct {
 		id      string
 		url     string
@@ -368,6 +359,36 @@ func (h *ModelsHandler) aggregateModelsFromSubscriptions(
 	return modelList
 }
 
+// listStandaloneModels serves GET /v1/models without a subscription system.
+// It lists ready models when the MaaSModelRef CRD is available and otherwise
+// returns an empty list; it never performs subscription selection or model
+// access probes.
+func (h *ModelsHandler) listStandaloneModels(c *gin.Context) {
+	c.Header("Cache-Control", "no-store")
+	c.Header("X-Access-Checked-At", time.Now().UTC().Format(time.RFC3339))
+
+	modelList := []models.Model{}
+	if h.maasModelRefLister != nil {
+		list, err := models.ListFromMaaSModelRefLister(h.maasModelRefLister)
+		if err != nil {
+			h.logger.Error("Listing from MaaSModelRef failed", "error", err)
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error": gin.H{
+					"message": "Failed to list models",
+					"type":    "server_error",
+				}})
+			return
+		}
+		modelList = models.FilterReadyModels(list)
+	}
+
+	h.logger.Debug("GET /v1/models returning standalone models", "count", len(modelList))
+	c.JSON(http.StatusOK, pagination.Page[models.Model]{
+		Object: "list",
+		Data:   modelList,
+	})
+}
+
 // ListLLMs handles GET /v1/models.
 func (h *ModelsHandler) ListLLMs(c *gin.Context) {
 	h = h.withContext(c)
@@ -387,6 +408,11 @@ func (h *ModelsHandler) ListLLMs(c *gin.Context) {
 			Object: "list",
 			Data:   []models.Model{},
 		})
+		return
+	}
+
+	if !h.subscriptionSelector.Enabled() {
+		h.listStandaloneModels(c)
 		return
 	}
 
