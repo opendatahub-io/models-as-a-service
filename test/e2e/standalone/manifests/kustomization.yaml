@@ -1,0 +1,14 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: maas-standalone-e2e
+
+resources:
+  - namespace.yaml
+  - postgres.yaml
+  - maas-api.yaml
+
+images:
+  - name: maas-api
+    newName: maas-api
+    newTag: standalone-e2e

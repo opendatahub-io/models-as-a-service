@@ -78,3 +78,22 @@ jobs:
             ${{ env.PROJECT_DIR }}/coverage.out
             ${{ env.PROJECT_DIR }}/coverage.html
           retention-days: 30
+
+  # Proves standalone mode works without the MaaS subscription CRDs/controller
+  # and that /v1/models works when only the MaaSModelRef CRD is installed.
+  standalone-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
+
+      - name: Install kind
+        run: |
+          curl -fsSL -o /tmp/kind https://kind.sigs.k8s.io/dl/latest/kind-linux-amd64
+          sudo install -m 0755 /tmp/kind /usr/local/bin/kind
+
+      - name: Run standalone E2E
+        run: ./test/e2e/standalone/run.sh

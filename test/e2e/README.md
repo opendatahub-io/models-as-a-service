@@ -49,6 +49,8 @@ pytest tests/<file>.py -v
 | `test_observability_identity.py` | Opt-in organization attribution reproduction on one gateway/model; requires `E2E_OBSERVABILITY_IDENTITY=true` and Limitador telemetry |
 | `test_trlp_rate_grouping.py` | TRLP limits grouped by rate: shared limits, per-subscription and per-user budgets, rate edits, gateway wasm config size guard |
 | `test_api_keys.py` | `/v1/api-keys` |
+| `test_standalone_mode.py` | Standalone `maas-api` with no MaaS subscription CRDs/controller/Kuadrant; skipped unless `STANDALONE_MAAS_API_URL` is set |
+| `test_standalone_model_catalog.py` | Standalone `maas-api` model listing after the MaaSModelRef CRD is installed |
 | `test_models_endpoint.py` | `/v1/models` |
 | `test_negative_security.py` | Security / negative paths on the **default** gateway (`GATEWAY_HOST`) |
 | `test_namespace_scoping.py` | Namespace wiring |
@@ -146,6 +148,25 @@ The multi-tenant external model suites (`test_tenant_external_model_*.py`) auto-
 Installed AGC/Praxis image and CRD-schema evidence for these suites is written to `ARTIFACTS_DIR/tenant-external-model-evidence-*.json` at session start (completion evidence for the multi-tenant external model scenarios).
 
 External OIDC runs require `EXTERNAL_OIDC=true` and `OIDC_ISSUER_URL`, `OIDC_TOKEN_URL`, `OIDC_CLIENT_ID`, `OIDC_USERNAME`, `OIDC_PASSWORD` per your deploy/test setup.
+
+## Standalone maas-api E2E
+
+`test_standalone_mode.py` and `test_standalone_model_catalog.py` verify the
+`MAAS_SUBSCRIPTION_MODE=standalone` contract. The first phase runs with **no
+MaaS subscription CRDs, no maas-controller, and no Kuadrant**. The second phase
+installs the `MaaSModelRef` CRD plus a ready model and restarts `maas-api` to
+prove model listing works when the CRD is present.
+
+Run it locally with kind and Docker:
+
+```bash
+./test/e2e/standalone/run.sh
+```
+
+The script builds the `maas-api` image, creates a kind cluster, deploys
+PostgreSQL plus a standalone `maas-api`, runs phase 1, installs the
+MaaSModelRef CRD, restarts the deployment, and runs phase 2. CI runs the same
+script in the `standalone-e2e` job.
 
 ## Nightly tier (`@pytest.mark.nightly`)
 

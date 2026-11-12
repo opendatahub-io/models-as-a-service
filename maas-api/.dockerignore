@@ -1,2 +1,5 @@
 deploy
 *.md
+bin
+coverage.out
+coverage.html
