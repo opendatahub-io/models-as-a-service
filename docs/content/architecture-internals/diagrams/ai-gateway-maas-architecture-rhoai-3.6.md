@@ -76,9 +76,10 @@ graph TB
     subgraph DataPlane["Data Plane — Gateway (per-tenant namespace)"]
         Envoy[Envoy Proxy<br/>Gateway]:::proxy
 
-        subgraph ExtProc["Praxis ExtProc"]
-            PreProc[payload-pre-processing<br/>pre-processing · fail-open]:::service
-            PostProc[payload-processing<br/>payload-processing · fail-closed]:::service
+        subgraph FilterChain["Envoy Filter Chain (request order)"]
+            PreProc[payload-pre-processing<br/>Praxis ExtProc · fail-open]:::service
+            WasmShim[wasm-shim<br/>Kuadrant WasmPlugin<br/>auth + rate limiting]:::proxy
+            PostProc[payload-processing<br/>Praxis ExtProc · fail-closed]:::service
         end
 
         MaaSAPI[maas-api<br/>per-tenant]:::service
@@ -103,7 +104,8 @@ graph TB
     %% DEPENDENCIES
     %% ════════════════════════════════════════════
     PostgreSQL[(PostgreSQL)]:::db
-    Kuadrant[Kuadrant / Authorino]:::service
+    Kuadrant[Authorino<br/>auth service]:::service
+    Limitador[Limitador<br/>rate limiting]:::service
 
     %% ── Operator deploys control plane ──
     AGO -->|deploys & manages| AGC
@@ -127,7 +129,7 @@ graph TB
     MaaSCtrl -.->|reconciles| MaasTenantConfig
     MaaSCtrl -.->|reconciles| ConfigCR
     MaaSCtrl -->|self-deploys per tenant| MaaSAPI
-    MaaSCtrl -->|creates AuthPolicy| Kuadrant
+    MaaSCtrl -->|creates AuthPolicy &<br/>TokenRateLimitPolicy| WasmShim
     MaaSCtrl -.->|watches conditionally| LLMInfSvc
     MaaSCtrl -.->|creates per subscription| InferenceObjective
 
@@ -141,8 +143,10 @@ graph TB
     %% ── Inference request flow — External Model path ──
     Client -->|"① HTTPS :443"| Envoy
     Envoy -->|"② gRPC :9004<br/>extract model name"| PreProc
-    Envoy -->|"③ auth"| Kuadrant
+    Envoy -->|"③ inline filter"| WasmShim
+    WasmShim -->|"auth callback"| Kuadrant
     Kuadrant -->|"validate API key"| MaaSAPI
+    WasmShim -->|"rate limit check"| Limitador
     Envoy -->|"④ gRPC :9004<br/>full processing"| PostProc
     Envoy -->|"⑤a external model<br/>HTTPS :443"| LLMProvider
 
@@ -178,8 +182,9 @@ graph TB
 | **AI Gateway Controller** | Reconciles ExternalModel/ExternalProvider; installs per-tenant Praxis ExtProc; publishes routing overlay | AI Gateway Operator |
 | **MaaS Controller** | Manages tenant lifecycle, subscriptions, auth policies; self-deploys maas-api per tenant; creates InferenceObjective per subscription | AI Gateway Operator |
 | **maas-api** | Per-tenant HTTP API for model listing, API key CRUD, subscription queries | MaaS Controller |
-| **Envoy Proxy (Gateway)** | Ingress gateway with ExtProc filter chain for pre-processing and payload-processing | Platform (Istio/Gateway API) |
-| **Praxis ExtProc (IPP)** | Two-stage Envoy ExtProc: pre-processing (model extraction, fail-open) and payload-processing (full pipeline, fail-closed) | AI Gateway Controller |
+| **Envoy Proxy (Gateway)** | Ingress gateway with filter chain: pre-processing ExtProc → wasm-shim → post-processing ExtProc | Platform (Istio/Gateway API) |
+| **Praxis ExtProc** | Two-stage Envoy ExtProc: pre-processing (model extraction, fail-open) and payload-processing (full pipeline, fail-closed) | AI Gateway Controller |
+| **wasm-shim (Kuadrant WasmPlugin)** | Inline Envoy filter between ExtProc stages; delegates auth to Authorino and rate limiting to Limitador | Kuadrant operator (via MaaS AuthPolicy) |
 | **llm-d Router (EPP)** | Endpoint Picker — intelligent routing engine using ext-proc; KV-cache-aware, priority-driven pod selection | llm-d deployment (InferencePool) |
 | **vLLM Model Servers** | Prefill and Decode pods serving LLM inference; disaggregated P/D architecture | KServe / LLMInferenceService |
 | **P/D Sidecar** | Per-decode-pod reverse proxy orchestrating disaggregated prefill→decode KV transfer | Co-deployed with decode pods |
@@ -190,9 +195,9 @@ graph TB
 ### External Model Path (steps ①–⑤a)
 
 1. **Client → Envoy** — HTTPS request hits the Gateway on port 443
-2. **Envoy → payload-pre-processing** — Pre-auth ExtProc extracts model name into `X-Gateway-Model-Name` header (fail-open)
-3. **Envoy → Kuadrant/Authorino** — Gateway auth: API key, TokenReview, or OIDC JWT validation; calls maas-api for key validation
-4. **Envoy → payload-processing** — Post-auth ExtProc runs full Praxis filter pipeline (fail-closed): request/response transformation, credential injection, guardrails
+2. **Envoy → payload-pre-processing** — Pre-processing ExtProc extracts model name into `X-Gateway-Model-Name` header (fail-open)
+3. **Envoy → wasm-shim** — Kuadrant WasmPlugin inline filter: delegates auth to Authorino (API key, TokenReview, or OIDC JWT; calls maas-api for key validation) and rate limiting to Limitador (TokenRateLimitPolicy per subscription)
+4. **Envoy → payload-processing** — Payload-processing ExtProc runs full Praxis filter pipeline (fail-closed): request/response transformation, credential injection, guardrails
 5. **Envoy → External LLM Provider** — Routed via ExternalName Service with TLS DestinationRule and provider API key injected by ExtProc
 
 ### On-Cluster Model Path (steps ①–④ then ⑤b–⑩)
