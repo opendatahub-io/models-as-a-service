@@ -29,18 +29,40 @@ These realms contain security issues intentional for testing:
 - Engineering
 - Site-Reliability
 - Project-Alpha
+- `ai-grid-admins`
+- `42c3e46f-2477-44d7-a85b-d3b43f6b31fa/reserved-ai-grid-admins`
 
 **Users:**
 - `alice_lead` (password: `letmein`)
   - Member of: Engineering, Project-Alpha
 - `bob_sre` (password: `letmein`)
   - Member of: Site-Reliability
+- `grid_admin` (password: `letmein`)
+  - Member of: `ai-grid-admins`
+  - Organization ID: `42c3e46f-2477-44d7-a85b-d3b43f6b31fa`
+  - Organization name: `coke`
+  - Organization role: `admins`
+- `grid_no_org` (password: `letmein`)
+  - Member of: no groups
+- `grid_reserved_group` (password: `letmein`)
+  - Member of: `42c3e46f-2477-44d7-a85b-d3b43f6b31fa/reserved-ai-grid-admins`
+  - Has no organization claims
+- `portal_user` (password: `letmein`)
+  - Member of: Engineering
+  - Email: `portal_user@example.com` (verified; the consumer portal auth proxy rejects sign-ins without one)
+  - Organization ID: `42c3e46f-2477-44d7-a85b-d3b43f6b31fa`
+  - Organization name: `coke`
+  - Organization role: `users`
 
-**Client:**
+**Clients:**
 - Client ID: `test-client`
-- Type: Public (no authentication)
-- Groups claim configured in tokens
-- Access tokens include `aud: maas-api` and `token_use: access` for the strict MaaS OIDC contract
+  - Type: Public (no authentication)
+  - Groups claim configured in tokens
+  - Organization claims are flat: `org_id`, `org_name`, and `roles`
+  - Access tokens include `aud: maas-api` and `token_use: access` for the strict MaaS OIDC contract
+- Client ID: `maas-consumer-portal`
+  - Type: Confidential (secret `maas-e2e-portal-client-secret`), used by the consumer portal auth proxy
+  - Same identity-contract mappers as `test-client`
 
 ### Tenant-B Realm
 
@@ -163,6 +185,18 @@ echo $TOKEN | cut -d'.' -f2 | base64 -d 2>/dev/null | jq .
   "groups": ["Project-Omega"]
 }
 ```
+
+**grid_admin** should have:
+```json
+{
+  "groups": ["ai-grid-admins"],
+  "org_id": "42c3e46f-2477-44d7-a85b-d3b43f6b31fa",
+  "org_name": "coke",
+  "roles": ["admins"]
+}
+```
+
+The `grid_reserved_group` user has a UUID-prefixed group but no `org_id`. Its group must not grant access to organization-bound resources.
 
 ## Use Cases
 

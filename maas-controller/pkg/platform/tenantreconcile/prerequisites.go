@@ -46,8 +46,8 @@ type PrerequisiteReport struct {
 // usageMetricsDashboard gates the monitoring-stack check: a missing monitoring stack is a
 // warning (and therefore Degraded) only when the legacy metrics dashboard is enabled.
 // usageLogging selects which DSCInitialization usage-log conditions warn.
-// When it is false, LokiStackAvailable, UsageLogsCollectorAvailable, or PersesAvailable
-// not True is a warning. When it is true, only PersesAvailable not True is a warning.
+// When it is false, UsageLogsCollectorAvailable or PersesAvailable not True is a
+// warning. When it is true, only PersesAvailable not True is a warning.
 func CollectPrerequisiteReport(ctx context.Context, c client.Client, appNamespace string, usageMetricsDashboard, usageLogging, telemetryEnabled bool) PrerequisiteReport {
 	log := oteljson.FromContext(ctx)
 	var rep PrerequisiteReport
@@ -171,7 +171,6 @@ const (
 	dsciConditionMonitoringReady             = "MonitoringReady"
 	dsciConditionMonitoringStackAvailable    = "MonitoringStackAvailable"
 	dsciConditionPersesAvailable             = "PersesAvailable"
-	dsciConditionLokiStackAvailable          = "LokiStackAvailable"
 	dsciConditionUsageLogsCollectorAvailable = "UsageLogsCollectorAvailable"
 )
 
@@ -324,10 +323,10 @@ func monitoringConditionWarning(conditions map[string]dsciConditionStatus, name,
 }
 
 // dsciUsageLoggingWarning reports platform usage-log dependencies.
-// usageLogging true checks only PersesAvailable. false also checks LokiStackAvailable
-// and UsageLogsCollectorAvailable.
+// usageLogging true checks only PersesAvailable. false also checks
+// UsageLogsCollectorAvailable.
 func dsciUsageLoggingWarning(fetchErr, condErr error, conditions map[string]dsciConditionStatus, usageLogging bool) string {
-	impact := "Logs-based usage views will not work until LokiStackAvailable, UsageLogsCollectorAvailable, and PersesAvailable are True"
+	impact := "Logs-based usage views will not work until UsageLogsCollectorAvailable and PersesAvailable are True"
 	if usageLogging {
 		impact = "Logs-based usage views will not work until PersesAvailable is True"
 	}
@@ -345,7 +344,6 @@ func dsciUsageLoggingWarning(fetchErr, condErr error, conditions map[string]dsci
 	}
 
 	required := []string{
-		dsciConditionLokiStackAvailable,
 		dsciConditionUsageLogsCollectorAvailable,
 		dsciConditionPersesAvailable,
 	}

@@ -79,9 +79,14 @@ spec:
     enabled: true
 ```
 
-Setting this field to `false` during an IPP migration is an explicit decision
-to accept the compatibility loss described in the [3.6 upgrade guide](../../migration/upgrade-to-3.6.md#ipp--praxis-api-translation-migration).
-It does not mean that a legacy transform was preserved.
+During an IPP → Praxis migration, an active Anthropic `messages` ExternalModel
+binding does not block cleanup while this field is `true`, whether an operator
+set it or maas-controller wrote it for a recognized RHOAI 3.5 IPP ConfigMap.
+Setting it to `false` is an explicit decision to accept the compatibility loss
+described in the [3.6 upgrade guide](../../migration/upgrade-to-3.6.md#ipp-praxis-api-translation-migration).
+It does not mean that a legacy transform was preserved, and it also turns off
+`targetModel` and provider `path` rewriting for every ExternalModel and the
+Anthropic `messages` profile.
 
 ---
 
