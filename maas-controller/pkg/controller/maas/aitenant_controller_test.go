@@ -3,6 +3,7 @@ package maas
 
 import (
 	"context"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -32,6 +33,7 @@ import (
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
+	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/oidcprobe"
 	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/platform/tenantreconcile"
 
 	. "github.com/onsi/gomega"
@@ -283,7 +285,9 @@ func reconcileAITenantToActive(t *testing.T, r *AITenantReconciler, key types.Na
 	g := NewWithT(t)
 
 	res := reconcileAITenantWithReadyTenantConfig(t, r, key)
-	g.Expect(res).To(Equal(ctrl.Result{}))
+	// AITenants with OIDC configured requeue every oidcRequeueInterval to
+	// re-probe the issuer; tenants without OIDC return no requeue.
+	g.Expect(res.RequeueAfter).To(SatisfyAny(BeZero(), Equal(oidcRequeueInterval)))
 }
 
 // reconcileAITenantWithReadyTenantConfig bootstraps the AITenant, marks its
@@ -353,6 +357,9 @@ func TestAITenantReconcile_ValidatesExistingGatewayAndCreatesBootstrapResources(
 		AppNamespace:     "opendatahub",
 		TenantNamespace:  "models-as-a-service",
 		GatewayNamespace: "openshift-ingress",
+		OIDCProbe: func(_ context.Context, _ string, _ *x509.CertPool) oidcprobe.Result {
+			return oidcprobe.Result{OK: true, Reason: oidcprobe.ReasonAvailable, Message: "fake probe OK"}
+		},
 	}
 
 	key := types.NamespacedName{Name: aitenant.Name, Namespace: aitenant.Namespace}
@@ -419,6 +426,11 @@ func TestAITenantReconcile_ValidatesExistingGatewayAndCreatesBootstrapResources(
 	g.Expect(ready).NotTo(BeNil())
 	g.Expect(ready.Status).To(Equal(metav1.ConditionTrue))
 	g.Expect(ready.Reason).To(Equal("Reconciled"))
+
+	oidcReady := apimeta.FindStatusCondition(updated.Status.Conditions, maasv1alpha1.AITenantConditionOIDCReady)
+	g.Expect(oidcReady).NotTo(BeNil())
+	g.Expect(oidcReady.Status).To(Equal(metav1.ConditionTrue))
+	g.Expect(oidcReady.Reason).To(Equal(oidcprobe.ReasonAvailable))
 }
 
 func TestAITenantReconcile_PersistsGatewayStatusBeforeTenantCreate(t *testing.T) {
@@ -794,6 +806,9 @@ func TestAITenantReconcile_MigratesAndDeletesPreExistingTenant(t *testing.T) {
 		AppNamespace:     "opendatahub",
 		TenantNamespace:  "models-as-a-service",
 		GatewayNamespace: "openshift-ingress",
+		OIDCProbe: func(_ context.Context, _ string, _ *x509.CertPool) oidcprobe.Result {
+			return oidcprobe.Result{OK: true, Reason: oidcprobe.ReasonAvailable, Message: "fake probe OK"}
+		},
 	}
 
 	key := types.NamespacedName{Name: aitenant.Name, Namespace: aitenant.Namespace}
@@ -823,7 +838,8 @@ func TestAITenantReconcile_MigratesAndDeletesPreExistingTenant(t *testing.T) {
 
 	res, err = r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key})
 	g.Expect(err).NotTo(HaveOccurred())
-	g.Expect(res).To(Equal(ctrl.Result{}))
+	// OIDC is configured, so the happy path requeues to re-probe the issuer.
+	g.Expect(res).To(Equal(ctrl.Result{RequeueAfter: oidcRequeueInterval}))
 
 	var updated maasv1alpha1.AITenant
 	g.Expect(cl.Get(context.Background(), key, &updated)).To(Succeed())
