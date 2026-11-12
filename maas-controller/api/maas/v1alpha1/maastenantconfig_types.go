@@ -71,7 +71,10 @@ type MaasTenantConfigSpec struct {
 	// +kubebuilder:validation:Optional
 	PayloadProcessing *TenantPayloadProcessingConfig `json:"payloadProcessing,omitempty"`
 
-	// PayloadPreProcessing defines scaling configuration for payload-pre-processing pods.
+	// PayloadPreProcessing defines scaling and resource configuration for
+	// payload-pre-processing pods. maxBodyBytes on this block is currently
+	// ignored by the AI Gateway controller; only payloadProcessing.maxBodyBytes
+	// is consumed.
 	// +kubebuilder:validation:Optional
 	PayloadPreProcessing *TenantPayloadProcessingConfig `json:"payloadPreProcessing,omitempty"`
 
