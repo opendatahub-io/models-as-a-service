@@ -11,6 +11,7 @@ markers = [
     "api_keys: API key CRUD, auth enforcement, subscription binding",
     "limitador: TokenRateLimitPolicy -> Limitador sync subset; triage a stalled limiter with -m limitador at varying -n",
     "models: /v1/models endpoint and gateway-scoped AuthPolicy",
+    "api_translation: Anthropic<->OpenAI API translation (apiTranslation flag; cluster-wide ExtProc + tenant config mutations)",
     "security: negative security paths and namespace scoping",
     "mt_lifecycle: multi-tenant AITenant lifecycle and discovery",
     "tenant_isolation: cross-tenant auth, rate-limit, subscription, and discovery isolation on shared tenants",
