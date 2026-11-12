@@ -33,7 +33,7 @@ from multitenancy_helpers import (
 from test_helper import _wait_for_subscription_trlp_status
 from test_helper import _delete_cr, _delete_governance_and_wait, _get_cluster_token
 
-pytestmark = pytest.mark.xdist_group("tenant_isolation")
+pytestmark = pytest.mark.xdist_group("tenant_iso_auth")
 
 
 def _mint_oidc_token_for_tenant(tenant: str) -> str:
@@ -87,6 +87,14 @@ def _mint_oidc_token_for_tenant(tenant: str) -> str:
 
 
 # Tenant auth isolation tests are enabled by default (Phase 1 implementation)
+
+
+def _oidc_token_source_configured(tenant: str) -> bool:
+    """True when a token source for this tenant exists in the environment."""
+    if os.environ.get(f"OIDC_TOKEN_TENANT_{tenant.upper()}"):
+        return True
+    url_var = "OIDC_TOKEN_URL" if tenant == "a" else "OIDC_TOKEN_URL_TENANT_B"
+    return bool(os.environ.get(url_var))
 
 
 @pytest.fixture(scope="module")
@@ -215,6 +223,17 @@ class TestTenantAuthIsolation:
             f"Tenant A key should be rejected on Tenant B gateway (got {response.status_code}): {response_summary(response)}"
         )
 
+    @pytest.mark.skipif(
+        not (
+            _oidc_token_source_configured("a")
+            and _oidc_token_source_configured("b")
+        ),
+        reason=(
+            "Per-tenant OIDC token sources not configured (OIDC_TOKEN_URL / "
+            "OIDC_TOKEN_URL_TENANT_B or OIDC_TOKEN_TENANT_A / OIDC_TOKEN_TENANT_B); "
+            "skipping at collection so the tenant fixture is not built for nothing"
+        ),
+    )
     def test_oidc_token_validation_per_tenant(self, tenant_env):
         """3.4: Tenant OIDC tokens are accepted only by their configured tenant endpoint."""
         token_a = _mint_oidc_token_for_tenant("a")
