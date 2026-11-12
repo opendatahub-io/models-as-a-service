@@ -16,7 +16,7 @@ Existing cluster (skip deploy):
 SKIP_DEPLOYMENT=true ./test/e2e/scripts/prow_run_smoke_test.sh
 ```
 
-Parallel pytest on an existing cluster (default 7 workers):
+Parallel pytest on an existing cluster (default 5 workers):
 
 ```bash
 SKIP_DEPLOYMENT=true ./test/e2e/run-tests-quick.sh
@@ -142,7 +142,7 @@ CI runs `./test/e2e/scripts/prow_run_smoke_test.sh`, a thin orchestrator that se
 | 3. Setup tokens | `scripts/setup-test-tokens.sh` | admin + regular user tokens (htpasswd / SA fallback) |
 | 4. Validate | `scripts/validate-deployment.sh` | pods, CRDs, deployment readiness |
 | 5. Pre-test waits | `prow_run_smoke_test.sh` | gateway reachability, auth chain, OIDC readiness |
-| 6. Test | `scripts/run_e2e_tests.sh` | pytest: two-pass xdist (parallel + serial) |
+| 6. Test | `scripts/run_e2e_tests.sh` | pytest: three marker-filtered passes (parallel, serial_exclusive, serial) |
 
 `prow_run_smoke_test.sh` contains only orchestration (prereqs, env defaults, phase sequencing, artifact collection). `deploy-platform.sh` and `deploy-models.sh` are runnable standalone (they bootstrap `PROJECT_ROOT` and source helpers if not already loaded). `setup-test-tokens.sh` must be sourced (exports `TOKEN`/`ADMIN_OC_TOKEN` into the parent shell).
 
@@ -194,16 +194,15 @@ Delegated Grid administration needs the strict OIDC contract on the default AITe
 
 ## Parallel execution (pytest-xdist)
 
-By default, `run_e2e_tests.sh` runs tests in **two marker-filtered passes** (default: 7 xdist workers on pass 1). `--serial-only` runs pass 2 (`-m "serial and not legacy_ipp"`) only and skips non-serial tests:
+By default, `run_e2e_tests.sh` runs tests in **three marker-filtered passes** (default: **5** xdist workers on pass 1). `--serial-only` runs passes **2a and 2b** only (pass 1 is skipped):
 
-1. **Pass 1:** `-m "not serial and not legacy_ipp"` — parallel across files when `E2E_PARALLEL_WORKERS > 1` (`--dist=loadgroup`), or single-worker serial execution when `E2E_PARALLEL_WORKERS=1`
-2. **Pass 2:** `-m "serial and not legacy_ipp"` — cluster-wide mutators (single worker): simulator-subscription lifecycle, UNCONFIGURED model auth, TRLP rebuilds, operator scale tests. Skipped when pass 1 fails (saves CI time on red runs).
+1. **Pass 1:** `-m "not serial and not serial_exclusive and not legacy_ipp and not legacy_ipp_pass2b"` — Praxis/AGC work including split `test_tenant_external_model_*` modules
+2. **Pass 2a:** `-m "serial_exclusive and not legacy_ipp"` — cluster-wide exclusive tests (always one worker)
+3. **Pass 2b:** `-m "((serial and not legacy_ipp) or legacy_ipp_pass2b) and not serial_exclusive"` — shared-cluster serial mutators plus **`test_per_tenant_ipp_isolation`** (`legacy_ipp_pass2b`). Opt-in legacy suites (`test_gateway_filter_chain`, `test_external_models`, `pytest -m legacy_ipp`) are **not** in default CI.
 
-Legacy maas-controller IPP suites (per-tenant IPP isolation, maas EnvoyFilter chain, ExternalModel reconciler) are marked `legacy_ipp` and skipped by default. Opt in with `pytest -m legacy_ipp` (from `test/e2e/` with env vars exported, or target specific files).
+Passes 2a and 2b still run when pass 1 fails (both results are reported).
 
-Pass 1 and pass 2 must stay separate: several modules mix `@serial` tests with worker-tenant tests, and module-scoped fixtures reject a single session that selects both.
-
-For single-worker debugging (still two passes, no xdist):
+For single-worker debugging on pass 1 only (passes 2a/2b unchanged):
 
 ```bash
 E2E_PARALLEL_WORKERS=1 ./run-tests-quick.sh
@@ -217,7 +216,8 @@ SKIP_DEPLOYMENT=true ./test/e2e/run-tests-quick.sh
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `E2E_PARALLEL_WORKERS` | `7` | Parallel workers for pass 1 (`-m "not serial and not legacy_ipp"`). Pass 2 (`@serial`, not `legacy_ipp`) always runs on one worker. Set to `1` for single-worker pass 1 (no xdist); marker split is unchanged. |
+| `E2E_PARALLEL_WORKERS` | `5` | Parallel workers for pass 1 (`-m "not serial and not serial_exclusive and not legacy_ipp and not legacy_ipp_pass2b"`). Set to `1` for single-worker pass 1 (no xdist). |
+| `E2E_SERIAL_WORKERS` | `1` | Workers for pass 2b (`-m "((serial and not legacy_ipp) or legacy_ipp_pass2b) and not serial_exclusive"`). Keep at `1` until shared-model serial lanes are audited. Pass 2a is always one worker. |
 | `E2E_AUTHPOLICY_PHASE_TIMEOUT` | `120` | MaaSAuthPolicy phase wait (`test_helper` default; parallel runner re-exports the same) |
 | `E2E_MAAS_SUBSCRIPTION_PHASE_TIMEOUT` | `120` | MaaSSubscription phase wait |
 | `E2E_GATEWAY_ENFORCED_TIMEOUT` | `240` (parallel) / `180` (serial) | Kuadrant gateway auth enforced wait |
@@ -228,7 +228,7 @@ SKIP_DEPLOYMENT=true ./test/e2e/run-tests-quick.sh
 | `E2E_MODEL_BACKEND_READY_TIMEOUT` | `300` | LLMInferenceService backend ready (tenant model provisioning) |
 | `E2E_USE_WORKER_TENANT` | `true` | When `true`, xdist workers bootstrap a dedicated AITenant for Bucket C pilots (`test_subscription.py` first). Set `false` to keep using `models-as-a-service`. |
 
-`@serial` tests run in pass 2; verify the current set with `pytest -m serial tests/ --collect-only -q`.
+`@serial` and `@serial_exclusive` tests are excluded from pass 1; verify markers with `pytest -m serial tests/ --collect-only -q` and `pytest -m serial_exclusive tests/ --collect-only -q`.
 
 **Worker tenant (Phase 3 pilot):** each xdist worker (`gw0`, `gw1`, …) bootstraps its own AITenant namespace with baseline `simulator-subscription` / `simulator-access` CRs. Non-serial tests in opted-in modules route `MAAS_SUBSCRIPTION_NAMESPACE`, `GATEWAY_HOST`, and `MAAS_API_BASE_URL` to that tenant for the duration of the test.
 
