@@ -5,8 +5,13 @@ markers = [
     "slow: long-running test (may wait for token expiry)",
     "xdist_group(name): pytest-xdist group marker for parallel test groups",
     "readonly: read-only smoke and validation tests (no cluster mutations)",
+    "smoke: PR/group-test subset — basic coverage with low AuthPolicy/CR churn (see E2E_SMOKE_ONLY)",
+    "full_suite: intentionally off the smoke path; required on new non-smoke E2E tests (see check_new_e2e_test_tiers.py)",
+    "pr_new: dynamically applied to tests added in this PR (git diff); selected with smoke when E2E_INCLUDE_NEW_FROM_DIFF=true",
     "api_keys: API key CRUD, auth enforcement, subscription binding",
+    "limitador: TokenRateLimitPolicy -> Limitador sync subset; triage a stalled limiter with -m limitador at varying -n",
     "models: /v1/models endpoint and gateway-scoped AuthPolicy",
+    "api_translation: Anthropic<->OpenAI API translation (apiTranslation flag; cluster-wide ExtProc + tenant config mutations)",
     "security: negative security paths and namespace scoping",
     "mt_lifecycle: multi-tenant AITenant lifecycle and discovery",
     "tenant_isolation: cross-tenant auth, rate-limit, subscription, and discovery isolation on shared tenants",
@@ -18,6 +23,7 @@ markers = [
     "legacy_ipp: legacy maas-controller IPP dataplane; excluded from default e2e passes (run with -m legacy_ipp)",
     "external: external OIDC and ExternalModel integrations",
     "nightly: extended E2E (external OIDC, slow paths); excluded from PR /group-test; run on scheduled nightly only",
+    "grid_oidc: Grid organization OIDC governance tests; collected before legacy external OIDC tests",
 ]
 addopts = "--strict-markers"
 

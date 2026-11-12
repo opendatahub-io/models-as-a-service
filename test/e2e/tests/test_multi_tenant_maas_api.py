@@ -10,6 +10,7 @@ These tests validate the Phase 1 multi-tenant contract:
 
 import os
 import time
+from typing import NamedTuple
 
 import pytest
 
@@ -45,6 +46,20 @@ WASM_GENERATION_STABILITY_WINDOW = int(
 )
 POLL_INTERVAL = 3
 
+
+class _AuthConfigObservation(NamedTuple):
+    name: str
+    uid: str
+    generation: int | None
+    ready: bool
+
+
+class _DualListenerCase(NamedTuple):
+    case: dict[str, str]
+    gateway: dict
+    route: dict
+
+
 # Multi-tenant maas-api tests are enabled by default (Phase 1 implementation)
 
 
@@ -68,12 +83,28 @@ def tenant_cases():
 def dual_listener_tenant_case():
     """Create one tenant gateway whose HTTP and HTTPS listeners match the same route."""
     require_aitenant_crd()
-    case = new_named_tenant_case("e2e-authcfg-http")
+    # AGC appends the tenant name to 41-char base names, so it must stay <= 21 chars.
+    case = new_named_tenant_case("e2e-dual")
     try:
         bootstrap_aitenant_tenant(case, dual_http_listener=True)
         apply_maas_auth_policy(case["policy_name"], case["tenant_ns"])
         wait_for_gateway_authpolicy_ready(case["gateway_name"])
-        yield case
+        gateway = wait_for_json(
+            "gateway",
+            case["gateway_name"],
+            GATEWAY_NAMESPACE,
+            predicate=lambda obj: {"http", "https"}
+            <= _gateway_listener_names_with_routes(obj),
+            timeout=180,
+        )
+        route = wait_for_json(
+            "httproute",
+            _tenant_api_names(case)["httproute"],
+            INFRA_NAMESPACE,
+            predicate=lambda obj: _route_accepted_by_gateway(obj, case["gateway_name"]),
+            timeout=180,
+        )
+        yield _DualListenerCase(case, gateway, route)
     finally:
         cleanup_discovery_case(case)
 
@@ -125,7 +156,7 @@ def _gateway_listener_names_with_routes(gateway: dict) -> set[str]:
 
 def _route_rule_authconfig_observations(
     route_namespace: str, route_name: str
-) -> dict[str, list[tuple[str, str, bool]]]:
+) -> dict[str, list[_AuthConfigObservation]]:
     """Return non-deleting managed AuthConfigs grouped by HTTPRoute rule."""
     route_annotation_prefix = (
         f"httproute.gateway.networking.k8s.io:{route_namespace}/{route_name}#"
@@ -146,14 +177,16 @@ def _route_rule_authconfig_observations(
         uid = metadata.get("uid")
         assert uid, f"Matching AuthConfig {name!r} has no metadata.uid"
         by_rule.setdefault(rule, []).append(
-            (name, uid, _authconfig_is_ready(authconfig))
+            _AuthConfigObservation(
+                name, uid, metadata.get("generation"), _authconfig_is_ready(authconfig)
+            )
         )
     return by_rule
 
 
 def _wait_for_stable_route_authconfigs(
-    route: dict,
-) -> dict[str, list[tuple[str, str, bool]]]:
+    route: dict, expected_per_rule: int
+) -> dict[str, list[_AuthConfigObservation]]:
     namespace = (route.get("metadata") or {}).get("namespace", INFRA_NAMESPACE)
     route_name = (route.get("metadata") or {}).get("name", "")
     rules = (route.get("spec") or {}).get("rules") or []
@@ -163,32 +196,34 @@ def _wait_for_stable_route_authconfigs(
     deadline = time.monotonic() + AUTHCONFIG_SETTLE_TIMEOUT
     last_snapshot = None
     stable_since = None
-    last_by_rule: dict[str, list[tuple[str, str, bool]]] = {}
+    last_by_rule: dict[str, list[_AuthConfigObservation]] = {}
     while time.monotonic() < deadline:
         last_by_rule = _route_rule_authconfig_observations(namespace, route_name)
+        # Generation is part of the snapshot so in-place updates also reset the window.
         snapshot = {
-            rule: tuple(sorted((name, uid) for name, uid, _ in observations))
+            rule: tuple(sorted((o.name, o.uid, o.generation) for o in observations))
             for rule, observations in sorted(last_by_rule.items())
         }
+        # Wait for every listener's AuthConfig, not just the first Ready one.
         complete = set(last_by_rule) == expected_rules and all(
-            any(ready for _, _, ready in observations)
+            len(observations) >= expected_per_rule and all(o.ready for o in observations)
             for observations in last_by_rule.values()
         )
         now = time.monotonic()
-        if complete and snapshot == last_snapshot:
-            if stable_since is not None and now - stable_since >= AUTHCONFIG_QUIET_WINDOW:
-                return last_by_rule
-        elif complete:
-            stable_since = now
-        else:
+        if not complete:
             stable_since = None
+        elif snapshot != last_snapshot or stable_since is None:
+            stable_since = now
+        elif now - stable_since >= AUTHCONFIG_QUIET_WINDOW:
+            return last_by_rule
         last_snapshot = snapshot
         time.sleep(POLL_INTERVAL)
 
     raise AssertionError(
         f"AuthConfig state for {namespace}/{route_name} did not settle within "
         f"{AUTHCONFIG_SETTLE_TIMEOUT}s; "
-        f"expected rules={expected_rules!r}, observed={last_by_rule!r}"
+        f"expected rules={expected_rules!r} with {expected_per_rule} AuthConfig(s) each, "
+        f"observed={last_by_rule!r}"
     )
 
 
@@ -340,19 +375,14 @@ class TestPerTenantMaaSAPI:
         assert all(deployment is not None for deployment in tenant_deployments)
         assert len({deployment["metadata"]["name"] for deployment in tenant_deployments if deployment}) == len(tenant_cases)
 
-    @pytest.mark.nightly
     @pytest.mark.serial
-    def test_dual_listeners_keep_one_authconfig_per_route_rule(self, dual_listener_tenant_case):
-        """One stable Authorino AuthConfig per rule when both listeners attach the route."""
-        case = dual_listener_tenant_case
-        gateway = wait_for_json(
-            "gateway",
-            case["gateway_name"],
-            GATEWAY_NAMESPACE,
-            predicate=lambda obj: {"http", "https"}
-            <= _gateway_listener_names_with_routes(obj),
-            timeout=180,
-        )
+    def test_dual_listeners_keep_one_authconfig_per_listener_rule(self, dual_listener_tenant_case):
+        """One stable AuthConfig per listener and rule when both listeners attach the route.
+
+        Kuadrant derives AuthConfig names from the full topology path, listener
+        included, so each (listener, rule) pair gets its own AuthConfig.
+        """
+        case, gateway, route = dual_listener_tenant_case
         listeners = {
             listener.get("name"): listener
             for listener in (gateway.get("spec") or {}).get("listeners") or []
@@ -366,31 +396,31 @@ class TestPerTenantMaaSAPI:
             f"Test setup must use a shared hostname across listeners: {listeners!r}"
         )
 
-        route_name = _tenant_api_names(case)["httproute"]
-        route = wait_for_json(
-            "httproute",
-            route_name,
-            INFRA_NAMESPACE,
-            predicate=lambda obj: _route_accepted_by_gateway(obj, case["gateway_name"]),
-            timeout=180,
+        listeners_with_routes = _gateway_listener_names_with_routes(gateway)
+        authconfigs_by_rule = _wait_for_stable_route_authconfigs(
+            route, len(listeners_with_routes)
         )
-        authconfigs_by_rule = _wait_for_stable_route_authconfigs(route)
         rules = (route.get("spec") or {}).get("rules") or []
         expected_rules = {f"rule-{index}" for index in range(1, len(rules) + 1)}
         assert set(authconfigs_by_rule) == expected_rules
         assert all(
-            len(observations) == 1 and observations[0][2]
+            len(observations) == len(listeners_with_routes)
+            and all(o.ready for o in observations)
             for observations in authconfigs_by_rule.values()
         ), (
-            f"Expected exactly one Ready and Available non-deleting Authorino "
-            f"AuthConfig per rule for "
-            f"{INFRA_NAMESPACE}/{route_name}; got {authconfigs_by_rule!r}"
+            f"Expected one Ready and Available non-deleting Authorino AuthConfig per "
+            f"listener {sorted(listeners_with_routes)!r} and rule for "
+            f"{INFRA_NAMESPACE}/{route['metadata']['name']}; got {authconfigs_by_rule!r}"
         )
 
-    @pytest.mark.nightly
     @pytest.mark.serial
     def test_dual_listener_wasm_envoyfilter_generation_stays_stable(
         self, dual_listener_tenant_case
     ):
         """The overlapping listeners must not trigger Kuadrant wasm config churn."""
-        _assert_gateway_wasm_generation_stable(dual_listener_tenant_case["gateway_name"])
+        # Start the quiet window from settled AuthConfigs, independent of test order.
+        _wait_for_stable_route_authconfigs(
+            dual_listener_tenant_case.route,
+            len(_gateway_listener_names_with_routes(dual_listener_tenant_case.gateway)),
+        )
+        _assert_gateway_wasm_generation_stable(dual_listener_tenant_case.case["gateway_name"])

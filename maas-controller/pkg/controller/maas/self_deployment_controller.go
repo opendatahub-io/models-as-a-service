@@ -69,6 +69,16 @@ const usageLogsCollectorClusterRoleBindingName = "usage-collector-application-lo
 // usageLogsDsciManagedKustomizeDir is the kustomization rendered when usageLogging is false or omitted.
 const usageLogsDsciManagedKustomizeDir = "dsci-managed"
 
+// usageLogsMaaSAPILokiDatasourceURL is the Perses datasource base URL for the
+// maas-api read-only Loki proxy (GET /v1/logs*). Hardcoded to the RHOAI
+// infra namespace for now; maas-api serves TLS on 8443 with a service-ca
+// signed serving cert. The multi-tenancy datasource appends ?only_user=true.
+const usageLogsMaaSAPILokiDatasourceURL = "https://maas-api.redhat-ai-gateway-infra.svc.cluster.local:8443/v1/logs"
+
+// usageLogsMaaSAPILokiCACertPath is the cluster service-ca bundle mounted in
+// every pod's service account volume; it verifies maas-api's serving cert.
+const usageLogsMaaSAPILokiCACertPath = "/var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt"
+
 // usageLogsTenancyProxyDeploymentName is the Deployment for the Loki query tenancy proxy.
 const usageLogsTenancyProxyDeploymentName = "usage-logs-tenancy-proxy"
 
@@ -97,12 +107,16 @@ type LifecycleReconciler struct {
 	ObservabilityManifestsPath  string
 	MonitoringNamespace         string
 	UsageLogsManifestPath       string
-	DiscoveryEnabled            bool
-	DiscoveryManifestPath       string
-	DiscoveryImage              string
-	DiscoveryLogLevel           string
-	DiscoveryNamespace          string
-	DiscoveryReplicas           *int32
+	// InfraNamespace is where maas-api runs; the usage-logs-loki Secret is
+	// looked up there to switch the Perses datasources to the maas-api Loki
+	// proxy (see ensureUsageLogs / patchPersesDatasourceMaaSAPILoki).
+	InfraNamespace        string
+	DiscoveryEnabled      bool
+	DiscoveryManifestPath string
+	DiscoveryImage        string
+	DiscoveryLogLevel     string
+	DiscoveryNamespace    string
+	DiscoveryReplicas     *int32
 
 	staleResourcesCleanupMu        sync.Mutex
 	staleResourcesCleanupCompleted bool
@@ -131,8 +145,15 @@ func (r *LifecycleReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
+	// Older versions left a finalizer on this controller's own Deployment. Remove it
+	// before any setup or teardown step can requeue or fail, so namespace deletion never
+	// waits for this controller to clean up its own workload.
+	if err := r.stripLegacyCleanupFinalizer(ctx, log, req.NamespacedName); err != nil {
+		return ctrl.Result{}, err
+	}
+
 	if dep.DeletionTimestamp.IsZero() {
-		// Strip before anything else so that, if teardown is requested below, Config
+		// Strip before any Config work below so that, if teardown is requested, Config
 		// deletion can never cascade-delete the Deployment via a stale ownerReference
 		// from a pre-self-teardown install.
 		if err := r.stripLegacyDeploymentConfigOwnerReference(ctx, log, req.NamespacedName); err != nil {
@@ -172,9 +193,6 @@ func (r *LifecycleReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		if err := r.ensureDiscoveryService(ctx, log); err != nil {
 			return ctrl.Result{}, err
 		}
-		if err := r.stripLegacyCleanupFinalizer(ctx, log, req.NamespacedName); err != nil {
-			return ctrl.Result{}, err
-		}
 		if cfg != nil {
 			if err := r.syncModuleStatus(ctx, cfg); err != nil {
 				return ctrl.Result{}, err
@@ -186,10 +204,7 @@ func (r *LifecycleReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		return ctrl.Result{}, nil
 	}
 
-	// Terminating: remove legacy finalizer only so deletion is not blocked.
-	if err := r.stripLegacyCleanupFinalizer(ctx, log, req.NamespacedName); err != nil {
-		return ctrl.Result{}, err
-	}
+	// Terminating: the legacy finalizer was already stripped above.
 	return ctrl.Result{}, nil
 }
 
@@ -396,6 +411,14 @@ func (r *LifecycleReconciler) ensureTenantReferencesConfig(ctx context.Context) 
 			return nil, nil
 		}
 		return nil, err
+	}
+	// Never link a terminating MaasTenantConfig to the current Config. Re-parenting it
+	// is wrong, and the patch fails when its namespace is already gone, which turns
+	// into a reconciler error loop during teardown.
+	if !tenant.DeletionTimestamp.IsZero() {
+		log.Info("default MaasTenantConfig is terminating; skipping Config owner reference link",
+			"namespace", r.TenantSubscriptionNamespace)
+		return nil, nil
 	}
 	if tenantReferencesConfig(&tenant, &cfg) {
 		return nil, nil
@@ -611,6 +634,14 @@ func (r *LifecycleReconciler) ensureUsageLogs(ctx context.Context, log logr.Logg
 		return fmt.Errorf("render inactive usage logs: %w", err)
 	}
 
+	// The usage-logs-loki Secret in the infra namespace switches the Perses
+	// datasources from the LokiStack gateway / tenancy proxy to the maas-api
+	// Loki proxy. Absent secret keeps the rendered defaults.
+	maasAPILoki, err := r.maasAPILokiEnabled(ctx, log)
+	if err != nil {
+		return err
+	}
+
 	// Track if the collector is skipped due to missing CRD (CWE-863).
 	// If the OpenTelemetryCollector CRD is unavailable, we must skip the entire
 	// bundle to prevent orphaned ClusterRoleBinding from granting cluster-logging-application-write
@@ -627,6 +658,11 @@ func (r *LifecycleReconciler) ensureUsageLogs(ctx context.Context, log logr.Logg
 		}
 		if err := patchPersesDatasourceURL(&res); err != nil {
 			return fmt.Errorf("patch %s %s: %w", res.GetKind(), res.GetName(), err)
+		}
+		if maasAPILoki {
+			if err := patchPersesDatasourceMaaSAPILoki(&res); err != nil {
+				return fmt.Errorf("patch %s %s: %w", res.GetKind(), res.GetName(), err)
+			}
 		}
 		if err := controllerutil.SetControllerReference(&cfg, &res, r.Scheme); err != nil {
 			return fmt.Errorf("set controller reference on %s %s: %w", res.GetKind(), res.GetName(), err)
@@ -808,6 +844,71 @@ func patchPersesDatasourceURL(res *unstructured.Unstructured) error {
 			return fmt.Errorf("set datasource URL: %w", err)
 		}
 	}
+
+	return nil
+}
+
+// maasAPILokiEnabled reports whether the usage-logs-loki Secret exists in the
+// infra namespace, which switches the Perses datasources to the maas-api Loki
+// proxy. A missing InfraNamespace leaves the feature off.
+func (r *LifecycleReconciler) maasAPILokiEnabled(ctx context.Context, log logr.Logger) (bool, error) {
+	if r.InfraNamespace == "" {
+		return false, nil
+	}
+	secret := &corev1.Secret{}
+	if err := r.Get(ctx, client.ObjectKey{Namespace: r.InfraNamespace, Name: tenantreconcile.LokiReadSecretName}, secret); err != nil {
+		if apierrors.IsNotFound(err) {
+			log.V(1).Info("usage-logs-loki Secret not found; Perses datasources keep rendered defaults",
+				"name", tenantreconcile.LokiReadSecretName, "namespace", r.InfraNamespace)
+			return false, nil
+		}
+		return false, fmt.Errorf("get Secret %s/%s: %w", r.InfraNamespace, tenantreconcile.LokiReadSecretName, err)
+	}
+	log.Info("usage-logs-loki Secret present; switching Perses datasources to the maas-api Loki proxy")
+	return true, nil
+}
+
+// patchPersesDatasourceMaaSAPILoki repoints the usage-log Perses datasources at
+// the maas-api read-only Loki proxy when the usage-logs-loki Secret exists.
+// usage-logs-all keeps the organization-wide (admin) view; usage-logs-multi-tenancy
+// appends only_user=true for the caller-scoped view. The CA switches from a
+// ConfigMap bundle to the service-ca.crt file mounted in every pod, which
+// verifies maas-api's service-ca-signed serving certificate.
+func patchPersesDatasourceMaaSAPILoki(res *unstructured.Unstructured) error {
+	if res.GetKind() != "PersesDatasource" {
+		return nil
+	}
+
+	var onlyUser bool
+	switch res.GetName() {
+	case "usage-logs-all":
+	case "usage-logs-multi-tenancy":
+		onlyUser = true
+	default:
+		return nil
+	}
+
+	url := usageLogsMaaSAPILokiDatasourceURL
+	if onlyUser {
+		url += "?only_user=true"
+	}
+	if err := unstructured.SetNestedField(res.Object, url, "spec", "config", "plugin", "spec", "proxy", "spec", "url"); err != nil {
+		return fmt.Errorf("set datasource URL: %w", err)
+	}
+
+	// The remaining /loki/api/v1/* endpoint patterns are unchanged: the base
+	// URL's /v1/logs path prefix routes them through the maas-api Loki proxy.
+	caCert := map[string]any{
+		"type":     "file",
+		"certPath": usageLogsMaaSAPILokiCACertPath,
+	}
+	if err := unstructured.SetNestedMap(res.Object, caCert, "spec", "client", "tls", "caCert"); err != nil {
+		return fmt.Errorf("set datasource CA cert: %w", err)
+	}
+	// The service-ca file verifies the serving cert; drop any leftover
+	// configmap-specific fields and skip-verify flags on a best-effort basis.
+	unstructured.RemoveNestedField(res.Object, "spec", "client", "tls", "caCert", "name")
+	unstructured.RemoveNestedField(res.Object, "spec", "client", "tls", "insecureSkipVerify")
 
 	return nil
 }
@@ -1058,7 +1159,19 @@ func formatTenantList(tenants []string, maxItems int) string {
 	return strings.Join(tenants[:maxItems], ", ") + fmt.Sprintf(" (and %d more)", len(tenants)-maxItems)
 }
 
-// SetupWithManager registers the controller to watch only the maas-controller Deployment.
+// enqueueLokiReadSecret schedules the lifecycle reconcile when the Secret that
+// switches the shared Perses datasources changes in the infrastructure namespace.
+func (r *LifecycleReconciler) enqueueLokiReadSecret(_ context.Context, obj client.Object) []reconcile.Request {
+	if r.InfraNamespace == "" || obj.GetNamespace() != r.InfraNamespace || obj.GetName() != tenantreconcile.LokiReadSecretName {
+		return nil
+	}
+	return []reconcile.Request{{NamespacedName: types.NamespacedName{
+		Namespace: r.DeploymentNS,
+		Name:      r.DeploymentName,
+	}}}
+}
+
+// SetupWithManager registers the lifecycle controller and its platform resource watches.
 func (r *LifecycleReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	selfOnly := predicate.NewPredicateFuncs(func(o client.Object) bool {
 		return o.GetName() == r.DeploymentName && o.GetNamespace() == r.DeploymentNS
@@ -1078,6 +1191,10 @@ func (r *LifecycleReconciler) SetupWithManager(mgr ctrl.Manager) error {
 
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&appsv1.Deployment{}, builder.WithPredicates(selfOnly)).
+		Watches(
+			&corev1.Secret{},
+			handler.EnqueueRequestsFromMapFunc(r.enqueueLokiReadSecret),
+		).
 		Watches(
 			&maasv1alpha1.Config{},
 			handler.EnqueueRequestsFromMapFunc(func(_ context.Context, _ client.Object) []reconcile.Request {

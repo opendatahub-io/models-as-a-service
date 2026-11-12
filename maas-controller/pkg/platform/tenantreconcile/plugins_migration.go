@@ -56,7 +56,7 @@ const (
 
 type pluginsMigrationResult struct {
 	Decision pluginsMigrationDecision
-	Baseline string // "default", "default+response-api-translation", "praxis", "absent", or ""
+	Baseline string // "default", "default+response-api-translation", "odh-3.5.0", "praxis", "absent", or ""
 	Reason   string
 	Forced   bool // an explicit force annotation accepts compatibility loss
 }
@@ -94,8 +94,9 @@ type ippProcessorConfig struct {
 // Known-good baselines (RHOAIENG-98846):
 //  1. Pure product default (response processors empty)
 //  2. Default + response api-translation enabled
+//  3. The ODH 3.5.0 default, an earlier shape of baseline 2
 //
-// Baseline #3 (legacy metering) is intentionally omitted until a real customer
+// A legacy metering baseline is intentionally omitted until a real customer
 // example ConfigMap is collected.
 func evaluatePluginsConfigMapMigration(ctx context.Context, reader client.Reader, params PlatformParams, tenant client.Object) (pluginsMigrationResult, error) {
 	if mtc, ok := tenant.(*maasv1alpha1.MaasTenantConfig); ok {
@@ -198,6 +199,19 @@ func apiTranslationCompatibilityRisk(models []string) string {
 	)
 }
 
+// explicitFalseAcceptsRisk follows apiTranslationCompatibilityRisk when an
+// operator set spec.apiTranslation.enabled=false. That also stops
+// ai-gateway-controller applying targetModel and the provider path for every
+// ExternalModel, not only for the listed bindings.
+const explicitFalseAcceptsRisk = "; explicit spec.apiTranslation.enabled=false accepts this compatibility loss and also turns off targetModel and path rewriting for every ExternalModel"
+
+// specAPITranslationEnabled reports the tenant's spec.apiTranslation.enabled.
+// An omitted value is off, as ai-gateway-controller reads it.
+func specAPITranslationEnabled(tenant client.Object) bool {
+	mtc, ok := tenant.(*maasv1alpha1.MaasTenantConfig)
+	return ok && mtc.Spec.APITranslation != nil && mtc.Spec.APITranslation.Enabled != nil && *mtc.Spec.APITranslation.Enabled
+}
+
 // persistAPITranslationMigrationRisk makes an accepted compatibility loss
 // durable before cleanup removes the IPP ConfigMap. The marker is consumed on
 // later reconciles to keep the tenant's Degraded condition informative while
@@ -226,20 +240,22 @@ func appendAcceptedAPITranslationMigrationRiskWarning(
 		return nil
 	}
 
+	// Migration has persisted its translation intent by now, so the spec holds it.
+	translationEnabled := specAPITranslationEnabled(tenant)
 	if risk == APITranslationMigrationRiskExplicitFalse {
-		models, err := legacyIPPTranslationModels(ctx, reader, *params, tenant)
+		models, err := legacyIPPTranslationModels(ctx, reader, *params, tenant, translationEnabled)
 		if err != nil {
 			return fmt.Errorf("recheck accepted API translation compatibility risk: %w", err)
 		}
 		if len(models) == 0 {
 			return nil
 		}
-		params.Warnings = append(params.Warnings, apiTranslationCompatibilityRisk(models)+"; explicit spec.apiTranslation.enabled=false accepts this compatibility loss")
+		params.Warnings = append(params.Warnings, apiTranslationCompatibilityRisk(models)+explicitFalseAcceptsRisk)
 		return nil
 	}
 
 	warning := forcedMigrationReason("force-payload-processing-migration annotation allowed migration", true)
-	models, err := legacyIPPTranslationModels(ctx, reader, *params, tenant)
+	models, err := legacyIPPTranslationModels(ctx, reader, *params, tenant, translationEnabled)
 	if err != nil {
 		return fmt.Errorf("recheck forced API translation compatibility risk: %w", err)
 	}
@@ -250,7 +266,22 @@ func appendAcceptedAPITranslationMigrationRiskWarning(
 	return nil
 }
 
-// persistAPITranslationMigrationIntent records the recognized response-enabled
+// ippBaselineTranslatesRequests reports whether a recognized IPP baseline ran
+// model-provider-resolver and request-side api-translation, which sent each
+// provider its targetModel and path. AGC applies both only with
+// spec.apiTranslation.enabled; without it a migrated provider receives the
+// MaaS model name on the default path, so a renamed model fails while it
+// reports Ready.
+func ippBaselineTranslatesRequests(baseline string) bool {
+	switch baseline {
+	case "default", "default+response-api-translation", "odh-3.5.0":
+		return true
+	default:
+		return false
+	}
+}
+
+// persistAPITranslationMigrationIntent records the translation of a recognized
 // IPP baseline before cleanup can delete its ConfigMap. Update uses the live
 // resourceVersion and retries conflicts so an operator's explicit true/false
 // choice wins over automatic migration.
@@ -297,13 +328,16 @@ func persistAPITranslationMigrationIntent(ctx context.Context, c client.Client, 
 }
 
 // legacyIPPTranslationModels returns active ExternalModels whose provider
-// binding is not the known-safe OpenAI-provider/OpenAI-Chat passthrough. The
-// wire format alone is insufficient: Azure, Vertex, and Bedrock providers can
-// use OpenAI-shaped requests while still needing provider-specific legacy
-// path or response handling. Current Praxis ExtProc does not dispatch those
-// legacy transforms after provider selection. The default tenant also covers
-// the models it serves outside tenant namespaces (see tenantNamespaces).
-func legacyIPPTranslationModels(ctx context.Context, reader client.Reader, params PlatformParams, tenant client.Object) ([]string, error) {
+// binding is not the known-safe OpenAI-provider/OpenAI-Chat passthrough or,
+// when translationEnabled, an Anthropic provider with apiFormat messages,
+// which Praxis translates from OpenAI Chat Completions. Without translation,
+// ai-gateway-controller skips that binding. The wire format alone is
+// insufficient: Azure, Vertex, and Bedrock providers can use OpenAI-shaped
+// requests while still needing provider-specific legacy path or response
+// handling. Current Praxis ExtProc does not dispatch those legacy transforms
+// after provider selection. The default tenant also covers the models it
+// serves outside tenant namespaces (see tenantNamespaces).
+func legacyIPPTranslationModels(ctx context.Context, reader client.Reader, params PlatformParams, tenant client.Object, translationEnabled bool) ([]string, error) {
 	namespace := params.ModelNamespace
 	if namespace == "" {
 		namespace = tenant.GetNamespace()
@@ -395,7 +429,9 @@ func legacyIPPTranslationModels(ctx context.Context, reader client.Reader, param
 				affected = append(affected, fmt.Sprintf("%s (apiFormat=%s, provider %s has unknown type)", label, apiFormat, providerName))
 				continue
 			}
-			if apiFormat != "openai-chat" || providerType != "openai" {
+			passthrough := apiFormat == "openai-chat" && providerType == "openai"
+			translated := translationEnabled && apiFormat == "messages" && providerType == "anthropic"
+			if !passthrough && !translated {
 				affected = append(affected, fmt.Sprintf("%s (apiFormat=%s, provider=%s)", label, apiFormat, providerType))
 			}
 		}
@@ -546,6 +582,9 @@ func matchKnownGoodIPPPluginsConfigMap(cm *corev1.ConfigMap) (baseline string, o
 		return "", false, "unexpected data keys: " + strings.Join(extra, ", ")
 	}
 
+	if matchODH350PreProcessing(pre) && matchODH350Processing(post) {
+		return "odh-3.5.0", true, ""
+	}
 	if !matchIPPPreProcessingDefault(pre) {
 		return "", false, "pre-processing plugins/profiles deviate from product default"
 	}
@@ -595,6 +634,36 @@ func matchIPPPreProcessingDefault(cfg ippProcessorConfig) bool {
 	wantRequest := []string{"model-extractor", "model-provider-resolver"}
 	return matchPluginDefs(cfg.Plugins, wantPlugins) &&
 		matchDefaultProfile(cfg.Profiles, wantRequest, nil)
+}
+
+// matchODH350PreProcessing matches the ODH 3.5.0 pre-processing chain, which
+// had no model-provider-resolver yet. It is recognized only together with the
+// ODH 3.5.0 processing chain.
+func matchODH350PreProcessing(cfg ippProcessorConfig) bool {
+	wantPlugins := []ippPlugin{{
+		Type: "body-field-to-header",
+		Name: "model-extractor",
+		Parameters: map[string]any{
+			"fieldName":  "model",
+			"headerName": "X-Gateway-Model-Name",
+		},
+	}}
+	return matchPluginDefs(cfg.Plugins, wantPlugins) &&
+		matchDefaultProfile(cfg.Profiles, []string{"model-extractor"}, nil)
+}
+
+// matchODH350Processing matches the ODH 3.5.0 processing chain: the product
+// default without maas-headers-guard, with response api-translation.
+func matchODH350Processing(cfg ippProcessorConfig) bool {
+	wantPlugins := []ippPlugin{
+		{Type: "stream-usage-enforcer"},
+		{Type: "model-provider-resolver"},
+		{Type: "api-translation"},
+		{Type: "apikey-injection"},
+	}
+	wantRequest := []string{"stream-usage-enforcer", "model-provider-resolver", "api-translation", "apikey-injection"}
+	return matchPluginDefs(cfg.Plugins, wantPlugins) &&
+		matchDefaultProfile(cfg.Profiles, wantRequest, []string{"api-translation"})
 }
 
 // matchIPPProcessingDefault returns the baseline name when cfg matches a

@@ -109,7 +109,6 @@ def tenant_rate_limit_setup(tenant_env):
                 name,
                 expected_ready=True,
                 namespace=namespace,
-                timeout=120,
             )
         for tenant in (tenant_a, tenant_b):
             wait_for_status_phase(

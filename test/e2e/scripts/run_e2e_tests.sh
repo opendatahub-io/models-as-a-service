@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # =============================================================================
 # E2E Test Runner — pytest execution only
 # =============================================================================
@@ -11,6 +11,8 @@
 #   Pass 3 (optional): -m nightly when MAAS_PYTEST_INCLUDE_NIGHTLY=true (e.g. EXTERNAL_OIDC deploys)
 #
 # Passes 1–2 always exclude @pytest.mark.nightly; the flag below only gates pass 3.
+# When E2E_SMOKE_ONLY=true (/group-test sets this), passes 1–2 additionally require
+# @pytest.mark.smoke so PR CI runs a low-churn subset instead of the full suite.
 #
 # Called by:
 #   - prow_run_smoke_test.sh (CI: deploy → validate → THIS)
@@ -22,22 +24,42 @@
 #   DEPLOYMENT_NAMESPACE, MAAS_SUBSCRIPTION_NAMESPACE
 #
 # Optional env vars:
-#   E2E_PARALLEL_WORKERS          pytest-xdist worker count (default: 7)
+#   E2E_PARALLEL_WORKERS          pytest-xdist worker count (default: 5)
+#   E2E_MAXFAIL                   stop a pass after N failures (default: 5, 0 = never).
+#                                 CI sets 0: on a shared control plane, five failures used
+#                                 to truncate the pass, undercounting failures and leaving
+#                                 the flake report covering only the part that ran.
 #   E2E_AUTHPOLICY_PHASE_TIMEOUT  seconds (default: 120, parallel only)
-#   E2E_MAAS_SUBSCRIPTION_PHASE_TIMEOUT  seconds (default: 90, parallel only)
+#   E2E_MAAS_SUBSCRIPTION_PHASE_TIMEOUT  seconds (default: 120, parallel only)
 #   E2E_GATEWAY_ENFORCED_TIMEOUT  seconds (default: 240, parallel only)
 #   E2E_MULTITENANCY_PHASE_TIMEOUT seconds (default: 180, parallel only)
 #   E2E_RECONCILE_WAIT            seconds between reconcile polls (default: 4)
 #   ARTIFACTS_DIR                 output directory for JUnit/HTML (default: test/e2e/reports)
+#   E2E_SMOKE_ONLY                When true, restrict passes 1–2 to @pytest.mark.smoke
+#                                 (/group-test sets true; unset/false = full suite)
+#   E2E_INCLUDE_NEW_FROM_DIFF     When true with E2E_SMOKE_ONLY, also select tests added
+#                                 since E2E_DIFF_BASE (dynamic pr_new marker; no source edit)
+#   E2E_DIFF_BASE                 Git ref/SHA for the PR base (or PULL_BASE_SHA / BASE_SHA)
+#   E2E_DIFF_UPSTREAM_URL         Canonical upstream clone URL (not the PR fork). /group-test
+#                                 sets this so merge-base does not use a stale fork origin/main.
+#   E2E_DIFF_TARGET_BRANCH        Upstream base branch name (Pac {{target_branch}}, default main)
 #   MAAS_PYTEST_INCLUDE_NIGHTLY   When true, run pass 3 (-m nightly) after serial pass
 #   E2E_RUN_ONLY_OIDC_TESTS       When true, skip passes 1–2 and run only pass 3 (external
 #                                 OIDC tests); requires EXTERNAL_OIDC=true
+#   E2E_RUN_ONLY_GRID_TESTS       When true, restrict the OIDC-only pass to grid_oidc tests;
+#                                 requires E2E_RUN_ONLY_OIDC_TESTS=true
+#   E2E_LIMITADOR_TRIAGE          When true, run only the Limitador sync subset (-m limitador)
+#                                 plus the serial pass; the broad parallel pass is skipped
+#   E2E_LIMITADOR_WORKERS         xdist worker count for the Limitador triage pass
+#                                 (default: 1; raise it to reproduce load-dependent stalls)
 #
 # Usage:
 #   export GATEWAY_HOST=maas.apps.cluster.example.com TOKEN=$(oc whoami -t) ...
-#   ./run_e2e_tests.sh                       # run all tests
+#   ./run_e2e_tests.sh                       # run all tests (unless E2E_SMOKE_ONLY=true)
+#   ./run_e2e_tests.sh --smoke-only          # only @pytest.mark.smoke
 #   ./run_e2e_tests.sh -- -k test_api_keys   # pass extra pytest args
 #   ./run_e2e_tests.sh --serial-only         # skip parallel pass
+#   ./run_e2e_tests.sh --limitador-triage    # only -m limitador + serial pass
 # =============================================================================
 
 set -euo pipefail
@@ -48,10 +70,20 @@ TEST_DIR="$PROJECT_ROOT/test/e2e"
 
 # ── Parse script flags (before --) vs pytest args (after --) ─────────────
 serial_only=false
+limitador_triage=false
+smoke_only=false
+case "${E2E_LIMITADOR_TRIAGE:-false}" in
+    1 | true | TRUE | yes | YES) limitador_triage=true ;;
+esac
+case "${E2E_SMOKE_ONLY:-false}" in
+    1 | true | TRUE | yes | YES) smoke_only=true ;;
+esac
 extra_pytest_args=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --serial-only) serial_only=true; shift ;;
+        --limitador-triage) limitador_triage=true; shift ;;
+        --smoke-only) smoke_only=true; shift ;;
         --) shift; extra_pytest_args=("$@"); break ;;
         *) extra_pytest_args+=("$1"); shift ;;
     esac
@@ -73,7 +105,7 @@ reject_forwarded_marker_args
 
 # ── Defaults ─────────────────────────────────────────────────────────────
 export E2E_RECONCILE_WAIT="${E2E_RECONCILE_WAIT:-4}"
-E2E_PARALLEL_WORKERS="${E2E_PARALLEL_WORKERS:-7}"
+E2E_PARALLEL_WORKERS="${E2E_PARALLEL_WORKERS:-5}"
 if ! [[ "$E2E_PARALLEL_WORKERS" =~ ^[1-9][0-9]*$ ]]; then
     echo "ERROR: E2E_PARALLEL_WORKERS must be a positive integer (>= 1), got '$E2E_PARALLEL_WORKERS'" >&2
     exit 1
@@ -85,7 +117,7 @@ mkdir -p "$ARTIFACTS_DIR"
 # ── Phase timeouts (parallel only) ───────────────────────────────────────
 if [[ "$E2E_PARALLEL_WORKERS" -gt 1 ]]; then
     export E2E_AUTHPOLICY_PHASE_TIMEOUT="${E2E_AUTHPOLICY_PHASE_TIMEOUT:-120}"
-    export E2E_MAAS_SUBSCRIPTION_PHASE_TIMEOUT="${E2E_MAAS_SUBSCRIPTION_PHASE_TIMEOUT:-90}"
+    export E2E_MAAS_SUBSCRIPTION_PHASE_TIMEOUT="${E2E_MAAS_SUBSCRIPTION_PHASE_TIMEOUT:-120}"
     export E2E_GATEWAY_ENFORCED_TIMEOUT="${E2E_GATEWAY_ENFORCED_TIMEOUT:-240}"
     export E2E_MULTITENANCY_PHASE_TIMEOUT="${E2E_MULTITENANCY_PHASE_TIMEOUT:-180}"
 fi
@@ -112,6 +144,7 @@ html="$ARTIFACTS_DIR/e2e-${user}.html"
 xml="$ARTIFACTS_DIR/e2e-${user}.xml"
 xml_serial="${xml%.xml}-serial.xml"
 xml_nightly="${xml%.xml}-nightly.xml"
+xml_limitador="${xml%.xml}-limitador.xml"
 
 # ── Marker tiers ─────────────────────────────────────────────────────────
 # Nightly tests always run in pass 3 only (when enabled), never in passes 1–2.
@@ -127,6 +160,10 @@ _run_only_oidc_tests=false
 case "${E2E_RUN_ONLY_OIDC_TESTS:-false}" in
     1 | true | TRUE | yes | YES) _run_only_oidc_tests=true ;;
 esac
+_run_only_grid_tests=false
+case "${E2E_RUN_ONLY_GRID_TESTS:-false}" in
+    1 | true | TRUE | yes | YES) _run_only_grid_tests=true ;;
+esac
 if [[ "$_run_only_oidc_tests" == true ]]; then
     if [[ "${EXTERNAL_OIDC:-false}" != "true" ]]; then
         echo "ERROR: E2E_RUN_ONLY_OIDC_TESTS=true requires EXTERNAL_OIDC=true; the OIDC tests skip without it" >&2
@@ -136,10 +173,116 @@ if [[ "$_run_only_oidc_tests" == true ]]; then
         echo "ERROR: E2E_RUN_ONLY_OIDC_TESTS=true cannot be combined with --serial-only" >&2
         exit 1
     fi
+    if [[ "$limitador_triage" == "true" ]]; then
+        echo "ERROR: E2E_RUN_ONLY_OIDC_TESTS=true cannot be combined with --limitador-triage" >&2
+        exit 1
+    fi
     _include_nightly_pass=true
 fi
-_parallel_marker="not serial and not legacy_ipp${_nightly_exclude}"
-_serial_marker="serial and not legacy_ipp${_nightly_exclude}"
+_nightly_marker="nightly"
+if [[ "$_run_only_grid_tests" == true ]]; then
+    if [[ "$_run_only_oidc_tests" != true ]]; then
+        echo "ERROR: E2E_RUN_ONLY_GRID_TESTS=true requires E2E_RUN_ONLY_OIDC_TESTS=true" >&2
+        exit 1
+    fi
+    _nightly_marker="nightly and grid_oidc"
+fi
+if [[ "$limitador_triage" == "true" && "$serial_only" == "true" ]]; then
+    echo "ERROR: --limitador-triage already runs the serial pass; drop --serial-only" >&2
+    exit 1
+fi
+if [[ "$smoke_only" == "true" && "$limitador_triage" == "true" ]]; then
+    echo "ERROR: --smoke-only / E2E_SMOKE_ONLY cannot be combined with --limitador-triage" >&2
+    exit 1
+fi
+# OIDC-only jobs skip passes 1–2 entirely; smoke filtering does not apply there.
+_smoke_require=""
+_include_new_from_diff=false
+case "${E2E_INCLUDE_NEW_FROM_DIFF:-false}" in
+    1 | true | TRUE | yes | YES) _include_new_from_diff=true ;;
+esac
+
+# Resolve the PR-base ref for dynamic pr_new selection.
+# Prefer an explicit SHA, then fetch the *upstream* target branch (not the fork's
+# origin/main — /group-test clones source-repo-url at --depth 50). Never let
+# merge-base failure abort under set -e; callers fall back to smoke-only.
+_resolve_e2e_diff_base() {
+    local base="${E2E_DIFF_BASE:-${PULL_BASE_SHA:-${BASE_SHA:-}}}"
+    if [[ -n "${base}" ]]; then
+        printf '%s\n' "${base}"
+        return 0
+    fi
+    local upstream_url="${E2E_DIFF_UPSTREAM_URL:-}"
+    local target_branch="${E2E_DIFF_TARGET_BRANCH:-main}"
+    local mb=""
+    if [[ -n "${upstream_url}" ]]; then
+        # When CI configures an upstream URL, do not fall back to origin/* —
+        # that may be a stale fork tip and would mis-classify upstream tests
+        # as PR-new. Fail closed so the caller uses smoke-only.
+        local ref="refs/e2e-diff-base/${target_branch}"
+        if git -C "$PROJECT_ROOT" fetch --depth=50 "${upstream_url}" \
+            "+refs/heads/${target_branch}:${ref}" >/dev/null 2>&1; then
+            mb="$(git -C "$PROJECT_ROOT" merge-base HEAD "${ref}" 2>/dev/null || true)"
+            if [[ -n "${mb}" ]]; then
+                printf '%s\n' "${mb}"
+                return 0
+            fi
+        fi
+        return 1
+    fi
+    local cand
+    for cand in "origin/${target_branch}" "origin/main" main; do
+        if git -C "$PROJECT_ROOT" rev-parse --verify "${cand}" >/dev/null 2>&1; then
+            mb="$(git -C "$PROJECT_ROOT" merge-base HEAD "${cand}" 2>/dev/null || true)"
+            if [[ -n "${mb}" ]]; then
+                printf '%s\n' "${mb}"
+                return 0
+            fi
+        fi
+    done
+    return 1
+}
+
+if [[ "$smoke_only" == "true" && "$_run_only_oidc_tests" != true ]]; then
+    if [[ "$_include_new_from_diff" == true ]]; then
+        _diff_base=""
+        if ! _diff_base="$(_resolve_e2e_diff_base)"; then
+            _diff_base=""
+        fi
+        if [[ -z "${_diff_base}" ]]; then
+            echo "WARNING: E2E_INCLUDE_NEW_FROM_DIFF=true but could not resolve a PR base" \
+                "(set E2E_DIFF_BASE / PULL_BASE_SHA / BASE_SHA, or E2E_DIFF_UPSTREAM_URL +" \
+                "E2E_DIFF_TARGET_BRANCH); smoke-only without pr_new" >&2
+            _smoke_require="smoke and "
+            echo "E2E smoke-only mode: restricting passes 1–2 to @pytest.mark.smoke"
+        else
+            _new_ids_file="${ARTIFACTS_DIR}/new-e2e-test-ids.txt"
+            if ! python "$SCRIPT_DIR/check_new_e2e_test_tiers.py" --base "${_diff_base}" --list-new \
+                >"${_new_ids_file}"; then
+                echo "WARNING: failed to list new E2E tests against ${_diff_base};" \
+                    "falling back to smoke-only without pr_new" >&2
+                : >"${_new_ids_file}"
+                _smoke_require="smoke and "
+                echo "E2E smoke-only mode: restricting passes 1–2 to @pytest.mark.smoke"
+            else
+                _new_count="$(grep -cve '^[[:space:]]*$' "${_new_ids_file}" || true)"
+                export E2E_NEW_TEST_IDS_FILE="${_new_ids_file}"
+                _smoke_require="(smoke or pr_new) and "
+                echo "E2E smoke-only + PR-new: -m '(smoke or pr_new) …' (base=${_diff_base}, new_tests=${_new_count}, ids=${_new_ids_file})"
+            fi
+        fi
+    else
+        _smoke_require="smoke and "
+        echo "E2E smoke-only mode: restricting passes 1–2 to @pytest.mark.smoke"
+    fi
+fi
+_parallel_marker="${_smoke_require}not serial and not legacy_ipp${_nightly_exclude}"
+_serial_marker="${_smoke_require}serial and not legacy_ipp${_nightly_exclude}"
+# The Limitador sync subset: tests that wait on a TokenRateLimitPolicy reaching
+# Enforced=True. Only they can see a stalled limiter, and because an unapplied
+# token limit still admits every request, the rest of the suite passes either way.
+# Already-serial limitador tests are left to the serial pass so nothing runs twice.
+_limitador_marker="limitador and not serial and not legacy_ipp${_nightly_exclude}"
 _pass_total=2
 if [[ "$_include_nightly_pass" == true ]]; then
     _pass_total=3
@@ -188,9 +331,10 @@ count_pytest_collected() {
     set +e
     summary=$( "$@" --collect-only -q 2>&1 | tail -1 )
     set -e
-    if [[ "$summary" =~ ([0-9]+)/[0-9]+\ tests\ collected ]]; then
+    # Pytest uses "test" for a single collected item and "tests" otherwise.
+    if [[ "$summary" =~ ([0-9]+)/[0-9]+\ tests?\ collected ]]; then
         collected="${BASH_REMATCH[1]}"
-    elif [[ "$summary" =~ ([0-9]+)\ tests\ collected ]]; then
+    elif [[ "$summary" =~ ([0-9]+)\ tests?\ collected ]]; then
         collected="${BASH_REMATCH[1]}"
     elif [[ "$summary" != *"no tests collected"* ]]; then
         echo "WARNING: could not parse pytest collection summary: ${summary}" >&2
@@ -247,11 +391,37 @@ snapshot_parallel_pass_pods() (
     done
 )
 
+run_limitador_pass() {
+    local workers="${E2E_LIMITADOR_WORKERS:-1}"
+    if ! [[ "$workers" =~ ^[1-9][0-9]*$ ]]; then
+        echo "ERROR: E2E_LIMITADOR_WORKERS must be a positive integer (>= 1), got '$workers'" >&2
+        exit 1
+    fi
+    echo "Running Limitador triage pass: -m '${_limitador_marker}' with ${workers} worker(s)"
+    # The limitador tests are non-serial and worker-tenant scoped, so they report
+    # as the parallel pass even at a single worker; the serial pass that follows
+    # is what E2E_PYTEST_PASS=serial exists for.
+    local xdist_args=()
+    if [[ "$workers" -gt 1 ]]; then
+        xdist_args=(-n "$workers" --dist=loadgroup)
+    fi
+    if ! run_pytest_pass "limitador triage" \
+        env E2E_PYTEST_PASS=parallel PYTHONPATH="$TEST_DIR:${PYTHONPATH:-}" pytest \
+        --maxfail="${E2E_MAXFAIL:-5}" \
+        ${xdist_args[@]+"${xdist_args[@]}"} \
+        --junitxml="$xml_limitador" \
+        --html="${html%.html}-limitador.html" --self-contained-html \
+        "${pytest_common_args[@]}" \
+        -m "${_limitador_marker}"; then
+        parallel_rc=1
+    fi
+}
+
 run_serial_pass() {
     echo "Running E2E pass 2/${_pass_total}: serial cluster mutators (-m '${_serial_marker}', single worker)"
     if ! run_pytest_pass "pass 2 (serial)" \
         env E2E_PYTEST_PASS=serial PYTHONPATH="$TEST_DIR:${PYTHONPATH:-}" pytest \
-        --maxfail=5 \
+        --maxfail="${E2E_MAXFAIL:-5}" \
         --junitxml="$xml_serial" \
         --html="${html%.html}-serial.html" --self-contained-html \
         "${pytest_common_args[@]}" \
@@ -264,22 +434,26 @@ run_nightly_pass() {
     if [[ "$_include_nightly_pass" != true ]]; then
         return 0
     fi
-    echo "Running E2E pass 3/${_pass_total}: nightly (-m nightly, EXTERNAL_OIDC=${EXTERNAL_OIDC:-false})"
+    echo "Running E2E pass 3/${_pass_total}: nightly (-m ${_nightly_marker}, EXTERNAL_OIDC=${EXTERNAL_OIDC:-false})"
     if ! run_pytest_pass "pass 3 (nightly)" \
         env E2E_PYTEST_PASS=nightly PYTHONPATH="$TEST_DIR:${PYTHONPATH:-}" pytest \
-        --maxfail=5 \
+        --maxfail="${E2E_MAXFAIL:-5}" \
         --junitxml="$xml_nightly" \
         --html="${html%.html}-nightly.html" --self-contained-html \
         "${pytest_common_args[@]}" \
-        -m nightly; then
+        -m "${_nightly_marker}"; then
         nightly_rc=1
     fi
 }
 
 maybe_run_serial_pass() {
+    # Always run the serial pass, even when the parallel pass failed. The serial
+    # tests are the cluster mutators most sensitive to state left behind by
+    # pass 1, and skipping them turns a parallel failure into a silent coverage
+    # gap: the job reports only the parallel error and never learns whether
+    # serial tests would also have failed. Both rc values are reported at exit.
     if [[ "$parallel_rc" -ne 0 ]]; then
-        echo "Skipping E2E pass 2/${_pass_total} (serial): parallel pass failed"
-        return 0
+        echo "E2E pass 1 (parallel) failed; still running pass 2/${_pass_total} (serial) to report its result independently"
     fi
     run_serial_pass
 }
@@ -295,6 +469,13 @@ maybe_run_nightly_pass() {
 if [[ "$_run_only_oidc_tests" == "true" ]]; then
     echo "Running E2E tests (OIDC tests only, E2E_RUN_ONLY_OIDC_TESTS=true; passes 1–2 skipped)"
     run_nightly_pass
+elif [[ "$limitador_triage" == "true" ]]; then
+    # Deliberately unconditional: a triage run exists to observe these passes, so
+    # neither one is allowed to be skipped because the other failed.
+    echo "Running E2E tests (Limitador triage only: -m '${_limitador_marker}' then -m '${_serial_marker}'; the broad parallel pass is skipped)"
+    run_limitador_pass
+    snapshot_parallel_pass_pods || echo "WARNING: failed to snapshot pods after the triage pass"
+    run_serial_pass
 elif [[ "$serial_only" == "true" ]]; then
     echo "Running E2E tests (serial pass only, -m '${_serial_marker}')"
     run_serial_pass
@@ -304,7 +485,7 @@ elif [[ "$E2E_PARALLEL_WORKERS" -le 1 ]]; then
     echo "Running E2E pass 1/${_pass_total}: non-serial (E2E_PARALLEL_WORKERS=${E2E_PARALLEL_WORKERS}, -m '${_parallel_marker}')"
     if ! run_pytest_pass "pass 1 (non-serial)" \
         env E2E_PYTEST_PASS=parallel PYTHONPATH="$TEST_DIR:${PYTHONPATH:-}" pytest \
-        --maxfail=5 \
+        --maxfail="${E2E_MAXFAIL:-5}" \
         --junitxml="$xml" \
         --html="$html" --self-contained-html \
         "${pytest_common_args[@]}" \
@@ -318,7 +499,7 @@ else
     echo "Running E2E pass 1/${_pass_total}: parallel (E2E_PARALLEL_WORKERS=${E2E_PARALLEL_WORKERS}, --dist=loadgroup, -m '${_parallel_marker}')"
     if ! run_pytest_pass "pass 1 (non-serial)" \
         env E2E_PYTEST_PASS=parallel PYTHONPATH="$TEST_DIR:${PYTHONPATH:-}" pytest \
-        --maxfail=5 \
+        --maxfail="${E2E_MAXFAIL:-5}" \
         -n "$E2E_PARALLEL_WORKERS" --dist=loadgroup \
         --junitxml="$xml" \
         --html="$html" --self-contained-html \
@@ -345,6 +526,9 @@ echo "✅ E2E tests completed"
 echo " - JUnit XML : ${xml}"
 if [[ -f "$xml_serial" ]]; then
     echo " - JUnit XML (serial pass): ${xml_serial}"
+fi
+if [[ -f "$xml_limitador" ]]; then
+    echo " - JUnit XML (limitador triage): ${xml_limitador}"
 fi
 if [[ -f "$xml_nightly" ]]; then
     echo " - JUnit XML (nightly pass): ${xml_nightly}"

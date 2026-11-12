@@ -22,6 +22,9 @@ const (
 	HeaderOrganizationID = "X-MaaS-Organization-Id"
 
 	// API Key configuration defaults.
+	// APIKeyPrefix is the recognizable prefix for inference API keys.
+	APIKeyPrefix = "sk-oai-"
+
 	// DefaultAPIKeyMaxExpirationDays is the default maximum allowed expiration for API keys.
 	DefaultAPIKeyMaxExpirationDays = 90
 
@@ -48,6 +51,10 @@ const (
 	// AnnotationRateLimitIdentity is a legacy stamp from early short-ID builds.
 	// Prefer status.rateLimitIdentity; still read as a migration fallback.
 	AnnotationRateLimitIdentity = "maas.opendatahub.io/rate-limit-identity"
+
+	// AnnotationSubscriptionHeaders configures experimental x-grid-* headers
+	// injected by the Gateway for requests resolved to an annotated MaaSSubscription.
+	AnnotationSubscriptionHeaders = "experimental.maas.opendatahub.io/headers"
 
 	// MaxLabelsEntries is the maximum number of label key-value pairs per API key (prevent abuse).
 	MaxLabelsEntries    = 50

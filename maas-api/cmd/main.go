@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/tls"
 	"errors"
 	"flag"
 	"fmt"
@@ -27,6 +26,7 @@ import (
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/constant"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/handlers"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/lokiproxy"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/metrics"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/middleware"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/models"
@@ -88,10 +88,10 @@ func serve() error {
 		return fmt.Errorf("failed to create cluster config: %w", err)
 	}
 
-	// Load database connection URL from Kubernetes secret
-	log.Info("Loading database connection URL from secret...")
-	if err := cfg.LoadDatabaseURL(ctx, cluster.ClientSet); err != nil {
-		return fmt.Errorf("failed to load database URL: %w", err)
+	// Load database connection URLs from Kubernetes secret
+	log.Info("Loading database connection URLs from secret...")
+	if err := cfg.LoadDatabaseURLs(ctx, cluster.ClientSet); err != nil {
+		return fmt.Errorf("failed to load database URLs: %w", err)
 	}
 
 	if err := cfg.Validate(); err != nil {
@@ -179,6 +179,14 @@ func serve() error {
 			log.Error("Failed to close token store", "error", err)
 		}
 	}()
+	// The store implements a custom Prometheus collector so database metrics share the
+	// lifecycle of the pools they measure. Registering it after successful construction
+	// avoids exposing counters for a store whose startup validation has already failed.
+	if collector, ok := store.(prometheus.Collector); ok {
+		if err := metricsRegistry.Register(collector); err != nil {
+			return fmt.Errorf("failed to register database metrics: %w", err)
+		}
+	}
 
 	if err = registerHandlers(ctx, log, router, cfg, cluster, store, metricsRecorder, profileMinVersion, profileCipherSuites); err != nil {
 		return fmt.Errorf("failed to register handlers: %w", err)
@@ -233,7 +241,11 @@ func serve() error {
 // DBConnectionURL is validated in cfg.Validate() before this is called.
 func initStore(ctx context.Context, log *logger.Logger, cfg *config.Config) (api_keys.MetadataStore, error) { //nolint:ireturn // Returns MetadataStore interface by design.
 	log.Info("Connecting to PostgreSQL database...", "tenant", cfg.TenantName)
-	return api_keys.NewPostgresStoreFromURL(ctx, log, cfg.DBConnectionURL, cfg.TenantName)
+	if cfg.DBReadConnectionURL == "" {
+		return api_keys.NewPostgresStoreFromURL(ctx, log, cfg.DBConnectionURL, cfg.TenantName)
+	}
+	log.Info("Using PostgreSQL read replica for local read-only queries")
+	return api_keys.NewPostgresStoreFromURLs(ctx, log, cfg.DBConnectionURL, cfg.DBReadConnectionURL, cfg.TenantName)
 }
 
 func registerHandlers(
@@ -247,7 +259,14 @@ func registerHandlers(
 	profileMinVersion uint16,
 	profileCipherSuites []uint16,
 ) error {
-	router.GET("/health", handlers.NewHealthHandler().HealthCheck)
+	healthHandler := handlers.NewHealthHandler()
+	// /health is the stable process contract. Register the separate database
+	// component endpoint only when the configured store can report it.
+	router.GET("/health", healthHandler.HealthCheck)
+	if reporter, ok := store.(handlers.DatabaseHealthReporter); ok {
+		healthHandler = healthHandler.WithDatabaseHealth(reporter)
+		router.GET("/health/database", healthHandler.DatabaseHealthCheck)
+	}
 
 	log.Info("Starting informers and waiting for cache sync...")
 	if !cluster.StartAndWaitForSync(ctx.Done()) {
@@ -305,18 +324,15 @@ func registerHandlers(
 		TenantNamespace: cfg.MaaSSubscriptionNamespace,
 		GatewayName:     cfg.GatewayName,
 	}
-	// Model listing keeps the existing SSO username/group path. It does not
-	// consume the new organization-role identity envelope.
+	// Model listing accepts both the verified OIDC identity envelope and the
+	// existing trusted username/group headers.
 	modelAuthMiddleware := make([]gin.HandlerFunc, 0, 3)
 	modelAuthMiddleware = append(modelAuthMiddleware,
+		tokenHandler.ExtractVerifiedIdentityOptional(),
 		tokenHandler.ExtractUserInfoOptional(),
 		middleware.TenantLogger(log, tenantLogCfg),
 	)
 	v1Routes.GET("/models", append(modelAuthMiddleware, modelsHandler.ListLLMs)...)
-
-	// /v1/me is intentionally SSO-only. Legacy username/group headers and API
-	// keys cannot reconstruct the verified OIDC identity response.
-	v1Routes.GET("/me", tokenHandler.ExtractVerifiedIdentity(), tokenHandler.GetMe)
 
 	// Management routes may receive the new verified-identity envelope. Keeping
 	// it optional here preserves older gateways and deployments with no
@@ -326,6 +342,11 @@ func registerHandlers(
 		tokenHandler.ExtractUserInfoOptional(),
 		middleware.TenantLogger(log, tenantLogCfg),
 	}
+
+	// Non-OIDC authentication methods reach maas-api through the gateway's
+	// trusted username/group headers. GetMe prefers the verified OIDC envelope
+	// when it is available.
+	v1Routes.GET("/me", append(optionalAuthMiddleware, tokenHandler.GetMe)...)
 
 	// Subscription listing routes use optional auth so they can return an empty
 	// list when no LLMInferenceService is deployed (same rationale as /v1/models).
@@ -368,6 +389,21 @@ func registerHandlers(
 	internalRoutes.DELETE("/tenants/:tenant/api-keys", cleanupAuth, apiKeyHandler.RevokeTenantAPIKeys)
 	internalRoutes.DELETE("/tenants/:tenant/subscriptions/:subscription/api-keys", cleanupAuth, apiKeyHandler.RevokeSubscriptionAPIKeys)
 	internalRoutes.POST("/subscriptions/select", tokenHandler.RejectTrustedIdentityHeaders(), subscriptionHandler.SelectSubscription)
+
+	// Read-only Loki proxy (GET /v1/logs*). Only registered when
+	// LOKI_READ_ENDPOINT is configured; every query is restricted to the
+	// caller's organization and requires organization admin membership.
+	if cfg.LokiReadEndpoint != "" {
+		lokiHandler, err := lokiproxy.NewHandler(log, cfg.LokiReadEndpoint, cfg.LokiReadToken, cfg.LokiReadCA)
+		if err != nil {
+			return fmt.Errorf("failed to create Loki proxy handler: %w", err)
+		}
+		lokiRoutes := v1Routes.Group("", strictAuthMiddleware...)
+		lokiHandler.RegisterRoutes(lokiRoutes)
+		log.Info("Loki read proxy enabled", "upstream", cfg.LokiReadEndpoint)
+	} else {
+		log.Info("Loki read proxy disabled: LOKI_READ_ENDPOINT is not set")
+	}
 
 	return nil
 }
@@ -432,13 +468,13 @@ func setupTLSProfile(ctx context.Context, log *logger.Logger, cfg *config.Config
 		"minTLSVersion", profile.MinTLSVersion,
 		"tlsAdherence", settings.Adherence)
 
-	profileMinVersion, profileCipherSuites, unsupported := tlsprofile.TLSConfigFromProfile(profile)
+	profileMinVersion, profileCipherSuites, unsupported, err := tlsprofile.TLSConfigFromProfile(profile)
+	if err != nil {
+		return 0, nil, fmt.Errorf("applying cluster TLS profile: %w", err)
+	}
 	if len(unsupported) > 0 {
 		log.Warn("TLS profile contains ciphers not supported by this Go version (ignored)",
 			"unsupportedCiphers", unsupported)
-	}
-	if len(profileCipherSuites) == 0 && profileMinVersion < tls.VersionTLS13 {
-		log.Warn("TLS profile produced no TLS 1.2 cipher suites; Go defaults will be used for TLS 1.2 negotiation")
 	}
 
 	if watchSettings {
@@ -502,7 +538,7 @@ func fetchTLSSettingsWithRetry(ctx context.Context, log *logger.Logger, restConf
 			return tlsprofile.DefaultSettings(), false, nil
 		}
 
-		if apierrors.IsForbidden(err) {
+		if apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err) {
 			// Preserve the authorization error instead of retrying into a watcher
 			// whose informer can never sync. A 403 only proves missing RBAC when
 			// discovery confirmed the group is served; otherwise the group may be
@@ -510,10 +546,14 @@ func fetchTLSSettingsWithRetry(ctx context.Context, log *logger.Logger, restConf
 			if discoveryErr != nil {
 				return tlsprofile.DefaultSettings(), false, fmt.Errorf(
 					"cannot determine whether config.openshift.io is served: API discovery failed (%w) "+
-						"and the cluster TLS profile request was forbidden: %w", discoveryErr, err)
+						"and the cluster TLS profile request was denied: %w", discoveryErr, err)
 			}
 			return tlsprofile.DefaultSettings(), false, fmt.Errorf(
-				"cluster TLS profile is not readable (config.openshift.io is served but access is forbidden, check the maas-api RBAC): %w", err)
+				"cluster TLS profile is not readable: config.openshift.io is served, access is denied; check maas-api RBAC: %w",
+				err)
+		}
+		if tlsprofile.IsProfileValidationError(err) {
+			return tlsprofile.DefaultSettings(), false, fmt.Errorf("invalid cluster TLS profile: %w", err)
 		}
 
 		lastErr = err

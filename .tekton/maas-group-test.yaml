@@ -11,7 +11,7 @@ metadata:
     pipelinesascode.tekton.dev/max-keep-runs: "3"
     pipelinesascode.tekton.dev/on-cel-expression: event == "group-test" || (event ==
       "pull_request" && target_branch == "stable")
-    pipelinesascode.tekton.dev/on-comment: "^/group-test"
+    pipelinesascode.tekton.dev/on-comment: "^/group-test$"
   name: maas-group-test
   namespace: open-data-hub-tenant
   labels:
@@ -42,6 +42,18 @@ spec:
         key: konflux-ci.dev/workload
         operator: Equal
         value: konflux-tenants
+      env:
+      # Low-churn PR subset; prow_run_smoke_test.sh defaults to full suite otherwise.
+      - name: E2E_SMOKE_ONLY
+        value: "true"
+      # Also run tests added in this PR once (dynamic pr_new), without marking them smoke.
+      - name: E2E_INCLUDE_NEW_FROM_DIFF
+        value: "true"
+      # Clone is the PR fork (depth 50); fetch the *upstream* target for merge-base.
+      - name: E2E_DIFF_UPSTREAM_URL
+        value: "https://github.com/opendatahub-io/models-as-a-service.git"
+      - name: E2E_DIFF_TARGET_BRANCH
+        value: "{{target_branch}}"
     serviceAccountName: konflux-integration-runner
   timeouts:
     pipeline: 4h0m0s
