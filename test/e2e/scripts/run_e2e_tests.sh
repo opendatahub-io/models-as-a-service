@@ -64,6 +64,17 @@
 
 set -euo pipefail
 
+_cleanup_large_io() {
+    if [[ "${E2E_LARGE_IO:-}" == "1" || "${E2E_LARGE_IO:-}" == "true" ]]; then
+        echo "Scaling down echo-simulator-large-io after large_io pass (freeing cluster resources)..."
+        kubectl patch llminferenceservices/echo-simulator-large-io \
+            -n "${E2E_MODEL_NAMESPACE:-llm}" \
+            --type merge -p '{"spec":{"replicas":0}}' \
+            || echo "WARNING: failed to scale down echo-simulator-large-io (non-fatal)"
+    fi
+}
+trap _cleanup_large_io EXIT
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 TEST_DIR="$PROJECT_ROOT/test/e2e"
@@ -92,7 +103,7 @@ done
 # Per-pass -m filters are owned by this script; forwarded markers can defeat the split.
 reject_forwarded_marker_args() {
     local arg
-    for arg in "${extra_pytest_args[@]}"; do
+    for arg in "${extra_pytest_args[@]+"${extra_pytest_args[@]}"}"; do
         case "$arg" in
             -m|--markers|-m*|--markers=*)
                 echo "ERROR: forwarded pytest marker ($arg) is not allowed; run_e2e_tests.sh applies per-pass -m filters" >&2
@@ -293,7 +304,7 @@ fi
 # Resolve relative paths against TEST_DIR so they work regardless of cwd.
 resolved_extra_args=()
 has_path_arg=false
-for arg in "${extra_pytest_args[@]}"; do
+for arg in "${extra_pytest_args[@]+"${extra_pytest_args[@]}"}"; do
     if [[ -e "$TEST_DIR/$arg" ]]; then
         resolved_extra_args+=("$TEST_DIR/$arg")
         has_path_arg=true
@@ -316,7 +327,7 @@ else
         -v --disable-warnings
         --capture=tee-sys --show-capture=all --log-level=INFO
         "$TEST_DIR/tests"
-        "${extra_pytest_args[@]}"
+        "${extra_pytest_args[@]+"${extra_pytest_args[@]}"}"
     )
 fi
 
@@ -511,6 +522,9 @@ else
     maybe_run_serial_pass
     maybe_run_nightly_pass
 fi
+
+# Post-run cleanup is handled by the _cleanup_large_io EXIT trap registered at
+# the top of this script, so it fires even if the script exits early.
 
 # ── Result ───────────────────────────────────────────────────────────────
 if [[ "$any_pass_collected_tests" != "true" ]]; then

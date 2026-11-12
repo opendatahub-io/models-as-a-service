@@ -1,0 +1,18 @@
+# MaaSModelRef for the large-context echo-mode simulator.
+# Used by streaming large I/O E2E tests (RHOAIENG-94274) that send ~4.3MB
+# payloads to validate WASM/ext_proc/Envoy buffer limits on the streaming path.
+# LLMIS from docs/samples/models/echo-simulator-large-io (name: echo-simulator-large-io in namespace llm).
+# Serves model ID: test/e2e-echo-model-large-io
+# No MaaSSubscription ships with this fixture; tests create their own.
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: MaaSModelRef
+metadata:
+  name: echo-simulator-large-io
+  namespace: llm
+  annotations:
+    openshift.io/display-name: "E2E Echo Simulated Model (Large I/O)"
+    openshift.io/description: "Simulated model running --mode echo for streaming large I/O tests (1Gi, 1700000 token context)"
+spec:
+  modelRef:
+    kind: LLMInferenceService
+    name: echo-simulator-large-io
