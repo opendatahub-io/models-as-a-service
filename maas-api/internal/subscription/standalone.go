@@ -21,6 +21,7 @@ type Backend interface {
 	SelectHighestPriority(groups []string, username string) (*SelectResponse, error)
 	GetAllAccessible(groups []string, username string) ([]*SelectResponse, error)
 	ResolveSubscriptionAdmin(identity *token.VerifiedIdentity, requestedSubscription string) (*AdminScope, error)
+	ResolveSubscriptionAdminScopes(identity *token.VerifiedIdentity) ([]*AdminScope, error)
 	CanonicalizeSubscription(requestedSubscription string) (string, error)
 	ListInventory(groups []string, username string, identity *token.VerifiedIdentity) ([]SubscriptionInfo, error)
 	ListAccessibleForModel(username string, groups []string, modelID string) ([]SubscriptionInfo, error)
@@ -52,6 +53,13 @@ func (DisabledSelector) GetAllAccessible(_ []string, _ string) ([]*SelectRespons
 }
 
 func (DisabledSelector) ResolveSubscriptionAdmin(_ *token.VerifiedIdentity, _ string) (*AdminScope, error) {
+	return nil, &SubscriptionAdminError{
+		Code:    "subscriptions_disabled",
+		Message: ErrSubscriptionsDisabled.Error(),
+	}
+}
+
+func (DisabledSelector) ResolveSubscriptionAdminScopes(_ *token.VerifiedIdentity) ([]*AdminScope, error) {
 	return nil, &SubscriptionAdminError{
 		Code:    "subscriptions_disabled",
 		Message: ErrSubscriptionsDisabled.Error(),

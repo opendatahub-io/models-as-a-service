@@ -304,11 +304,8 @@ func (c *Config) Validate() error {
 	if strings.TrimSpace(c.MaaSSubscriptionNamespace) == "" {
 		return errors.New("MAAS_SUBSCRIPTION_NAMESPACE must be non-empty")
 	}
-	if c.SubscriptionMode == "" {
-		c.SubscriptionMode = SubscriptionModeEnforced
-	}
-	if c.SubscriptionMode != SubscriptionModeEnforced && c.SubscriptionMode != SubscriptionModeStandalone {
-		return fmt.Errorf("MAAS_SUBSCRIPTION_MODE %q is invalid: must be %q or %q", c.SubscriptionMode, SubscriptionModeEnforced, SubscriptionModeStandalone)
+	if err := c.validateSubscriptionMode(); err != nil {
+		return err
 	}
 	if errs := validation.IsDNS1123Label(c.MaaSSubscriptionNamespace); len(errs) > 0 {
 		return fmt.Errorf("MAAS_SUBSCRIPTION_NAMESPACE %q is invalid: %v", c.MaaSSubscriptionNamespace, errs)
@@ -319,35 +316,8 @@ func (c *Config) Validate() error {
 		return errors.New("TENANT_NAME must be non-empty and non-whitespace to ensure tenant isolation")
 	}
 
-	// Validate API key max expiration days
-	if c.APIKeyMaxExpirationDays < 1 {
-		return errors.New("API_KEY_MAX_EXPIRATION_DAYS must be at least 1")
-	}
-
-	if c.AccessCheckTimeoutSeconds < 1 {
-		return errors.New("ACCESS_CHECK_TIMEOUT_SECONDS must be at least 1")
-	}
-
-	if c.LastUsedDebounceSecs < 0 {
-		return errors.New("LAST_USED_DEBOUNCE_SECS must be greater than or equal to 0")
-	}
-
-	if c.APIKeyDeletionRetentionDays == 0 {
-		c.APIKeyDeletionRetentionDays = defaultAPIKeyDeletionRetentionDays
-	}
-	if c.APIKeyDeletionRetentionDays < 1 {
-		return errors.New("API_KEY_DELETION_RETENTION_DAYS must be at least 1")
-	}
-	if c.APIKeyDeletionRetentionDays > maxAPIKeyDeletionRetentionDays {
-		return fmt.Errorf("API_KEY_DELETION_RETENTION_DAYS must be at most %d", maxAPIKeyDeletionRetentionDays)
-	}
-
-	if c.MetricsPort < 1 || c.MetricsPort > 65535 {
-		return errors.New("METRICS_PORT must be between 1 and 65535")
-	}
-
-	if c.MetricsSecure && strings.TrimSpace(c.MetricsCertDir) == "" {
-		return errors.New("METRICS_CERT_DIR must be non-empty when METRICS_SECURE is true")
+	if err := c.validateLimits(); err != nil {
+		return err
 	}
 
 	if strings.TrimSpace(c.LokiReadEndpoint) != "" {
@@ -385,6 +355,44 @@ func (c *Config) handleDeprecatedFlags() error {
 }
 
 // PrintDeprecationWarnings prints warnings for deprecated flags to stderr.
+func (c *Config) validateLimits() error {
+	if c.APIKeyMaxExpirationDays < 1 {
+		return errors.New("API_KEY_MAX_EXPIRATION_DAYS must be at least 1")
+	}
+	if c.AccessCheckTimeoutSeconds < 1 {
+		return errors.New("ACCESS_CHECK_TIMEOUT_SECONDS must be at least 1")
+	}
+	if c.LastUsedDebounceSecs < 0 {
+		return errors.New("LAST_USED_DEBOUNCE_SECS must be greater than or equal to 0")
+	}
+	if c.APIKeyDeletionRetentionDays == 0 {
+		c.APIKeyDeletionRetentionDays = defaultAPIKeyDeletionRetentionDays
+	}
+	if c.APIKeyDeletionRetentionDays < 1 {
+		return errors.New("API_KEY_DELETION_RETENTION_DAYS must be at least 1")
+	}
+	if c.APIKeyDeletionRetentionDays > maxAPIKeyDeletionRetentionDays {
+		return fmt.Errorf("API_KEY_DELETION_RETENTION_DAYS must be at most %d", maxAPIKeyDeletionRetentionDays)
+	}
+	if c.MetricsPort < 1 || c.MetricsPort > 65535 {
+		return errors.New("METRICS_PORT must be between 1 and 65535")
+	}
+	if c.MetricsSecure && strings.TrimSpace(c.MetricsCertDir) == "" {
+		return errors.New("METRICS_CERT_DIR must be non-empty when METRICS_SECURE is true")
+	}
+	return nil
+}
+
+func (c *Config) validateSubscriptionMode() error {
+	if c.SubscriptionMode == "" {
+		c.SubscriptionMode = SubscriptionModeEnforced
+	}
+	if c.SubscriptionMode != SubscriptionModeEnforced && c.SubscriptionMode != SubscriptionModeStandalone {
+		return fmt.Errorf("MAAS_SUBSCRIPTION_MODE %q is invalid: must be %q or %q", c.SubscriptionMode, SubscriptionModeEnforced, SubscriptionModeStandalone)
+	}
+	return nil
+}
+
 func (c *Config) PrintDeprecationWarnings(log *logger.Logger) {
 	flag.Visit(func(f *flag.Flag) {
 		if f.Name == "port" {

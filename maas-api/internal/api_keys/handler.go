@@ -731,6 +731,14 @@ func rejectAPIKeyManagement(c *gin.Context) bool {
 	return true
 }
 
+func (h *Handler) rejectSubscriptionWhenDisabled(c *gin.Context, requestedSubscription string) bool {
+	if requestedSubscription == "" || h.adminResolver.Enabled() {
+		return false
+	}
+	c.JSON(http.StatusBadRequest, gin.H{"error": ErrSubscriptionsDisabled.Error()})
+	return true
+}
+
 // validateLabels validates the labels map for security and size constraints.
 // Labels are user-defined key-value pairs for organizing and filtering API keys.
 func validateLabels(labels map[string]string) error {
@@ -931,6 +939,17 @@ func applySearchAPIKeysDefaults(req *SearchAPIKeysRequest) {
 	}
 }
 
+func extractRequestedSubscription(req *SearchAPIKeysRequest) string {
+	if req.Filters == nil || req.Filters.Subscription == nil {
+		return ""
+	}
+	requested := strings.TrimSpace(*req.Filters.Subscription)
+	if requested == "" {
+		req.Filters.Subscription = nil
+	}
+	return requested
+}
+
 func validateSearchAPIKeysRequest(c *gin.Context, req *SearchAPIKeysRequest) bool {
 	for _, status := range req.Filters.Status {
 		trimmed := strings.TrimSpace(status)
@@ -1031,15 +1050,8 @@ func (h *Handler) SearchAPIKeys(c *gin.Context) {
 	}
 
 	targetUsername := strings.TrimSpace(req.Filters.Username)
-	requestedSubscription := ""
-	if req.Filters.Subscription != nil {
-		requestedSubscription = strings.TrimSpace(*req.Filters.Subscription)
-		if requestedSubscription == "" {
-			req.Filters.Subscription = nil
-		}
-	}
-	if requestedSubscription != "" && !h.adminResolver.Enabled() {
-		c.JSON(http.StatusBadRequest, gin.H{"error": ErrSubscriptionsDisabled.Error()})
+	requestedSubscription := extractRequestedSubscription(&req)
+	if h.rejectSubscriptionWhenDisabled(c, requestedSubscription) {
 		return
 	}
 
@@ -1345,8 +1357,7 @@ func (h *Handler) BulkRevokeAPIKeys(c *gin.Context) {
 		})
 		return
 	}
-	if req.Subscription != "" && !h.adminResolver.Enabled() {
-		c.JSON(http.StatusBadRequest, gin.H{"error": ErrSubscriptionsDisabled.Error()})
+	if h.rejectSubscriptionWhenDisabled(c, req.Subscription) {
 		return
 	}
 
