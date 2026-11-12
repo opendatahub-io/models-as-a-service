@@ -379,6 +379,7 @@ func (s *PostgresStore) Search(
 	whereClauses = append(whereClauses, fmt.Sprintf("tenant = $%d", argPos))
 	args = append(args, s.tenantName)
 	argPos++
+	whereClauses = append(whereClauses, "deleted_at IS NULL")
 	// Exclude ephemeral keys by default
 	if filters.IncludeEphemeral == nil || !*filters.IncludeEphemeral {
 		whereClauses = append(whereClauses, "ephemeral = FALSE")
@@ -404,12 +405,12 @@ func (s *PostgresStore) Search(
 		whereClauses = append(whereClauses, fmt.Sprintf("(%s) IN (%s)", effectiveStatusExpr, strings.Join(placeholders, ",")))
 	}
 
-	// Filter by subscription name
-	if filters.Subscription != nil && *filters.Subscription != "" {
-		whereClauses = append(whereClauses, fmt.Sprintf("subscription = $%d", argPos))
-		args = append(args, strings.TrimSpace(*filters.Subscription))
-		argPos++
-	}
+	whereClauses, args, argPos = appendSubscriptionSearchFilters(
+		whereClauses,
+		args,
+		argPos,
+		filters,
+	)
 
 	// Add labels containment filter
 	if len(filters.LabelsContain) > 0 {
@@ -666,7 +667,6 @@ func (s *PostgresStore) GetByHash(ctx context.Context, keyHash string) (*ApiKey,
 		if description.Valid {
 			k.Description = description.String
 		}
-		// user_groups is now directly scanned as []string - no JSON parsing needed
 		k.Groups = userGroups
 
 		if lastUsedAt.Valid {
@@ -767,6 +767,80 @@ func (s *PostgresStore) BulkRevoke(ctx context.Context, username, subscription, 
 		"count", count,
 		"user", logger.RedactValue(username),
 		"subscription", logger.RedactValue(subscription),
+	)
+	return count, nil
+}
+
+func bulkRevokeBySubscriptionsWhereClause(username string, subscriptions []string, tenant string) (string, []any) {
+	conditions := make([]string, 0, 6)
+	conditions = append(conditions,
+		"tenant = $1",
+		"status = 'active'",
+		"deleted_at IS NULL",
+		"(expires_at IS NULL OR expires_at > NOW())",
+	)
+	args := make([]any, 0, 2+len(subscriptions))
+	args = append(args, tenant, username)
+	conditions = append(conditions, "username = $2")
+
+	placeholders := make([]string, len(subscriptions))
+	for index, subscription := range subscriptions {
+		placeholders[index] = fmt.Sprintf("$%d", index+3)
+		args = append(args, subscription)
+	}
+	conditions = append(conditions, fmt.Sprintf("subscription IN (%s)", strings.Join(placeholders, ",")))
+
+	return strings.Join(conditions, " AND "), args
+}
+
+// BulkRevokeBySubscriptions revokes or counts active keys for one user across
+// the supplied delegated-administrator subscription scope.
+func (s *PostgresStore) BulkRevokeBySubscriptions(
+	ctx context.Context,
+	username string,
+	subscriptions []string,
+	tenant string,
+	dryRun bool,
+) (int, error) {
+	if username == "" || len(subscriptions) == 0 {
+		return 0, errors.New("username and at least one subscription are required")
+	}
+	if tenant != s.tenantName {
+		return 0, fmt.Errorf("%w: attempted to revoke keys for tenant %q but store is scoped to %q", ErrTenantMismatch, tenant, s.tenantName)
+	}
+
+	where, args := bulkRevokeBySubscriptionsWhereClause(username, subscriptions, tenant)
+	s.recordQuery("bulk_revoke_by_subscriptions", "write")
+
+	if dryRun {
+		//nolint:gosec // where clause uses static column names with parameterized $N placeholders
+		query := fmt.Sprintf("SELECT COUNT(*) FROM api_keys WHERE %s", where)
+
+		var count int
+		if err := s.writeDB.QueryRowContext(ctx, query, args...).Scan(&count); err != nil {
+			return 0, fmt.Errorf("dry-run count query failed: %w", err)
+		}
+		return count, nil
+	}
+
+	//nolint:gosec // where clause uses static column names with parameterized $N placeholders
+	query := fmt.Sprintf("UPDATE api_keys SET status = 'revoked' WHERE %s", where)
+
+	result, err := s.writeDB.ExecContext(ctx, query, args...)
+	if err != nil {
+		return 0, fmt.Errorf("failed to bulk revoke keys: %w", err)
+	}
+
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("failed to get affected rows: %w", err)
+	}
+
+	count := int(rows)
+	s.logger.Info("Bulk revoked keys by administered subscriptions",
+		"count", count,
+		"user", logger.RedactValue(username),
+		"subscriptionCount", len(subscriptions),
 	)
 	return count, nil
 }
@@ -924,4 +998,35 @@ func (s *PostgresStore) Close() error {
 		}
 	}
 	return writeErr
+}
+
+func appendSubscriptionSearchFilters(
+	whereClauses []string,
+	args []any,
+	argPos int,
+	filters *SearchFilters,
+) ([]string, []any, int) {
+	subscription := ""
+	if filters.Subscription != nil {
+		subscription = strings.TrimSpace(*filters.Subscription)
+	}
+	if subscription != "" {
+		whereClauses = append(whereClauses, fmt.Sprintf("subscription = $%d", argPos))
+		args = append(args, subscription)
+		argPos++
+	}
+	if len(filters.SubscriptionNames) == 0 {
+		return whereClauses, args, argPos
+	}
+
+	placeholders := make([]string, len(filters.SubscriptionNames))
+	for index, subscriptionName := range filters.SubscriptionNames {
+		placeholders[index] = fmt.Sprintf("$%d", argPos)
+		args = append(args, strings.TrimSpace(subscriptionName))
+		argPos++
+	}
+	return append(
+		whereClauses,
+		fmt.Sprintf("subscription IN (%s)", strings.Join(placeholders, ",")),
+	), args, argPos
 }

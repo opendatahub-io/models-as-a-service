@@ -59,17 +59,18 @@ spec:
         - name: maas-api
           port: 8443
           weight: 100
-    # Rule 4: Health endpoint for external readiness probes
+    # Rule 4: Public process health only; the exact match keeps database
+    # diagnostics cluster-internal.
     - matches:
         - path:
-            type: PathPrefix
+            type: Exact
             value: /maas-api/health
       filters:
         - type: URLRewrite
           urlRewrite:
             path:
-              type: ReplacePrefixMatch
-              replacePrefixMatch: /health
+              type: ReplaceFullPath
+              replaceFullPath: /health
       backendRefs:
         - name: maas-api
           port: 8443

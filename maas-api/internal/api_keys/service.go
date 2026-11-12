@@ -2,6 +2,7 @@ package api_keys
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -303,6 +304,10 @@ func (s *Service) ValidateAPIKey(ctx context.Context, key string) (*ValidationRe
 	if groups == nil {
 		groups = []string{} // Return empty array if no groups stored
 	}
+	groupsJSON, err := json.Marshal(groups)
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode API key groups: %w", err)
+	}
 
 	// Fail closed: reject keys with no bound subscription (CWE-284)
 	// This prevents legacy keys, bad migrations, or manual writes with empty subscription
@@ -331,6 +336,7 @@ func (s *Service) ValidateAPIKey(ctx context.Context, key string) (*ValidationRe
 		KeyID:        metadata.ID,
 		KeyName:      metadata.Name,
 		Groups:       groups, // Original user groups for subscription-based authorization
+		GroupsJSON:   string(groupsJSON),
 		Subscription: metadata.Subscription,
 		Tenant:       metadata.Tenant,
 	}, nil
@@ -375,6 +381,21 @@ func (s *Service) BulkRevokeAPIKeys(ctx context.Context, username, subscription,
 		return 0, errors.New("at least one of username or subscription is required")
 	}
 	return s.store.BulkRevoke(ctx, username, subscription, tenant, dryRun)
+}
+
+// BulkRevokeAPIKeysBySubscriptions revokes all active keys for a user within a
+// resolved delegated-administrator subscription scope.
+func (s *Service) BulkRevokeAPIKeysBySubscriptions(
+	ctx context.Context,
+	username string,
+	subscriptions []string,
+	tenant string,
+	dryRun bool,
+) (int, error) {
+	if username == "" || len(subscriptions) == 0 {
+		return 0, errors.New("username and at least one subscription are required")
+	}
+	return s.store.BulkRevokeBySubscriptions(ctx, username, subscriptions, tenant, dryRun)
 }
 
 // RevokeTenantAPIKeys revokes all active keys for a tenant.

@@ -40,12 +40,12 @@ Thanks for your interest in contributing. This guide explains how to work with t
 ## Pull request process
 
 1. **Push** your branch to your fork and open a **pull request** against `main`.
-2. **Use semantic PR titles** so CI can accept the PR. Format: `type: subject` (subject not starting with a capital).
-   - Allowed **types:** `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, `revert`.
+2. **Use semantic PR titles** so CI can accept the PR. Follow the title rules in the [PR template](.github/PULL_REQUEST_TEMPLATE.md).
    - Examples: `feat: add TLS option for deploy script`, `fix: correct sourceNamespace for Kuadrant subscription`, `docs: update quickstart`.
    - Draft/WIP PRs can use the `draft` or `wip` label to skip title validation.
-3. **Keep changes focused** and ensure CI passes (see below).
-4. **Address review feedback** from [OWNERS](OWNERS); maintainers will approve and merge when ready.
+3. **Fill in the [PR template](.github/PULL_REQUEST_TEMPLATE.md).** Its comments say what each section needs.
+4. **Keep changes focused** and ensure CI passes (see below).
+5. **Address review feedback** from [OWNERS](OWNERS); maintainers will approve and merge when ready.
 
 ### Approval policy (1 vs 2 reviewers)
 

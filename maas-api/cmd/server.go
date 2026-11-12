@@ -4,6 +4,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"net/http"
+	"slices"
 	"time"
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/cert"
@@ -27,9 +28,22 @@ func newServer(cfg *config.Config, handler http.Handler, profileMinVersion uint1
 			return nil, err
 		}
 		srv.TLSConfig = tlsConfig
+		if !slices.Contains(tlsConfig.NextProtos, "h2") {
+			disableHTTP2(srv)
+		}
 	}
 
 	return srv, nil
+}
+
+// disableHTTP2 prevents net/http from running its HTTP/2 setup on a server
+// whose TLS configuration cannot serve it. NextProtos alone is not enough:
+// ServeTLS runs the HTTP/2 startup check before applying ALPN, and that check
+// rejects TLS 1.2 cipher lists without an ECDHE AES-128-GCM suite.
+func disableHTTP2(srv *http.Server) {
+	protocols := new(http.Protocols)
+	protocols.SetHTTP1(true)
+	srv.Protocols = protocols
 }
 
 // buildTLSConfig creates the TLS configuration for the API server.
@@ -61,7 +75,7 @@ func buildTLSConfig(cfg *config.Config, profileMinVersion uint16, profileCipherS
 	tlsCfg := &tls.Config{
 		Certificates: []tls.Certificate{tlsCert},
 		MinVersion:   minVersion,
-		NextProtos:   []string{"h2", "http/1.1"},
+		NextProtos:   tlsNextProtos(minVersion, profileCipherSuites),
 	}
 
 	if len(profileCipherSuites) > 0 {
@@ -69,6 +83,26 @@ func buildTLSConfig(cfg *config.Config, profileMinVersion uint16, profileCipherS
 	}
 
 	return tlsCfg, nil
+}
+
+func tlsNextProtos(minVersion uint16, cipherSuites []uint16) []string {
+	if minVersion < tls.VersionTLS12 {
+		return []string{"http/1.1"}
+	}
+	// TLS 1.3 and an empty TLS 1.2 cipher list both use Go's defaults, which
+	// include an HTTP/2-eligible ECDHE AES-128-GCM suite.
+	if minVersion >= tls.VersionTLS13 || len(cipherSuites) == 0 {
+		return []string{"h2", "http/1.1"}
+	}
+	for _, id := range cipherSuites {
+		// Go's net/http requires an ECDHE AES-128-GCM suite for HTTP/2;
+		// RSA key exchange suites do not qualify.
+		if id == tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256 ||
+			id == tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256 {
+			return []string{"h2", "http/1.1"}
+		}
+	}
+	return []string{"http/1.1"}
 }
 
 func listenAndServe(srv *http.Server) error {
