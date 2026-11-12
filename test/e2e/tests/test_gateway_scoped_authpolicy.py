@@ -49,6 +49,7 @@ def _gateway_auth_rego(context) -> str:
 class TestGatewayAuthPolicyStructure:
     """S10: AuthPolicy targets Gateway; no legacy per-model policies."""
 
+    @pytest.mark.smoke
     def test_gateway_auth_policy_contract(self, worker_tenant_context):
         """Gateway AuthPolicy targets the Gateway and replaces per-model policies."""
         context = worker_tenant_context

@@ -1,6 +1,7 @@
 package subscription_test
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -9,6 +10,12 @@ import (
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/subscription"
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/token"
+)
+
+const (
+	adminTestOrganizationA = "42c3e46f-2477-44d7-a85b-d3b43f6b31fa"
+	adminTestOrganizationB = "5a9d6b0e-9d0f-4c9f-ae07-916e3576d9fa"
 )
 
 func TestSelectorCanonicalizeSubscription(t *testing.T) {
@@ -77,4 +84,130 @@ func TestSelectorCanonicalizeSubscription(t *testing.T) {
 			assert.Equal(t, test.want, got)
 		})
 	}
+}
+
+func TestResolveSubscriptionAdminUsesFlatOrganizationRole(t *testing.T) {
+	organizationASubscription := createSubscriptionForAdmin(
+		t, "subscription-a", "test-ns", adminTestOrganizationA, "", "Active", nil,
+	)
+	organizationBSubscription := createSubscriptionForAdmin(
+		t, "subscription-b", "test-ns", adminTestOrganizationB, "", "Active", nil,
+	)
+	selector := subscription.NewSelector(
+		logger.New(false),
+		&mockLister{subscriptions: []*unstructured.Unstructured{
+			organizationASubscription,
+			organizationBSubscription,
+		}},
+		nil,
+		nil,
+		subscription.WithTenantName("test-tenant"),
+	)
+	identity := flatAdminIdentity(t, adminTestOrganizationA, []string{"admins"})
+
+	scope, err := selector.ResolveSubscriptionAdmin(identity, "test-ns/subscription-a")
+	require.NoError(t, err)
+	assert.Equal(t, adminTestOrganizationA, scope.OrganizationID)
+
+	_, err = selector.ResolveSubscriptionAdmin(identity, "test-ns/subscription-b")
+	var adminErr *subscription.SubscriptionAdminError
+	require.ErrorAs(t, err, &adminErr)
+	assert.Equal(t, "access_denied", adminErr.Code)
+}
+
+func TestResolveSubscriptionAdminScopesUsesFlatOrganizationRole(t *testing.T) {
+	organizationASubscription := createSubscriptionForAdmin(
+		t, "subscription-a", "test-ns", adminTestOrganizationA, "", "Active", nil,
+	)
+	organizationBSubscription := createSubscriptionForAdmin(
+		t, "subscription-b", "test-ns", adminTestOrganizationB, "", "Active", nil,
+	)
+	selector := subscription.NewSelector(
+		logger.New(false),
+		&mockLister{subscriptions: []*unstructured.Unstructured{
+			organizationASubscription,
+			organizationBSubscription,
+		}},
+		nil,
+		nil,
+		subscription.WithTenantName("test-tenant"),
+	)
+	identity := flatAdminIdentity(t, adminTestOrganizationA, []string{"admins"})
+
+	scopes, err := selector.ResolveSubscriptionAdminScopes(identity)
+	require.NoError(t, err)
+	require.Len(t, scopes, 1)
+	assert.Equal(t, "test-tenant", scopes[0].Tenant)
+	assert.Equal(t, "test-ns", scopes[0].Namespace)
+	assert.Equal(t, "subscription-a", scopes[0].Subscription)
+	assert.Equal(t, adminTestOrganizationA, scopes[0].OrganizationID)
+
+	noAdminIdentity := flatAdminIdentity(t, adminTestOrganizationA, []string{"users"})
+	noAdminSelector := subscription.NewSelector(
+		logger.New(false),
+		&mockLister{},
+		nil,
+		nil,
+		subscription.WithTenantName("test-tenant"),
+	)
+
+	scopes, err = noAdminSelector.ResolveSubscriptionAdminScopes(noAdminIdentity)
+	require.NoError(t, err)
+	assert.Empty(t, scopes)
+}
+
+func TestResolveSubscriptionAdminRequiresAdminsRoleAndOIDCSource(t *testing.T) {
+	subscriptionObject := createSubscriptionForAdmin(
+		t, "subscription-a", "test-ns", adminTestOrganizationA, "", "Active", nil,
+	)
+	selector := subscription.NewSelector(
+		logger.New(false),
+		&mockLister{subscriptions: []*unstructured.Unstructured{subscriptionObject}},
+		nil,
+		nil,
+		subscription.WithTenantName("test-tenant"),
+	)
+
+	tests := []struct {
+		name   string
+		roles  []string
+		source string
+	}{
+		{name: "empty roles", roles: []string{}},
+		{name: "users role", roles: []string{"users"}},
+		{name: "unknown role", roles: []string{"owner"}},
+		{name: "API key identity", roles: []string{"admins"}, source: "api-key"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			identity := flatAdminIdentity(t, adminTestOrganizationA, test.roles)
+			if test.source != "" {
+				identity.Source = test.source
+			}
+
+			_, err := selector.ResolveSubscriptionAdmin(identity, "test-ns/subscription-a")
+			var adminErr *subscription.SubscriptionAdminError
+			require.ErrorAs(t, err, &adminErr)
+			assert.Equal(t, "access_denied", adminErr.Code)
+		})
+	}
+}
+
+func flatAdminIdentity(t *testing.T, organizationID string, roles []string) *token.VerifiedIdentity {
+	t.Helper()
+	envelope, err := json.Marshal(map[string]any{
+		"source": "oidc",
+		"claims": map[string]any{
+			"iss":    "https://issuer.example.com",
+			"sub":    "admin-user",
+			"aud":    "maas-api",
+			"azp":    "maas-client",
+			"org_id": organizationID,
+			"roles":  roles,
+		},
+	})
+	require.NoError(t, err)
+	identity, err := token.ParseIdentityEnvelope(string(envelope))
+	require.NoError(t, err)
+	return identity
 }

@@ -9,10 +9,9 @@ import uuid
 
 import pytest
 import requests
-
-from grid_oidc_helpers import request_grid_token
 import test_helper
-
+from grid_inventory_fixtures import ORGANIZATION_A, ORGANIZATION_B
+from grid_oidc_helpers import request_grid_token
 
 pytestmark = [
     pytest.mark.nightly,
@@ -33,40 +32,40 @@ def _decode_jwt_payload(token: str) -> dict:
 
 
 class TestGridTenantAdminClaims:
-    def test_keycloak_organization_claim_is_namespaced(self):
+    def test_keycloak_organization_claims_are_flat(self):
         token = request_grid_token("grid_admin")
         claims = _decode_jwt_payload(token)
 
         assert "maasOrganizations" not in claims
-        organizations = claims["https://redhat.com/maas/orgs"]
-        assert isinstance(organizations, list)
-        assert len(organizations) == 2
+        assert "https://redhat.com/maas/orgs" not in claims
+        assert claims["org_id"] == ORGANIZATION_A
+        assert claims["org_name"] == "coke"
+        assert claims["roles"] == ["admins"]
 
-        assert organizations[0]["organization_id"] == (
-            "42c3e46f-2477-44d7-a85b-d3b43f6b31fa"
-        )
-        assert organizations[0]["roles"] == ["admins"]
-        assert organizations[1]["organization_id"] == (
-            "53d4f57e-3588-55e8-b96c-4ec54a7c42fa"
-        )
-        assert organizations[1]["roles"] == ["users"]
-
-    def test_keycloak_groups_remain_organization_qualified(self):
+    def test_keycloak_groups_remain_plain(self):
         token = request_grid_token("grid_admin")
         claims = _decode_jwt_payload(token)
 
         groups = claims["groups"]
-        assert set(groups) == {
-            "42c3e46f-2477-44d7-a85b-d3b43f6b31fa/ai-grid-admins",
-            "53d4f57e-3588-55e8-b96c-4ec54a7c42fa/ai-grid-users",
-        }
+        assert groups == ["ai-grid-admins"]
 
-        organizations = claims["https://redhat.com/maas/orgs"]
-        organization_ids = {
-            organization["organization_id"] for organization in organizations
-        }
-        assert all("/" in group for group in groups)
-        assert all(group.split("/", 1)[0] in organization_ids for group in groups)
+    def test_second_organization_uses_the_same_plain_group(self):
+        claims = _decode_jwt_payload(request_grid_token("grid_admin_b"))
+
+        assert "https://redhat.com/maas/orgs" not in claims
+        assert claims["org_id"] == ORGANIZATION_B
+        assert claims["org_name"] == "org-b"
+        assert claims["roles"] == ["admins"]
+        assert claims["groups"] == ["ai-grid-admins"]
+
+    def test_non_admin_has_flat_organization_claims(self):
+        claims = _decode_jwt_payload(request_grid_token("grid_non_admin"))
+
+        assert "https://redhat.com/maas/orgs" not in claims
+        assert claims["org_id"] == ORGANIZATION_A
+        assert claims["org_name"] == "coke"
+        assert claims["roles"] == ["users"]
+        assert claims["groups"] == ["ai-grid-admins"]
 
     def test_grid_admin_without_private_model_access_sees_only_public_models(
         self, maas_api_base_url: str
@@ -107,6 +106,29 @@ class TestGridTenantAdminClaims:
         assert [
             subscription["subscription_id_header"] for subscription in subscriptions
         ] == [test_helper.SIMULATOR_SUBSCRIPTION]
+
+    def test_uuid_prefixed_group_without_org_id_cannot_access_private_subscription(
+        self, maas_api_base_url: str
+    ):
+        token = request_grid_token("grid_reserved_group")
+        claims = _decode_jwt_payload(token)
+        assert claims["groups"] == [
+            "42c3e46f-2477-44d7-a85b-d3b43f6b31fa/reserved-ai-grid-admins"
+        ]
+        assert {"org_id", "org_name", "roles"}.isdisjoint(claims)
+
+        response = test_helper._request_with_gateway_retry(
+            requests.get,
+            f"{maas_api_base_url}/v1/subscriptions",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=30,
+            auth_denial_is_transient=False,
+        )
+        assert response.status_code == 403, (
+            f"Expected GET /v1/subscriptions to reject grid_reserved_group "
+            f"with 403, got "
+            f"{response.status_code}"
+        )
 
     def test_tampered_grid_token_is_rejected(self, maas_api_base_url: str):
         token = request_grid_token("grid_admin") + "tampered"

@@ -1052,18 +1052,9 @@ func (m *mockAuthPolicyLister) List() ([]*unstructured.Unstructured, error) {
 	return m.policies, nil
 }
 
-func inventoryIdentityFor(t *testing.T, organizations []token.OrganizationMembership) *token.VerifiedIdentity {
+func inventoryIdentityFor(t *testing.T, organizationID string, roles []string) *token.VerifiedIdentity {
 	t.Helper()
-	return &token.VerifiedIdentity{
-		Source: "oidc",
-		Claims: token.VerifiedClaims{
-			Issuer:          "https://issuer.example.com",
-			Subject:         "user-1",
-			Audience:        token.Audience{Value: "maas-api"},
-			AuthorizedParty: "maas-client",
-			Organizations:   organizations,
-		},
-	}
+	return flatAdminIdentity(t, organizationID, roles)
 }
 
 func createInventorySubscription(
@@ -1220,10 +1211,7 @@ func TestListSubscriptions_AdminUnionRolesAndCompleteModelRefs(t *testing.T) {
 			{"name": "model-d", "namespace": "model-ns"},
 		}),
 	}
-	identity := inventoryIdentityFor(t, []token.OrganizationMembership{
-		{OrganizationID: organizationA, Roles: []string{"admins"}},
-		{OrganizationID: organizationB, Roles: []string{"users"}},
-	})
+	identity := inventoryIdentityFor(t, organizationA, []string{"admins"})
 	router := setupInventoryTestRouter(
 		&mockLister{subscriptions: []*unstructured.Unstructured{
 			ownerSubscription,
@@ -1263,6 +1251,51 @@ func TestListSubscriptions_AdminUnionRolesAndCompleteModelRefs(t *testing.T) {
 	assert.Equal(t, organizationA, byName["pending-owner-admin-sub"].OrganizationID)
 	assert.Equal(t, organizationB, byName["owner-only-sub"].OrganizationID)
 	assert.Equal(t, organizationB, byName["unmarked-sub"].OrganizationID)
+}
+
+func TestListSubscriptions_FlatOrganizationAdminScope(t *testing.T) {
+	organizationASubscription := createInventorySubscription(
+		t, "organization-a-sub", nil, organizationA, organizationB, "Active", nil,
+	)
+	organizationBSubscription := createInventorySubscription(
+		t, "organization-b-sub", nil, organizationB, organizationA, "Active", nil,
+	)
+	lister := &mockLister{subscriptions: []*unstructured.Unstructured{
+		organizationASubscription,
+		organizationBSubscription,
+	}}
+	tests := []struct {
+		name           string
+		organizationID string
+		roles          []string
+		want           []string
+	}{
+		{name: "organization A admin", organizationID: organizationA, roles: []string{"admins"}, want: []string{"organization-a-sub"}},
+		{name: "organization A user", organizationID: organizationA, roles: []string{"users"}, want: []string{}},
+		{name: "organization B admin", organizationID: organizationB, roles: []string{"admins"}, want: []string{"organization-b-sub"}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			router := setupInventoryTestRouter(
+				lister,
+				nil,
+				"",
+				nil,
+				inventoryIdentityFor(t, test.organizationID, test.roles),
+			)
+			recorder := httptest.NewRecorder()
+			router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/v1/subscriptions", nil))
+
+			require.Equal(t, http.StatusOK, recorder.Code)
+			var result []subscription.SubscriptionInfo
+			require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &result))
+			got := make([]string, 0, len(result))
+			for _, item := range result {
+				got = append(got, item.SubscriptionIDHeader)
+			}
+			assert.Equal(t, test.want, got)
+		})
+	}
 }
 
 func TestListSubscriptions_AdminSubjectInventoryUsesExactModelRefJoins(t *testing.T) {
@@ -1313,9 +1346,7 @@ func TestListSubscriptions_AdminSubjectInventoryUsesExactModelRefJoins(t *testin
 			organizationA + "/viewers",
 		}, []map[string]any{{"name": "model-b", "namespace": "model-ns"}}),
 	}
-	identity := inventoryIdentityFor(t, []token.OrganizationMembership{
-		{OrganizationID: organizationA, Roles: []string{"admins"}},
-	})
+	identity := inventoryIdentityFor(t, organizationA, []string{"admins"})
 	router := setupInventoryTestRouter(
 		&mockLister{subscriptions: []*unstructured.Unstructured{subscriptionObject}},
 		policies,
@@ -1416,9 +1447,7 @@ func TestListSubscriptions_AdminInventorySkipsIncompleteModelRefs(t *testing.T) 
 			organizationA + "/owners",
 		}, []map[string]any{{"name": "model-a", "namespace": "model-ns"}}),
 	}
-	identity := inventoryIdentityFor(t, []token.OrganizationMembership{
-		{OrganizationID: organizationA, Roles: []string{"admins"}},
-	})
+	identity := inventoryIdentityFor(t, organizationA, []string{"admins"})
 	router := setupInventoryTestRouter(
 		&mockLister{subscriptions: []*unstructured.Unstructured{subscriptionObject}},
 		policies,
@@ -1445,9 +1474,7 @@ func TestListSubscriptionsForModel_DoesNotUseAdminInventory(t *testing.T) {
 	subscriptionObject := createInventorySubscription(t, "admin-sub", nil, organizationA, organizationB, "Pending", []map[string]any{
 		{"name": "model-a", "namespace": "model-ns"},
 	})
-	identity := inventoryIdentityFor(t, []token.OrganizationMembership{
-		{OrganizationID: organizationA, Roles: []string{"admins"}},
-	})
+	identity := inventoryIdentityFor(t, organizationA, []string{"admins"})
 	router := setupInventoryTestRouter(
 		&mockLister{subscriptions: []*unstructured.Unstructured{subscriptionObject}},
 		nil,
@@ -2093,12 +2120,8 @@ const validCallbackIdentity = `{
     "aud": "maas-api",
     "azp": "maas-client",
     "groups": [],
-    "https://redhat.com/maas/orgs": [
-      {
-        "organization_id": "42c3e46f-2477-44d7-a85b-d3b43f6b31fa",
-        "roles": ["admins"]
-      }
-    ]
+    "org_id": "42c3e46f-2477-44d7-a85b-d3b43f6b31fa",
+    "roles": ["admins"]
   }
 }`
 
@@ -2107,20 +2130,22 @@ const (
 	organizationB = "53d4f57e-3588-55e8-b96c-4ec54a7c42fa"
 )
 
-func callbackIdentityFor(t *testing.T, organizations []token.OrganizationMembership, groups []string) string {
+func callbackIdentityFor(t *testing.T, organizationID string, roles, groups []string) string {
 	t.Helper()
-	identity := token.VerifiedIdentity{
-		Source: "oidc",
-		Claims: token.VerifiedClaims{
-			Issuer:          "https://issuer.example.com",
-			Subject:         "user-1",
-			Audience:        token.Audience{Value: "maas-api"},
-			AuthorizedParty: "maas-client",
-			Groups:          groups,
-			Organizations:   organizations,
-		},
+	claims := map[string]any{
+		"iss":    "https://issuer.example.com",
+		"sub":    "user-1",
+		"aud":    "maas-api",
+		"azp":    "maas-client",
+		"org_id": organizationID,
 	}
-	data, err := json.Marshal(identity)
+	if roles != nil {
+		claims["roles"] = roles
+	}
+	if groups != nil {
+		claims["groups"] = groups
+	}
+	data, err := json.Marshal(map[string]any{"source": "oidc", "claims": claims})
 	require.NoError(t, err)
 	return string(data)
 }
@@ -2273,13 +2298,7 @@ func TestHandler_SelectSubscription_SubscriptionAdminRejectsMalformedIdentity(t 
 }
 
 func TestHandler_SelectSubscription_SubscriptionAdminAllowsOrganizationAdmin(t *testing.T) {
-	adminIdentity := callbackIdentityFor(t, []token.OrganizationMembership{{
-		OrganizationID: organizationA,
-		Roles:          []string{"admins"},
-	}, {
-		OrganizationID: organizationB,
-		Roles:          []string{"users"},
-	}}, nil)
+	adminIdentity := callbackIdentityFor(t, organizationA, []string{"admins"}, nil)
 
 	tests := []struct {
 		name   string
@@ -2304,10 +2323,7 @@ func TestHandler_SelectSubscription_SubscriptionAdminAllowsOrganizationAdmin(t *
 }
 
 func TestHandler_SelectSubscription_SubscriptionAdminAllowsMultipleSubscriptionsPerOrganization(t *testing.T) {
-	adminIdentity := callbackIdentityFor(t, []token.OrganizationMembership{{
-		OrganizationID: organizationA,
-		Roles:          []string{"admins"},
-	}}, nil)
+	adminIdentity := callbackIdentityFor(t, organizationA, []string{"admins"}, nil)
 	lister := &mockLister{subscriptions: []*unstructured.Unstructured{
 		createSubscriptionForAdmin(t, "grid-sub-a-1", "test-ns", organizationA, organizationB, "Active", nil),
 		createSubscriptionForAdmin(t, "grid-sub-a-2", "test-ns", organizationA, organizationB, "Pending", nil),
@@ -2321,13 +2337,7 @@ func TestHandler_SelectSubscription_SubscriptionAdminAllowsMultipleSubscriptions
 }
 
 func TestHandler_SelectSubscription_SubscriptionAdminRequiresAdminForRequestedSubscription(t *testing.T) {
-	identity := callbackIdentityFor(t, []token.OrganizationMembership{{
-		OrganizationID: organizationA,
-		Roles:          []string{"admins"},
-	}, {
-		OrganizationID: organizationB,
-		Roles:          []string{"users"},
-	}}, nil)
+	identity := callbackIdentityFor(t, organizationA, []string{"admins"}, nil)
 	lister := &mockLister{subscriptions: []*unstructured.Unstructured{
 		createSubscriptionForAdmin(t, "grid-sub-a", "test-ns", organizationA, organizationB, "Active", nil),
 		createSubscriptionForAdmin(t, "grid-sub-b", "test-ns", organizationB, organizationA, "Active", nil),
@@ -2347,21 +2357,9 @@ func TestHandler_SelectSubscription_SubscriptionAdminRequiresAdminForRequestedSu
 
 func TestHandler_SelectSubscription_SubscriptionAdminDeniesCrossOrganizationAndLegacyGrants(t *testing.T) {
 	adminGroup := organizationA + "/ai-grid-admins"
-	aAdmin := callbackIdentityFor(t, []token.OrganizationMembership{{
-		OrganizationID: organizationA,
-		Roles:          []string{"admins"},
-	}}, []string{adminGroup})
-	aUserWithAdminGroup := callbackIdentityFor(t, []token.OrganizationMembership{{
-		OrganizationID: organizationA,
-		Roles:          []string{"users"},
-	}}, []string{adminGroup})
-	aAdminBUser := callbackIdentityFor(t, []token.OrganizationMembership{{
-		OrganizationID: organizationA,
-		Roles:          []string{"admins"},
-	}, {
-		OrganizationID: organizationB,
-		Roles:          []string{"users"},
-	}}, nil)
+	aAdmin := callbackIdentityFor(t, organizationA, []string{"admins"}, []string{adminGroup})
+	aUserWithAdminGroup := callbackIdentityFor(t, organizationA, []string{"users"}, []string{adminGroup})
+	bAdmin := callbackIdentityFor(t, organizationB, []string{"admins"}, nil)
 
 	tests := []struct {
 		name           string
@@ -2372,9 +2370,9 @@ func TestHandler_SelectSubscription_SubscriptionAdminDeniesCrossOrganizationAndL
 		expectedReason string
 	}{
 		{
-			name:           "A admin is only a B user",
-			identity:       aAdminBUser,
-			association:    organizationB,
+			name:           "B admin cannot administer an A subscription",
+			identity:       bAdmin,
+			association:    organizationA,
 			attribution:    organizationA,
 			ownerGroups:    []string{adminGroup},
 			expectedReason: "access_denied",
@@ -2424,10 +2422,7 @@ func TestHandler_SelectSubscription_SubscriptionAdminDeniesCrossOrganizationAndL
 }
 
 func TestHandler_SelectSubscription_SubscriptionAdminDeniesAmbiguousBareName(t *testing.T) {
-	adminIdentity := callbackIdentityFor(t, []token.OrganizationMembership{{
-		OrganizationID: organizationA,
-		Roles:          []string{"admins"},
-	}}, nil)
+	adminIdentity := callbackIdentityFor(t, organizationA, []string{"admins"}, nil)
 	lister := &mockLister{subscriptions: []*unstructured.Unstructured{
 		createSubscriptionForAdmin(t, "grid-sub", "test-ns", organizationA, organizationB, "Active", nil),
 		createSubscriptionForAdmin(t, "grid-sub", "other-ns", organizationA, organizationB, "Active", nil),
@@ -2451,7 +2446,7 @@ func TestHandler_SelectSubscription_SubscriptionAdminMissingRolesHasNoAdmin(t *t
 			"sub": "user-1",
 			"aud": "maas-api",
 			"azp": "maas-client",
-			"https://redhat.com/maas/orgs": [{"organization_id":"` + organizationA + `"}]
+			"org_id": "` + organizationA + `"
 		}
 	}`
 	lister := &mockLister{subscriptions: []*unstructured.Unstructured{
@@ -2467,7 +2462,7 @@ func TestHandler_SelectSubscription_SubscriptionAdminMissingRolesHasNoAdmin(t *t
 	assert.Equal(t, "access_denied", response["error"])
 }
 
-func TestHandler_SelectSubscription_SubscriptionAdminRejectsDuplicateOrganizationEntries(t *testing.T) {
+func TestHandler_SelectSubscription_SubscriptionAdminRejectsDuplicateOrganizationIDClaims(t *testing.T) {
 	identity := `{
 		"source": "oidc",
 		"claims": {
@@ -2475,10 +2470,9 @@ func TestHandler_SelectSubscription_SubscriptionAdminRejectsDuplicateOrganizatio
 			"sub": "user-1",
 			"aud": "maas-api",
 			"azp": "maas-client",
-			"https://redhat.com/maas/orgs": [
-				{"organization_id":"` + organizationA + `","roles":["users"]},
-				{"organization_id":"` + organizationA + `","roles":["admins"]}
-			]
+			"org_id": "` + organizationA + `",
+			"org_id": "` + organizationA + `",
+			"roles": ["admins"]
 		}
 	}`
 	lister := &mockLister{subscriptions: []*unstructured.Unstructured{
@@ -2492,10 +2486,7 @@ func TestHandler_SelectSubscription_SubscriptionAdminRejectsDuplicateOrganizatio
 }
 
 func TestHandler_SelectSubscription_SubscriptionAdminDoesNotUseInferenceAccessChecker(t *testing.T) {
-	adminIdentity := callbackIdentityFor(t, []token.OrganizationMembership{{
-		OrganizationID: organizationA,
-		Roles:          []string{"admins"},
-	}}, nil)
+	adminIdentity := callbackIdentityFor(t, organizationA, []string{"admins"}, nil)
 	lister := &mockLister{subscriptions: []*unstructured.Unstructured{
 		createSubscriptionForAdmin(t, "grid-sub", "test-ns", organizationA, organizationB, "Active", nil),
 	}}
