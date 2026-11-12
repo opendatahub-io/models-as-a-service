@@ -2928,10 +2928,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#serial-marker" class="md-nav__link">
+  <a href="#serial-markers" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Serial Marker
+        Serial markers
       
     </span>
   </a>
@@ -3653,10 +3653,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#serial-marker" class="md-nav__link">
+  <a href="#serial-markers" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Serial Marker
+        Serial markers
       
     </span>
   </a>
@@ -3921,187 +3921,157 @@
 <tbody>
 <tr>
 <td><code>readonly</code></td>
-<td><code>test_smoke.py</code></td>
-<td>Health checks, catalog shape, basic inference</td>
+<td><code>test_smoke.py</code>, <code>test_config_tenant.py</code>, <code>test_tenant.py</code>, <code>test_tenant_discovery.py</code>, <code>test_networkpolicy.py</code>, <code>test_authpolicy_generation_stability.py</code>, <code>test_gateway_filter_chain_praxis.py</code>, <code>test_xdist_config.py</code></td>
+<td>Read-only cluster/API checks</td>
 </tr>
 <tr>
-<td><code>readonly</code></td>
-<td><code>test_config_tenant.py</code></td>
-<td>Read-only Config CR validation</td>
-</tr>
-<tr>
-<td><code>readonly</code></td>
-<td><code>test_tenant.py</code></td>
-<td>Read-only MaasTenantConfig validation</td>
-</tr>
-<tr>
-<td><code>readonly</code></td>
-<td><code>test_tenant_discovery.py</code></td>
-<td>Read-only /v1/tenants endpoint checks</td>
-</tr>
-<tr>
-<td><code>readonly</code></td>
-<td><code>test_networkpolicy.py</code></td>
-<td>NetworkPolicy + connectivity checks</td>
-</tr>
-<tr>
-<td><code>readonly</code></td>
+<td><code>legacy_ipp_filter_chain</code></td>
 <td><code>test_gateway_filter_chain.py</code></td>
-<td>Gateway filter order (ipp-pre -&gt; auth -&gt; ipp -&gt; endpoint picker); its InferencePool traffic test is <code>serial</code></td>
+<td>Legacy IPP filter order (<code>legacy_ipp</code> opt-in; not default CI)</td>
 </tr>
 <tr>
-<td><code>api_keys</code></td>
+<td><code>legacy_ipp_external_models</code></td>
+<td><code>test_external_models.py</code></td>
+<td>Legacy ExternalModel routing (<code>legacy_ipp</code> opt-in)</td>
+</tr>
+<tr>
+<td><code>api_keys_core</code></td>
 <td><code>test_api_keys.py</code></td>
-<td>API key CRUD, admin authorization, validation</td>
+<td>API key CRUD, admin authorization, validation (<code>worker_tenant</code>)</td>
 </tr>
 <tr>
-<td><code>api_keys</code></td>
-<td><code>test_subscription.py</code></td>
-<td>Subscription enforcement, rate limiting, auth flows</td>
+<td><code>api_unconfigured_model</code></td>
+<td><code>test_subscription.py</code>, <code>test_trlp_rate_grouping.py</code></td>
+<td>Subscription enforcement, rate limiting, TRLP grouping (<code>worker_tenant</code>)</td>
 </tr>
 <tr>
-<td><code>api_keys</code></td>
+<td><code>api_keys_sub_endpoints</code></td>
 <td><code>test_subscription_list_endpoints.py</code></td>
-<td>Subscription listing endpoints</td>
+<td>Subscription listing endpoints (<code>worker_tenant</code>)</td>
 </tr>
 <tr>
-<td><code>api_keys</code></td>
+<td><code>api_xkey</code></td>
 <td><code>test_x_api_key_auth.py</code></td>
-<td>X-API-Key header authentication (IPP ExternalModel)</td>
+<td>X-API-Key header authentication</td>
 </tr>
 <tr>
-<td><code>models</code></td>
+<td><code>api_embedding</code></td>
+<td><code>test_embedding_inference.py</code></td>
+<td>Embedding inference (<code>worker_tenant</code>)</td>
+</tr>
+<tr>
+<td><code>models_endpoint</code></td>
 <td><code>test_models_endpoint.py</code></td>
-<td><code>/v1/models</code> subscription-aware filtering</td>
+<td><code>/v1/models</code> subscription-aware filtering (<code>worker_tenant</code>)</td>
 </tr>
 <tr>
-<td><code>models</code></td>
+<td><code>models_gw_authpolicy</code></td>
 <td><code>test_gateway_scoped_authpolicy.py</code></td>
-<td>Gateway AuthPolicy structure, lifecycle, enforcement gaps</td>
+<td>Gateway AuthPolicy structure and enforcement (<code>worker_tenant</code>)</td>
 </tr>
 <tr>
-<td><code>models</code></td>
+<td><code>models_identity</code></td>
 <td><code>test_model_identity_conflict.py</code></td>
-<td>MaaSModelRef model-identity collision detection</td>
+<td>MaaSModelRef model-identity collision (<code>worker_tenant</code>)</td>
 </tr>
 <tr>
-<td><code>models</code></td>
+<td><code>models_mt_integration</code></td>
 <td><code>test_multi_tenant_integration.py</code></td>
-<td>Full lifecycle, two-tenant coexistence (placed here to even out pass 1)</td>
+<td>Multi-tenant lifecycle coexistence (<code>worker_tenant</code>)</td>
 </tr>
 <tr>
 <td><code>security</code></td>
-<td><code>test_negative_security.py</code></td>
-<td>Header spoofing, expired keys, cross-model access</td>
+<td><code>test_negative_security.py</code>, <code>test_namespace_scoping.py</code></td>
+<td>Security / namespace isolation on the default gateway</td>
 </tr>
 <tr>
-<td><code>security</code></td>
-<td><code>test_namespace_scoping.py</code></td>
-<td>Namespace isolation behavior</td>
-</tr>
-<tr>
-<td><code>mt_lifecycle</code></td>
+<td><code>mt_lc_aitenant</code></td>
 <td><code>test_aitenant_lifecycle.py</code></td>
 <td>AITenant create/migrate/delete</td>
 </tr>
 <tr>
-<td><code>mt_lifecycle</code></td>
+<td><code>mt_lc_maas_api</code></td>
 <td><code>test_multi_tenant_maas_api.py</code></td>
-<td>Per-tenant Deployment, Service, HTTPRoute; dual-listener AuthConfig/wasm checks are <code>@pytest.mark.serial</code></td>
+<td>Per-tenant maas-api infra; dual-listener checks are <code>@nightly</code></td>
 </tr>
 <tr>
-<td><code>mt_lifecycle</code></td>
+<td><code>mt_lc_ns_discovery</code></td>
 <td><code>test_tenant_namespace_discovery.py</code></td>
 <td>Namespace-label discovery, webhook validation</td>
 </tr>
 <tr>
-<td><code>mt_lifecycle</code></td>
+<td><code>mt_lc_crd_watch</code></td>
 <td><code>test_crd_watch_resilience.py</code></td>
-<td>Dynamic CRD watch registration (restarts controller)</td>
+<td>CRD watch registration (<code>serial_exclusive</code>; pass 2a only)</td>
 </tr>
 <tr>
-<td><code>tenant_isolation</code></td>
+<td><code>tenant_iso_auth</code></td>
 <td><code>test_tenant_auth_isolation.py</code></td>
 <td>Cross-tenant key rejection, OIDC scoping</td>
 </tr>
 <tr>
-<td><code>tenant_isolation</code></td>
+<td><code>tenant_iso_rate</code></td>
 <td><code>test_tenant_rate_limit_isolation.py</code></td>
 <td>Per-tenant rate limit independence</td>
 </tr>
 <tr>
-<td><code>tenant_isolation</code></td>
+<td><code>tenant_iso_sub</code></td>
 <td><code>test_tenant_subscription_isolation.py</code></td>
 <td>Per-tenant subscription scoping</td>
 </tr>
 <tr>
-<td><code>tenant_isolation</code></td>
+<td><code>tenant_iso_discovery</code></td>
 <td><code>test_tenant_discovery_isolation.py</code></td>
-<td>Per-tenant /v1/tenants isolation</td>
+<td>Per-tenant <code>/v1/tenants</code> isolation</td>
 </tr>
 <tr>
 <td><code>tenant_inference</code></td>
 <td><code>test_tenant_model_inference.py</code></td>
-<td>Cross-gateway auth isolation and per-Gateway AuthPolicy EnvoyFilter selectors</td>
+<td>Cross-gateway auth isolation, per-Gateway AuthPolicy selectors</td>
 </tr>
 <tr>
-<td><code>tenant_ipp</code></td>
+<td><code>tenant_ipp_legacy</code></td>
 <td><code>test_per_tenant_ipp_isolation.py</code></td>
-<td>Per-tenant IPP stacks, routing isolation</td>
+<td>Legacy IPP stacks (<code>legacy_ipp_pass2b</code>; serial pass 2b, not pass 1)</td>
+</tr>
+<tr>
+<td><code>tenant_ipp_praxis</code></td>
+<td><code>test_per_tenant_praxis_isolation.py</code></td>
+<td>Praxis per-tenant isolation</td>
+</tr>
+<tr>
+<td><code>tenant_ipp_ext_*</code></td>
+<td><code>test_tenant_external_model_*.py</code> (one group per file, e.g. <code>tenant_ipp_ext_attach</code>)</td>
+<td>AGC/Praxis external models on tenant gateways (pass 1; split for wall clock)</td>
+</tr>
+<tr>
+<td><code>tenant_ipp_extproc_*</code></td>
+<td><code>test_praxis_extproc_restart.py</code>, <code>test_praxis_extproc_secret_rotation.py</code></td>
+<td>Praxis extproc lifecycle</td>
 </tr>
 <tr>
 <td><code>tenant_auto_resolve</code></td>
 <td><code>test_tenant_auto_resolve.py</code></td>
-<td>MaaSModelRef tenant auto-resolution from the gateway parentRef</td>
-</tr>
-<tr>
-<td><code>tenant_ipp</code></td>
-<td><code>test_tenant_external_model_attachment.py</code></td>
-<td>Multi-tenant AGC/Praxis external models: user-ns models on tenant gateways, lifecycle cleanup, <code>NotAllowedByListeners</code></td>
-</tr>
-<tr>
-<td><code>tenant_ipp</code></td>
-<td><code>test_tenant_external_model_shared.py</code></td>
-<td>Multi-tenant AGC/Praxis external models: shared model on two gateways, auth/quota isolation</td>
-</tr>
-<tr>
-<td><code>tenant_ipp</code></td>
-<td><code>test_tenant_external_model_conflicts.py</code></td>
-<td>Multi-tenant AGC/Praxis external models: modelName conflicts, same-named objects (overlay collision regression)</td>
-</tr>
-<tr>
-<td><code>tenant_ipp</code></td>
-<td><code>test_tenant_external_model_compat.py</code></td>
-<td>Multi-tenant AGC/Praxis external models: omitted-gatewayRefs compatibility; legacy IPP coexistence (<code>serial</code>, gated on <code>TENANT_EXTERNAL_MODEL_LEGACY_IPP_E2E</code>)</td>
-</tr>
-<tr>
-<td><code>tenant_ipp</code></td>
-<td><code>test_tenant_external_model_crossns.py</code></td>
-<td>ReferenceGrant-gated cross-namespace providers (P1; gated on <code>TENANT_EXTERNAL_MODEL_CROSSNS_E2E</code>)</td>
-</tr>
-<tr>
-<td><code>tenant_ipp</code></td>
-<td><code>test_tenant_external_model_default_tenant.py</code></td>
-<td>AGC/Praxis: models without <code>gatewayRefs</code> outside tenant namespaces served through the default tenant's Gateway (3.5 compatibility), <code>gatewayRefs</code> transition, deletion cleanup</td>
+<td>MaaSModelRef tenant auto-resolution from gateway parentRef</td>
 </tr>
 <tr>
 <td><code>inference_priority</code></td>
 <td><code>test_inference_priority.py</code></td>
-<td>Subscription <code>inferencePriority</code>: InferenceObjective lifecycle, <code>flowControlStatuses</code>, gateway flow-control headers (<code>serial</code>; skips without the <code>inferenceobjectives.llm-d.ai</code> CRD)</td>
+<td>Subscription <code>inferencePriority</code> / InferenceObjective (<code>serial</code>)</td>
+</tr>
+<tr>
+<td><code>echo_io</code></td>
+<td><code>test_echo_large_io.py</code></td>
+<td>Large payload echo (<code>serial</code>)</td>
 </tr>
 <tr>
 <td><code>external</code></td>
-<td><code>test_external_oidc.py</code></td>
-<td>External OIDC token flows (skipped unless <code>EXTERNAL_OIDC=true</code>)</td>
-</tr>
-<tr>
-<td><code>external</code></td>
-<td><code>test_external_models.py</code></td>
-<td>ExternalModel/ExternalProvider, egress, body routing</td>
+<td><code>test_external_oidc.py</code>, <code>test_external_model_routing.py</code>, Grid governance modules</td>
+<td>Externally gated OIDC/routing/admin tests</td>
 </tr>
 </tbody>
 </table>
-<p>The <code>test_tenant_external_model_*</code> modules share the <code>tenant_ipp</code> group for now: the legacy IPP controllers do not yet skip ExternalModels with gatewayRefs (upstream image pin pending), so without the guard they adopt this suite's models and flap <code>status.httpRouteName</code> when the groups run concurrently. Split them back into their own <code>tenant_external_model</code> group once the guard ships.</p>
+<p>Each test file declares exactly one <code>xdist_group</code> (see module-level <code>pytestmark</code>). Pass 1 runs parallel groups; <code>@serial_exclusive</code> runs alone in pass 2a; <code>@serial</code> and <code>@legacy_ipp_pass2b</code> run in pass 2b. Opt-in <code>@legacy_ipp</code> suites are excluded from default CI passes.</p>
 <h2 id="running-tests">Running Tests</h2>
 <h3 id="unit-tests-go">Unit Tests (Go)</h3>
 <div class="tabbed-set tabbed-alternate" data-tabs="1:2"><input checked="checked" id="__tabbed_1_1" name="__tabbed_1" type="radio" /><input id="__tabbed_1_2" name="__tabbed_1" type="radio" /><div class="tabbed-labels"><label for="__tabbed_1_1">maas-api</label><label for="__tabbed_1_2">maas-controller</label></div>
@@ -4175,11 +4145,14 @@ database topology.</p>
 <a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="nb">export</span><span class="w"> </span><span class="nv">GATEWAY_HOST</span><span class="o">=</span><span class="s2">&quot;maas.apps.your-cluster.example.com&quot;</span>
 <a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="nb">export</span><span class="w"> </span><span class="nv">E2E_SKIP_TLS_VERIFY</span><span class="o">=</span><span class="nb">true</span>
 <a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a>
-<a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a><span class="c1"># Mixed-marker modules need separate passes (or use run_e2e_tests.sh for the full suite).</span>
-<a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a>pytest<span class="w"> </span>tests/<span class="w"> </span>-m<span class="w"> </span><span class="s2">&quot;not serial&quot;</span><span class="w"> </span>-v
-<a id="__codelineno-7-10" name="__codelineno-7-10" href="#__codelineno-7-10"></a>pytest<span class="w"> </span>tests/<span class="w"> </span>-m<span class="w"> </span>serial<span class="w"> </span>-v
-<a id="__codelineno-7-11" name="__codelineno-7-11" href="#__codelineno-7-11"></a>pytest<span class="w"> </span>tests/test_subscription.py<span class="w"> </span>-m<span class="w"> </span><span class="s2">&quot;not serial&quot;</span><span class="w"> </span>-v
-<a id="__codelineno-7-12" name="__codelineno-7-12" href="#__codelineno-7-12"></a>pytest<span class="w"> </span>tests/test_api_keys.py::TestAPIKeyCRUD<span class="w"> </span>-m<span class="w"> </span><span class="s2">&quot;not serial&quot;</span><span class="w"> </span>-v
+<a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a><span class="c1"># Match run_e2e_tests.sh (three passes):</span>
+<a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a>pytest<span class="w"> </span>tests/<span class="w"> </span>-m<span class="w"> </span><span class="s2">&quot;not serial and not serial_exclusive and not legacy_ipp and not legacy_ipp_pass2b&quot;</span><span class="w"> </span>-n<span class="w"> </span><span class="m">5</span><span class="w"> </span>--dist<span class="o">=</span>loadgroup<span class="w"> </span>-v
+<a id="__codelineno-7-10" name="__codelineno-7-10" href="#__codelineno-7-10"></a>pytest<span class="w"> </span>tests/<span class="w"> </span>-m<span class="w"> </span><span class="s2">&quot;serial_exclusive and not legacy_ipp&quot;</span><span class="w"> </span>-v
+<a id="__codelineno-7-11" name="__codelineno-7-11" href="#__codelineno-7-11"></a>pytest<span class="w"> </span>tests/<span class="w"> </span>-m<span class="w"> </span><span class="s2">&quot;((serial and not legacy_ipp) or legacy_ipp_pass2b) and not serial_exclusive&quot;</span><span class="w"> </span>-v
+<a id="__codelineno-7-12" name="__codelineno-7-12" href="#__codelineno-7-12"></a>
+<a id="__codelineno-7-13" name="__codelineno-7-13" href="#__codelineno-7-13"></a><span class="c1"># Single file in pass 1 only:</span>
+<a id="__codelineno-7-14" name="__codelineno-7-14" href="#__codelineno-7-14"></a>pytest<span class="w"> </span>tests/test_subscription.py<span class="w"> </span>-m<span class="w"> </span><span class="s2">&quot;not serial and not serial_exclusive and not legacy_ipp and not legacy_ipp_pass2b&quot;</span><span class="w"> </span>-v
+<a id="__codelineno-7-15" name="__codelineno-7-15" href="#__codelineno-7-15"></a>pytest<span class="w"> </span>tests/test_api_keys.py::TestAPIKeyCRUD<span class="w"> </span>-m<span class="w"> </span><span class="s2">&quot;not serial and not serial_exclusive and not legacy_ipp and not legacy_ipp_pass2b&quot;</span><span class="w"> </span>-v
 </code></pre></div>
 </div>
 </div>
@@ -4228,7 +4201,11 @@ database topology.</p>
 </tr>
 <tr>
 <td><code>E2E_PARALLEL_WORKERS</code></td>
-<td>pytest-xdist worker count for pass 1 (default <code>5</code>). Set to <code>1</code> for single-worker pass 1 without xdist; pass 2 stays serial.</td>
+<td>pytest-xdist worker count for pass 1 (default <code>5</code>). Set to <code>1</code> for single-worker pass 1 without xdist; the serial passes are unaffected.</td>
+</tr>
+<tr>
+<td><code>E2E_SERIAL_WORKERS</code></td>
+<td>pytest-xdist lane count for serial pass 2b (default <code>1</code> everywhere, including CI). Lanes above 1 are implemented and were measured at 2 and 3 lanes, but they are <strong>not enabled by default</strong>: pass-2b files share the stored auth state of common models even across different <code>xdist_group</code>s, so concurrent lanes race (measured failure: <code>test_models_endpoint::test_empty_model_list</code>). Pass 2a is always one worker.</td>
 </tr>
 <tr>
 <td><code>LLMISVC_CONTROLLER_CPU_REQUEST</code> / <code>LLMISVC_CONTROLLER_CPU_LIMIT</code></td>
@@ -4251,10 +4228,11 @@ model, while <code>E2E_MODEL_NAME</code> sets the ID sent in the inference reque
 does not identify the model route. SSE parsing is centralized in
 <code>test_helper.assert_openai_sse_chat_stream</code>.</p>
 <h3 id="parallel-e2e-pytest-xdist">Parallel E2E (pytest-xdist)</h3>
-<p><code>run_e2e_tests.sh</code> and <code>run-tests-quick.sh</code> run <strong>two marker-filtered passes</strong> by default (default <code>E2E_PARALLEL_WORKERS=5</code>). Use <code>--serial-only</code> to run pass 2 only (<code>-m serial</code>); that mode does not execute non-serial tests. Direct <code>pytest</code> invocations must use the same split when a module mixes <code>@serial</code> and worker-tenant tests.</p>
+<p><code>run_e2e_tests.sh</code> and <code>run-tests-quick.sh</code> run <strong>three marker-filtered passes</strong> by default (default <code>E2E_PARALLEL_WORKERS=5</code>). Use <code>--serial-only</code> to run passes <strong>2a and 2b</strong> only; that mode skips pass 1. Direct <code>pytest</code> invocations must use the same selectors when a module mixes <code>@serial</code> and worker-tenant tests.</p>
 <ol>
-<li><strong>Pass 1</strong>: <code>-m "not serial"</code> — with <code>--dist=loadgroup -n 5</code> when workers &gt; 1, or single-worker execution when <code>E2E_PARALLEL_WORKERS=1</code></li>
-<li><strong>Pass 2 (serial)</strong>: <code>-m serial</code> — tests that mutate shared cluster state (subscription delete/restore, controller/Kuadrant scaling)</li>
+<li><strong>Pass 1</strong>: <code>-m "not serial and not serial_exclusive and not legacy_ipp and not legacy_ipp_pass2b"</code></li>
+<li><strong>Pass 2a (<code>serial_exclusive</code>)</strong>: <code>-m "serial_exclusive and not legacy_ipp"</code></li>
+<li><strong>Pass 2b (serial)</strong>: <code>-m "((serial and not legacy_ipp) or legacy_ipp_pass2b) and not serial_exclusive"</code> — includes <code>test_per_tenant_ipp_isolation</code> after parallel work. Full legacy IPP catalog (<code>test_external_models</code>, <code>test_gateway_filter_chain</code>) stays <strong><code>legacy_ipp</code> opt-in</strong> only.</li>
 </ol>
 <p>Set <code>E2E_PARALLEL_WORKERS=1</code> to disable xdist on pass 1 while keeping the serial/non-serial split (useful for debugging on shared clusters). Pass <code>./run_e2e_tests.sh --serial-only</code> only when intentionally limiting the run to serial mutators.</p>
 <h4 id="xdist-groups">xdist Groups</h4>
@@ -4271,13 +4249,13 @@ does not identify the model route. SSE parsing is centralized in
 <p><strong>Mutation scope</strong>: Tests that create, modify, or delete the same CRs (MaaSAuthPolicy, MaaSSubscription, MaaSModelRef, etc.) must be in the same group. This prevents two workers from concurrently mutating the same resource.</p>
 </li>
 <li>
-<p><strong>Functional domain</strong>: Group tests by what they exercise. API key tests go with <code>api_keys</code>, gateway AuthPolicy tests go with <code>models</code>, multi-tenant lifecycle tests go with <code>mt_lifecycle</code>, etc.</p>
+<p><strong>Functional domain</strong>: Group tests by what they exercise (for example <code>api_keys_core</code>, <code>models_endpoint</code>, <code>mt_lc_*</code>, <code>tenant_ipp_ext_*</code>).</p>
 </li>
 <li>
 <p><strong>Read-only tests go in <code>readonly</code></strong>: Tests that only read cluster state (no creates, no deletes, no patches) belong in the <code>readonly</code> group. This group finishes fast and never conflicts with other groups.</p>
 </li>
 <li>
-<p><strong>Self-managing tenant tests go in <code>mt_lifecycle</code> or a <code>tenant_*</code> group</strong>: Tests that create their own AITenant CRs belong in one of these groups. <code>mt_lifecycle</code> for lifecycle operations (create/delete/migrate), <code>tenant_isolation</code> for cross-tenant isolation assertions using the <code>shared_test_tenants</code> fixture. A long isolation module that builds its own tenant pair gets its own group (<code>tenant_inference</code>, <code>tenant_ipp</code>), so its runtime doesn't add to <code>tenant_isolation</code>'s.</p>
+<p><strong>Self-managing tenant tests</strong> use <code>mt_lc_*</code>, <code>tenant_iso_*</code>, <code>tenant_inference</code>, or <code>tenant_ipp_ext_*</code> groups. Legacy per-tenant IPP isolation (<code>test_per_tenant_ipp_isolation.py</code>) uses <code>legacy_ipp_pass2b</code> and runs in serial pass 2b, not pass 1.</p>
 </li>
 <li>
 <p><strong>Externally-gated tests go in <code>external</code></strong>: Tests that require external infrastructure (Keycloak OIDC, external endpoints) and use <code>pytest.mark.skipif</code> to self-gate belong in the <code>external</code> group.</p>
@@ -4286,19 +4264,28 @@ does not identify the model route. SSE parsing is centralized in
 <p><strong>Prefer existing groups over new ones</strong>: Adding more groups increases cluster resource pressure. Only create a new group if the test's mutation scope genuinely conflicts with all existing groups. The exception is wall clock: with <code>--dist=loadgroup</code> pass 1 cannot finish before its longest group, so split a group whose runtime alone sets the pass length, as long as the parts share no tenants or CRs and make no negative assertions (quiet logs, counters) on components the others touch. Pass 1 has more groups than workers: xdist starts the groups with the most tests first and hands the rest to whichever worker drains first, so a long group with few tests starts late.</p>
 </li>
 </ol>
-<h4 id="serial-marker">Serial Marker</h4>
-<p>Tests that mutate <strong>global</strong> cluster state must be marked <code>@pytest.mark.serial</code>:</p>
+<h4 id="serial-markers">Serial markers</h4>
+<p>Tests that mutate <strong>global</strong> cluster state use <code>@pytest.mark.serial</code> or <code>@pytest.mark.serial_exclusive</code>:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">serial</span>
 <a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="k">def</span><span class="w"> </span><span class="nf">test_delete_shared_subscription_then_restore</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
 <a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>    <span class="o">...</span>
+<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a>
+<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">serial_exclusive</span>  <span class="c1"># pass 2a only — scales a control plane or deletes a cluster CRD</span>
+<a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a><span class="k">def</span><span class="w"> </span><span class="nf">test_scale_controller_for_status_patch</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a>    <span class="o">...</span>
 </code></pre></div>
-<p>Serial tests run in Pass 2 on a single worker. Use <code>@serial</code> when the test:</p>
+<ul>
+<li><strong><code>serial</code></strong>: shared-cluster mutators; run in <strong>pass 2b</strong> (with <code>@legacy_ipp_pass2b</code> tests), not pass 1.</li>
+<li><strong><code>serial_exclusive</code></strong>: needs the whole cluster alone; run in <strong>pass 2a</strong> (single worker), never with pass 1 parallel work.</li>
+</ul>
+<p>Use <code>@serial</code> when the test:</p>
 <ul>
 <li>Deletes or modifies a shared fixture (e.g., <code>simulator-subscription</code>, <code>simulator-access</code>)</li>
-<li>Scales or restarts a cluster operator (maas-controller, Kuadrant)</li>
-<li>Modifies a CRD or cluster-scoped resource that other groups depend on</li>
+<li>Scales or restarts a cluster operator (maas-controller, Kuadrant) but other parallel groups can resume after pass 2a</li>
+<li>Modifies cluster-scoped state that other groups depend on, without requiring an exclusive cluster window</li>
 </ul>
-<p>Do <strong>not</strong> use <code>@serial</code> for tests that only create/delete their own uniquely-named resources — those are safe to run in parallel within their group.</p>
+<p>Use <code>@serial_exclusive</code> when scaling a control plane to zero or deleting a cluster-scoped CRD that pass 1 still needs.</p>
+<p>Do <strong>not</strong> use <code>@serial</code> for tests that only create/delete their own uniquely-named resources — those are safe to run in parallel within their group. Modules with <code>@pytest.mark.worker_tenant</code> skip worker bootstrap for any test marked <code>serial</code> or <code>serial_exclusive</code>.</p>
 <h2 id="ci-pipeline">CI Pipeline</h2>
 <p>CI runs automatically on every PR and push to <code>main</code>. Here's how the different test types fit together:</p>
 <pre class="mermaid"><code>graph TB
@@ -4547,7 +4534,7 @@ does not identify the model route. SSE parsing is centralized in
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="November 4, 2026 08:23:13 UTC">November 4, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="November 12, 2026 20:53:40 UTC">November 12, 2026</span>
   </span>
 
     
