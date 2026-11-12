@@ -75,7 +75,7 @@ func (m *Model) extractFieldsFromExtraFields() error {
 			continue
 		}
 
-		jsonFieldName := strings.Split(jsonTag, ",")[0]
+		jsonFieldName, _, _ := strings.Cut(jsonTag, ",")
 		if jsonFieldName == "" {
 			jsonFieldName = strings.ToLower(field.Name)
 		}

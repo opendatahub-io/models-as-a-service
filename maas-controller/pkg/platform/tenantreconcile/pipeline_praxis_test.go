@@ -810,7 +810,7 @@ func praxisOwnedDeployment(namespace, name string) *appsv1.Deployment {
 				Operation:  metav1.ManagedFieldsOperationApply,
 				APIVersion: "apps/v1",
 				FieldsType: "FieldsV1",
-				FieldsV1:   &metav1.FieldsV1{Raw: fieldV1},
+				FieldsV1:   metav1.NewFieldsV1(string(fieldV1)),
 			}},
 		},
 	}
@@ -1085,7 +1085,7 @@ func TestCleanupIPPExternalModelRoutes_PreservesUnsafeOwnership(t *testing.T) {
 				Operation:  metav1.ManagedFieldsOperationApply,
 				APIVersion: "gateway.networking.k8s.io/v1",
 				FieldsType: "FieldsV1",
-				FieldsV1:   &metav1.FieldsV1{Raw: []byte("{}")},
+				FieldsV1:   metav1.NewFieldsV1("{}"),
 			}})
 		}},
 		"foreign route": {model: true, mutate: func(route *unstructured.Unstructured) {
