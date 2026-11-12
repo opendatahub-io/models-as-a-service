@@ -45,6 +45,7 @@ type ValidationResult struct {
 	KeyID        string   `json:"keyId,omitempty"`
 	KeyName      string   `json:"keyName,omitempty"`      // User-provided name for the key
 	Groups       []string `json:"groups,omitempty"`       // User groups for subscription-based authorization
+	GroupsJSON   string   `json:"groupsJSON,omitempty"`   // JSON-encoded group array for trusted header injection
 	Subscription string   `json:"subscription,omitempty"` // MaaSSubscription name from DB (Authorino → subscription-info)
 	Tenant       string   `json:"tenant"`                 // Tenant bound at key creation (always present, empty string for legacy keys)
 	Reason       string   `json:"reason,omitempty"`       // If invalid: "key not found", "revoked", etc.
@@ -95,7 +96,8 @@ type SearchFilters struct {
 	HasBeenUsed   *bool `json:"hasBeenUsed,omitempty"`   // true = used, false = never used
 
 	// Subscription filter
-	Subscription *string `json:"subscription,omitempty"` // Filter by bound subscription name
+	Subscription      *string  `json:"subscription,omitempty"` // Filter by bound subscription name
+	SubscriptionNames []string `json:"-"`
 
 	// Ephemeral key filter
 	IncludeEphemeral *bool `json:"includeEphemeral,omitempty"` // Include ephemeral keys in results (default: false)

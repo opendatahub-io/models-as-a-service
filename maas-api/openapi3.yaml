@@ -36,20 +36,42 @@ paths:
                                 $ref: '#/components/schemas/HealthResponse'
                             example:
                                 status: healthy
+    /health/database:
+        get:
+            tags:
+                - health
+            summary: Check the health status of the MaaS API database component
+            description: |
+                Returns non-secret database pool diagnostics. This component endpoint is
+                cluster-only and is not exposed through the Gateway; the stable public
+                `/health` endpoint remains implementation-agnostic.
+            operationId: health#database-healthcheck
+            security: []
+            responses:
+                "200":
+                    description: OK response.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/DatabaseHealthResponse'
+                            example:
+                                status: healthy
+                                database:
+                                    read_pool_healthy: true
+                                    read_replica_configured: true
     /v1/me:
         get:
             tags:
                 - identity
-            summary: Return the verified SSO caller identity
+            summary: Return the authenticated caller identity
             description: |
-                Returns the verified `iss` and `sub` claims, optional profile claims, and all literal
-                organization membership entries from the trusted OIDC identity envelope. Optional
-                claims are returned verbatim when present and nonempty; they are omitted when absent
-                or empty, and are never replaced with `null` or an empty array. The response contains
-                no computed permissions, subscriptions, or inventory. Group claims and organization
-                membership entries are independent literal claims; neither is used to infer or
-                validate the other. API-key and Kubernetes authentication cannot provide this
-                SSO-only response.
+                The response returns the verified `iss` and `sub` claims, optional profile claims,
+                literal groups, and flat organization claims from the trusted OIDC envelope.
+                Other callers receive trusted gateway identity as `sub`, `name`, and
+                `preferred_username`, plus their groups. `iss` is omitted for those callers.
+                The response omits optional claims when they are absent or empty. The response
+                contains no computed permissions, subscriptions, or inventory. For flat
+                organization identities, `org_id` identifies the organization for plain groups.
             operationId: identity#get-me
             responses:
                 "200":
@@ -70,15 +92,13 @@ paths:
                                 preferred_username: alex
                                 email: alex@example.com
                                 groups:
-                                    - idp-developers
-                                https://redhat.com/maas/orgs:
-                                    - organization_id: 42c3e46f-2477-44d7-a85b-d3b43f6b31fa
-                                      organization_name: grid-tenant
-                                      roles:
-                                          - admins
-                                    - organization_id: 53d4f57e-3588-55e8-b96c-4ec54a7c42fa
+                                    - users
+                                org_id: 42c3e46f-2477-44d7-a85b-d3b43f6b31fa
+                                org_name: grid-tenant
+                                roles:
+                                    - admins
                 "401":
-                    description: Unauthorized. Verified SSO identity is missing or invalid.
+                    description: Unauthorized. Authenticated identity is missing or invalid.
                     content:
                         application/json:
                             schema:
@@ -354,9 +374,9 @@ paths:
 
                 Regular users can search only their own keys. A verified SSO subscription
                 administrator can search metadata for all users in an explicitly authorized
-                subscription. The subscription filter is canonicalized to its stored plain name
-                before pagination and result counts; omitting it does not broaden a delegated
-                administrator's search to every administered subscription or organization user.
+                subscription, or in the union of subscriptions they administer when the
+                subscription filter is omitted. The subscription filter is canonicalized to
+                its stored plain name before pagination and result counts.
             operationId: api-keys-v2#search
             requestBody:
                 required: false
@@ -493,12 +513,13 @@ paths:
                 - Regular users can bulk revoke their own keys (username = self).
                 - Subscription-scoped revocation requires platform-admin or delegated
                   subscription-admin authorization.
-                - Cross-user revocation requires platform-admin authorization, or an explicit
-                  subscription for which the SSO caller has delegated admin authority.
+                - Cross-user revocation requires platform-admin authorization, or delegated
+                  organization-admin authorization.
 
-                A username-only request does not authorize a delegated administrator to revoke a
-                user's keys across subscriptions. Dry-run counts and mutations use the same
-                canonical tenant and subscription scope.
+                A username-only request from a delegated administrator is constrained to the
+                subscriptions administered by the caller's organization and cannot affect another
+                organization. Dry-run counts and mutations use the same tenant and subscription
+                scope.
 
                 When `dryRun` is true, the response includes the count of keys that
                 would be revoked without performing any mutation.
@@ -515,7 +536,7 @@ paths:
                             properties:
                                 username:
                                     type: string
-                                    description: Username whose keys should be revoked.
+                                    description: Username whose keys should be revoked. Delegated administrators can revoke this user's keys only within subscriptions administered by their organization.
                                 subscription:
                                     type: string
                                     description: Subscription name or namespace/name alias whose bound keys should be revoked. Delegated administrators must administer this subscription.
@@ -874,6 +895,27 @@ components:
                     example: healthy
             required:
                 - status
+
+        DatabaseHealthResponse:
+            type: object
+            properties:
+                status:
+                    type: string
+                    description: Process health status; read-pool health is reported under database.
+                    example: healthy
+                database:
+                    type: object
+                    additionalProperties: true
+                    description: Non-secret database pool status
+                    properties:
+                        read_replica_configured:
+                            type: boolean
+                            description: Whether an optional read replica is configured for local reads.
+                        read_pool_healthy:
+                            type: boolean
+                            description: Whether the configured read pool is currently healthy.
+            required:
+                - status
         
         # Model list response
         ModelListResponse:
@@ -1193,22 +1235,22 @@ components:
         CallerIdentity:
             type: object
             description: |
-                Verified SSO identity fields only; no computed permissions or inventory. `iss` and
-                `sub` are always present. Optional scalar and array fields are returned verbatim
-                when present and nonempty, and are omitted otherwise.
+                Caller identity fields contain no computed permissions or inventory. The response
+                always includes `sub`. OIDC responses also include verified `iss`. Other callers
+                omit `iss`. The response omits optional fields when absent or empty.
             properties:
                 iss:
                     type: string
                     format: uri
-                    description: Verified issuer claim
+                    description: Verified OIDC issuer claim. Omitted for other authenticated callers.
                     example: https://issuer.example.com
                 sub:
                     type: string
-                    description: Verified subject claim
+                    description: Verified OIDC subject claim, or trusted gateway identity.
                     example: user-1
                 name:
                     type: string
-                    description: Verified full-name claim. Omitted when absent or empty.
+                    description: Verified OIDC full-name claim, or trusted gateway identity. Omitted when absent or empty.
                     example: Alex User
                 given_name:
                     type: string
@@ -1220,7 +1262,7 @@ components:
                     example: User
                 preferred_username:
                     type: string
-                    description: Verified preferred-username claim. Omitted when absent or empty.
+                    description: Verified OIDC preferred-username claim, or trusted gateway identity. Omitted when absent or empty.
                     example: alex
                 email:
                     type: string
@@ -1230,48 +1272,31 @@ components:
                 groups:
                     type: array
                     description: |
-                        All literal verified group claims. Omitted when the claim is absent or empty.
-                        Group names are independent of organization membership entries and do not
-                        imply an organization role.
+                        The API returns literal OIDC group claims or groups from the trusted gateway.
+                        Flat organization identities keep their group names plain. The API omits
+                        groups when absent or empty. A group does not grant an organization role.
                     items:
                         type: string
                     example:
-                        - 42c3e46f-2477-44d7-a85b-d3b43f6b31fa/users
-                https://redhat.com/maas/orgs:
-                    type: array
-                    description: |
-                        All literal verified organization membership entries, without filtering by
-                        target or role. Omitted when the claim is absent or empty.
-                    items:
-                        $ref: '#/components/schemas/OrganizationMembership'
-            required:
-                - iss
-                - sub
-
-        OrganizationMembership:
-            type: object
-            description: One literal verified organization membership entry.
-            properties:
-                organization_id:
+                        - users
+                org_id:
                     type: string
                     format: uuid
-                    description: Always present. Canonical organization UUID.
+                    description: This is the canonical ID of the caller organization. The API omits it without organization identity.
                     example: 42c3e46f-2477-44d7-a85b-d3b43f6b31fa
-                organization_name:
+                org_name:
                     type: string
-                    description: Organization display name. Omitted when absent or empty.
+                    description: The API returns this display name when present. It omits the field when the value is empty.
                     example: grid-tenant
                 roles:
                     type: array
-                    description: |
-                        Literal roles from the same organization entry. Omitted when the roles claim
-                        is absent or empty; absence means the caller has no organization role.
+                    description: These are the roles for `org_id`. The API omits this field when no roles are present.
                     items:
                         type: string
                     example:
                         - admins
             required:
-                - organization_id
+                - sub
 
         # API Key configuration limits
         ApiKeyConfig:

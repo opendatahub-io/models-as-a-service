@@ -87,7 +87,7 @@ func TestMaaSAuthPolicyReconciler_CrossNamespace(t *testing.T) {
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithRESTMapper(testRESTMapper()).
-		WithObjects(modelA, routeA, modelB, routeB, maasPolicy).
+		WithObjects(legacyNamespace(policyNamespace), modelA, routeA, modelB, routeB, maasPolicy).
 		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
 		Build()
 
@@ -180,7 +180,7 @@ func TestMaaSAuthPolicyReconciler_SelectiveModelManagement(t *testing.T) {
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithRESTMapper(testRESTMapper()).
-		WithObjects(modelA, routeA, modelB, routeB, maasPolicy).
+		WithObjects(legacyNamespace(policyNamespace), modelA, routeA, modelB, routeB, maasPolicy).
 		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
 		Build()
 
@@ -275,7 +275,7 @@ func TestMaaSAuthPolicyReconciler_SameNameDifferentNamespaces(t *testing.T) {
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithRESTMapper(testRESTMapper()).
-		WithObjects(modelA, routeA, modelB, routeB, policyA, policyB).
+		WithObjects(legacyNamespace(namespaceA), legacyNamespace(namespaceB), modelA, routeA, modelB, routeB, policyA, policyB).
 		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
 		Build()
 
@@ -615,7 +615,7 @@ func TestMaaSAuthPolicyReconciler_DuplicateNameAnnotationIsolation(t *testing.T)
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithRESTMapper(testRESTMapper()).
-		WithObjects(model, route, policyA).
+		WithObjects(legacyNamespace(namespaceA), model, route, policyA).
 		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
 		Build()
 

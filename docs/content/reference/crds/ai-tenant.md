@@ -33,6 +33,8 @@ Deleting an `AITenant` performs a cleanup of the tenant's MaaS state. The contro
 
 The `AITenant` stays in `Terminating` phase while MaaS resource finalizers run. If API-key revocation cannot run (for example the revocation Job fails), it reports `Ready=False` with reason `DeletionBlocked`. When revocation prerequisites (`maas-api`, `maas-api-cleanup` ServiceAccount) are missing but `Config/default` still exists, the controller requests `MaasTenantConfig` reconciliation so the tenant controller can restore operands before creating the Job. When prerequisites are permanently gone (for example `Config/default` was removed during platform teardown), the controller emits `APIKeyCleanupSkipped`, sets `APIKeysRevoked` with reason `RevocationOperandsUnavailable`, and continues deletion. That skip path does not call maas-api; keys may remain in the database until separately purged. A tenant namespace that is already terminating does not block AITenant cleanup.
 
+Set `maas.opendatahub.io/retain-api-keys-on-delete: "true"` to skip tenant-wide API-key revocation for an `AITenant` copy managed by an external system that performs revocation for the authoritative deletion. The controller emits `APIKeyCleanupSkipped`, sets `APIKeysRevoked` with reason `APIKeysRetainedByExternalOwner`, and completes the remaining AITenant cleanup. During AITenant deletion, the annotation also skips API-key cleanup for child `MaaSSubscription` objects owned by that `AITenant`; it does not change cleanup for a subscription deleted while its owning AITenant remains active. The subscription-level annotation remains available for narrower retention. The annotation must be present before deletion and revocation begin. Adding it after a revocation Job has started or completed is unsupported and may not prevent keys from being revoked. Use this only for externally projected copies, such as an AI Grid tenant projected to multiple clusters. If every projected copy is deleted with retention enabled, the tenant's keys remain active; if the tenant and a subscription with the same name are recreated, retained keys match them again and can validate. There is no hub-side revocation path yet, so revoke retained keys through the authoritative tenant API before removing the final projected copy.
+
 ---
 
 ## Namespace Discovery
@@ -60,6 +62,18 @@ The `MaasTenantConfig/default-tenant` object in each tenant namespace owns MaaS-
 | name | string | No | `metadata.name` | Name of the Gateway in the controller-configured Gateway namespace. |
 
 The Gateway namespace is controller configuration, not an `AITenant` spec field. The Gateway must already exist, normally after network or cluster administrator approval. The controller only reads the Gateway and reports the resolved reference in `status.gatewayRef`; it does not create, label, annotate, reconcile, adopt, or delete Gateway resources.
+
+### Experimental large-response buffer
+
+For large inference responses such as batched embeddings, MaaS applies a default `64 MB` Envoy listener buffer to the tenant Gateway. Platform administrators may override the experimental value with a Gateway annotation:
+
+```yaml
+metadata:
+  annotations:
+    maas.opendatahub.io/experimental-body-buffer-limit-mb: "64"
+```
+
+The value is an integer number of megabytes. Values from `1` through `64` are accepted; invalid or out-of-range values use the `64 MB` default. This annotation is experimental and may later move into the supported tenant configuration API.
 
 ---
 

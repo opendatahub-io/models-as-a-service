@@ -22,6 +22,11 @@ EXTERNAL_OIDC="${EXTERNAL_OIDC:-false}"
 SKIP_AUTH_CHECK="${SKIP_AUTH_CHECK:-true}"
 export POLICY_ENGINE="${POLICY_ENGINE:-rhcl}"
 export INGRESS_MODE="${INGRESS_MODE:-ocproute}"
+# External OIDC requires Authorino/RHCL; never permit callers to skip that
+# readiness gate for this deployment mode.
+if [[ "${EXTERNAL_OIDC}" == "true" ]]; then
+    SKIP_AUTH_CHECK=false
+fi
 AUTHORINO_NAMESPACE="${AUTHORINO_NAMESPACE:-$(resolve_authorino_namespace "${POLICY_ENGINE}")}"
 export AUTHORINO_NAMESPACE
 LLMISVC_CONTROLLER_CPU_REQUEST="${LLMISVC_CONTROLLER_CPU_REQUEST-1}"
@@ -143,6 +148,11 @@ deploy_maas_platform() {
     fi
 
     raise_llmisvc_controller_cpu
+
+    # Consumer portal enablement (stand-in maas-portal Service + auth proxy
+    # credentials Secret). On by default in OIDC lanes (MAAS_PORTAL defaults
+    # to EXTERNAL_OIDC); see deploy-maas-portal.sh.
+    bash "${PROJECT_ROOT}/test/e2e/scripts/deploy-maas-portal.sh"
 
     if [[ "${SKIP_AUTH_CHECK:-true}" == "true" ]]; then
         echo "⚠️  WARNING: Skipping Authorino readiness check (SKIP_AUTH_CHECK=true)"

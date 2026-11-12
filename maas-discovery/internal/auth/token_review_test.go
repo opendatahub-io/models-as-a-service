@@ -10,8 +10,8 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	authenticationv1 "k8s.io/api/authentication/v1"
-	authorizationv1 "k8s.io/api/authorization/v1"
+	authv1 "k8s.io/api/authentication/v1"
+	authzv1 "k8s.io/api/authorization/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	kubefake "k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
@@ -19,11 +19,8 @@ import (
 	"github.com/opendatahub-io/models-as-a-service/maas-discovery/internal/auth"
 )
 
-func init() {
-	gin.SetMode(gin.TestMode)
-}
-
 func setupRouter(kubeClient *kubefake.Clientset) *gin.Engine {
+	gin.SetMode(gin.TestMode)
 	log := slog.Default()
 	r := gin.New()
 	r.GET("/v1/tenants",
@@ -45,10 +42,10 @@ func setupRouter(kubeClient *kubefake.Clientset) *gin.Engine {
 func fakeAuthenticatedClient(username string, groups []string) *kubefake.Clientset {
 	client := kubefake.NewSimpleClientset()
 	client.PrependReactor("create", "tokenreviews", func(action k8stesting.Action) (bool, runtime.Object, error) {
-		return true, &authenticationv1.TokenReview{
-			Status: authenticationv1.TokenReviewStatus{
+		return true, &authv1.TokenReview{
+			Status: authv1.TokenReviewStatus{
 				Authenticated: true,
-				User: authenticationv1.UserInfo{
+				User: authv1.UserInfo{
 					Username: username,
 					Groups:   groups,
 				},
@@ -56,8 +53,8 @@ func fakeAuthenticatedClient(username string, groups []string) *kubefake.Clients
 		}, nil
 	})
 	client.PrependReactor("create", "subjectaccessreviews", func(action k8stesting.Action) (bool, runtime.Object, error) {
-		return true, &authorizationv1.SubjectAccessReview{
-			Status: authorizationv1.SubjectAccessReviewStatus{Allowed: true},
+		return true, &authzv1.SubjectAccessReview{
+			Status: authzv1.SubjectAccessReviewStatus{Allowed: true},
 		}, nil
 	})
 	return client
@@ -83,10 +80,10 @@ func TestTokenReview_Success(t *testing.T) {
 func TestTokenReview_NonAdmin(t *testing.T) {
 	client := kubefake.NewSimpleClientset()
 	client.PrependReactor("create", "tokenreviews", func(action k8stesting.Action) (bool, runtime.Object, error) {
-		return true, &authenticationv1.TokenReview{
-			Status: authenticationv1.TokenReviewStatus{
+		return true, &authv1.TokenReview{
+			Status: authv1.TokenReviewStatus{
 				Authenticated: true,
-				User: authenticationv1.UserInfo{
+				User: authv1.UserInfo{
 					Username: "bob",
 					Groups:   []string{"system:authenticated", "team-b"},
 				},
@@ -94,12 +91,12 @@ func TestTokenReview_NonAdmin(t *testing.T) {
 		}, nil
 	})
 	client.PrependReactor("create", "subjectaccessreviews", func(action k8stesting.Action) (bool, runtime.Object, error) {
-		sar, ok := action.(k8stesting.CreateAction).GetObject().(*authorizationv1.SubjectAccessReview)
+		sar, ok := action.(k8stesting.CreateAction).GetObject().(*authzv1.SubjectAccessReview)
 		require.True(t, ok)
 		if sar.Spec.ResourceAttributes != nil && sar.Spec.ResourceAttributes.Resource == "aitenants" {
-			return true, &authorizationv1.SubjectAccessReview{Status: authorizationv1.SubjectAccessReviewStatus{Allowed: false}}, nil
+			return true, &authzv1.SubjectAccessReview{Status: authzv1.SubjectAccessReviewStatus{Allowed: false}}, nil
 		}
-		return true, &authorizationv1.SubjectAccessReview{Status: authorizationv1.SubjectAccessReviewStatus{Allowed: true}}, nil
+		return true, &authzv1.SubjectAccessReview{Status: authzv1.SubjectAccessReviewStatus{Allowed: true}}, nil
 	})
 
 	r := setupRouter(client)
@@ -132,8 +129,8 @@ func TestTokenReview_MissingAuthHeader(t *testing.T) {
 func TestTokenReview_InvalidToken(t *testing.T) {
 	client := kubefake.NewSimpleClientset()
 	client.PrependReactor("create", "tokenreviews", func(action k8stesting.Action) (bool, runtime.Object, error) {
-		return true, &authenticationv1.TokenReview{
-			Status: authenticationv1.TokenReviewStatus{Authenticated: false, Error: "token expired"},
+		return true, &authv1.TokenReview{
+			Status: authv1.TokenReviewStatus{Authenticated: false, Error: "token expired"},
 		}, nil
 	})
 	r := setupRouter(client)
@@ -150,16 +147,16 @@ func TestTokenReview_InvalidToken(t *testing.T) {
 func TestTokenReview_SARDenied(t *testing.T) {
 	client := kubefake.NewSimpleClientset()
 	client.PrependReactor("create", "tokenreviews", func(action k8stesting.Action) (bool, runtime.Object, error) {
-		return true, &authenticationv1.TokenReview{
-			Status: authenticationv1.TokenReviewStatus{
+		return true, &authv1.TokenReview{
+			Status: authv1.TokenReviewStatus{
 				Authenticated: true,
-				User:          authenticationv1.UserInfo{Username: "rogue"},
+				User:          authv1.UserInfo{Username: "rogue"},
 			},
 		}, nil
 	})
 	client.PrependReactor("create", "subjectaccessreviews", func(action k8stesting.Action) (bool, runtime.Object, error) {
-		return true, &authorizationv1.SubjectAccessReview{
-			Status: authorizationv1.SubjectAccessReviewStatus{Allowed: false, Reason: "not authorized"},
+		return true, &authzv1.SubjectAccessReview{
+			Status: authzv1.SubjectAccessReviewStatus{Allowed: false, Reason: "not authorized"},
 		}, nil
 	})
 	r := setupRouter(client)

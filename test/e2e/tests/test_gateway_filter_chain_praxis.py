@@ -26,7 +26,7 @@ from test_gateway_filter_chain import (
     _listener_state,
 )
 
-pytestmark = pytest.mark.xdist_group("readonly")
+pytestmark = [pytest.mark.xdist_group("readonly"), pytest.mark.smoke]
 
 
 def _skip_unless_praxis_payload_processing():
