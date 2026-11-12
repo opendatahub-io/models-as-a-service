@@ -300,6 +300,31 @@ The maas-api server is configured via **environment variables** or **CLI flags**
 !!! note "Database Configuration"
     The database connection URL is loaded from the Kubernetes secret `maas-db-config` (key: `DB_CONNECTION_URL`) in the same namespace as the maas-api pod. See [Database Configuration](#database-configuration) below.
 
+### Standalone mode (unsupported)
+
+`MAAS_SUBSCRIPTION_MODE=standalone` is an **unsupported deployment mode**. It exists
+for deployments that use `maas-api` only as an API-key lifecycle and validation
+service while their own gateway provides authentication, authorization, and
+routing. It is not a supported RHOAI product configuration and carries no
+upgrade or compatibility guarantees.
+
+In standalone mode:
+
+- `maas-api` does not require the `MaaSSubscription`, `MaaSAuthPolicy`,
+  `AITenant`, or `MaasTenantConfig` CRDs to become ready. Their informers are
+  not started.
+- If the `MaaSModelRef` CRD is served at startup, `maas-api` starts only that
+  informer and `/v1/models` lists ready models. If the CRD is absent,
+  `/v1/models` returns an empty list. Restart `maas-api` after installing or
+  removing the CRD. The gateway is responsible for its own model catalog either
+  way.
+- API keys are created and validated without a bound subscription.
+- Subscription selection and listing endpoints return `503 Service Unavailable`.
+- Subscription-scoped key creation, search, and bulk revoke return `400 Bad Request`.
+
+The deployment must protect the trusted identity headers that `maas-api` consumes.
+Do not expose `maas-api` directly to untrusted clients.
+
 ### CLI Flags
 
 Most environment variables have corresponding CLI flags. When both are provided, CLI flags take precedence. Note that `API_KEY_MAX_EXPIRATION_DAYS`, `API_KEY_DELETION_RETENTION_DAYS`, and `ACCESS_CHECK_TIMEOUT_SECONDS` are environment variable only and have no CLI flag equivalents.
