@@ -47,13 +47,22 @@ These realms contain security issues intentional for testing:
 - `grid_reserved_group` (password: `letmein`)
   - Member of: `42c3e46f-2477-44d7-a85b-d3b43f6b31fa/reserved-ai-grid-admins`
   - Has no organization claims
+- `portal_user` (password: `letmein`)
+  - Member of: Engineering
+  - Email: `portal_user@example.com` (verified; the consumer portal auth proxy rejects sign-ins without one)
+  - Organization ID: `42c3e46f-2477-44d7-a85b-d3b43f6b31fa`
+  - Organization name: `coke`
+  - Organization role: `users`
 
-**Client:**
+**Clients:**
 - Client ID: `test-client`
-- Type: Public (no authentication)
-- Groups claim configured in tokens
-- Organization claims are flat: `org_id`, `org_name`, and `roles`
-- Access tokens include `aud: maas-api` and `token_use: access` for the strict MaaS OIDC contract
+  - Type: Public (no authentication)
+  - Groups claim configured in tokens
+  - Organization claims are flat: `org_id`, `org_name`, and `roles`
+  - Access tokens include `aud: maas-api` and `token_use: access` for the strict MaaS OIDC contract
+- Client ID: `maas-consumer-portal`
+  - Type: Confidential (secret `maas-e2e-portal-client-secret`), used by the consumer portal auth proxy
+  - Same identity-contract mappers as `test-client`
 
 ### Tenant-B Realm
 
