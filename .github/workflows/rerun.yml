@@ -31,6 +31,8 @@ jobs:
           GH_REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.issue.number }}
           COMMENT_BODY: ${{ github.event.comment.body }}
+          COMMENT_AUTHOR: ${{ github.event.comment.user.login }}
+          COMMENT_AUTHOR_ID: ${{ github.event.comment.user.id }}
         run: |
           # Parse before making API calls; quoted mentions and command prefixes
           # must not accidentally rerun CI.
@@ -57,11 +59,30 @@ jobs:
           esac
 
           PR_HEAD=$(gh api "repos/${GH_REPO}/pulls/${PR_NUMBER}" \
-            --jq '[.head.sha, .head.repo.id, .head.ref] | @tsv')
-          IFS=$'\t' read -r HEAD_SHA HEAD_REPOSITORY_ID HEAD_BRANCH <<< "$PR_HEAD"
-          if [ -z "$HEAD_SHA" ] || [ -z "$HEAD_REPOSITORY_ID" ] || [ -z "$HEAD_BRANCH" ]; then
-            echo "::error::Failed to resolve HEAD repository, branch, and SHA for PR #${PR_NUMBER}"
+            --jq '[.head.sha, .head.repo.id, .head.ref, .base.repo.id] | @tsv')
+          IFS=$'\t' read -r HEAD_SHA HEAD_REPOSITORY_ID HEAD_BRANCH BASE_REPOSITORY_ID <<< "$PR_HEAD"
+          if [ -z "$HEAD_SHA" ] || [ -z "$HEAD_REPOSITORY_ID" ] || [ -z "$HEAD_BRANCH" ] || [ -z "$BASE_REPOSITORY_ID" ]; then
+            echo "::error::Failed to resolve PR repositories, branch, and SHA for PR #${PR_NUMBER}"
             exit 1
+          fi
+          require_write_access() {
+            if [ "${WRITE_AUTHORIZED:-false}" = true ]; then return; fi
+            COMMENT_PERMISSION=$(gh api "repos/${GH_REPO}/collaborators/${COMMENT_AUTHOR}/permission")
+            # Bind current permission to the original numeric identity: logins can change.
+            # shellcheck disable=SC2016 # $user_id is a jq argument.
+            WRITE_PERMISSION_FILTER='.user.id == $user_id and (.permission == "write" or .permission == "admin")'
+            if ! jq -e --argjson user_id "$COMMENT_AUTHOR_ID" "$WRITE_PERMISSION_FILTER" \
+                <<< "$COMMENT_PERMISSION" > /dev/null; then
+              echo "::error::Retrying repository-owned branches or cancelled workflows requires current repository write access; ask a maintainer"
+              exit 1
+            fi
+            WRITE_AUTHORIZED=true
+          }
+          # Public-fork pull_request runs retain GitHub's read-only token cap.
+          # Same-repository runs can explicitly request write scopes and secrets;
+          # do not delegate their replay on the basis of past contributions.
+          if [ "$HEAD_REPOSITORY_ID" = "$BASE_REPOSITORY_ID" ]; then
+            require_write_access
           fi
           echo "PR #${PR_NUMBER} HEAD SHA: ${HEAD_SHA}"
 
@@ -114,6 +135,9 @@ jobs:
             fi
             RERUN_MODE="$MODE"
             if [ "$RUN_CONCLUSION" = "cancelled" ]; then
+              # A cancellation does not prove that GitHub's approval gate passed.
+              # Keep this recovery path maintainer-only, including on fork PRs.
+              require_write_access
               # --failed does not select cancelled jobs. Rerun the whole workflow
               # so cancelled prerequisites and their dependents run again.
               RERUN_MODE=""

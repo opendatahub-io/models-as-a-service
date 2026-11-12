@@ -128,7 +128,12 @@ Konflux builds multi-arch container images (x86_64, arm64, ppc64le, s390x) for b
 ### Retrying GitHub Actions
 
 For a transient failure, owners, organization members, collaborators, and previous
-contributors can post one of these commands on its own line in a PR comment:
+contributors can retry failed fork PR workflows by posting one of these commands on its
+own line in a PR comment. Retrying a branch in this repository requires current
+repository write access, because those workflows can use write permissions and
+secrets. A permission lookup failure denies the request; ask a maintainer to retry.
+Cancelled workflows also require current repository write access, including on
+fork PRs: cancellation alone does not establish that GitHub approved execution.
 
 | Command | Effect |
 |---------|--------|

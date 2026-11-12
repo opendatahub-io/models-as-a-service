@@ -79,7 +79,7 @@ jobs:
                 '| All jobs in failed or cancelled workflows | `/rerun-all` |',
                 '| One failed or cancelled workflow | `/rerun-workflow "workflow name"` |',
                 '',
-                'Owners, organization members, collaborators, and previous contributors can use these commands. If you are new to this repository, ask a maintainer to post the command.',
+                'Owners, organization members, collaborators, and previous contributors can retry failed fork PR workflows. Retrying a branch in this repository or any cancelled workflow requires current repository write access. If you are new to this repository, ask a maintainer to post the command.',
                 '',
                 'These commands retry GitHub Actions for the latest PR commit. They do not retry Konflux/Prow checks or approve blocked workflows.',
                 '',
