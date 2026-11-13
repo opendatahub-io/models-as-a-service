@@ -19,7 +19,20 @@ from test_helper import (
 
 log = logging.getLogger(__name__)
 
-_WORKER_ISOLATED_XDIST_GROUPS = frozenset({"api_keys", "models"})
+# Groups whose tests mutate worker-scoped cluster state. Anything in this set must
+# opt in to isolation via @pytest.mark.worker_tenant (or run @pytest.mark.serial).
+# Keep in sync when splitting a group: one group id per test file.
+_WORKER_ISOLATED_XDIST_GROUPS = frozenset({
+    "api_keys_core",
+    "api_embedding",
+    "api_unconfigured_model",
+    "api_keys_sub_endpoints",
+    "api_xkey",
+    "models_endpoint",
+    "models_identity",
+    "models_gw_authpolicy",
+    "models_mt_integration",
+})
 
 
 # pr_new marking lives in pr_new_selection.py (pytest_plugins) so it is not
@@ -88,9 +101,9 @@ def single_subscription_tenant(monkeypatch):
 @pytest.fixture(autouse=True)
 def _activate_marked_worker_tenant(request):
     """Provision isolation only when the test explicitly opts in by marker."""
-    if (
-        request.node.get_closest_marker("worker_tenant")
-        and not request.node.get_closest_marker("serial")
+    if request.node.get_closest_marker("worker_tenant") and not (
+        request.node.get_closest_marker("serial")
+        or request.node.get_closest_marker("serial_exclusive")
     ):
         request.getfixturevalue("worker_tenant_context")
 
@@ -103,13 +116,18 @@ def pytest_collection_modifyitems(config, items):  # noqa: ARG001 - pytest hook 
     state (simulator-subscription, UNCONFIGURED model auth, MODEL_REF TRLP churn).
     CI runs serial tests in a second pass.
 
+    Pass 2 keeps every serial file in its own xdist group so run_e2e_tests.sh can
+    spread serial work over several lanes. Files that mutate the same shared
+    model belong to one group so they can never land on two lanes at once.
+    Tests that need the whole cluster (they scale a control plane down or delete
+    a cluster-scoped CRD) are marked serial_exclusive instead and run in their
+    own single-worker pass, selected by marker expression — not by a hook-added
+    xdist_group, which cannot override a module-level one.
+
     Every xdist worker collects every test, so isolation must never be inferred
     from the collected xdist groups. The worker_tenant marker is the opt-in.
     """
     for item in items:
-        if item.get_closest_marker("serial"):
-            item.add_marker(pytest.mark.xdist_group("serial"))
-
         xdist_markers = list(item.iter_markers("xdist_group"))
         if not xdist_markers:
             raise pytest.UsageError(
@@ -124,6 +142,7 @@ def pytest_collection_modifyitems(config, items):  # noqa: ARG001 - pytest hook 
         if (
             grouped_state
             and not item.get_closest_marker("serial")
+            and not item.get_closest_marker("serial_exclusive")
             and not item.get_closest_marker("worker_tenant")
         ):
             groups = ", ".join(sorted(grouped_state))

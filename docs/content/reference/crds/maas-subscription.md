@@ -4,7 +4,7 @@ Defines a subscription plan with per-model token rate limits. Creates Kuadrant T
 
 For AGC ExternalModels with per-gateway routes, each referenced MaaSModelRef reconciles a TokenRateLimitPolicy on its selected tenant route (in the model/route namespace). Policies keep existing names (`maas-trlp-<maasmodelref-name>`) and are labeled with the selected full gateway identity (`maas.opendatahub.io/gateway-namespace`, `maas.opendatahub.io/gateway-name`) for diagnostics and operational context.
 
-By default, when a `MaaSSubscription` is deleted, its finalizer waits for a subscription-scoped cleanup Job to soft-delete and invalidate only the API keys bound to that subscription. Keys for other subscriptions in the tenant are not affected. Cleanup failures keep the subscription in `Terminating`, are retried, and emit a Kubernetes Warning event. Set `maas.opendatahub.io/retain-api-keys-on-delete: "true"` to skip API-key revocation for a subscription copy managed by an external system that performs revocation for the authoritative deletion. The finalizer still completes its other cleanup.
+By default, when a `MaaSSubscription` is deleted, its finalizer waits for a subscription-scoped cleanup Job to soft-delete and invalidate only the API keys bound to that subscription. Keys for other subscriptions in the tenant are not affected. Cleanup failures keep the subscription in `Terminating`, are retried, and emit a Kubernetes Warning event. Set `maas.opendatahub.io/retain-api-keys-on-delete: "true"` to skip API-key revocation for a subscription copy managed by an external system that performs revocation for the authoritative deletion. Cleanup is also skipped when the owning `AITenant` is being deleted and uses that annotation to retain API keys. The annotation must be present before deletion and cleanup begin. Adding it after a cleanup Job has started or completed is unsupported and may not prevent keys from being revoked. The finalizer still completes its other cleanup. If tenant-level retention is used for every copy, keys remain active and match again when the tenant and a subscription with the same name are recreated; there is no hub-side revocation path yet.
 
 ## MaaSSubscriptionSpec
 
@@ -85,7 +85,7 @@ MaaSSubscription supports standard Kubernetes and OpenShift annotations for use 
 
 | Annotation | Description | Example |
 | ---------- | ----------- | ------- |
-| `maas.opendatahub.io/retain-api-keys-on-delete` | Skip subscription API-key revocation when this object is deleted; use only when an external owner revokes keys for the authoritative deletion | `"true"` |
+| `maas.opendatahub.io/retain-api-keys-on-delete` | Skip subscription API-key revocation when this object is deleted, or when its owning `AITenant` is deleted with retention; use only when an external owner revokes keys for the authoritative deletion | `"true"` |
 | `openshift.io/display-name` | Human-readable display name | `"Premium Subscription"` |
 | `openshift.io/description` | Free-text description | `"Premium-tier subscription with 1000 tokens/min rate limit"` |
 

@@ -29,7 +29,7 @@ from test_helper import (
 
 log = logging.getLogger(__name__)
 
-pytestmark = [pytest.mark.xdist_group("models"), pytest.mark.worker_tenant]
+pytestmark = [pytest.mark.xdist_group("models_gw_authpolicy"), pytest.mark.worker_tenant]
 
 
 def _gateway_auth_rego(context) -> str:

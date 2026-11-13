@@ -449,7 +449,7 @@ class TestAuthPolicyRemoval:
     deleted, and subsequent requests with the API key should be denied.
     """
 
-    @pytest.mark.serial
+    @pytest.mark.serial_exclusive  # mutates the shared UNCONFIGURED model's MaaSAuthPolicies
     def test_authpolicy_deletion_revokes_access(self):
         """Create auth policy, delete it, verify legacy per-model AuthPolicy is absent.
 
@@ -635,10 +635,6 @@ class TestHeaderAbuse:
             assert r.status_code != 500, (
                 f"Server error with injection payload '{payload}': {r.text[:500]}"
             )
-
-
-class TestWebhookValidation:
-    """Verify admission webhooks enforce namespace labeling requirements."""
 
 
 # ============================================================================
