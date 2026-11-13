@@ -11,6 +11,7 @@ linters:
     - depguard
     - err113
     - exhaustruct
+    - exhaustruct_v5
     - forbidigo
     - funlen
     - gochecknoglobals
@@ -101,7 +102,7 @@ linters:
     rules:
       - linters:
           - modernize
-        text: "(omitzero|mapsloop|rangeint|newexpr|slicesbackward):"
+        text: "(omitzero|mapsloop|rangeint|newexpr|slicesbackward|errorsastype):"
       - linters:
           - gosec
         text: "G118:"
