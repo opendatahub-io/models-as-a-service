@@ -532,6 +532,13 @@ spec:
                 - short
                 - legacy
                 type: string
+              subscriptionIdentityId:
+                description: |-
+                  SubscriptionIdentityID is the database-owned incarnation ID shared by
+                  projected copies of this subscription. It is a local cache written by the
+                  maas-api identity observer and is not part of desired provider state.
+                pattern: ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$
+                type: string
               tokenRateLimitStatuses:
                 description: TokenRateLimitStatuses reports the status of each generated
                   TokenRateLimitPolicy

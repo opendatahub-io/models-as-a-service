@@ -42,6 +42,10 @@ type PlatformParams struct {
 
 	APIKeyMaxExpirationDays     string
 	APIKeyDeletionRetentionDays string
+	// SubscriptionIdentityMode and SubscriptionObserverID configure the
+	// per-tenant maas-api subscription identity observer.
+	SubscriptionIdentityMode string
+	SubscriptionObserverID   string
 
 	// MaaSAPIReplicas overrides the maas-api Deployment replica count when non-nil.
 	MaaSAPIReplicas *int32
@@ -160,6 +164,8 @@ func BuildPlatformParams(tenant client.Object, platformContext PlatformContext, 
 		MaaSAPIKeyCleanupImage:      firstNonEmpty(os.Getenv("RELATED_IMAGE_UBI_MINIMAL_IMAGE"), DefaultMaaSAPIKeyCleanupImage),
 		APIKeyMaxExpirationDays:     resolveAPIKeyMaxExpirationDays(tenant),
 		APIKeyDeletionRetentionDays: resolveAPIKeyDeletionRetentionDays(tenant),
+		SubscriptionIdentityMode:    resolveSubscriptionIdentityMode(tenant, platformContext.SubscriptionIdentityMode),
+		SubscriptionObserverID:      resolveSubscriptionObserverID(tenant),
 		SkipIPP:                     platformContext.SkipIPP,
 	}
 
@@ -514,6 +520,25 @@ func resolveAPIKeyDeletionRetentionDays(tenant client.Object) string {
 		return strconv.FormatInt(int64(*cfg.DeletionRetentionDays), 10)
 	}
 	return DefaultAPIKeyDeletionRetentionDays
+}
+
+func resolveSubscriptionIdentityMode(tenant client.Object, defaultMode string) string {
+	if defaultMode == "" {
+		defaultMode = "off"
+	}
+	cfg := apiKeysConfigFor(tenant)
+	if cfg != nil && cfg.SubscriptionIdentityMode != "" {
+		return cfg.SubscriptionIdentityMode
+	}
+	return defaultMode
+}
+
+func resolveSubscriptionObserverID(tenant client.Object) string {
+	cfg := apiKeysConfigFor(tenant)
+	if cfg != nil {
+		return cfg.SubscriptionObserverID
+	}
+	return ""
 }
 
 func apiKeysConfigFor(tenant client.Object) *maasv1alpha1.TenantAPIKeysConfig {
@@ -1075,6 +1100,14 @@ func patchMaaSAPIDeployment(log logr.Logger, r *unstructured.Unstructured, param
 	}
 	if err := setOrAddEnvVar(r, "maas-api", "API_KEY_MAX_EXPIRATION_DAYS", params.APIKeyMaxExpirationDays); err != nil {
 		return fmt.Errorf("patch API_KEY_MAX_EXPIRATION_DAYS: %w", err)
+	}
+	if err := setOrAddEnvVar(r, "maas-api", "SUBSCRIPTION_IDENTITY_MODE", params.SubscriptionIdentityMode); err != nil {
+		return fmt.Errorf("patch SUBSCRIPTION_IDENTITY_MODE: %w", err)
+	}
+	if params.SubscriptionObserverID != "" {
+		if err := setOrAddEnvVar(r, "maas-api", "SUBSCRIPTION_OBSERVER_ID", params.SubscriptionObserverID); err != nil {
+			return fmt.Errorf("patch SUBSCRIPTION_OBSERVER_ID: %w", err)
+		}
 	}
 	deletionRetentionDays := firstNonEmpty(params.APIKeyDeletionRetentionDays, DefaultAPIKeyDeletionRetentionDays)
 	if err := setOrAddEnvVar(r, "maas-api", "API_KEY_DELETION_RETENTION_DAYS", deletionRetentionDays); err != nil {

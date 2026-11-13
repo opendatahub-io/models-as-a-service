@@ -41,6 +41,10 @@ func (fixedSubSelector) SelectHighestPriority(_ []string, _ string) (*subscripti
 	return &subscription.SelectResponse{Name: testSubscriptionName, Phase: "Active"}, nil
 }
 
+func (fixedSubSelector) LookupSubscription(namespace, name string) (*subscription.SelectResponse, error) {
+	return &subscription.SelectResponse{Name: name, Namespace: namespace, Phase: "Active"}, nil
+}
+
 // errSubSelector returns fixed errors from Select / SelectHighestPriority (for handler HTTP mapping tests).
 type errSubSelector struct {
 	selectErr          error
@@ -59,6 +63,13 @@ func (e errSubSelector) SelectHighestPriority(_ []string, _ string) (*subscripti
 		return nil, e.highestPriorityErr
 	}
 	return &subscription.SelectResponse{Name: testSubscriptionName, Phase: "Active"}, nil
+}
+
+func (e errSubSelector) LookupSubscription(namespace, name string) (*subscription.SelectResponse, error) {
+	if e.selectErr != nil {
+		return nil, e.selectErr
+	}
+	return &subscription.SelectResponse{Name: name, Namespace: namespace, Phase: "Active"}, nil
 }
 
 type failingInvalidateTenantStore struct {
@@ -1428,7 +1439,7 @@ func TestUserCanCreateOwnKey(t *testing.T) {
 	meta, err := store.Get(context.Background(), response.ID)
 	require.NoError(t, err)
 	assert.Equal(t, "alice", meta.Username)
-	assert.Equal(t, []string{"tier-free", "system:authenticated"}, meta.Groups)
+	assert.Equal(t, []string{"tier-free"}, meta.Groups)
 	assert.Equal(t, testSubscriptionName, meta.Subscription)
 }
 

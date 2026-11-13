@@ -294,6 +294,13 @@ type MaaSSubscriptionStatus struct {
 	// +kubebuilder:validation:Enum=short;legacy
 	RateLimitIdentity string `json:"rateLimitIdentity,omitempty"`
 
+	// SubscriptionIdentityID is the database-owned incarnation ID shared by
+	// projected copies of this subscription. It is a local cache written by the
+	// maas-api identity observer and is not part of desired provider state.
+	// +optional
+	// +kubebuilder:validation:Pattern=`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`
+	SubscriptionIdentityID string `json:"subscriptionIdentityId,omitempty"`
+
 	// ModelRefStatuses reports the status of each referenced MaaSModelRef
 	// +optional
 	ModelRefStatuses []ModelRefStatus `json:"modelRefStatuses,omitempty"`

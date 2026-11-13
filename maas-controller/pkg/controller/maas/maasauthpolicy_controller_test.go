@@ -1232,6 +1232,7 @@ func TestMaaSAuthPolicyReconciler_CachingConfiguration(t *testing.T) {
 		name            string
 		metadataTTL     int64
 		authzTTL        int64
+		identityMode    string
 		wantMetadataTTL int64
 		wantAuthzTTL    int64
 	}{
@@ -1270,6 +1271,14 @@ func TestMaaSAuthPolicyReconciler_CachingConfiguration(t *testing.T) {
 			wantMetadataTTL: 60,
 			wantAuthzTTL:    60, // Should be capped at metadata TTL
 		},
+		{
+			name:            "strict identity mode disables caches",
+			metadataTTL:     60,
+			authzTTL:        60,
+			identityMode:    "strict",
+			wantMetadataTTL: 0,
+			wantAuthzTTL:    0,
+		},
 	}
 
 	for _, tc := range tests {
@@ -1286,13 +1295,14 @@ func TestMaaSAuthPolicyReconciler_CachingConfiguration(t *testing.T) {
 				Build()
 
 			r := &MaaSAuthPolicyReconciler{
-				Client:           c,
-				Scheme:           scheme,
-				InfraNamespace:   "maas-system",
-				GatewayName:      "maas-default-gateway",
-				GatewayNamespace: gatewayNS,
-				MetadataCacheTTL: tc.metadataTTL,
-				AuthzCacheTTL:    tc.authzTTL,
+				Client:                   c,
+				Scheme:                   scheme,
+				InfraNamespace:           "maas-system",
+				GatewayName:              "maas-default-gateway",
+				GatewayNamespace:         gatewayNS,
+				MetadataCacheTTL:         tc.metadataTTL,
+				AuthzCacheTTL:            tc.authzTTL,
+				SubscriptionIdentityMode: tc.identityMode,
 			}
 
 			req := ctrl.Request{NamespacedName: types.NamespacedName{Name: maasPolicyName, Namespace: namespace}}
@@ -1377,6 +1387,44 @@ func TestMaaSAuthPolicyReconciler_CachingConfiguration(t *testing.T) {
 				t.Errorf("require-group-membership cache.key.selector is empty")
 			}
 		})
+	}
+}
+
+func TestMaaSAuthPolicyReconciler_TenantIdentityModeOverridesGlobalDefault(t *testing.T) {
+	const namespace = "default"
+	tenant := &maasv1alpha1.Tenant{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      maasv1alpha1.TenantInstanceName,
+			Namespace: namespace,
+		},
+		Spec: maasv1alpha1.TenantSpec{
+			APIKeys: &maasv1alpha1.TenantAPIKeysConfig{
+				SubscriptionIdentityMode: "off",
+			},
+		},
+	}
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(testRESTMapper()).
+		WithObjects(legacyNamespace(namespace), tenant).
+		Build()
+	r := &MaaSAuthPolicyReconciler{
+		Client:                   c,
+		Scheme:                   scheme,
+		SubscriptionIdentityMode: "strict",
+	}
+
+	if r.subscriptionIdentityStrictForNamespace(context.Background(), namespace) {
+		t.Fatal("tenant off mode must override the global strict default")
+	}
+
+	tenant.Spec.APIKeys.SubscriptionIdentityMode = "strict"
+	r.SubscriptionIdentityMode = "off"
+	if err := c.Update(context.Background(), tenant); err != nil {
+		t.Fatalf("update tenant: %v", err)
+	}
+	if !r.subscriptionIdentityStrictForNamespace(context.Background(), namespace) {
+		t.Fatal("tenant strict mode must override the global off default")
 	}
 }
 
@@ -1936,6 +1984,24 @@ func TestMaaSAuthPolicyReconciler_IdentityHeadersUpstream(t *testing.T) {
 		}
 		if !metricsEnabled {
 			t.Error("filters.identity.metrics must be true for telemetry to access identity data")
+		}
+	})
+
+	t.Run("subscription authorization leaves incarnation binding to API validation", func(t *testing.T) {
+		rego, found, err := unstructured.NestedString(
+			gwPolicy.Object,
+			"spec", "defaults", "rules", "authorization", "subscription-valid", "opa", "rego",
+		)
+		if err != nil || !found {
+			t.Fatalf("subscription-valid rego missing: found=%v err=%v", found, err)
+		}
+		for _, field := range []string{
+			"subscriptionIdentityId",
+			"subscriptionNamespace",
+		} {
+			if strings.Contains(rego, field) {
+				t.Errorf("subscription-valid rego should not compare %s locally; maas-api strict validation owns that decision, got:\n%s", field, rego)
+			}
 		}
 	})
 }

@@ -41,6 +41,7 @@ spec:
           - --enable-tenant-namespace-discovery
           - --metadata-cache-ttl=60
           - --authz-cache-ttl=60
+          - --subscription-identity-mode=$(SUBSCRIPTION_IDENTITY_MODE)
           - --log-format=otel-json
         env:
           - name: CONTROLLER_NAMESPACE
@@ -57,6 +58,8 @@ spec:
             value: "AUTO"
           - name: MAAS_SUBSCRIPTION_NAMESPACE
             value: "models-as-a-service"
+          - name: SUBSCRIPTION_IDENTITY_MODE
+            value: "off"
           - name: AITENANT_NAMESPACE
             value: "ai-tenants"
           - name: RELATED_IMAGE_ODH_MAAS_API_IMAGE

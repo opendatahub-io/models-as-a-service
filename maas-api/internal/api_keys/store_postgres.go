@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/lib/pq"
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
@@ -200,7 +201,128 @@ func (s *PostgresStore) AddKey(
 		userGroups = []string{}
 	}
 
-	// Marshal labels to JSONB (NULL if empty)
+	if err := s.insertAPIKey(ctx, s.writeDB, username, keyID, keyHash, name, description, userGroups, subscription, nil, "", tenant, expiresAt, ephemeral, labels); err != nil {
+		return err
+	}
+
+	s.logger.Debug("Stored API key", "id", keyID, "user", logger.RedactValue(username), "ephemeral", ephemeral)
+	return nil
+}
+
+func (s *PostgresStore) AddKeyWithSubscriptionIdentity(
+	ctx context.Context,
+	username, keyID, keyHash, name, description string,
+	userGroups []string,
+	subscription string,
+	subscriptionIdentityID, subscriptionNamespace, tenant string,
+	expiresAt *time.Time,
+	ephemeral bool,
+	labels map[string]string,
+	maxObservationAge time.Duration,
+) error {
+	if keyID == "" {
+		return ErrEmptyJTI
+	}
+	if name == "" {
+		return ErrEmptyName
+	}
+	if keyHash == "" {
+		return errors.New("key hash is required")
+	}
+	if subscription == "" {
+		return errors.New("subscription is required")
+	}
+	if subscriptionIdentityID == "" || subscriptionNamespace == "" {
+		return ErrSubscriptionIdentityRequired
+	}
+	if _, err := uuid.Parse(subscriptionIdentityID); err != nil {
+		return fmt.Errorf("%w: invalid UUID", ErrSubscriptionIdentityRequired)
+	}
+	if tenant != s.tenantName {
+		return fmt.Errorf("%w: attempted to create key for tenant %q but store is scoped to %q", ErrTenantMismatch, tenant, s.tenantName)
+	}
+	if maxObservationAge <= 0 {
+		return errors.New("max observation age must be positive")
+	}
+	if ephemeral && expiresAt == nil {
+		return errors.New("ephemeral keys must have an expiration time")
+	}
+
+	tx, err := s.writeDB.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to begin API-key identity transaction: %w", err)
+	}
+	defer rollbackTransaction(tx)
+
+	var selectedIdentityID string
+	var rotationPendingAt, deletedAt sql.NullTime
+	err = tx.QueryRowContext(ctx, `
+		SELECT id, rotation_pending_at, deleted_at
+		FROM subscription_identities
+		WHERE tenant = $1 AND namespace = $2 AND name = $3 AND deleted_at IS NULL
+		FOR UPDATE
+	`, tenant, subscriptionNamespace, subscription).Scan(&selectedIdentityID, &rotationPendingAt, &deletedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrSubscriptionIdentityRequired
+	}
+	if err != nil {
+		return fmt.Errorf("failed to lock subscription identity: %w", err)
+	}
+	if rotationPendingAt.Valid {
+		return ErrSubscriptionIdentityMismatch
+	}
+	if selectedIdentityID != subscriptionIdentityID {
+		return ErrSubscriptionIdentityMismatch
+	}
+
+	var observed bool
+	err = tx.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM subscription_observations observation
+			JOIN subscription_observers observer
+				ON observer.observer_id = observation.observer_id
+			WHERE observation.subscription_id = $1
+			  AND observation.absent_at IS NULL
+			  AND observer.retired_at IS NULL
+			  AND observer.observed_at >= NOW() - ($2 * INTERVAL '1 second')
+			  AND observer.tenant = $3
+		)
+		`, subscriptionIdentityID, int(maxObservationAge.Seconds()), tenant).Scan(&observed)
+	if err != nil {
+		return fmt.Errorf("failed to validate subscription observation: %w", err)
+	}
+	if !observed {
+		return ErrSubscriptionIdentityNotObserved
+	}
+
+	if err := s.insertAPIKey(ctx, tx, username, keyID, keyHash, name, description, userGroups, subscription, &subscriptionIdentityID, subscriptionNamespace, tenant, expiresAt, ephemeral, labels); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit API-key identity transaction: %w", err)
+	}
+
+	s.logger.Debug("Stored identity-bound API key", "id", keyID, "user", logger.RedactValue(username), "ephemeral", ephemeral)
+	return nil
+}
+
+type databaseWriter interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
+
+func (s *PostgresStore) insertAPIKey(
+	ctx context.Context,
+	db databaseWriter,
+	username, keyID, keyHash, name, description string,
+	userGroups []string,
+	subscription string,
+	subscriptionIdentityID *string,
+	subscriptionNamespace, tenant string,
+	expiresAt *time.Time,
+	ephemeral bool,
+	labels map[string]string,
+) error {
 	var labelsJSON []byte
 	var err error
 	if len(labels) > 0 {
@@ -209,10 +331,17 @@ func (s *PostgresStore) AddKey(
 			return fmt.Errorf("failed to marshal labels: %w", err)
 		}
 	}
+	if userGroups == nil {
+		userGroups = []string{}
+	}
 
 	query := `
-		INSERT INTO api_keys (id, username, name, description, key_hash, user_groups, subscription, tenant, status, created_at, expires_at, ephemeral, labels)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'active', $9, $10, $11, $12)
+		INSERT INTO api_keys (
+			id, username, name, description, key_hash, user_groups, subscription,
+			subscription_id, subscription_namespace, tenant, status, created_at,
+			expires_at, ephemeral, labels
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'active', $11, $12, $13, $14)
 	`
 
 	var labelsParam any
@@ -224,15 +353,18 @@ func (s *PostgresStore) AddKey(
 
 	s.recordQuery("add_key", "write")
 	// Use pq.Array to handle PostgreSQL TEXT[] type
-	_, err = s.writeDB.ExecContext(ctx, query,
+	_, err = db.ExecContext(ctx, query,
 		keyID, username, name, description, keyHash, pq.Array(userGroups),
-		subscription, tenant, time.Now().UTC(), expiresAt, ephemeral, labelsParam)
+		subscription, subscriptionIdentityID, subscriptionNamespace, tenant,
+		time.Now().UTC(), expiresAt, ephemeral, labelsParam)
 	if err != nil {
 		return fmt.Errorf("failed to insert API key: %w", err)
 	}
-
-	s.logger.Debug("Stored API key", "id", keyID, "user", logger.RedactValue(username), "ephemeral", ephemeral)
 	return nil
+}
+
+func rollbackTransaction(tx *sql.Tx) {
+	_ = tx.Rollback()
 }
 
 // List returns a paginated list of API keys with optional filtering.
@@ -544,7 +676,7 @@ func (s *PostgresStore) Search(
 func (s *PostgresStore) Get(ctx context.Context, keyID string) (*ApiKey, error) {
 	// Use effective status to return 'expired' for keys past expiration date
 	query := `
-		SELECT id, name, description, username, subscription, tenant, created_at, expires_at,
+		SELECT id, name, description, username, subscription, subscription_id, subscription_namespace, tenant, created_at, expires_at,
 			CASE WHEN status = 'active' AND expires_at IS NOT NULL AND expires_at < NOW() THEN 'expired' ELSE status END AS status,
 			last_used_at, ephemeral, labels
 		FROM api_keys
@@ -562,8 +694,9 @@ func (s *PostgresStore) Get(ctx context.Context, keyID string) (*ApiKey, error) 
 	var expiresAt, lastUsedAt sql.NullTime
 	var description sql.NullString
 	var labelsJSON []byte
+	var subscriptionIdentityID, subscriptionNamespace sql.NullString
 
-	err := row.Scan(&k.ID, &k.Name, &description, &k.Username, &k.Subscription, &k.Tenant, &createdAt, &expiresAt, &k.Status, &lastUsedAt, &k.Ephemeral, &labelsJSON)
+	err := row.Scan(&k.ID, &k.Name, &description, &k.Username, &k.Subscription, &subscriptionIdentityID, &subscriptionNamespace, &k.Tenant, &createdAt, &expiresAt, &k.Status, &lastUsedAt, &k.Ephemeral, &labelsJSON)
 	fallbackUsed := false
 	if err != nil && errors.Is(err, sql.ErrNoRows) {
 		// QueryRow surfaces a completed empty result as sql.ErrNoRows during Scan.
@@ -589,7 +722,7 @@ func (s *PostgresStore) Get(ctx context.Context, keyID string) (*ApiKey, error) 
 		s.logger.Warn("PostgreSQL read query failed; falling back to writable primary",
 			"operation", "get", "error", err)
 		row = s.writeDB.QueryRowContext(ctx, query, keyID, s.tenantName)
-		err = row.Scan(&k.ID, &k.Name, &description, &k.Username, &k.Subscription, &k.Tenant, &createdAt, &expiresAt, &k.Status, &lastUsedAt, &k.Ephemeral, &labelsJSON)
+		err = row.Scan(&k.ID, &k.Name, &description, &k.Username, &k.Subscription, &subscriptionIdentityID, &subscriptionNamespace, &k.Tenant, &createdAt, &expiresAt, &k.Status, &lastUsedAt, &k.Ephemeral, &labelsJSON)
 		fallbackUsed = true
 	}
 	if err != nil {
@@ -607,6 +740,12 @@ func (s *PostgresStore) Get(ctx context.Context, keyID string) (*ApiKey, error) 
 	k.CreationDate = createdAt.UTC().Format(time.RFC3339)
 	if description.Valid {
 		k.Description = description.String
+	}
+	if subscriptionIdentityID.Valid {
+		k.SubscriptionIdentityID = subscriptionIdentityID.String
+	}
+	if subscriptionNamespace.Valid {
+		k.SubscriptionNamespace = subscriptionNamespace.String
 	}
 	if expiresAt.Valid {
 		k.ExpirationDate = expiresAt.Time.UTC().Format(time.RFC3339)
@@ -638,7 +777,7 @@ func (s *PostgresStore) Get(ctx context.Context, keyID string) (*ApiKey, error) 
 // Expiration state transitions remain writes and always use the primary.
 func (s *PostgresStore) GetByHash(ctx context.Context, keyHash string) (*ApiKey, error) {
 	query := `
-		SELECT id, username, name, description, user_groups, subscription, tenant, status, expires_at, last_used_at, ephemeral
+		SELECT id, username, name, description, user_groups, subscription, subscription_id, subscription_namespace, tenant, status, expires_at, last_used_at, ephemeral
 		FROM api_keys
 		WHERE key_hash = $1 AND tenant = $2 AND deleted_at IS NULL
 	`
@@ -654,9 +793,10 @@ func (s *PostgresStore) GetByHash(ctx context.Context, keyHash string) (*ApiKey,
 		var expiresAt, lastUsedAt sql.NullTime
 		var description sql.NullString
 		var userGroups []string
+		var subscriptionIdentityID, subscriptionNamespace sql.NullString
 
 		// Use pq.Array to scan PostgreSQL TEXT[] into []string
-		if err := rows.Scan(&k.ID, &k.Username, &k.Name, &description, pq.Array(&userGroups), &k.Subscription, &k.Tenant, &k.Status, &expiresAt, &lastUsedAt, &k.Ephemeral); err != nil {
+		if err := rows.Scan(&k.ID, &k.Username, &k.Name, &description, pq.Array(&userGroups), &k.Subscription, &subscriptionIdentityID, &subscriptionNamespace, &k.Tenant, &k.Status, &expiresAt, &lastUsedAt, &k.Ephemeral); err != nil {
 			return nil, fmt.Errorf("database lookup failed: %w", err)
 		}
 		if err := rows.Err(); err != nil {
@@ -665,6 +805,12 @@ func (s *PostgresStore) GetByHash(ctx context.Context, keyHash string) (*ApiKey,
 
 		if description.Valid {
 			k.Description = description.String
+		}
+		if subscriptionIdentityID.Valid {
+			k.SubscriptionIdentityID = subscriptionIdentityID.String
+		}
+		if subscriptionNamespace.Valid {
+			k.SubscriptionNamespace = subscriptionNamespace.String
 		}
 		k.Groups = userGroups
 

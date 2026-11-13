@@ -24,6 +24,11 @@ rules:
   resources: ["aitenants", "maasauthpolicies", "maasmodelrefs", "maassubscriptions", "maastenantconfigs"]
   verbs: ["get", "list", "watch"]
 
+# Subscription identity observer writes only its owned status field.
+- apiGroups: ["maas.opendatahub.io"]
+  resources: ["maassubscriptions/status"]
+  verbs: ["get", "update", "patch"]
+
 - apiGroups: ["aigateway.opendatahub.io"]
   resources: ["aiguardrails"]
   verbs: ["get", "list", "watch"]

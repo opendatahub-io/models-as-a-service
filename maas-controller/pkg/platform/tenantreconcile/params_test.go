@@ -100,6 +100,33 @@ func TestBuildPlatformParams(t *testing.T) {
 	})
 }
 
+func TestBuildPlatformParamsSubscriptionIdentityModePrecedence(t *testing.T) {
+	platformContext := PlatformContext{
+		GatewayRef: maasv1alpha1.TenantGatewayRef{
+			Namespace: "gateway-ns",
+			Name:      "gateway-name",
+		},
+		SubscriptionIdentityMode: "observe",
+	}
+	tenant := &maasv1alpha1.MaasTenantConfig{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "model-ns"},
+		Spec: maasv1alpha1.MaasTenantConfigSpec{
+			APIKeys: &maasv1alpha1.TenantAPIKeysConfig{
+				SubscriptionIdentityMode: "strict",
+			},
+		},
+	}
+
+	got, err := BuildPlatformParams(tenant, platformContext, "tenant-ns", "controller-ns", "cluster-audience", "opendatahub", logr.Discard())
+	require.NoError(t, err)
+	assert.Equal(t, "strict", got.SubscriptionIdentityMode)
+
+	tenant.Spec.APIKeys.SubscriptionIdentityMode = ""
+	got, err = BuildPlatformParams(tenant, platformContext, "tenant-ns", "controller-ns", "cluster-audience", "opendatahub", logr.Discard())
+	require.NoError(t, err)
+	assert.Equal(t, "observe", got.SubscriptionIdentityMode)
+}
+
 func TestResolveGatewayBodyBufferLimitMB(t *testing.T) {
 	tests := []struct {
 		name       string

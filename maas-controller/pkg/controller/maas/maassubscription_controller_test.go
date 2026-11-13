@@ -235,6 +235,86 @@ func TestEnsureSubscriptionAPIKeysRevoked_CreatesScopedJob(t *testing.T) {
 	}
 }
 
+func TestEnsureSubscriptionAPIKeysRevoked_CreatesIdentityAbsenceJobDespiteRetention(t *testing.T) {
+	const (
+		tenantNamespace = "team-a-maas"
+		appNamespace    = "odh-ai-gateway-infra"
+	)
+
+	subscription := newMaaSSubscription("sub-delete", tenantNamespace, "team-a", "llm", 100)
+	subscription.UID = types.UID("subscription-uid")
+	subscription.Status.SubscriptionIdentityID = "identity-id"
+	subscription.Annotations = map[string]string{
+		retainAPIKeysOnDeleteAnnotation: "true",
+	}
+	tenant := &maasv1alpha1.MaasTenantConfig{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      maasv1alpha1.MaasTenantConfigInstanceName,
+			Namespace: tenantNamespace,
+			Labels: map[string]string{
+				"maas.opendatahub.io/managed-by-aitenant": "true",
+				"maas.opendatahub.io/tenant-name":         "team-a",
+				"maas.opendatahub.io/tenant-namespace":    tenantNamespace,
+			},
+		},
+	}
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(&batcv1.Job{}).
+		WithObjects(subscription, tenant).
+		Build()
+	r := &MaaSSubscriptionReconciler{
+		Client:                             c,
+		APIReader:                          c,
+		Scheme:                             scheme,
+		AppNamespace:                       appNamespace,
+		SubscriptionIdentityCleanupEnabled: true,
+		SubscriptionIdentityMode:           "strict",
+	}
+
+	complete, err := r.ensureSubscriptionAPIKeysRevoked(context.Background(), ctrl.Log, subscription)
+	if err != nil {
+		t.Fatalf("ensureSubscriptionAPIKeysRevoked: %v", err)
+	}
+	if complete {
+		t.Fatal("identity absence Job must not be reported complete before it runs")
+	}
+
+	job := subscriptionIdentityAbsenceJob(subscription, "team-a", "team-a", appNamespace, true)
+	var created batcv1.Job
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(job), &created); err != nil {
+		t.Fatalf("get identity absence Job: %v", err)
+	}
+	args := strings.Join(created.Spec.Template.Spec.Containers[0].Args, " ")
+	if !strings.Contains(args, "/internal/v1/subscriptions/team-a-maas/sub-delete/absence") {
+		t.Fatalf("identity absence Job args = %s, want identity endpoint", args)
+	}
+	if !strings.Contains(args, "-X POST") ||
+		!strings.Contains(args, "subscriptionIdentityId") ||
+		!strings.Contains(args, "identity-id") {
+		t.Fatalf("identity absence Job args = %s, want POST and identity payload", args)
+	}
+	if !strings.Contains(args, `\"retainAPIKeys\":true`) {
+		t.Fatalf("identity absence Job args = %s, want retained API-key payload", args)
+	}
+	if created.Annotations["maas.opendatahub.io/cleanup-scope"] != "subscription-identity" {
+		t.Fatalf("cleanup scope annotation = %q, want subscription-identity", created.Annotations["maas.opendatahub.io/cleanup-scope"])
+	}
+
+	created.Status.Conditions = []batcv1.JobCondition{{Type: batcv1.JobComplete, Status: corev1.ConditionTrue}}
+	if err := c.Status().Update(context.Background(), &created); err != nil {
+		t.Fatalf("mark identity absence Job complete: %v", err)
+	}
+	complete, err = r.ensureSubscriptionAPIKeysRevoked(context.Background(), ctrl.Log, subscription)
+	if err != nil {
+		t.Fatalf("ensure completed identity absence: %v", err)
+	}
+	if !complete {
+		t.Fatal("completed identity absence Job must be reported complete")
+	}
+}
+
 func TestEnsureSubscriptionAPIKeysRevoked_RequiresApplicationNamespace(t *testing.T) {
 	subscription := newMaaSSubscription("sub-delete", "models-as-a-service", "team-a", "llm", 100)
 	r := &MaaSSubscriptionReconciler{Client: fake.NewClientBuilder().WithScheme(scheme).Build(), Scheme: scheme}
@@ -245,6 +325,152 @@ func TestEnsureSubscriptionAPIKeysRevoked_RequiresApplicationNamespace(t *testin
 	}
 	if complete {
 		t.Fatal("cleanup must not be reported complete when namespace wiring is missing")
+	}
+}
+
+func TestEnsureSubscriptionAPIKeysRevoked_UsesAbsenceJobWhenStatusIdentityIsMissing(t *testing.T) {
+	const (
+		tenantNamespace = "team-a-maas"
+		appNamespace    = "odh-ai-gateway-infra"
+	)
+	subscription := newMaaSSubscription("sub-delete", tenantNamespace, "team-a", "llm", 100)
+	subscription.UID = types.UID("subscription-uid")
+	tenant := &maasv1alpha1.MaasTenantConfig{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      maasv1alpha1.MaasTenantConfigInstanceName,
+			Namespace: tenantNamespace,
+		},
+	}
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(subscription, tenant).
+		Build()
+	r := &MaaSSubscriptionReconciler{
+		Client:                             c,
+		APIReader:                          c,
+		Scheme:                             scheme,
+		AppNamespace:                       appNamespace,
+		SubscriptionIdentityCleanupEnabled: true,
+		SubscriptionIdentityMode:           "strict",
+	}
+
+	complete, err := r.ensureSubscriptionAPIKeysRevoked(context.Background(), ctrl.Log, subscription)
+	if err != nil {
+		t.Fatalf("ensureSubscriptionAPIKeysRevoked: %v", err)
+	}
+	if complete {
+		t.Fatal("identity absence Job must not be reported complete before it runs")
+	}
+
+	job := subscriptionIdentityAbsenceJob(subscription, "team-a", "team-a", appNamespace, false)
+	var created batcv1.Job
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(job), &created); err != nil {
+		t.Fatalf("get identity absence Job: %v", err)
+	}
+	args := strings.Join(created.Spec.Template.Spec.Containers[0].Args, " ")
+	if !strings.Contains(args, "/internal/v1/subscriptions/team-a-maas/sub-delete/absence") ||
+		!strings.Contains(args, `\"objectUID\":\"subscription-uid\"`) {
+		t.Fatalf("identity absence Job args = %s, want object-UID recovery payload", args)
+	}
+	if strings.Contains(args, `\"retainAPIKeys\":true`) {
+		t.Fatalf("identity absence Job args = %s, did not expect retained API-key payload", args)
+	}
+}
+
+func TestEnsureSubscriptionAPIKeysRevoked_TenantModeOverridesGlobalDefault(t *testing.T) {
+	const (
+		tenantNamespace = "team-a-maas"
+		appNamespace    = "odh-ai-gateway-infra"
+	)
+	subscription := newMaaSSubscription("sub-delete", tenantNamespace, "team-a", "llm", 100)
+	subscription.UID = types.UID("subscription-uid")
+	tenant := &maasv1alpha1.MaasTenantConfig{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      maasv1alpha1.MaasTenantConfigInstanceName,
+			Namespace: tenantNamespace,
+		},
+		Spec: maasv1alpha1.MaasTenantConfigSpec{
+			APIKeys: &maasv1alpha1.TenantAPIKeysConfig{
+				SubscriptionIdentityMode: "off",
+			},
+		},
+	}
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(subscription, tenant).
+		Build()
+	r := &MaaSSubscriptionReconciler{
+		Client:                             c,
+		APIReader:                          c,
+		Scheme:                             scheme,
+		AppNamespace:                       appNamespace,
+		SubscriptionIdentityCleanupEnabled: true,
+		SubscriptionIdentityMode:           "strict",
+	}
+
+	complete, err := r.ensureSubscriptionAPIKeysRevoked(context.Background(), ctrl.Log, subscription)
+	if err != nil {
+		t.Fatalf("ensureSubscriptionAPIKeysRevoked: %v", err)
+	}
+	if complete {
+		t.Fatal("legacy cleanup Job must not be reported complete before it runs")
+	}
+
+	job := subscriptionAPIKeyRevocationJob(subscription, "team-a", "team-a", appNamespace)
+	var created batcv1.Job
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(job), &created); err != nil {
+		t.Fatalf("get legacy cleanup Job: %v", err)
+	}
+	if created.Annotations["maas.opendatahub.io/cleanup-scope"] != "subscription" {
+		t.Fatalf("cleanup scope annotation = %q, want subscription", created.Annotations["maas.opendatahub.io/cleanup-scope"])
+	}
+}
+
+func TestEnsureSubscriptionAPIKeysRevoked_ObserveModeUsesLegacyCleanup(t *testing.T) {
+	const (
+		tenantNamespace = "team-a-maas"
+		appNamespace    = "odh-ai-gateway-infra"
+	)
+	subscription := newMaaSSubscription("sub-delete", tenantNamespace, "team-a", "llm", 100)
+	subscription.UID = types.UID("subscription-uid")
+	tenant := &maasv1alpha1.MaasTenantConfig{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      maasv1alpha1.MaasTenantConfigInstanceName,
+			Namespace: tenantNamespace,
+		},
+		Spec: maasv1alpha1.MaasTenantConfigSpec{
+			APIKeys: &maasv1alpha1.TenantAPIKeysConfig{
+				SubscriptionIdentityMode: "observe",
+			},
+		},
+	}
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(subscription, tenant).
+		Build()
+	r := &MaaSSubscriptionReconciler{
+		Client:                             c,
+		APIReader:                          c,
+		Scheme:                             scheme,
+		AppNamespace:                       appNamespace,
+		SubscriptionIdentityCleanupEnabled: true,
+	}
+
+	complete, err := r.ensureSubscriptionAPIKeysRevoked(context.Background(), ctrl.Log, subscription)
+	if err != nil {
+		t.Fatalf("ensureSubscriptionAPIKeysRevoked: %v", err)
+	}
+	if complete {
+		t.Fatal("legacy cleanup Job must not be reported complete before it runs")
+	}
+
+	job := subscriptionAPIKeyRevocationJob(subscription, "team-a", "team-a", appNamespace)
+	var created batcv1.Job
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(job), &created); err != nil {
+		t.Fatalf("get legacy cleanup Job: %v", err)
+	}
+	if created.Annotations["maas.opendatahub.io/cleanup-scope"] != "subscription" {
+		t.Fatalf("cleanup scope annotation = %q, want subscription", created.Annotations["maas.opendatahub.io/cleanup-scope"])
 	}
 }
 
@@ -504,6 +730,72 @@ func TestEnsureSubscriptionAPIKeysRevoked_SkipsWhenAITenantIsGoneAfterRetention(
 		}
 	default:
 		t.Fatal("expected a Normal event when recorded AITenant retention outlives the AITenant")
+	}
+}
+
+func TestEnsureSubscriptionAPIKeysRevoked_OwningAITenantRetentionRecordsAbsence(t *testing.T) {
+	const (
+		tenantNamespace   = "team-a-maas"
+		aitenantNamespace = "odh-ai-tenants"
+		aitenantName      = "team-a"
+		appNamespace      = "odh-ai-gateway-infra"
+	)
+	subscription := newMaaSSubscription("sub-delete", tenantNamespace, "team-a", "llm", 100)
+	subscription.UID = types.UID("subscription-uid")
+	subscription.Status.SubscriptionIdentityID = "identity-id"
+	tenant := &maasv1alpha1.MaasTenantConfig{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      maasv1alpha1.MaasTenantConfigInstanceName,
+			Namespace: tenantNamespace,
+			Annotations: map[string]string{
+				aitenantNameAnnotation:      aitenantName,
+				aitenantNamespaceAnnotation: aitenantNamespace,
+			},
+		},
+	}
+	aitenant := &maasv1alpha1.AITenant{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       aitenantName,
+			Namespace:  aitenantNamespace,
+			Finalizers: []string{aitenantFinalizer},
+			Annotations: map[string]string{
+				retainAPIKeysOnDeleteAnnotation: "true",
+			},
+		},
+	}
+	deletionTimestamp := metav1.Now()
+	aitenant.DeletionTimestamp = &deletionTimestamp
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(&batcv1.Job{}).
+		WithObjects(subscription, tenant, aitenant).
+		Build()
+	r := &MaaSSubscriptionReconciler{
+		Client:                             c,
+		APIReader:                          c,
+		Scheme:                             scheme,
+		AppNamespace:                       appNamespace,
+		SubscriptionIdentityCleanupEnabled: true,
+		SubscriptionIdentityMode:           "strict",
+	}
+
+	complete, err := r.ensureSubscriptionAPIKeysRevoked(context.Background(), ctrl.Log, subscription)
+	if err != nil {
+		t.Fatalf("ensureSubscriptionAPIKeysRevoked: %v", err)
+	}
+	if complete {
+		t.Fatal("identity absence Job must not be reported complete before it runs")
+	}
+
+	job := subscriptionIdentityAbsenceJob(subscription, "team-a", "team-a", appNamespace, true)
+	var created batcv1.Job
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(job), &created); err != nil {
+		t.Fatalf("get identity absence Job: %v", err)
+	}
+	args := strings.Join(created.Spec.Template.Spec.Containers[0].Args, " ")
+	if !strings.Contains(args, `\"retainAPIKeys\":true`) {
+		t.Fatalf("identity absence Job args = %s, want retained API-key payload", args)
 	}
 }
 
@@ -1995,15 +2287,48 @@ func failStatusUpdates(err error) interceptor.Funcs {
 		SubResourceUpdate: func(context.Context, client.Client, string, client.Object, ...client.SubResourceUpdateOption) error {
 			return err
 		},
+		SubResourcePatch: func(context.Context, client.Client, string, client.Object, client.Patch, ...client.SubResourcePatchOption) error {
+			return err
+		},
 	}
 }
 
-// TestMaaSSubscriptionReconciler_StatusConflictWithDuplicateScanRequeues reproduces
-// scanForDuplicatePriority writing status between updateStatus reading the subscription
-// and writing it back. The For() watch drops status-only events, so the conflict has to
-// come back from Reconcile or the subscription keeps an empty phase until its generation
-// changes.
-func TestMaaSSubscriptionReconciler_StatusConflictWithDuplicateScanRequeues(t *testing.T) {
+func TestMaaSSubscriptionReconciler_StatusPatchPreservesIdentity(t *testing.T) {
+	identityID := "0b6fe901-7b52-4a78-9cbf-e398728ef67e"
+	sub := &maasv1alpha1.MaaSSubscription{
+		ObjectMeta: metav1.ObjectMeta{Name: "identity-preserved", Namespace: "default"},
+		Status: maasv1alpha1.MaaSSubscriptionStatus{
+			SubscriptionIdentityID: identityID,
+		},
+	}
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(testRESTMapper()).
+		WithObjects(sub).
+		WithStatusSubresource(&maasv1alpha1.MaaSSubscription{}).
+		Build()
+
+	r := &MaaSSubscriptionReconciler{Client: c, APIReader: c, Scheme: scheme}
+	if _, err := r.Reconcile(t.Context(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(sub)}); err != nil {
+		t.Fatalf("Reconcile error = %v", err)
+	}
+
+	got := &maasv1alpha1.MaaSSubscription{}
+	if err := c.Get(t.Context(), client.ObjectKeyFromObject(sub), got); err != nil {
+		t.Fatalf("Get subscription: %v", err)
+	}
+	if got.Status.SubscriptionIdentityID != identityID {
+		t.Errorf("subscription identity = %q, want %q", got.Status.SubscriptionIdentityID, identityID)
+	}
+	if got.Status.Phase != maasv1alpha1.PhaseInvalid {
+		t.Errorf("subscription phase = %q, want %q", got.Status.Phase, maasv1alpha1.PhaseInvalid)
+	}
+}
+
+// TestMaaSSubscriptionReconciler_StatusPatchWithDuplicateScanDoesNotConflict verifies
+// that scanForDuplicatePriority writing status between owned-field status patches cannot
+// erase or conflict with the subscription controller's fields.
+func TestMaaSSubscriptionReconciler_StatusPatchWithDuplicateScanDoesNotConflict(t *testing.T) {
 	const (
 		namespace = "default"
 		subName   = "sub-a"
@@ -2031,13 +2356,13 @@ func TestMaaSSubscriptionReconciler_StatusConflictWithDuplicateScanRequeues(t *t
 		WithStatusSubresource(&maasv1alpha1.MaaSSubscription{}).
 		WithIndex(&maasv1alpha1.MaaSSubscription{}, "spec.modelRef", subscriptionModelRefIndexer).
 		WithInterceptorFuncs(interceptor.Funcs{
-			SubResourceUpdate: func(ctx context.Context, cl client.Client, subResource string, obj client.Object, opts ...client.SubResourceUpdateOption) error {
+			SubResourcePatch: func(ctx context.Context, cl client.Client, subResource string, obj client.Object, patch client.Patch, opts ...client.SubResourcePatchOption) error {
 				if !raced {
 					raced = true
 					scanner := &MaaSSubscriptionReconciler{Client: cl, APIReader: cl, Scheme: scheme}
 					scanner.scanForDuplicatePriority(ctx)
 				}
-				return cl.SubResource(subResource).Update(ctx, obj, opts...)
+				return cl.SubResource(subResource).Patch(ctx, obj, patch, opts...)
 			},
 		}).
 		Build()
@@ -2046,16 +2371,13 @@ func TestMaaSSubscriptionReconciler_StatusConflictWithDuplicateScanRequeues(t *t
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: subName, Namespace: namespace}}
 
 	_, err := r.Reconcile(t.Context(), req)
-	if !apierrors.IsConflict(err) {
-		t.Fatalf("first Reconcile error = %v, want a conflict so the subscription is requeued", err)
+	if err != nil {
+		t.Fatalf("first Reconcile error = %v, want nil because owned-field patches do not conflict", err)
 	}
 
 	got := &maasv1alpha1.MaaSSubscription{}
 	if err := c.Get(t.Context(), req.NamespacedName, got); err != nil {
 		t.Fatalf("Get subscription: %v", err)
-	}
-	if got.Status.Phase != "" {
-		t.Fatalf("phase after conflicting write = %q, want empty", got.Status.Phase)
 	}
 
 	// Requeued reconcile.
@@ -2230,13 +2552,13 @@ func TestMaaSSubscriptionReconciler_ReconcileErrorPreservedOnStatusFailure(t *te
 	sub := newMaaSSubscription("sub-missing", "default", "team-a", "missing-model", 100)
 	funcs := interceptor.Funcs{
 		// Allow the early sticky rateLimitIdentity status stamp (phase still
-		// empty); fail later status writes used for the reconcile-error path.
-		SubResourceUpdate: func(ctx context.Context, cl client.Client, subResource string, obj client.Object, opts ...client.SubResourceUpdateOption) error {
+		// empty); fail later status patches used for the reconcile-error path.
+		SubResourcePatch: func(ctx context.Context, cl client.Client, subResource string, obj client.Object, patch client.Patch, opts ...client.SubResourcePatchOption) error {
 			if subResource != "status" {
-				return cl.SubResource(subResource).Update(ctx, obj, opts...)
+				return cl.SubResource(subResource).Patch(ctx, obj, patch, opts...)
 			}
-			if sub, ok := obj.(*maasv1alpha1.MaaSSubscription); ok && sub.Status.Phase == "" {
-				return cl.Status().Update(ctx, obj, opts...)
+			if sub, ok := obj.(*maasv1alpha1.MaaSSubscription); ok && sub.Status.Phase == "" && sub.Status.RateLimitIdentity != "" {
+				return cl.SubResource(subResource).Patch(ctx, obj, patch, opts...)
 			}
 			return statusErr
 		},

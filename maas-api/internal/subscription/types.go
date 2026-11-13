@@ -49,6 +49,9 @@ type SelectResponse struct {
 	Priority       int32          `json:"priority,omitempty"`       // Subscription priority
 	ModelRefs      []ModelRefInfo `json:"modelRefs,omitempty"`      // Model references with rate limits
 	OrganizationID string         `json:"organizationId,omitempty"` // Organization ID for billing
+	// SubscriptionIdentityID is the database incarnation ID cached on the local
+	// MaaSSubscription status. Empty during migration and on unresolved copies.
+	SubscriptionIdentityID string `json:"subscriptionIdentityId,omitempty"`
 	// AssociatedOrganizationID carries the administrative association internally
 	// without changing the Authorino callback response contract.
 	AssociatedOrganizationID string              `json:"-"`

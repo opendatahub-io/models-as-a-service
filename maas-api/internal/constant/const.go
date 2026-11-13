@@ -56,6 +56,10 @@ const (
 	// injected by the Gateway for requests resolved to an annotated MaaSSubscription.
 	AnnotationSubscriptionHeaders = "experimental.maas.opendatahub.io/headers"
 
+	// DefaultSubscriptionObservationMaxAgeSeconds is the fallback freshness
+	// window for subscription observers when configuration is unavailable.
+	DefaultSubscriptionObservationMaxAgeSeconds = 180
+
 	// MaxLabelsEntries is the maximum number of label key-value pairs per API key (prevent abuse).
 	MaxLabelsEntries    = 50
 	MaxLabelKeyLength   = 128

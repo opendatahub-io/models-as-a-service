@@ -91,6 +91,11 @@ type MaaSAuthPolicyReconciler struct {
 	// Applies to auth-valid, subscription-valid, and require-group-membership authorization evaluators.
 	AuthzCacheTTL int64
 
+	// SubscriptionIdentityMode mirrors the maas-api rollout mode. Strict mode
+	// disables metadata and authorization caches because identity revocation is
+	// not represented in the cached request key.
+	SubscriptionIdentityMode string
+
 	// Recorder emits Kubernetes events for conflict detection warnings.
 	Recorder events.EventRecorder
 	// MaxConcurrentReconciles is the maximum number of concurrent Reconciles which can be run.
@@ -120,7 +125,11 @@ type oidcConfig struct {
 // otherwise stale metadata can lead to incorrect authorization decisions.
 // Returns the minimum of AuthzCacheTTL and MetadataCacheTTL, clamped to non-negative values.
 func (r *MaaSAuthPolicyReconciler) authzCacheTTL() int64 {
-	metadata := r.MetadataCacheTTL
+	return r.authzCacheTTLForIdentity(r.SubscriptionIdentityMode == "strict")
+}
+
+func (r *MaaSAuthPolicyReconciler) authzCacheTTLForIdentity(strictIdentity bool) int64 {
+	metadata := r.metadataCacheTTLForIdentity(strictIdentity)
 	authz := r.AuthzCacheTTL
 
 	// Defensive: clamp negative values to 0 (should be caught at startup, but defensive)
@@ -135,6 +144,24 @@ func (r *MaaSAuthPolicyReconciler) authzCacheTTL() int64 {
 		return authz
 	}
 	return metadata
+}
+
+func (r *MaaSAuthPolicyReconciler) metadataCacheTTLForIdentity(strictIdentity bool) int64 {
+	if strictIdentity {
+		return 0
+	}
+	return max(r.MetadataCacheTTL, 0)
+}
+
+func (r *MaaSAuthPolicyReconciler) subscriptionIdentityStrictForNamespace(ctx context.Context, namespace string) bool {
+	tenant, err := fetchTenantForNamespace(ctx, r.Client, namespace)
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return r.SubscriptionIdentityMode == subscriptionIdentityModeStrict
+		}
+		return true
+	}
+	return subscriptionIdentityModeForTenant(tenant, r.SubscriptionIdentityMode) == subscriptionIdentityModeStrict
 }
 
 // fetchTenantIdentifier fetches the tenant identifier from the tenant config in the given namespace.
@@ -820,6 +847,13 @@ func subscriptionInfoStringHeader(jsonField string) map[string]any {
 // Gateway-level policy. Model identity is resolved dynamically via CEL on every request.
 // Guardrail response headers are the tenant catalog's selectable checks.
 func (r *MaaSAuthPolicyReconciler) buildGatewayAuthPolicySpec(oidc *oidcConfig, xAPIKeyEnabled bool, tenantID, tenantName, gatewayNamespace, gatewayName string, guardrailHeaders []guardrailHeader) map[string]any {
+	return r.buildGatewayAuthPolicySpecForIdentity(
+		oidc, xAPIKeyEnabled, tenantID, tenantName, gatewayNamespace, gatewayName, guardrailHeaders,
+		r.SubscriptionIdentityMode == "strict",
+	)
+}
+
+func (r *MaaSAuthPolicyReconciler) buildGatewayAuthPolicySpecForIdentity(oidc *oidcConfig, xAPIKeyEnabled bool, tenantID, tenantName, gatewayNamespace, gatewayName string, guardrailHeaders []guardrailHeader, strictIdentity bool) map[string]any {
 	// Construct tenant-specific maas-api service name using TenantIdentifier
 	// Default tenant (tenantID="") uses "maas-api", others use "maas-api-{tenantID}"
 	maasAPIServiceName := "maas-api"
@@ -993,7 +1027,7 @@ allow {
 				"key": map[string]any{
 					"selector": authValidCacheKey,
 				},
-				"ttl": r.authzCacheTTL(),
+				"ttl": r.authzCacheTTLForIdentity(strictIdentity),
 			},
 		},
 		"subscription-valid": map[string]any{
@@ -1017,7 +1051,7 @@ allow {
 				"key": map[string]any{
 					"selector": subscriptionGatewayCacheKeySelector(),
 				},
-				"ttl": r.authzCacheTTL(),
+				"ttl": r.authzCacheTTLForIdentity(strictIdentity),
 			},
 		},
 		"require-group-membership": map[string]any{
@@ -1035,7 +1069,7 @@ allow {
 				"key": map[string]any{
 					"selector": subscriptionGatewayCacheKeySelector(),
 				},
-				"ttl": r.authzCacheTTL(),
+				"ttl": r.authzCacheTTLForIdentity(strictIdentity),
 			},
 		},
 	}
@@ -1212,7 +1246,7 @@ allow {
 					"key": map[string]any{
 						"selector": `auth.identity.replace("Bearer ", "")`,
 					},
-					"ttl": r.MetadataCacheTTL,
+					"ttl": r.metadataCacheTTLForIdentity(strictIdentity),
 				},
 				"metrics":  false,
 				"priority": int64(0),
@@ -1235,7 +1269,7 @@ allow {
 					"key": map[string]any{
 						"selector": subscriptionGatewayCacheKeySelector(),
 					},
-					"ttl": r.MetadataCacheTTL,
+					"ttl": r.metadataCacheTTLForIdentity(strictIdentity),
 				},
 				"metrics":  false,
 				"priority": int64(1),
@@ -1747,7 +1781,10 @@ func (r *MaaSAuthPolicyReconciler) reconcileGatewayAuthPolicyWithHeaders(
 		subscriptionNamespace = "models-as-a-service"
 	}
 
-	spec := r.buildGatewayAuthPolicySpec(oidc, xAPIKeyEnabled, tenantID, tenantName, gatewayNamespace, gatewayName, guardrailHeaders)
+	strictIdentity := r.subscriptionIdentityStrictForNamespace(ctx, subscriptionNamespace)
+	spec := r.buildGatewayAuthPolicySpecForIdentity(
+		oidc, xAPIKeyEnabled, tenantID, tenantName, gatewayNamespace, gatewayName, guardrailHeaders, strictIdentity,
+	)
 	subscriptionHeaders, headerErr := r.subscriptionHeaderNames(ctx, subscriptionNamespace)
 	if headerErr != nil {
 		return false, headerErr
@@ -2379,7 +2416,8 @@ func (r *MaaSAuthPolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return err
 	}
 
-	if r.AuthzCacheTTL > r.MetadataCacheTTL {
+	globalStrict := r.SubscriptionIdentityMode == "strict"
+	if !globalStrict && r.AuthzCacheTTL > r.MetadataCacheTTL {
 		log.Info("WARNING: Authorization cache TTL exceeds metadata cache TTL. "+
 			"Authorization caches will be capped at metadata TTL to prevent stale authorization decisions.",
 			"authzCacheTTL", r.AuthzCacheTTL,

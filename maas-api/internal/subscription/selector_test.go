@@ -2433,6 +2433,26 @@ func TestSelect_RateLimitIDOnlyForShortIdentity(t *testing.T) {
 	})
 }
 
+func TestSelect_ReturnsSubscriptionIdentity(t *testing.T) {
+	log := logger.New(false)
+	sub := createSubscriptionWithModelRefs("identity-sub", []string{"g1"}, []map[string]any{
+		{"name": "model-a", "namespace": "ns1"},
+	})
+	identityID := "0b6fe901-7b52-4a78-9cbf-e398728ef67e"
+	if err := unstructured.SetNestedField(sub.Object, identityID, "status", "subscriptionIdentityId"); err != nil {
+		t.Fatalf("SetNestedField subscriptionIdentityId: %v", err)
+	}
+
+	selector := subscription.NewSelector(log, &fakeLister{subscriptions: []*unstructured.Unstructured{sub}}, nil, nil)
+	result, err := selector.Select([]string{"g1"}, "", "", "ns1/model-a")
+	if err != nil {
+		t.Fatalf("Select: %v", err)
+	}
+	if result.SubscriptionIdentityID != identityID {
+		t.Errorf("SubscriptionIdentityID = %q, want %q", result.SubscriptionIdentityID, identityID)
+	}
+}
+
 // TRLP limits are keyed on the modelref, not the requested identity: a
 // request carrying a client-facing alias — bare or as a path pair's name
 // segment — must resolve ResolvedModel (and with it RateLimitID) to the

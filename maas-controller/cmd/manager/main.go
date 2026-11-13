@@ -1126,6 +1126,8 @@ func main() {
 	var usageLogsManifestPath string
 	var discoveryManifestPath string
 	var logFormat oteljson.Format
+	var enableSubscriptionIdentityCleanup bool
+	var subscriptionIdentityMode string
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8443", "The address the metrics endpoint binds to.")
 	flag.BoolVar(&secureMetrics, "metrics-secure", true,
@@ -1154,6 +1156,10 @@ func main() {
 		"Maximum number of concurrent reconciles for subscription and auth policy controllers (1-10). Values above 5 may require increased CPU/memory on the controller pod.")
 	flag.BoolVar(&enableTenantNamespaceDiscovery, "enable-tenant-namespace-discovery", false,
 		"Discover AITenant-managed tenant namespaces labeled ai-gateway.opendatahub.io/tenant or maas.opendatahub.io/managed-by-aitenant=true and reconcile MaaS tenant CRs from them.")
+	flag.BoolVar(&enableSubscriptionIdentityCleanup, "enable-subscription-identity-cleanup", false,
+		"Use identity-aware MaaSSubscription absence cleanup after the subscription identity rollout reaches its finalizer stage.")
+	flag.StringVar(&subscriptionIdentityMode, "subscription-identity-mode", "off",
+		"Subscription identity rollout mode (off, observe, or strict). Strict mode disables Authorino metadata and authorization caches.")
 
 	opts := zap.Options{Development: false}
 	opts.BindFlags(flag.CommandLine)
@@ -1161,6 +1167,12 @@ func main() {
 	flag.Parse()
 
 	maxConcurrentReconciles = clampConcurrentReconciles(maxConcurrentReconciles)
+	switch subscriptionIdentityMode {
+	case "off", "observe", "strict":
+	default:
+		setupLog.Error(nil, "invalid subscription identity mode", "mode", subscriptionIdentityMode)
+		os.Exit(1)
+	}
 
 	// Allow empty monitoring-namespace to disable observability features (e.g. on xKS
 	// where the monitoring namespace may not exist). Non-empty values must be valid.
@@ -1318,6 +1330,7 @@ func main() {
 		ClusterAudience:                 clusterAudience,
 		MetadataCacheTTL:                metadataCacheTTL,
 		AuthzCacheTTL:                   authzCacheTTL,
+		SubscriptionIdentityMode:        subscriptionIdentityMode,
 		TenantNamespaceDiscoveryEnabled: enableTenantNamespaceDiscovery,
 		MaxConcurrentReconciles:         maxConcurrentReconciles,
 	}).SetupWithManager(mgr); err != nil {
@@ -1325,15 +1338,17 @@ func main() {
 		os.Exit(1)
 	}
 	if err := (&maas.MaaSSubscriptionReconciler{
-		Client:                          mgr.GetClient(),
-		Scheme:                          mgr.GetScheme(),
-		APIReader:                       mgr.GetAPIReader(),
-		AppNamespace:                    infraNamespace,
-		DefaultTenantNamespace:          maasSubscriptionNamespace,
-		TenantNamespaceDiscoveryEnabled: enableTenantNamespaceDiscovery,
-		GatewayName:                     gatewayName,
-		GatewayNamespace:                gatewayNamespace,
-		MaxConcurrentReconciles:         maxConcurrentReconciles,
+		Client:                             mgr.GetClient(),
+		Scheme:                             mgr.GetScheme(),
+		APIReader:                          mgr.GetAPIReader(),
+		AppNamespace:                       infraNamespace,
+		DefaultTenantNamespace:             maasSubscriptionNamespace,
+		TenantNamespaceDiscoveryEnabled:    enableTenantNamespaceDiscovery,
+		GatewayName:                        gatewayName,
+		GatewayNamespace:                   gatewayNamespace,
+		SubscriptionIdentityCleanupEnabled: enableSubscriptionIdentityCleanup,
+		SubscriptionIdentityMode:           subscriptionIdentityMode,
+		MaxConcurrentReconciles:            maxConcurrentReconciles,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "MaaSSubscription")
 		os.Exit(1)
@@ -1412,6 +1427,7 @@ func main() {
 		ClusterAudience:                 clusterAudience,
 		TenantNamespaceDiscoveryEnabled: enableTenantNamespaceDiscovery,
 		MetadataCacheTTL:                metadataCacheTTL,
+		SubscriptionIdentityMode:        subscriptionIdentityMode,
 		MonitoringNamespace:             monitoringNamespace,
 		UsageLogsManifestPath:           usageLogsManifestPath,
 	}

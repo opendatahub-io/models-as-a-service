@@ -236,6 +236,18 @@ type TenantAPIKeysConfig struct {
 	// +kubebuilder:validation:Minimum=1
 	// +kubebuilder:validation:Maximum=106751
 	DeletionRetentionDays *int32 `json:"deletionRetentionDays,omitempty"`
+
+	// SubscriptionIdentityMode controls database-owned subscription identity
+	// binding and validation. The safe rollout default is off.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Enum=off;observe;strict
+	SubscriptionIdentityMode string `json:"subscriptionIdentityMode,omitempty"`
+
+	// SubscriptionObserverID is the stable UUID identifying this deployment's
+	// subscription observer. It is required when identity mode is observe or strict.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Pattern=`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`
+	SubscriptionObserverID string `json:"subscriptionObserverId,omitempty"`
 }
 
 // TenantMaasAPIConfig defines scaling and resource configuration for maas-api pods.

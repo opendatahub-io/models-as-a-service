@@ -73,6 +73,21 @@ spec:
                     format: int32
                     minimum: 1
                     type: integer
+                  subscriptionIdentityMode:
+                    description: |-
+                      SubscriptionIdentityMode controls database-owned subscription identity
+                      binding and validation. The safe rollout default is off.
+                    enum:
+                    - "off"
+                    - observe
+                    - strict
+                    type: string
+                  subscriptionObserverId:
+                    description: |-
+                      SubscriptionObserverID is the stable UUID identifying this deployment's
+                      subscription observer. It is required when identity mode is observe or strict.
+                    pattern: ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$
+                    type: string
                 type: object
               apiTranslation:
                 description: |-

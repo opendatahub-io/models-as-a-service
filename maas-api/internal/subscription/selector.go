@@ -188,6 +188,7 @@ type subscription struct {
 	DeletionTimestamp        *string                // metadata.deletionTimestamp (set when being deleted)
 	TokenRateLimitStatuses   []TokenRateLimitStatus // per-model TRLP status from status.tokenRateLimitStatuses
 	UseShortRateLimitID      bool                   // status.rateLimitIdentity=short
+	SubscriptionIdentityID   string                 // status.subscriptionIdentityId
 	Objectives               map[string]string      // "namespace/name" of a model -> InferenceObjective name, from status.flowControlStatuses
 }
 
@@ -846,6 +847,26 @@ func (s *Selector) SelectHighestPriority(groups []string, username string) (*Sel
 	return resp, nil
 }
 
+// LookupSubscription returns one local subscription without applying user
+// authorization. It is used to compare an API key's immutable identity binding
+// with the subscription incarnation currently present in this cluster.
+func (s *Selector) LookupSubscription(namespace, name string) (*SelectResponse, error) {
+	if s.subscriptionNamespace != "" && namespace != s.subscriptionNamespace {
+		return nil, fmt.Errorf("subscription namespace %q is not served by this selector", namespace)
+	}
+	subscriptions, err := s.loadSubscriptions()
+	if err != nil {
+		return nil, fmt.Errorf("failed to load subscriptions: %w", err)
+	}
+	for index := range subscriptions {
+		sub := &subscriptions[index]
+		if sub.Namespace == namespace && sub.Name == name {
+			return toResponse(sub), nil
+		}
+	}
+	return nil, &SubscriptionNotFoundError{Subscription: namespace + "/" + name}
+}
+
 func subscriptionIsDeleting(sub *subscription) bool {
 	return sub != nil && sub.DeletionTimestamp != nil
 }
@@ -943,6 +964,10 @@ func parseSubscription(obj *unstructured.Unstructured) (subscription, error) {
 	}
 	sub.UseShortRateLimitID = UsesShortRateLimitID(identity)
 
+	if subscriptionIdentityID, found, _ := unstructured.NestedString(obj.Object, "status", "subscriptionIdentityId"); found {
+		sub.SubscriptionIdentityID = strings.TrimSpace(subscriptionIdentityID)
+	}
+
 	// Parse owner
 	if owner, found, _ := unstructured.NestedMap(spec, "owner"); found {
 		// Parse groups
@@ -950,6 +975,9 @@ func parseSubscription(obj *unstructured.Unstructured) (subscription, error) {
 			for _, g := range groupsRaw {
 				if groupMap, ok := g.(map[string]any); ok {
 					if name, ok := groupMap["name"].(string); ok {
+						if name == "system:authenticated" {
+							continue
+						}
 						sub.Groups = append(sub.Groups, name)
 					}
 				}
@@ -1492,6 +1520,7 @@ func toResponse(sub *subscription) *SelectResponse {
 		Headers:                  sub.Headers,
 		Phase:                    sub.Phase,
 		Ready:                    sub.Ready,
+		SubscriptionIdentityID:   sub.SubscriptionIdentityID,
 	}
 	if sub.DeletionTimestamp != nil {
 		resp.DeletionTimestamp = *sub.DeletionTimestamp
