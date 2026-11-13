@@ -36,7 +36,15 @@ jobs:
       with:
         kustomize-version: '5.7.1'
 
-    - name: Validate Kustomize manifests
+    - name: Install promtool
+      env:
+        PROM_VERSION: '3.13.2'
+      run: |
+        curl -fsSL "https://github.com/prometheus/prometheus/releases/download/v${PROM_VERSION}/prometheus-${PROM_VERSION}.linux-amd64.tar.gz" \
+          | tar -xz --strip-components=1 -C "$RUNNER_TEMP" "prometheus-${PROM_VERSION}.linux-amd64/promtool"
+        echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+
+    - name: Validate manifests and Prometheus rule tests
       run: |
         ./scripts/ci/validate-manifests.sh
 

@@ -79,6 +79,51 @@ validate_canonical_roots() {
     return $exit_code
 }
 
+# ---------------------------------------------------------------------------
+# Prometheus recording rule and alert unit tests
+# ---------------------------------------------------------------------------
+# Every *.unit-tests.yaml under deployment/base/observability is executed with promtool,
+# so rule changes cannot land without their assertions running. CI installs promtool;
+# locally the check is skipped when the binary is absent.
+
+validate_prometheus_rules() {
+    local project_root="${1:-$(git rev-parse --show-toplevel)}"
+    local rules_dir="$project_root/deployment/base/observability"
+    local exit_code=0
+
+    shopt -s nullglob
+    local test_files=("$rules_dir"/*.unit-tests.yaml)
+    shopt -u nullglob
+
+    if [[ ${#test_files[@]} -eq 0 ]]; then
+        return 0
+    fi
+
+    if ! command -v promtool >/dev/null 2>&1; then
+        if [[ -n "${CI:-}" ]]; then
+            echo -e "❌ ${bold}promtool not found${normal} - required to run ${underline}${#test_files[@]}${normal} rule test file(s)"
+            return 1
+        fi
+        echo -e "⏭️  ${bold}Skipping${normal} Prometheus rule tests (promtool not installed)"
+        return 0
+    fi
+
+    for test_file in "${test_files[@]}"; do
+        local relative_path=${test_file#"$project_root/"}
+        local message="${bold}Validating${normal} ${underline}$relative_path${normal}"
+        echo -n -e "⏳ ${message}"
+        if output=$(promtool test rules "$test_file" 2>&1); then
+            echo -e "\r✅ ${message}"
+        else
+            echo -e "\r❌ ${message}"
+            echo "$output"
+            exit_code=1
+        fi
+    done
+
+    return $exit_code
+}
+
 # When script is not sourced, but directly invoked, run all validations
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     PROJECT_ROOT=$(git rev-parse --show-toplevel)
@@ -86,6 +131,7 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
 
     validate_all "$PROJECT_ROOT" || EXIT_CODE=1
     validate_canonical_roots "$PROJECT_ROOT" || EXIT_CODE=1
+    validate_prometheus_rules "$PROJECT_ROOT" || EXIT_CODE=1
 
     exit $EXIT_CODE
 fi
