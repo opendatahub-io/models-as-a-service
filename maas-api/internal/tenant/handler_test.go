@@ -253,6 +253,85 @@ func TestExtractGatewayMetadata_RejectsInternalServiceName(t *testing.T) {
 	assert.Contains(t, err.Error(), "internal service name")
 }
 
+// routeFrontedGateway is a Route-mode Gateway: a hostname-less HTTPS listener and the
+// internal service name as its only address, annotated with host when host is non-empty.
+func routeFrontedGateway(host string) map[string]any {
+	gateway := map[string]any{
+		"metadata": map[string]any{},
+		"spec": map[string]any{
+			"listeners": []any{
+				map[string]any{"name": "https", "port": int64(443), "protocol": "HTTPS"},
+			},
+		},
+		"status": map[string]any{
+			"addresses": []any{
+				map[string]any{
+					"type":  "Hostname",
+					"value": "maas-default-gateway-maas-gateway-class.openshift-ingress.svc.cluster.local",
+				},
+			},
+			"listeners": []any{
+				map[string]any{"name": "https", "attachedRoutes": int64(2)},
+			},
+		},
+	}
+	if host != "" {
+		gateway["metadata"] = map[string]any{
+			"annotations": map[string]any{ExternalHostnameAnnotation: host},
+		}
+	}
+	return gateway
+}
+
+func TestExtractGatewayMetadata_ExternalHostnameAnnotationServesARouteFrontedGateway(t *testing.T) {
+	handler := NewHandler(logger.New(false), nil, "test-tenant", "maas-default-gateway", "openshift-ingress")
+
+	_, err := handler.extractGatewayMetadata(routeFrontedGateway(""))
+	require.Error(t, err, "without the annotation the internal address is still refused")
+	assert.Contains(t, err.Error(), ExternalHostnameAnnotation, "the error names the fix")
+
+	metadata, err := handler.extractGatewayMetadata(routeFrontedGateway(" maas.apps.example.com "))
+	require.NoError(t, err)
+	assert.Equal(t, "https://maas.apps.example.com", metadata.ExternalURL)
+	assert.Equal(t, "https", metadata.Protocol)
+	assert.Equal(t, int64(443), metadata.Port)
+}
+
+func TestExtractGatewayMetadata_ExternalHostnameAnnotationWinsOverAListenerHostname(t *testing.T) {
+	handler := NewHandler(logger.New(false), nil, "test-tenant", "maas-default-gateway", "openshift-ingress")
+	gateway := routeFrontedGateway("maas.apps.example.com")
+	gateway["spec"] = map[string]any{
+		"listeners": []any{
+			map[string]any{
+				"name":     "https",
+				"port":     int64(8443),
+				"protocol": "HTTPS",
+				"hostname": "gateway.internal.example.com",
+			},
+		},
+	}
+
+	metadata, err := handler.extractGatewayMetadata(gateway)
+	require.NoError(t, err)
+	assert.Equal(t, "https://maas.apps.example.com", metadata.ExternalURL, "the proxy's host and port are what clients reach")
+}
+
+func TestExtractGatewayMetadata_RejectsAnExternalHostnameThatIsNotABareDNSName(t *testing.T) {
+	handler := NewHandler(logger.New(false), nil, "test-tenant", "maas-default-gateway", "openshift-ingress")
+	for _, host := range []string{
+		"https://maas.apps.example.com",
+		"maas.apps.example.com:443",
+		"maas.apps.example.com/v1",
+		"maas-api.maas.svc.cluster.local",
+		"maas-api.maas.svc",
+		"Not_A_Host",
+	} {
+		_, err := handler.extractGatewayMetadata(routeFrontedGateway(host))
+		require.Error(t, err, "%q is refused", host)
+		assert.Contains(t, err.Error(), ExternalHostnameAnnotation, "%q: the error names the annotation", host)
+	}
+}
+
 func TestSelectBestListener_HTTPBeforeHTTPS(t *testing.T) {
 	specListeners := []any{
 		map[string]any{"name": "http", "port": int64(80), "protocol": "HTTP", "hostname": "maas.example.com"},

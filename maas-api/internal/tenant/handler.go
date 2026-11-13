@@ -12,6 +12,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/client-go/dynamic"
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
@@ -22,6 +23,11 @@ const (
 	protocolHTTPS = "HTTPS"
 	protocolTLS   = "TLS"
 	protocolHTTP  = "HTTP"
+
+	// ExternalHostnameAnnotation names the host clients reach the Gateway at when a proxy in
+	// front of it, such as an OpenShift Route, owns the external hostname. Clients use https on
+	// port 443.
+	ExternalHostnameAnnotation = "maas.opendatahub.io/external-hostname"
 )
 
 // Handler handles /v1/tenant endpoint requests.
@@ -144,6 +150,20 @@ func (h *Handler) GetTenantInfo(c *gin.Context) {
 // Hostname, port, and protocol come from spec.listeners.
 // Readiness (attachedRoutes) comes from status.listeners.
 func (h *Handler) extractGatewayMetadata(gateway map[string]any) (*GatewayMetadata, error) {
+	// A proxy in front of the Gateway owns the external hostname, so the listeners name none.
+	if host, ok := externalHostnameAnnotation(gateway); ok {
+		if err := validateExternalHostname(host); err != nil {
+			return nil, fmt.Errorf("gateway %s/%s annotation %s: %w", h.gatewayNamespace, h.gatewayName, ExternalHostnameAnnotation, err)
+		}
+		return &GatewayMetadata{
+			Name:        h.gatewayName,
+			Namespace:   h.gatewayNamespace,
+			Protocol:    "https",
+			ExternalURL: "https://" + host,
+			Port:        443,
+		}, nil
+	}
+
 	// Extract spec
 	spec, ok := gateway["spec"].(map[string]any)
 	if !ok {
@@ -204,10 +224,12 @@ func (h *Handler) extractGatewayMetadata(gateway map[string]any) (*GatewayMetada
 			"gateway", h.gatewayName,
 			"namespace", h.gatewayNamespace,
 			"internal_address", externalHost,
-			"recommendation", "Configure Gateway with hostname in spec.listeners and LoadBalancer service type")
+			"recommendation", "Configure Gateway with hostname in spec.listeners and LoadBalancer service type, "+
+				"or annotate it with "+ExternalHostnameAnnotation+" when a Route fronts it")
 		return nil, fmt.Errorf("gateway %s/%s is not configured with an external hostname (found internal service name: %s). "+
-			"Please configure the Gateway with spec.listeners[].hostname and use LoadBalancer service type",
-			h.gatewayNamespace, h.gatewayName, externalHost)
+			"Please configure the Gateway with spec.listeners[].hostname and use LoadBalancer service type, "+
+			"or annotate it with %s when a Route or another proxy fronts it",
+			h.gatewayNamespace, h.gatewayName, externalHost, ExternalHostnameAnnotation)
 	}
 
 	// Build external URL
@@ -229,6 +251,29 @@ func (h *Handler) extractGatewayMetadata(gateway map[string]any) (*GatewayMetada
 		ExternalURL: externalURL,
 		Port:        port,
 	}, nil
+}
+
+// externalHostnameAnnotation returns the trimmed ExternalHostnameAnnotation value, if set.
+func externalHostnameAnnotation(gateway map[string]any) (string, bool) {
+	metadata, _ := gateway["metadata"].(map[string]any)
+	annotations, _ := metadata["annotations"].(map[string]any)
+	host, _ := annotations[ExternalHostnameAnnotation].(string)
+	host = strings.TrimSpace(host)
+	return host, host != ""
+}
+
+// validateExternalHostname refuses a value that is not a bare external DNS name.
+func validateExternalHostname(host string) error {
+	if strings.ContainsAny(host, "/:?# ") {
+		return fmt.Errorf("%q must be a bare hostname, with no scheme, port or path", host)
+	}
+	if strings.HasSuffix(host, ".svc.cluster.local") || strings.HasSuffix(host, ".svc") {
+		return fmt.Errorf("%q is an internal service name", host)
+	}
+	if errs := validation.IsDNS1123Subdomain(host); len(errs) > 0 {
+		return fmt.Errorf("%q is not a DNS name: %s", host, strings.Join(errs, "; "))
+	}
+	return nil
 }
 
 // selectBestListener picks the best ready listener from a Gateway spec.

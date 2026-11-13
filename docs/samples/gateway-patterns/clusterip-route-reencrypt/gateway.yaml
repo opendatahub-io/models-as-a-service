@@ -9,6 +9,9 @@ metadata:
   annotations:
     opendatahub.io/managed: "false"
     security.opendatahub.io/authorino-tls-bootstrap: "true"
+    # The Route's host, which /v1/tenants reports as the external URL.
+    # Replace with the host in openshift-route.yaml.
+    maas.opendatahub.io/external-hostname: maas.<cluster-domain>
 spec:
   gatewayClassName: openshift-default
   infrastructure:

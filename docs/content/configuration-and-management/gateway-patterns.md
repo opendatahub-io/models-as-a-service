@@ -39,8 +39,9 @@ Use this table to decide which pattern fits your deployment:
     
     **Known limitations:**
     
-    - The `/v1/tenants` endpoint cannot discover the external hostname (Gateway has no hostname 
-      in `spec.listeners`, returns error instead of internal service name)
+    - The Gateway has no hostname in `spec.listeners`, so `/v1/tenants` needs the Route's host
+      in the `maas.opendatahub.io/external-hostname` annotation on the Gateway. Without it the
+      endpoint returns an error instead of the internal service name.
     - Not compliant with Gateway API specification
     - May have unexpected behavior or compatibility issues
     
@@ -140,6 +141,7 @@ metadata:
   annotations:
     opendatahub.io/managed: "false"
     security.opendatahub.io/authorino-tls-bootstrap: "true"
+    maas.opendatahub.io/external-hostname: maas.<cluster-domain>   # The Route's host
 spec:
   gatewayClassName: openshift-default
   infrastructure:
@@ -170,6 +172,7 @@ spec:
 | `kuadrant.io/gateway: "true"` | Enables Kuadrant/RHCL policy attachment (AuthPolicy, RateLimitPolicy) |
 | `opendatahub.io/managed: "false"` | Lets maas-controller manage AuthPolicies; prevents ODH Model Controller from overwriting them |
 | `security.opendatahub.io/authorino-tls-bootstrap: "true"` | Creates the EnvoyFilter for Gateway → Authorino TLS communication |
+| `maas.opendatahub.io/external-hostname` | The Route's host. `/v1/tenants` reports `https://<host>` as the Gateway's external URL |
 | `infrastructure.parametersRef` | References the `gw-options` ConfigMap for ClusterIP and service-ca configuration |
 
 #### 4. OpenShift Route
