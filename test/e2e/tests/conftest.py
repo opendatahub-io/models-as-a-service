@@ -213,10 +213,9 @@ def gateway_host() -> str:
 def _verify_gateway_dns(gateway_host: str):
     """Verify the gateway hostname resolves before running any tests.
 
-    If DNS resolution fails, all tests are skipped. This catches CI
-    infrastructure issues (e.g. cluster teardown, network isolation)
-    early instead of producing cryptic ConnectionError stack traces
-    in every test.
+    If DNS resolution fails, every test errors with one clear message instead
+    of a ConnectionError stack trace. It fails rather than skips: an all-skipped
+    run exits 0, so a cluster without a reachable gateway would pass the job.
     """
     host_port = gateway_host.rsplit(":", 1)
     if len(host_port) == 2 and host_port[1].isdigit():
@@ -226,9 +225,10 @@ def _verify_gateway_dns(gateway_host: str):
     try:
         socket.getaddrinfo(host, port or 0)
     except socket.gaierror:
-        pytest.skip(
+        pytest.fail(
             f"Gateway hostname '{gateway_host}' does not resolve "
-            f"— CI infrastructure issue, skipping all tests"
+            f"— CI infrastructure issue",
+            pytrace=False,
         )
 
 
