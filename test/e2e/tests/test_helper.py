@@ -288,6 +288,9 @@ REQUIRE_TRLP_ENFORCED = os.environ.get("E2E_REQUIRE_TRLP_ENFORCED", "").lower() 
 # refuses a request, and only then call it a failure. Covers Limitador lagging
 # the policy status by a few seconds.
 RATE_LIMIT_ENFORCEMENT_TIMEOUT = int(os.environ.get("E2E_RATE_LIMIT_ENFORCEMENT_TIMEOUT", "60"))
+# Authorino caches maas-api lookups for --metadata-cache-ttl (60s by default),
+# so access changes can lag for a credential that already passed.
+AUTH_CACHE_TIMEOUT = int(os.environ.get("E2E_AUTH_CACHE_TIMEOUT", "90"))
 OC_TIMEOUT = int(os.environ.get("E2E_OC_TIMEOUT", "60"))
 # An API server blip (TLS handshake timeout, admission webhook unreachable while
 # maas-controller restarts) must not fail a test or skip a teardown delete.
@@ -1610,6 +1613,20 @@ def _poll_status(api_key, expected, path=None, extra_headers=None, model_name=No
     if last is None and last_err is None:
         err_msg += ", no response (all requests may have raised non-RequestException)"
     raise AssertionError(err_msg)
+
+
+def _assert_status_holds(api_key, expected, duration, poll_interval=5, **kwargs):
+    """Fail unless every inference request answers expected for duration seconds."""
+    deadline = time.time() + duration
+    while True:
+        response = _inference(api_key, **kwargs)
+        assert response.status_code == expected, (
+            f"Expected {expected} to hold for {duration}s, got {response.status_code}: "
+            f"{(response.text or '')[:200]}"
+        )
+        if time.time() >= deadline:
+            return response
+        time.sleep(poll_interval)
 
 
 # ---------------------------------------------------------------------------

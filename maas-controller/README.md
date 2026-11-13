@@ -494,8 +494,8 @@ The controller accepts the following command-line flags:
 | `--maas-api-namespace` | `opendatahub` | The namespace where maas-api service is deployed. |
 | `--maas-subscription-namespace` | `models-as-a-service` | The namespace to watch for MaaSAuthPolicy, MaaSSubscription and MaasTenantConfig CRs. |
 | `--aitenant-namespace` | `ai-tenants` | The infrastructure namespace where AITenant CRs are accepted. |
-| `--metadata-cache-ttl` | `60` | TTL in seconds for Authorino metadata HTTP caching (apiKeyValidation, subscription-info). |
-| `--authz-cache-ttl` | `60` | TTL in seconds for Authorino OPA authorization caching (auth-valid, subscription-valid, require-group-membership). |
+| `--metadata-cache-ttl` | `60` | TTL in seconds for Authorino metadata HTTP caching (apiKeyValidation, subscription-info). `0` disables caching. |
+| `--authz-cache-ttl` | `0` | Deprecated and ignored. Authorization results are recomputed from cached metadata on every request. |
 | `--subscription-namespace-maintain-interval` | `30s` | How often to re-check controller-managed namespaces while the manager is running. |
 | `--enable-tenant-namespace-discovery` | `false` | When enabled, watch MaaS CRs in all namespaces and reconcile the configured `--maas-subscription-namespace` plus tenant namespaces labeled `ai-gateway.opendatahub.io/tenant` or `maas.opendatahub.io/managed-by-aitenant=true`. |
 

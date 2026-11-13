@@ -22,18 +22,6 @@ func TestGatewayCacheKeysUseAuthorinoExpressionResolver(t *testing.T) {
 			name: "subscription-info",
 			path: []string{"spec", "defaults", "rules", "metadata", "subscription-info", "cache", "key"},
 		},
-		{
-			name: "auth-valid",
-			path: []string{"spec", "defaults", "rules", "authorization", "auth-valid", "cache", "key"},
-		},
-		{
-			name: "subscription-valid",
-			path: []string{"spec", "defaults", "rules", "authorization", "subscription-valid", "cache", "key"},
-		},
-		{
-			name: "require-group-membership",
-			path: []string{"spec", "defaults", "rules", "authorization", "require-group-membership", "cache", "key"},
-		},
 	}
 
 	authorizationJSON := gatewayCacheKeyAuthorizationJSON(t, gatewayCacheKeyInput{
@@ -140,10 +128,6 @@ func TestGatewayCacheKeysIsolateAuthorinoInputs(t *testing.T) {
 	apiKeyOnlyVariants := map[string]gatewayCacheKeyInput{
 		"API key": variants["API key"],
 	}
-	apiKeyAndModelVariants := map[string]gatewayCacheKeyInput{
-		"API key": variants["API key"],
-		"model":   variants["model"],
-	}
 
 	testCases := []struct {
 		name     string
@@ -158,21 +142,6 @@ func TestGatewayCacheKeysIsolateAuthorinoInputs(t *testing.T) {
 		{
 			name:     "subscription-info",
 			path:     []string{"spec", "defaults", "rules", "metadata", "subscription-info", "cache", "key", "expression"},
-			variants: variants,
-		},
-		{
-			name:     "auth-valid",
-			path:     []string{"spec", "defaults", "rules", "authorization", "auth-valid", "cache", "key", "expression"},
-			variants: apiKeyAndModelVariants,
-		},
-		{
-			name:     "subscription-valid",
-			path:     []string{"spec", "defaults", "rules", "authorization", "subscription-valid", "cache", "key", "expression"},
-			variants: variants,
-		},
-		{
-			name:     "require-group-membership",
-			path:     []string{"spec", "defaults", "rules", "authorization", "require-group-membership", "cache", "key", "expression"},
 			variants: variants,
 		},
 	}
@@ -210,14 +179,6 @@ func TestGatewaySubscriptionCacheKeysIsolateAuthorizationIdentities(t *testing.T
 		{
 			name: "subscription-info",
 			path: []string{"spec", "defaults", "rules", "metadata", "subscription-info", "cache", "key", "expression"},
-		},
-		{
-			name: "subscription-valid",
-			path: []string{"spec", "defaults", "rules", "authorization", "subscription-valid", "cache", "key", "expression"},
-		},
-		{
-			name: "require-group-membership",
-			path: []string{"spec", "defaults", "rules", "authorization", "require-group-membership", "cache", "key", "expression"},
 		},
 	}
 
