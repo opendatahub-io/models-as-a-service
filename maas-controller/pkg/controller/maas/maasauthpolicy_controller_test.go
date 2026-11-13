@@ -1001,6 +1001,71 @@ func TestMaaSAuthPolicyReconciler_EnsureBaseGatewayAuthPolicyDoesNotResolveGuard
 	}
 }
 
+func TestMaaSAuthPolicyReconciler_DefaultGatewayRendersDefaultTenantGuardrailCatalog(t *testing.T) {
+	const (
+		gatewayNamespace = "openshift-ingress"
+		gatewayName      = "maas-default-gateway"
+		defaultNamespace = "models-as-a-service"
+		otherNamespace   = "unmanaged-tenant"
+	)
+
+	// given: the default tenant is AITenant-managed, so it renders a (here empty) guardrail
+	// catalog; another namespace resolves to the default tenant identity through an unlabeled
+	// MaasTenantConfig and has no catalog of its own. Both write the default gateway's AuthPolicy.
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(testRESTMapper()).
+		WithObjects(
+			&maasv1alpha1.MaasTenantConfig{ObjectMeta: metav1.ObjectMeta{
+				Name: maasv1alpha1.MaasTenantConfigInstanceName, Namespace: defaultNamespace,
+				Labels: map[string]string{tenantreconcile.LabelManagedByAITenant: "true"},
+			}},
+			&maasv1alpha1.AITenant{
+				ObjectMeta: metav1.ObjectMeta{Name: tenantreconcile.DefaultAITenantName, Namespace: tenantreconcile.DefaultAITenantNamespace},
+				Status:     maasv1alpha1.AITenantStatus{TenantNamespace: defaultNamespace},
+			},
+			&maasv1alpha1.MaasTenantConfig{ObjectMeta: metav1.ObjectMeta{
+				Name: maasv1alpha1.MaasTenantConfigInstanceName, Namespace: otherNamespace,
+			}},
+		).
+		Build()
+	r := &MaaSAuthPolicyReconciler{
+		Client:           c,
+		Scheme:           scheme,
+		GatewayNamespace: gatewayNamespace,
+		GatewayName:      gatewayName,
+		TenantNamespace:  defaultNamespace,
+	}
+	reconcileFrom := func(namespace string) bool {
+		t.Helper()
+		changed, err := r.reconcileGatewayAuthPolicy(t.Context(), logr.Discard(), nil, false, namespace, "", gatewayNamespace, gatewayName)
+		if err != nil {
+			t.Fatalf("reconcileGatewayAuthPolicy(%s) error = %v", namespace, err)
+		}
+		return changed
+	}
+
+	// when: both namespaces reconcile the default gateway in turn
+	reconcileFrom(defaultNamespace)
+	changedByOther := reconcileFrom(otherNamespace)
+	changedByDefault := reconcileFrom(defaultNamespace)
+
+	// then: the policy converged on the first write and keeps the default tenant's catalog
+	if changedByOther || changedByDefault {
+		t.Fatalf("gateway AuthPolicy rewritten after converging: by %s=%t, by %s=%t",
+			otherNamespace, changedByOther, defaultNamespace, changedByDefault)
+	}
+	policy := &unstructured.Unstructured{}
+	policy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
+	if err := c.Get(t.Context(), types.NamespacedName{Name: maasGatewayAuthPolicyName, Namespace: gatewayNamespace}, policy); err != nil {
+		t.Fatalf("Get gateway AuthPolicy: %v", err)
+	}
+	authorizationRules := nestedMapRequired(t, policy, "spec", "defaults", "rules", "authorization")
+	if _, exists := authorizationRules["guardrail-checks-known"]; !exists {
+		t.Fatal("default gateway AuthPolicy lost the default tenant's guardrail catalog validation rule")
+	}
+}
+
 func TestMaaSAuthPolicyReconciler_LastPolicyDeletionDoesNotResolveGuardrails(t *testing.T) {
 	const (
 		gatewayNamespace = "openshift-ingress"
