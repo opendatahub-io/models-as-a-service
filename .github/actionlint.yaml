@@ -1,0 +1,6 @@
+paths:
+  .github/workflows/rerun-help.yml:
+    ignore:
+      # GitHub supports concurrency.queue; actionlint 1.7.12 does not yet.
+      # Remove when https://github.com/rhysd/actionlint/issues/657 is fixed.
+      - '^unexpected key "queue" for "concurrency" section\. expected one of "cancel-in-progress", "group"$'
