@@ -675,6 +675,9 @@ func (r *MaaSSubscriptionReconciler) reconcileTRLPForModel(ctx context.Context, 
 			if delErr := r.deleteModelTRLP(ctx, log, modelNamespace, modelName); delErr != nil {
 				return fmt.Errorf("failed to clean up TokenRateLimitPolicy for missing model %s/%s: %w", modelNamespace, modelName, delErr)
 			}
+			if delErr := r.deleteModelRLP(ctx, log, modelNamespace, modelName); delErr != nil {
+				return fmt.Errorf("failed to clean up RateLimitPolicy for missing model %s/%s: %w", modelNamespace, modelName, delErr)
+			}
 			return nil
 		}
 		if errors.Is(err, ErrHTTPRouteNotFound) {
@@ -703,6 +706,9 @@ func (r *MaaSSubscriptionReconciler) reconcileTRLPForModel(ctx context.Context, 
 	if err := r.Get(ctx, client.ObjectKeyFromObject(existingCheck), existingCheck); err == nil {
 		if !isManaged(existingCheck) {
 			log.Info("TokenRateLimitPolicy opted out, skipping reconciliation", "name", policyName, "namespace", httpRouteNS, "model", modelNamespace+"/"+modelName)
+			if rlpErr := r.reconcileRLPForModel(ctx, log, modelNamespace, modelName); rlpErr != nil {
+				return rlpErr
+			}
 			return nil
 		}
 	} else if !apierrors.IsNotFound(err) {
@@ -714,6 +720,9 @@ func (r *MaaSSubscriptionReconciler) reconcileTRLPForModel(ctx context.Context, 
 		log.Info("no active subscriptions for model, deleting TokenRateLimitPolicy", "model", modelNamespace+"/"+modelName)
 		if delErr := r.deleteModelTRLP(ctx, log, modelNamespace, modelName); delErr != nil {
 			return fmt.Errorf("failed to delete TokenRateLimitPolicy for model %s/%s: %w", modelNamespace, modelName, delErr)
+		}
+		if delErr := r.deleteModelRLP(ctx, log, modelNamespace, modelName); delErr != nil {
+			return fmt.Errorf("failed to delete RateLimitPolicy for model %s/%s: %w", modelNamespace, modelName, delErr)
 		}
 		return nil
 	}
@@ -829,6 +838,10 @@ func (r *MaaSSubscriptionReconciler) reconcileTRLPForModel(ctx context.Context, 
 			return fmt.Errorf("failed to create TokenRateLimitPolicy for model %s: %w", modelName, err)
 		}
 		log.Info("TokenRateLimitPolicy created", "name", policyName, "model", modelName, "subscriptionCount", len(subNames), "subscriptions", subNames)
+		if err := r.reconcileRLPForModel(ctx, log, modelNamespace, modelName); err != nil {
+			return err
+		}
+		return nil
 	} else if err != nil {
 		return fmt.Errorf("failed to get existing TokenRateLimitPolicy: %w", err)
 	} else {
@@ -837,6 +850,9 @@ func (r *MaaSSubscriptionReconciler) reconcileTRLPForModel(ctx context.Context, 
 		if err := r.updateExistingTRLP(ctx, log, route, policy, spec, policyName, modelNamespace, modelName, subNames); err != nil {
 			return err
 		}
+	}
+	if err := r.reconcileRLPForModel(ctx, log, modelNamespace, modelName); err != nil {
+		return err
 	}
 	return nil
 }

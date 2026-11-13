@@ -376,6 +376,10 @@ func (r *MaaSModelRefReconciler) handleDeletion(ctx context.Context, log logr.Lo
 			return ctrl.Result{}, err
 		}
 
+		if err := r.deleteGeneratedPoliciesByLabel(ctx, log, model.Namespace, model.Name, "RateLimitPolicy", "kuadrant.io", "v1"); err != nil {
+			return ctrl.Result{}, err
+		}
+
 		// Kind-specific cleanup (e.g. delete HTTPRoute for ExternalModel; no-op for llmisvc)
 		if handler := GetBackendHandler(model.Spec.ModelRef.Kind, r); handler != nil {
 			if err := handler.CleanupOnDelete(ctx, log, model); err != nil {

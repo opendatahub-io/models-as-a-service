@@ -15,6 +15,7 @@ This directory contains kustomizations for end-to-end testing that combine publi
 - **distinct-2**: Second distinct model serving `test/e2e-distinct-model-2` (validates multiple distinct models in subscriptions)
 - **trlp-test**: Model used to validate TRLP validation behavior
 - **embedding**: Embedding model (validates `/v1/embeddings`, TRLP, default-deny)
+- **rerank**: HTTPS mock rerank backend (validates `/v1/rerank` BBR, request RateLimitPolicy, 403)
 - **echo-sim**: Simulator running `--mode echo` serving `test/e2e-echo-model` (validates large mirrored I/O and credential leaks)
 
 #### About echo-sim

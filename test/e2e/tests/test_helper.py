@@ -366,6 +366,13 @@ EMBEDDING_MODEL_CANONICAL_ID = os.environ.get(
     "E2E_EMBEDDING_MODEL_CANONICAL_ID",
     f"publishers/{MODEL_NAMESPACE}/models/{EMBEDDING_MODEL_NAME}",
 )
+RERANK_MODEL_REF = os.environ.get("E2E_RERANK_MODEL_REF", "e2e-rerank-simulated")
+RERANK_MODEL_PATH = os.environ.get("E2E_RERANK_MODEL_PATH", "/llm/e2e-rerank-simulated")
+RERANK_MODEL_NAME = os.environ.get("E2E_RERANK_MODEL_NAME", "test/e2e-rerank-model")
+RERANK_MODEL_CANONICAL_ID = os.environ.get(
+    "E2E_RERANK_MODEL_CANONICAL_ID",
+    f"publishers/{MODEL_NAMESPACE}/models/{RERANK_MODEL_NAME}",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -1751,6 +1758,23 @@ def _embedding_inference(api_key, path=None, extra_headers=None, model_name=None
         json={"model": model_name, "input": "Hello world"},
         timeout=TIMEOUT, verify=TLS_VERIFY,
     )
+
+
+def _rerank_inference(api_key, path=None, model_name=None, bbr=False):
+    """POST /v1/rerank with API key (path-based or BBR at gateway root)."""
+    model_name = model_name or RERANK_MODEL_NAME
+    if bbr:
+        url = f"{_gateway_url()}/v1/rerank"
+    else:
+        path = path or RERANK_MODEL_PATH
+        url = f"{_gateway_url()}{path}/v1/rerank"
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    body = {
+        "model": model_name,
+        "query": "what is a vector database?",
+        "documents": ["A vector DB stores embeddings.", "Unrelated text."],
+    }
+    return requests.post(url, headers=headers, json=body, timeout=TIMEOUT, verify=TLS_VERIFY)
 
 
 # ---------------------------------------------------------------------------
