@@ -106,6 +106,7 @@ func (u *unstructuredLister) Get(namespace, name string) (*unstructured.Unstruct
 }
 
 func NewClusterConfig(
+	subscriptionMode SubscriptionMode,
 	aitenantNamespace, subscriptionNamespace string, resyncPeriod time.Duration,
 	sarCacheMaxSize int, metricsRegisterer prometheus.Registerer, log infoLogger,
 ) (*ClusterConfig, error) {
@@ -122,6 +123,36 @@ func NewClusterConfig(
 	dynamicClient, err := dynamic.NewForConfig(restConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create dynamic client: %w", err)
+	}
+
+	// SAR-based admin checker: uses SubjectAccessReview to check RBAC permissions.
+	// Admin is determined by: can user create maasauthpolicies in the MaaS namespace?
+	// This aligns with RBAC from opendatahub-operator#3301 which grants admin groups CRUD access to MaaS resources.
+	// Results are cached for 30s to reduce K8s API server load under high traffic.
+	sarChecker := auth.NewSARAdminChecker(clientset, subscriptionNamespace)
+	adminCheckerVal := auth.NewCachedAdminChecker(sarChecker, 30*time.Second, 2*time.Second, sarCacheMaxSize, metricsRegisterer, nil)
+
+	cluster := &ClusterConfig{
+		ClientSet:     clientset,
+		DynamicClient: dynamicClient,
+		AdminChecker:  adminCheckerVal,
+		restConfig:    restConfig,
+		log:           log,
+	}
+
+	if subscriptionMode == "" {
+		subscriptionMode = SubscriptionModeEnforced
+	}
+	discoveryCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if subscriptionMode == SubscriptionModeStandalone {
+		log.Info("Standalone subscription mode enabled; skipping MaaS subscription informers")
+		// Keep MaaSModelRef when the CRD is served: /v1/models depends on it.
+		if err := cluster.setupModelRefInformer(discoveryCtx, clientset.Discovery(), dynamicClient, resyncPeriod); err != nil {
+			return nil, err
+		}
+		return cluster, nil
 	}
 
 	// MaaSModelRef informer (cached); watches all namespaces so we can list any namespace from cache.
@@ -159,47 +190,61 @@ func NewClusterConfig(
 	// AIGuardrail stays cluster-wide: model-scoped attachments resolve in the model's namespace.
 	guardrailDynamicFactory := dynamicinformer.NewDynamicSharedInformerFactory(dynamicClient, resyncPeriod)
 
-	// SAR-based admin checker: uses SubjectAccessReview to check RBAC permissions.
-	// Admin is determined by: can user create maasauthpolicies in the MaaS namespace?
-	// This aligns with RBAC from opendatahub-operator#3301 which grants admin groups CRUD access to MaaS resources.
-	// Results are cached for 30s to reduce K8s API server load under high traffic.
-	sarChecker := auth.NewSARAdminChecker(clientset, subscriptionNamespace)
-	adminCheckerVal := auth.NewCachedAdminChecker(sarChecker, 30*time.Second, 2*time.Second, sarCacheMaxSize, metricsRegisterer, nil)
-
-	cluster := &ClusterConfig{
-		ClientSet:     clientset,
-		DynamicClient: dynamicClient,
-
-		MaaSModelRefLister:     maasModelRefListerVal,
-		MaaSSubscriptionLister: maasSubscriptionListerVal,
-		MaaSAuthPolicyLister:   authPolicyListerVal,
-		AITenantGetter:         tenantListerVal,
-		MaasTenantConfigGetter: tenantConfigListerVal,
-		AdminChecker:           adminCheckerVal,
-
-		restConfig: restConfig,
-		informersSynced: []cache.InformerSynced{
-			maasInformer.Informer().HasSynced,
-			subscriptionInformer.Informer().HasSynced,
-			authPolicyInformer.Informer().HasSynced,
-			tenantInformer.Informer().HasSynced,
-			tenantConfigInformer.Informer().HasSynced,
-		},
-		startFuncs: []func(<-chan struct{}){
-			maasDynamicFactory.Start,
-			subscriptionDynamicFactory.Start,
-			authPolicyDynamicFactory.Start,
-			tenantDynamicFactory.Start,
-			guardrailDynamicFactory.Start,
-		},
-		log: log,
+	cluster.MaaSModelRefLister = maasModelRefListerVal
+	cluster.MaaSSubscriptionLister = maasSubscriptionListerVal
+	cluster.MaaSAuthPolicyLister = authPolicyListerVal
+	cluster.AITenantGetter = tenantListerVal
+	cluster.MaasTenantConfigGetter = tenantConfigListerVal
+	cluster.informersSynced = []cache.InformerSynced{
+		maasInformer.Informer().HasSynced,
+		subscriptionInformer.Informer().HasSynced,
+		authPolicyInformer.Informer().HasSynced,
+		tenantInformer.Informer().HasSynced,
+		tenantConfigInformer.Informer().HasSynced,
 	}
-	discoveryCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	cluster.startFuncs = []func(<-chan struct{}){
+		maasDynamicFactory.Start,
+		subscriptionDynamicFactory.Start,
+		authPolicyDynamicFactory.Start,
+		tenantDynamicFactory.Start,
+		guardrailDynamicFactory.Start,
+	}
+
 	if err := cluster.setupGuardrailInformer(discoveryCtx, clientset.Discovery(), guardrailDynamicFactory); err != nil {
 		return nil, err
 	}
 	return cluster, nil
+}
+
+// setupModelRefInformer starts the MaaSModelRef informer only when the CRD is
+// served. Standalone deployments may run without it; in that case /v1/models
+// returns an empty list instead of blocking startup.
+func (c *ClusterConfig) setupModelRefInformer(
+	ctx context.Context, discoveryClient discovery.DiscoveryInterfaceWithContext,
+	dynamicClient dynamic.Interface, resyncPeriod time.Duration,
+) error {
+	gvr := models.GVR()
+	resources, err := discoveryClient.ServerResourcesForGroupVersionWithContext(ctx, gvr.GroupVersion().String())
+	if err != nil {
+		if apierrors.IsNotFound(err) || apierrors.IsForbidden(err) {
+			c.log.Info("MaaSModelRef API unavailable; /v1/models will return an empty list", "error", err)
+			return nil
+		}
+		return fmt.Errorf("discovering MaaSModelRef API: %w", err)
+	}
+	for _, resource := range resources.APIResources {
+		if resource.Name == gvr.Resource {
+			factory := dynamicinformer.NewDynamicSharedInformerFactory(dynamicClient, resyncPeriod)
+			informer := factory.ForResource(gvr)
+			c.MaaSModelRefLister = &unstructuredLister{lister: informer.Lister(), log: c.log}
+			c.informersSynced = append(c.informersSynced, informer.Informer().HasSynced)
+			c.startFuncs = append(c.startFuncs, factory.Start)
+			c.log.Info("Created MaaSModelRef informer", "watchNamespace", "ALL", "gvr", gvr.String())
+			return nil
+		}
+	}
+	c.log.Info("MaaSModelRef API unavailable; /v1/models will return an empty list")
+	return nil
 }
 
 // setupGuardrailInformer checks once at startup. Installing the API later requires a restart.

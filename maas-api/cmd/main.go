@@ -83,7 +83,10 @@ func serve() error {
 
 	metricsRegistry := prometheus.NewRegistry()
 
-	cluster, err := config.NewClusterConfig(cfg.AITenantNamespace, cfg.MaaSSubscriptionNamespace, constant.DefaultResyncPeriod, cfg.SARCacheMaxSize, metricsRegistry, log)
+	cluster, err := config.NewClusterConfig(
+		cfg.SubscriptionMode, cfg.AITenantNamespace, cfg.MaaSSubscriptionNamespace,
+		constant.DefaultResyncPeriod, cfg.SARCacheMaxSize, metricsRegistry, log,
+	)
 	if err != nil {
 		return fmt.Errorf("failed to create cluster config: %w", err)
 	}
@@ -276,47 +279,55 @@ func registerHandlers(
 
 	v1Routes := router.Group("/v1")
 
-	authPolicyChecker := authpolicy.NewChecker(log, cluster.MaaSAuthPolicyLister)
-	subscriptionSelector := subscription.NewSelector(log, cluster.MaaSSubscriptionLister, cluster.MaaSModelRefLister, authPolicyChecker,
-		subscription.WithTenantName(cfg.TenantName),
-		subscription.WithSubscriptionNamespace(cfg.MaaSSubscriptionNamespace),
-		subscription.WithGuardrailPlanResolver(subscription.NewGuardrailPlanResolver(
-			cfg.AITenantNamespace,
-			cfg.AITenantName,
-			cluster.AITenantGetter,
-			cluster.MaasTenantConfigGetter,
-			cluster.AIGuardrailGetter,
-		)))
-
-	resolveCtx, resolveCancel := context.WithTimeout(ctx, time.Duration(cfg.AccessCheckTimeoutSeconds)*time.Second)
-	gatewayInternalHost, err := config.ResolveGatewayInternalHost(resolveCtx, cluster.ClientSet, cfg.GatewayName, cfg.GatewayNamespace)
-	resolveCancel()
-	if err != nil {
-		return fmt.Errorf("failed to resolve gateway internal address: %w", err)
+	var subscriptionBackend subscription.Backend = subscription.DisabledSelector{}
+	if cfg.SubscriptionMode == config.SubscriptionModeEnforced {
+		authPolicyChecker := authpolicy.NewChecker(log, cluster.MaaSAuthPolicyLister)
+		subscriptionBackend = subscription.NewSelector(log, cluster.MaaSSubscriptionLister, cluster.MaaSModelRefLister, authPolicyChecker,
+			subscription.WithTenantName(cfg.TenantName),
+			subscription.WithSubscriptionNamespace(cfg.MaaSSubscriptionNamespace),
+			subscription.WithGuardrailPlanResolver(subscription.NewGuardrailPlanResolver(
+				cfg.AITenantNamespace,
+				cfg.AITenantName,
+				cluster.AITenantGetter,
+				cluster.MaasTenantConfigGetter,
+				cluster.AIGuardrailGetter,
+			)))
 	}
-	if gatewayInternalHost == "" {
-		return fmt.Errorf("gateway service not found for %s/%s: model access probes require a resolvable gateway internal host",
-			cfg.GatewayNamespace, cfg.GatewayName)
-	}
-	log.Info("Resolved gateway internal host for access probes", "host", gatewayInternalHost)
 
-	modelManager, err := models.NewManager(log, cfg.AccessCheckTimeoutSeconds, gatewayInternalHost, cfg.DiscoveryEnableHTTP2, profileMinVersion, profileCipherSuites)
-	if err != nil {
-		log.Fatal("Failed to create model manager", "error", err)
+	var modelManager *models.Manager
+	if cfg.SubscriptionMode == config.SubscriptionModeEnforced {
+		resolveCtx, resolveCancel := context.WithTimeout(ctx, time.Duration(cfg.AccessCheckTimeoutSeconds)*time.Second)
+		gatewayInternalHost, err := config.ResolveGatewayInternalHost(resolveCtx, cluster.ClientSet, cfg.GatewayName, cfg.GatewayNamespace)
+		resolveCancel()
+		if err != nil {
+			return fmt.Errorf("failed to resolve gateway internal address: %w", err)
+		}
+		if gatewayInternalHost == "" {
+			return fmt.Errorf("gateway service not found for %s/%s: model access probes require a resolvable gateway internal host",
+				cfg.GatewayNamespace, cfg.GatewayName)
+		}
+		log.Info("Resolved gateway internal host for access probes", "host", gatewayInternalHost)
+
+		modelManager, err = models.NewManager(log, cfg.AccessCheckTimeoutSeconds, gatewayInternalHost, cfg.DiscoveryEnableHTTP2, profileMinVersion, profileCipherSuites)
+		if err != nil {
+			log.Fatal("Failed to create model manager", "error", err)
+		}
+	} else {
+		log.Info("Standalone subscription mode enabled; skipping MaaS Gateway model probes")
 	}
 
 	tokenHandler := token.NewHandler(log, cfg.TenantName)
-	modelsHandler := handlers.NewModelsHandler(log, modelManager, subscriptionSelector, cluster.MaaSModelRefLister, metricsRecorder)
-	subscriptionHandler := subscription.NewHandler(log, subscriptionSelector, metricsRecorder)
+	modelsHandler := handlers.NewModelsHandler(log, modelManager, subscriptionBackend, cluster.MaaSModelRefLister, metricsRecorder)
+	subscriptionHandler := subscription.NewHandler(log, subscriptionBackend, metricsRecorder)
 
-	apiKeyService := api_keys.NewServiceWithLogger(store, cfg, subscriptionSelector, log)
+	apiKeyService := api_keys.NewServiceWithLogger(store, cfg, subscriptionBackend, log)
 	apiKeyService.StartDebounceCleanup(ctx)
 	apiKeyHandler := api_keys.NewHandler(
 		log,
 		apiKeyService,
 		cluster.AdminChecker,
 		metricsRecorder,
-		subscriptionSelector,
+		subscriptionBackend,
 	)
 
 	tenantLogCfg := middleware.TenantLoggerConfig{

@@ -30,6 +30,8 @@ const testSubscriptionName = "test-subscription"
 // fixedSubSelector satisfies SubscriptionSelector for handler tests (no cluster subscriptions).
 type fixedSubSelector struct{}
 
+func (fixedSubSelector) Enabled() bool { return true }
+
 func (fixedSubSelector) Select(_ []string, _ string, requested string, _ string) (*subscription.SelectResponse, error) {
 	if requested != "" {
 		return &subscription.SelectResponse{Name: requested, Phase: "Active"}, nil
@@ -46,6 +48,8 @@ type errSubSelector struct {
 	selectErr          error
 	highestPriorityErr error
 }
+
+func (e errSubSelector) Enabled() bool { return true }
 
 func (e errSubSelector) Select(_ []string, _ string, _ string, _ string) (*subscription.SelectResponse, error) {
 	if e.selectErr != nil {
@@ -535,10 +539,10 @@ func TestIsAuthorizedForKey(t *testing.T) {
 	})
 }
 
-func TestNewHandlerRequiresSubscriptionAdminResolver(t *testing.T) {
-	assert.PanicsWithValue(t, "adminResolver cannot be nil", func() {
-		NewHandler(logger.Development(), nil, newMockAdminChecker(), nil, nil)
-	})
+func TestNewHandlerDefaultsToDisabledResolver(t *testing.T) {
+	handler := NewHandler(logger.Development(), nil, newMockAdminChecker(), nil, nil)
+	require.NotNil(t, handler)
+	assert.False(t, handler.adminResolver.Enabled())
 }
 
 func TestResolveSubscriptionAdminFailsClosedWithoutResolver(t *testing.T) {
@@ -3584,6 +3588,8 @@ func TestSearchAPIKeys_InvalidLabelsContain(t *testing.T) {
 
 type noopSubscriptionAdminResolver struct{}
 
+func (noopSubscriptionAdminResolver) Enabled() bool { return true }
+
 func (noopSubscriptionAdminResolver) ResolveSubscriptionAdmin(
 	*token.VerifiedIdentity,
 	string,
@@ -3611,6 +3617,8 @@ type subscriptionAdminResolverStub struct {
 	canonicalErr   error
 	canonicalCalls int
 }
+
+func (r *subscriptionAdminResolverStub) Enabled() bool { return true }
 
 func (r *subscriptionAdminResolverStub) ResolveSubscriptionAdmin(
 	_ *token.VerifiedIdentity,

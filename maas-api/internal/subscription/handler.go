@@ -1,6 +1,7 @@
 package subscription
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -36,23 +37,51 @@ func (h *Handler) withContext(c *gin.Context) *Handler {
 	return &requestHandler
 }
 
+// HandlerSelector is the subscription surface used by the HTTP handlers. Both
+// the live Selector and the disabled standalone implementation satisfy it.
+type HandlerSelector interface {
+	Enabled() bool
+	SelectWithContext(ctx context.Context, groups []string, username string, requestedSubscription string, requestedModel string) (*SelectResponse, error)
+	ResolveSubscriptionAdmin(identity *token.VerifiedIdentity, requestedSubscription string) (*AdminScope, error)
+	ListInventory(groups []string, username string, identity *token.VerifiedIdentity) ([]SubscriptionInfo, error)
+	ListAccessibleForModel(username string, groups []string, modelID string) ([]SubscriptionInfo, error)
+}
+
 // Handler handles subscription selection requests.
 type Handler struct {
-	selector *Selector
+	selector HandlerSelector
 	logger   *logger.Logger
 	metrics  MetricsRecorder
 }
 
 // NewHandler creates a new subscription handler.
-func NewHandler(log *logger.Logger, selector *Selector, metrics MetricsRecorder) *Handler {
+func NewHandler(log *logger.Logger, selector HandlerSelector, metrics MetricsRecorder) *Handler {
 	if log == nil {
 		log = logger.Production()
+	}
+	if selector == nil {
+		selector = DisabledSelector{}
 	}
 	return &Handler{
 		selector: selector,
 		logger:   log,
 		metrics:  metrics,
 	}
+}
+
+// subscriptionsDisabled writes the common 503 response and reports whether the
+// request was handled. Keeping one shape and one log site prevents the
+// standalone contract from drifting per endpoint.
+func (h *Handler) subscriptionsDisabled(c *gin.Context) bool {
+	if h.selector.Enabled() {
+		return false
+	}
+	h.logger.Debug("Subscription system disabled; returning service unavailable", "path", c.Request.URL.Path)
+	c.JSON(http.StatusServiceUnavailable, gin.H{"error": gin.H{
+		"message": "subscription system is disabled in standalone mode",
+		"type":    "service_unavailable",
+	}})
+	return true
 }
 
 // SelectSubscription handles POST /internal/v1/subscriptions/select requests.
@@ -73,6 +102,9 @@ func NewHandler(log *logger.Logger, selector *Selector, metrics MetricsRecorder)
 func (h *Handler) SelectSubscription(c *gin.Context) {
 	h = h.withContext(c)
 
+	if h.subscriptionsDisabled(c) {
+		return
+	}
 	h.logger.Debug("Subscription selection request received",
 		"path", c.Request.URL.Path,
 		"method", c.Request.Method,
@@ -373,6 +405,9 @@ func (h *Handler) handleSubscriptionAdmin(c *gin.Context, request SelectRequest)
 func (h *Handler) ListSubscriptions(c *gin.Context) {
 	h = h.withContext(c)
 
+	if h.subscriptionsDisabled(c) {
+		return
+	}
 	c.Header("Cache-Control", "no-store")
 	identityVal, identityExists := c.Get("verified_identity")
 	var identity *token.VerifiedIdentity
@@ -443,6 +478,9 @@ func (h *Handler) ListSubscriptions(c *gin.Context) {
 func (h *Handler) ListSubscriptionsForModel(c *gin.Context) {
 	h = h.withContext(c)
 
+	if h.subscriptionsDisabled(c) {
+		return
+	}
 	c.Header("Cache-Control", "no-store")
 	userContextVal, exists := c.Get("user")
 	if !exists {
