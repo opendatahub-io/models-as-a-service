@@ -1197,6 +1197,20 @@ def _run_oc(cmd, *, input_text=None, timeout=None, retry_budget=None):
         time.sleep(delay)
 
 
+def _oc_json(*args):
+    """Run `oc <args> -o json` and parse the output; assert failures with redacted stderr.
+
+    Shared so callers stop hand-rolling this (test_observability_identity.py had
+    an identical copy); stderr is redacted here since oc error output can echo
+    back request data a caller passed in, e.g. a token or key in a failed patch.
+    """
+    from multitenancy_helpers import redact_sensitive
+
+    result = _run_oc(["oc", *args, "-o", "json"])
+    assert result.returncode == 0, redact_sensitive(result.stderr)
+    return json.loads(result.stdout)
+
+
 def _get_cr(kind, name, namespace=None, *, oc_timeout=None, oc_retry_budget=None):
     """Get a CR as dict, or None if not found. Retries on transient errors.
 
