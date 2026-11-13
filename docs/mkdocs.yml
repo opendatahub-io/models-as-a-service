@@ -101,6 +101,7 @@ nav:
       - Authorino Caching: configuration-and-management/authorino-caching.md
       - External OIDC: advanced-administration/external-oidc.md
       - Controller Performance Tuning: advanced-administration/controller-performance-tuning.md
+      - ExtProc Hardening and Tuning: advanced-administration/extproc-hardening.md
   - Observability:
     - Overview: observability/index.md
     - Setup: observability/setup.md
