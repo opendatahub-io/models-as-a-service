@@ -227,6 +227,7 @@ fi
 # OIDC-only jobs skip passes 1–2 entirely; smoke filtering does not apply there.
 _smoke_require=""
 _include_new_from_diff=false
+_pr_new_failed=false
 case "${E2E_INCLUDE_NEW_FROM_DIFF:-false}" in
     1 | true | TRUE | yes | YES) _include_new_from_diff=true ;;
 esac
@@ -235,6 +236,7 @@ esac
 # Prefer an explicit SHA, then fetch the *upstream* target branch (not the fork's
 # origin/main — /group-test clones source-repo-url at --depth 50). Never let
 # merge-base failure abort under set -e; callers fall back to smoke-only.
+# git stderr goes to $_pr_new_log: the fallback is otherwise the only trace.
 _resolve_e2e_diff_base() {
     local base="${E2E_DIFF_BASE:-${PULL_BASE_SHA:-${BASE_SHA:-}}}"
     if [[ -n "${base}" ]]; then
@@ -250,8 +252,8 @@ _resolve_e2e_diff_base() {
         # as PR-new. Fail closed so the caller uses smoke-only.
         local ref="refs/e2e-diff-base/${target_branch}"
         if git -C "$PROJECT_ROOT" fetch --depth=50 "${upstream_url}" \
-            "+refs/heads/${target_branch}:${ref}" >/dev/null 2>&1; then
-            mb="$(git -C "$PROJECT_ROOT" merge-base HEAD "${ref}" 2>/dev/null || true)"
+            "+refs/heads/${target_branch}:${ref}" >/dev/null 2>>"${_pr_new_log:-/dev/null}"; then
+            mb="$(git -C "$PROJECT_ROOT" merge-base HEAD "${ref}" 2>>"${_pr_new_log:-/dev/null}" || true)"
             if [[ -n "${mb}" ]]; then
                 printf '%s\n' "${mb}"
                 return 0
@@ -261,8 +263,8 @@ _resolve_e2e_diff_base() {
     fi
     local cand
     for cand in "origin/${target_branch}" "origin/main" main; do
-        if git -C "$PROJECT_ROOT" rev-parse --verify "${cand}" >/dev/null 2>&1; then
-            mb="$(git -C "$PROJECT_ROOT" merge-base HEAD "${cand}" 2>/dev/null || true)"
+        if git -C "$PROJECT_ROOT" rev-parse --verify "${cand}" >/dev/null 2>>"${_pr_new_log:-/dev/null}"; then
+            mb="$(git -C "$PROJECT_ROOT" merge-base HEAD "${cand}" 2>>"${_pr_new_log:-/dev/null}" || true)"
             if [[ -n "${mb}" ]]; then
                 printf '%s\n' "${mb}"
                 return 0
@@ -272,8 +274,24 @@ _resolve_e2e_diff_base() {
     return 1
 }
 
+# In /group-test the checkout root is owned by another uid than the e2e step, and
+# git refuses it ("dubious ownership"). Trust $PROJECT_ROOT for this script and the
+# tier checker it spawns. safe.directory is read only from protected config, which
+# includes GIT_CONFIG_* (command scope); repo-local config is ignored, and --global
+# would edit a developer's ~/.gitconfig.
+_trust_project_root_for_git() {
+    local n="${GIT_CONFIG_COUNT:-0}"
+    export "GIT_CONFIG_KEY_${n}=safe.directory" "GIT_CONFIG_VALUE_${n}=${PROJECT_ROOT}"
+    export GIT_CONFIG_COUNT=$((n + 1))
+}
+
 if [[ "$smoke_only" == "true" && "$_run_only_oidc_tests" != true ]]; then
     if [[ "$_include_new_from_diff" == true ]]; then
+        # A fallback below fails the run at the end, after all passes, so tests
+        # added in the PR can't be dropped while the check stays green.
+        _pr_new_log="${ARTIFACTS_DIR}/pr-new-selection.log"
+        : >"${_pr_new_log}"
+        _trust_project_root_for_git
         _diff_base=""
         if ! _diff_base="$(_resolve_e2e_diff_base)"; then
             _diff_base=""
@@ -281,15 +299,19 @@ if [[ "$smoke_only" == "true" && "$_run_only_oidc_tests" != true ]]; then
         if [[ -z "${_diff_base}" ]]; then
             echo "WARNING: E2E_INCLUDE_NEW_FROM_DIFF=true but could not resolve a PR base" \
                 "(set E2E_DIFF_BASE / PULL_BASE_SHA / BASE_SHA, or E2E_DIFF_UPSTREAM_URL +" \
-                "E2E_DIFF_TARGET_BRANCH); smoke-only without pr_new" >&2
+                "E2E_DIFF_TARGET_BRANCH); smoke-only without pr_new. Details (${_pr_new_log}):" >&2
+            sed 's/^/  /' "${_pr_new_log}" >&2 || true
+            _pr_new_failed=true
             _smoke_require="smoke and "
             echo "E2E smoke-only mode: restricting passes 1–2 to @pytest.mark.smoke"
         else
             _new_ids_file="${ARTIFACTS_DIR}/new-e2e-test-ids.txt"
             if ! python "$SCRIPT_DIR/check_new_e2e_test_tiers.py" --base "${_diff_base}" --list-new \
-                >"${_new_ids_file}"; then
+                >"${_new_ids_file}" 2>>"${_pr_new_log}"; then
                 echo "WARNING: failed to list new E2E tests against ${_diff_base};" \
-                    "falling back to smoke-only without pr_new" >&2
+                    "falling back to smoke-only without pr_new. Details (${_pr_new_log}):" >&2
+                sed 's/^/  /' "${_pr_new_log}" >&2 || true
+                _pr_new_failed=true
                 : >"${_new_ids_file}"
                 _smoke_require="smoke and "
                 echo "E2E smoke-only mode: restricting passes 1–2 to @pytest.mark.smoke"
@@ -297,6 +319,7 @@ if [[ "$smoke_only" == "true" && "$_run_only_oidc_tests" != true ]]; then
                 _new_count="$(grep -cve '^[[:space:]]*$' "${_new_ids_file}" || true)"
                 export E2E_NEW_TEST_IDS_FILE="${_new_ids_file}"
                 _smoke_require="(smoke or pr_new) and "
+                echo "base=${_diff_base} new_tests=${_new_count} ids=${_new_ids_file}" >>"${_pr_new_log}"
                 echo "E2E smoke-only + PR-new: -m '(smoke or pr_new) …' (base=${_diff_base}, new_tests=${_new_count}, ids=${_new_ids_file})"
             fi
         fi
@@ -584,6 +607,10 @@ if [[ "$any_pass_collected_tests" != "true" ]]; then
 fi
 if [[ "$parallel_rc" -ne 0 || "$serial_rc" -ne 0 || "$nightly_rc" -ne 0 ]]; then
     echo "❌ ERROR: E2E tests failed (parallel_rc=${parallel_rc}, serial_rc=${serial_rc}, nightly_rc=${nightly_rc})"
+    exit 1
+fi
+if [[ "$_pr_new_failed" == true ]]; then
+    echo "❌ ERROR: tests added in this PR were not selected (pr_new fell back to smoke-only); see ${_pr_new_log}"
     exit 1
 fi
 
