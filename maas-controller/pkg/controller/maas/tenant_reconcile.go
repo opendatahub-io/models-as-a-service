@@ -340,6 +340,15 @@ func (r *TenantReconciler) validateConfigAndGateway(ctx context.Context, log log
 		return nil, tenantreconcile.PlatformContext{}, &res, nil
 	}
 
+	if err := tenantreconcile.ValidateSubscriptionIdentityConfig(tenant, r.SubscriptionIdentityMode); err != nil {
+		log.Info("subscription identity configuration validation failed", "error", err)
+		if err2 := r.patchStatus(ctx, tenant, "Failed", metav1.ConditionFalse, "InvalidSubscriptionIdentityConfig", err.Error()); err2 != nil {
+			return nil, tenantreconcile.PlatformContext{}, nil, err2
+		}
+		res := ctrl.Result{RequeueAfter: 30 * time.Second}
+		return nil, tenantreconcile.PlatformContext{}, &res, nil
+	}
+
 	if err := validateGatewayExists(ctx, r.Client, platformContext.GatewayRef.Namespace, platformContext.GatewayRef.Name); err != nil {
 		log.Info("gateway validation failed", "error", err)
 		if err2 := r.patchStatus(ctx, tenant, "Pending", metav1.ConditionFalse, "GatewayNotReady", err.Error()); err2 != nil {

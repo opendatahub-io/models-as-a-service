@@ -2288,6 +2288,52 @@ func TestBuildGatewayAuthPolicySpec_SubscriptionHeaderInjection(t *testing.T) {
 	}
 }
 
+func TestBuildGatewayAuthPolicySpec_BindsSubscriptionSelectionToAPIKeyIdentity(t *testing.T) {
+	r := &MaaSAuthPolicyReconciler{
+		InfraNamespace:           "maas-system",
+		GatewayName:              "maas-default-gateway",
+		GatewayNamespace:         "gateway-ns",
+		ClusterAudience:          "https://kubernetes.default.svc",
+		MetadataCacheTTL:         60,
+		AuthzCacheTTL:            60,
+		SubscriptionIdentityMode: "strict",
+	}
+	spec := r.buildGatewayAuthPolicySpec(nil, false, "", "models-as-a-service", "test-gateway-ns", "test-gateway", nil)
+	obj := &unstructured.Unstructured{Object: map[string]any{"spec": spec}}
+	bodyExpression := nestedStringRequired(t, obj,
+		"spec", "defaults", "rules", "metadata", "subscription-info", "http", "body", "expression",
+	)
+
+	const identityID = "0b6fe901-7b52-4a78-9cbf-e398728ef67e"
+	auth := map[string]any{
+		"identity": "sk-oai-test",
+		"metadata": map[string]any{
+			"apiKeyValidation": map[string]any{
+				"groups":                 []any{},
+				"username":               "alice",
+				"subscription":           "identity-sub",
+				"subscriptionIdentityId": identityID,
+			},
+		},
+	}
+	body := evaluateGatewayCELMap(t, bodyExpression, auth)
+	if body["requestedSubscription"] != "identity-sub" {
+		t.Fatalf("requestedSubscription = %#v, want identity-sub", body["requestedSubscription"])
+	}
+	if body["requestedSubscriptionIdentityId"] != identityID {
+		t.Fatalf("requestedSubscriptionIdentityId = %#v, want %s", body["requestedSubscriptionIdentityId"], identityID)
+	}
+
+	tokenBody := evaluateGatewayCELMap(t, bodyExpression, map[string]any{
+		"identity": map[string]any{"user": map[string]any{"username": "alice", "groups": []any{}}},
+		"groups":   []any{},
+		"username": "alice",
+	})
+	if tokenBody["requestedSubscriptionIdentityId"] != "" {
+		t.Fatalf("user-token requestedSubscriptionIdentityId = %#v, want empty", tokenBody["requestedSubscriptionIdentityId"])
+	}
+}
+
 func TestSubscriptionInfoStringHeader(t *testing.T) {
 	h := subscriptionInfoStringHeader("organizationId")
 	plain, ok := h["plain"].(map[string]any)

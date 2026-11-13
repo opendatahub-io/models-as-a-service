@@ -1,4 +1,4 @@
-package subscriptionidentity
+package subscriptionidentity_test
 
 import (
 	"context"
@@ -26,6 +26,7 @@ import (
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/api_keys"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/subscription"
+	subscriptionidentity "github.com/opendatahub-io/models-as-a-service/maas-api/internal/subscriptionidentity"
 )
 
 type fakeObservationSession struct {
@@ -90,6 +91,7 @@ type fakeIdentityStore struct {
 
 type recordingDynamicClient struct {
 	dynamic.Interface
+
 	patchTypes         []types.PatchType
 	patches            [][]byte
 	subresources       [][]string
@@ -106,6 +108,7 @@ func (client *recordingDynamicClient) Resource(gvr schema.GroupVersionResource) 
 
 type recordingResource struct {
 	dynamic.NamespaceableResourceInterface
+
 	client *recordingDynamicClient
 }
 
@@ -118,10 +121,18 @@ func (resource *recordingResource) Namespace(namespace string) dynamic.ResourceI
 
 type namespacedRecordingResource struct {
 	dynamic.ResourceInterface
+
 	client *recordingDynamicClient
 }
 
-func (resource *namespacedRecordingResource) Patch(ctx context.Context, name string, patchType types.PatchType, data []byte, options metav1.PatchOptions, subresources ...string) (*unstructured.Unstructured, error) {
+func (resource *namespacedRecordingResource) Patch(
+	ctx context.Context,
+	name string,
+	patchType types.PatchType,
+	data []byte,
+	options metav1.PatchOptions,
+	subresources ...string,
+) (*unstructured.Unstructured, error) {
 	resource.client.patchTypes = append(resource.client.patchTypes, patchType)
 	resource.client.patches = append(resource.client.patches, append([]byte(nil), data...))
 	resource.client.subresources = append(resource.client.subresources, append([]string(nil), subresources...))
@@ -129,12 +140,12 @@ func (resource *namespacedRecordingResource) Patch(ctx context.Context, name str
 		conflict := resource.client.conflictFirstPatch
 		resource.client.conflictFirstPatch = false
 		resource.client.invalidFirstPatch = false
-		current, err := resource.ResourceInterface.Get(ctx, name, metav1.GetOptions{}, subresources...)
+		current, err := resource.Get(ctx, name, metav1.GetOptions{}, subresources...)
 		if err != nil {
 			return nil, err
 		}
 		current.SetResourceVersion("rv-2")
-		if _, err := resource.ResourceInterface.Update(ctx, current, metav1.UpdateOptions{}, subresources...); err != nil {
+		if _, err := resource.Update(ctx, current, metav1.UpdateOptions{}, subresources...); err != nil {
 			return nil, err
 		}
 		if conflict {
@@ -144,7 +155,7 @@ func (resource *namespacedRecordingResource) Patch(ctx context.Context, name str
 			field.Invalid(field.NewPath("metadata", "resourceVersion"), "rv-1", "stale resource version"),
 		})
 	}
-	return resource.ResourceInterface.Get(ctx, name, metav1.GetOptions{}, subresources...)
+	return resource.Get(ctx, name, metav1.GetOptions{}, subresources...)
 }
 
 func (store *fakeIdentityStore) BeginSubscriptionObservation(context.Context, string, string) (api_keys.SubscriptionObservationSession, error) {
@@ -170,7 +181,7 @@ func TestHandlerRecordAbsenceVerifiesObjectAndCommits(t *testing.T) {
 		object,
 	)
 	session := &fakeObservationSession{result: api_keys.SubscriptionCleanupCleaned}
-	handler := NewHandler(
+	handler := subscriptionidentity.NewHandler(
 		logger.Development(),
 		&fakeIdentityStore{session: session},
 		client,
@@ -193,7 +204,7 @@ func TestHandlerRecordAbsenceVerifiesObjectAndCommits(t *testing.T) {
 	router.ServeHTTP(response, request)
 
 	require.Equal(t, http.StatusOK, response.Code)
-	assert.True(t, session.heartbeat)
+	assert.False(t, session.heartbeat, "absence requests must not refresh full-observation freshness")
 	assert.True(t, session.committed)
 	assert.False(t, session.rolledBack)
 	require.Len(t, session.absences, 1)
@@ -224,7 +235,7 @@ func TestHandlerRecordAbsenceRejectsStatusMismatch(t *testing.T) {
 		object,
 	)
 	session := &fakeObservationSession{}
-	handler := NewHandler(
+	handler := subscriptionidentity.NewHandler(
 		logger.Development(),
 		&fakeIdentityStore{session: session},
 		client,
@@ -267,7 +278,7 @@ func TestHandlerRecordAbsenceRetainsAPIKeys(t *testing.T) {
 		object,
 	)
 	session := &fakeObservationSession{result: api_keys.SubscriptionCleanupRetainedPolicy}
-	handler := NewHandler(
+	handler := subscriptionidentity.NewHandler(
 		logger.Development(),
 		&fakeIdentityStore{session: session},
 		client,
@@ -314,7 +325,7 @@ func TestHandlerRecordAbsenceReturnsConflictWhenCleanupIsBlocked(t *testing.T) {
 		object,
 	)
 	session := &fakeObservationSession{result: api_keys.SubscriptionCleanupBlockedEmpty}
-	handler := NewHandler(
+	handler := subscriptionidentity.NewHandler(
 		logger.Development(),
 		&fakeIdentityStore{session: session},
 		client,
@@ -366,13 +377,14 @@ func TestObserverRefreshListsAppliesStatusAndMarksAbsence(t *testing.T) {
 			ObjectUID:      "old-uid",
 		}},
 	}
-	observer := NewObserver(
+	observer := subscriptionidentity.NewObserver(
 		&fakeIdentityStore{session: session},
 		client,
 		"subscriptions",
 		"tenant-a",
 		"11111111-2222-3333-4444-555555555555",
 		time.Hour,
+		30*time.Second,
 		logger.Development(),
 	)
 
@@ -422,13 +434,14 @@ func TestObserverRefreshPreservesExistingStatus(t *testing.T) {
 		object,
 	)
 	client := &recordingDynamicClient{Interface: baseClient}
-	observer := NewObserver(
+	observer := subscriptionidentity.NewObserver(
 		&fakeIdentityStore{session: &fakeObservationSession{}},
 		client,
 		"subscriptions",
 		"tenant-a",
 		"11111111-2222-3333-4444-555555555555",
 		time.Hour,
+		30*time.Second,
 		logger.Development(),
 	)
 
@@ -460,17 +473,18 @@ func TestObserverStatusPatchRetriesConflict(t *testing.T) {
 		object,
 	)
 	client := &recordingDynamicClient{Interface: baseClient, conflictFirstPatch: true}
-	observer := NewObserver(
+	observer := subscriptionidentity.NewObserver(
 		&fakeIdentityStore{session: &fakeObservationSession{}},
 		client,
 		"subscriptions",
 		"tenant-a",
 		"11111111-2222-3333-4444-555555555555",
 		time.Hour,
+		30*time.Second,
 		logger.Development(),
 	)
 
-	require.NoError(t, observer.applyStatus(context.Background(), SubscriptionObject{
+	require.NoError(t, observer.ApplyStatus(context.Background(), subscriptionidentity.SubscriptionObject{
 		Namespace:        "subscriptions",
 		Name:             "conflict-sub",
 		ObjectUID:        "conflict-uid",
@@ -503,17 +517,18 @@ func TestObserverStatusPatchRetriesStaleResourceVersion(t *testing.T) {
 		object,
 	)
 	client := &recordingDynamicClient{Interface: baseClient, invalidFirstPatch: true}
-	observer := NewObserver(
+	observer := subscriptionidentity.NewObserver(
 		&fakeIdentityStore{session: &fakeObservationSession{}},
 		client,
 		"subscriptions",
 		"tenant-a",
 		"11111111-2222-3333-4444-555555555555",
 		time.Hour,
+		30*time.Second,
 		logger.Development(),
 	)
 
-	require.NoError(t, observer.applyStatus(context.Background(), SubscriptionObject{
+	require.NoError(t, observer.ApplyStatus(context.Background(), subscriptionidentity.SubscriptionObject{
 		Namespace:        "subscriptions",
 		Name:             "stale-sub",
 		ObjectUID:        "stale-uid",

@@ -129,11 +129,6 @@ func (handler *Handler) RecordAbsence(c *gin.Context) {
 		}
 	}()
 
-	if err := session.Heartbeat(c.Request.Context()); err != nil {
-		handler.logger.Error("Failed to refresh subscription observer heartbeat", "subscription", namespace+"/"+name, "error", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to record subscription absence"})
-		return
-	}
 	result, revokedKeys, err := session.RecordAbsenceAndCleanup(
 		c.Request.Context(),
 		api_keys.SubscriptionAbsenceRequest{
@@ -158,7 +153,7 @@ func (handler *Handler) RecordAbsence(c *gin.Context) {
 	}
 	committed = true
 
-	status := http.StatusOK
+	status := http.StatusConflict
 	switch result {
 	case api_keys.SubscriptionCleanupBlockedEmpty,
 		api_keys.SubscriptionCleanupBlockedStale,
@@ -166,6 +161,10 @@ func (handler *Handler) RecordAbsence(c *gin.Context) {
 		api_keys.SubscriptionCleanupBlockedUnverified,
 		api_keys.SubscriptionCleanupNotFound:
 		status = http.StatusConflict
+	case api_keys.SubscriptionCleanupRetained,
+		api_keys.SubscriptionCleanupRetainedPolicy,
+		api_keys.SubscriptionCleanupCleaned:
+		status = http.StatusOK
 	}
 	c.JSON(status, absenceResponse{Result: string(result), RevokedAPIKeys: revokedKeys})
 }

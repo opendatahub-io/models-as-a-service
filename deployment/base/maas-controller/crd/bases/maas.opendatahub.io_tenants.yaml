@@ -86,6 +86,12 @@ spec:
                     pattern: ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$
                     type: string
                 type: object
+                x-kubernetes-validations:
+                - message: subscriptionObserverId is required when subscriptionIdentityMode
+                    is observe or strict
+                  rule: '(has(self.subscriptionIdentityMode) && self.subscriptionIdentityMode
+                    in [''observe'', ''strict'']) ? (has(self.subscriptionObserverId)
+                    && size(self.subscriptionObserverId) > 0) : true'
               externalOIDC:
                 description: |-
                   ExternalOIDC configures an external OIDC identity provider for legacy/unmanaged

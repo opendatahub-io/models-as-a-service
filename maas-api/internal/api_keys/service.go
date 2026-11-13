@@ -344,7 +344,12 @@ func (s *Service) ValidateAPIKey(ctx context.Context, key string) (*ValidationRe
 			}, nil
 		}
 		localSubscription, lookupErr := s.subSelector.LookupSubscription(metadata.SubscriptionNamespace, metadata.Subscription)
-		if lookupErr != nil || localSubscription == nil ||
+		if lookupErr != nil {
+			s.logger.WithContext(ctx).Warn("Failed to look up local subscription for API-key validation",
+				"key_id", metadata.ID, "error", lookupErr)
+			return nil, fmt.Errorf("lookup local subscription %s/%s: %w", metadata.SubscriptionNamespace, metadata.Subscription, lookupErr)
+		}
+		if localSubscription == nil ||
 			localSubscription.DeletionTimestamp != "" ||
 			localSubscription.Namespace != metadata.SubscriptionNamespace ||
 			localSubscription.SubscriptionIdentityID != metadata.SubscriptionIdentityID {

@@ -146,10 +146,10 @@ patches:
       name: maas-api-supplemental
     patch: |
       - op: test
-        path: /rules/4/apiGroups
+        path: /rules/5/apiGroups
         value: ["config.openshift.io"]
       - op: test
-        path: /rules/4/resources
+        path: /rules/5/resources
         value: ["apiservers"]
       - op: remove
-        path: /rules/4
+        path: /rules/5

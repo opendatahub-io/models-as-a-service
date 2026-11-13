@@ -285,7 +285,7 @@ func (s *PostgresStore) AddKeyWithSubscriptionIdentity(
 			WHERE observation.subscription_id = $1
 			  AND observation.absent_at IS NULL
 			  AND observer.retired_at IS NULL
-			  AND observer.observed_at >= NOW() - ($2 * INTERVAL '1 second')
+			  AND observation.observed_at >= NOW() - ($2 * INTERVAL '1 second')
 			  AND observer.tenant = $3
 		)
 		`, subscriptionIdentityID, int(maxObservationAge.Seconds()), tenant).Scan(&observed)
@@ -296,7 +296,11 @@ func (s *PostgresStore) AddKeyWithSubscriptionIdentity(
 		return ErrSubscriptionIdentityNotObserved
 	}
 
-	if err := s.insertAPIKey(ctx, tx, username, keyID, keyHash, name, description, userGroups, subscription, &subscriptionIdentityID, subscriptionNamespace, tenant, expiresAt, ephemeral, labels); err != nil {
+	if err := s.insertAPIKey(
+		ctx, tx, username, keyID, keyHash, name, description, userGroups,
+		subscription, &subscriptionIdentityID, subscriptionNamespace, tenant,
+		expiresAt, ephemeral, labels,
+	); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
@@ -696,7 +700,11 @@ func (s *PostgresStore) Get(ctx context.Context, keyID string) (*ApiKey, error) 
 	var labelsJSON []byte
 	var subscriptionIdentityID, subscriptionNamespace sql.NullString
 
-	err := row.Scan(&k.ID, &k.Name, &description, &k.Username, &k.Subscription, &subscriptionIdentityID, &subscriptionNamespace, &k.Tenant, &createdAt, &expiresAt, &k.Status, &lastUsedAt, &k.Ephemeral, &labelsJSON)
+	err := row.Scan(
+		&k.ID, &k.Name, &description, &k.Username, &k.Subscription,
+		&subscriptionIdentityID, &subscriptionNamespace, &k.Tenant,
+		&createdAt, &expiresAt, &k.Status, &lastUsedAt, &k.Ephemeral, &labelsJSON,
+	)
 	fallbackUsed := false
 	if err != nil && errors.Is(err, sql.ErrNoRows) {
 		// QueryRow surfaces a completed empty result as sql.ErrNoRows during Scan.
@@ -722,7 +730,11 @@ func (s *PostgresStore) Get(ctx context.Context, keyID string) (*ApiKey, error) 
 		s.logger.Warn("PostgreSQL read query failed; falling back to writable primary",
 			"operation", "get", "error", err)
 		row = s.writeDB.QueryRowContext(ctx, query, keyID, s.tenantName)
-		err = row.Scan(&k.ID, &k.Name, &description, &k.Username, &k.Subscription, &subscriptionIdentityID, &subscriptionNamespace, &k.Tenant, &createdAt, &expiresAt, &k.Status, &lastUsedAt, &k.Ephemeral, &labelsJSON)
+		err = row.Scan(
+			&k.ID, &k.Name, &description, &k.Username, &k.Subscription,
+			&subscriptionIdentityID, &subscriptionNamespace, &k.Tenant,
+			&createdAt, &expiresAt, &k.Status, &lastUsedAt, &k.Ephemeral, &labelsJSON,
+		)
 		fallbackUsed = true
 	}
 	if err != nil {
@@ -796,7 +808,11 @@ func (s *PostgresStore) GetByHash(ctx context.Context, keyHash string) (*ApiKey,
 		var subscriptionIdentityID, subscriptionNamespace sql.NullString
 
 		// Use pq.Array to scan PostgreSQL TEXT[] into []string
-		if err := rows.Scan(&k.ID, &k.Username, &k.Name, &description, pq.Array(&userGroups), &k.Subscription, &subscriptionIdentityID, &subscriptionNamespace, &k.Tenant, &k.Status, &expiresAt, &lastUsedAt, &k.Ephemeral); err != nil {
+		if err := rows.Scan(
+			&k.ID, &k.Username, &k.Name, &description, pq.Array(&userGroups),
+			&k.Subscription, &subscriptionIdentityID, &subscriptionNamespace,
+			&k.Tenant, &k.Status, &expiresAt, &lastUsedAt, &k.Ephemeral,
+		); err != nil {
 			return nil, fmt.Errorf("database lookup failed: %w", err)
 		}
 		if err := rows.Err(); err != nil {

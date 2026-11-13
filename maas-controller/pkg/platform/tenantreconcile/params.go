@@ -541,6 +541,16 @@ func resolveSubscriptionObserverID(tenant client.Object) string {
 	return ""
 }
 
+func ValidateSubscriptionIdentityConfig(tenant client.Object, defaultMode string) error {
+	if resolveSubscriptionIdentityMode(tenant, defaultMode) == "off" {
+		return nil
+	}
+	if strings.TrimSpace(resolveSubscriptionObserverID(tenant)) == "" {
+		return errors.New("subscriptionObserverId is required when subscription identity mode is observe or strict")
+	}
+	return nil
+}
+
 func apiKeysConfigFor(tenant client.Object) *maasv1alpha1.TenantAPIKeysConfig {
 	switch t := tenant.(type) {
 	case *maasv1alpha1.MaasTenantConfig:

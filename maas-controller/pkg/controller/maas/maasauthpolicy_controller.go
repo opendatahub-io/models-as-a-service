@@ -492,6 +492,10 @@ const (
 	celSubscription = `(has(auth.metadata) && has(auth.metadata.apiKeyValidation)) ` +
 		`? auth.metadata.apiKeyValidation.subscription : ` +
 		`("x-maas-subscription" in request.headers ? request.headers["x-maas-subscription"] : "")`
+
+	celSubscriptionIdentity = `(has(auth.metadata) && has(auth.metadata.apiKeyValidation) ` +
+		`&& has(auth.metadata.apiKeyValidation.subscriptionIdentityId)) ` +
+		`? auth.metadata.apiKeyValidation.subscriptionIdentityId : ""`
 )
 
 // celModelIdentity extracts model identity from the request at gateway level.
@@ -853,7 +857,13 @@ func (r *MaaSAuthPolicyReconciler) buildGatewayAuthPolicySpec(oidc *oidcConfig, 
 	)
 }
 
-func (r *MaaSAuthPolicyReconciler) buildGatewayAuthPolicySpecForIdentity(oidc *oidcConfig, xAPIKeyEnabled bool, tenantID, tenantName, gatewayNamespace, gatewayName string, guardrailHeaders []guardrailHeader, strictIdentity bool) map[string]any {
+func (r *MaaSAuthPolicyReconciler) buildGatewayAuthPolicySpecForIdentity(
+	oidc *oidcConfig,
+	xAPIKeyEnabled bool,
+	tenantID, tenantName, gatewayNamespace, gatewayName string,
+	guardrailHeaders []guardrailHeader,
+	strictIdentity bool,
+) map[string]any {
 	// Construct tenant-specific maas-api service name using TenantIdentifier
 	// Default tenant (tenantID="") uses "maas-api", others use "maas-api-{tenantID}"
 	maasAPIServiceName := "maas-api"
@@ -869,6 +879,7 @@ func (r *MaaSAuthPolicyReconciler) buildGatewayAuthPolicySpecForIdentity(oidc *o
   "groups": %s,
   "username": %s,
   "requestedSubscription": `+celSubscription+`,
+  "requestedSubscriptionIdentityId": `+celSubscriptionIdentity+`,
   "requestedModel": %s
 }`, celGroups, celUsername, celModelIdentity)
 

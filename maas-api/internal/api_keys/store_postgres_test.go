@@ -290,6 +290,45 @@ func TestPostgresStore_SubscriptionIdentityRotationRevokesKeys(t *testing.T) {
 
 	_, err = store.GetByHash(ctx, keyHash)
 	require.ErrorIs(t, err, api_keys.ErrInvalidKey)
+
+	db, err := sql.Open("pgx", os.Getenv("TEST_DATABASE_URL"))
+	require.NoError(t, err)
+	defer db.Close()
+	_, err = db.ExecContext(ctx, `
+		UPDATE subscription_identities
+		SET rotation_pending_at = NOW() - INTERVAL '2 seconds'
+		WHERE id = $1
+	`, identityID)
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, `
+		UPDATE subscription_observations
+		SET absent_at = NOW() - INTERVAL '2 seconds',
+		    observed_at = NOW() - INTERVAL '2 seconds'
+		WHERE subscription_id = $1
+	`, identityID)
+	require.NoError(t, err)
+
+	recoverySession, err := store.BeginSubscriptionObservation(ctx, observerID, tenant)
+	require.NoError(t, err)
+	replacementID, err := recoverySession.ResolveSubscriptionIdentity(ctx, api_keys.ResolveSubscriptionIdentityRequest{
+		Namespace: "subscriptions",
+		Name:      "identity-sub",
+		ObjectUID: "uid-2",
+		Settle:    time.Second,
+	})
+	require.NoError(t, err)
+	require.NotEqual(t, identityID, replacementID)
+	require.NoError(t, recoverySession.Commit())
+
+	replacementKeyID := uuid.NewString()
+	replacementKeyHash := uuid.NewString()
+	require.NoError(t, store.AddKeyWithSubscriptionIdentity(
+		ctx, "alice", replacementKeyID, replacementKeyHash, "replacement identity key", "", []string{"users"},
+		"identity-sub", replacementID, "subscriptions", tenant, nil, false, nil, time.Minute,
+	))
+	replacementKey, err := store.GetByHash(ctx, replacementKeyHash)
+	require.NoError(t, err)
+	assert.Equal(t, replacementID, replacementKey.SubscriptionIdentityID)
 }
 
 func TestPostgresStore_RecordAbsenceAndCleanup(t *testing.T) {

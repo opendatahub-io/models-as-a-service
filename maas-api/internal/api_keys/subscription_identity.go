@@ -43,6 +43,7 @@ type ResolveSubscriptionIdentityRequest struct {
 	Name             string
 	ObjectUID        string
 	StatusIdentityID string
+	Settle           time.Duration
 }
 
 type SubscriptionAbsenceRequest struct {
@@ -81,6 +82,7 @@ type postgresObservationSession struct {
 
 var _ SubscriptionIdentityStore = (*PostgresStore)(nil)
 
+//nolint:ireturn // session interface by design
 func (s *PostgresStore) BeginSubscriptionObservation(ctx context.Context, observerID, tenant string) (SubscriptionObservationSession, error) {
 	if _, err := uuid.Parse(observerID); err != nil {
 		return nil, fmt.Errorf("observer ID must be a UUID: %w", err)
@@ -195,6 +197,13 @@ func (session *postgresObservationSession) ResolveSubscriptionIdentity(ctx conte
 		return "", fmt.Errorf("failed to lock subscription identity: %w", err)
 	}
 	if rotationPendingAt.Valid {
+		newIdentityID, err := session.recoverRotatedIdentity(ctx, request, identityID)
+		if err != nil {
+			return "", err
+		}
+		if newIdentityID != "" {
+			return newIdentityID, nil
+		}
 		return "", ErrSubscriptionIdentityPending
 	}
 
@@ -211,6 +220,9 @@ func (session *postgresObservationSession) ResolveSubscriptionIdentity(ctx conte
 
 	if request.StatusIdentityID != "" {
 		if request.StatusIdentityID != identityID {
+			if err := session.rotateIdentity(ctx, identityID); err != nil {
+				return "", err
+			}
 			return "", ErrSubscriptionIdentityMismatch
 		}
 		if err := session.upsertObservation(ctx, identityID, request.ObjectUID); err != nil {
@@ -225,14 +237,8 @@ func (session *postgresObservationSession) ResolveSubscriptionIdentity(ctx conte
 		}
 		return identityID, nil
 	}
-	if priorID != "" {
-		if err := session.rotateIdentity(ctx, identityID); err != nil {
-			return "", err
-		}
-		return "", ErrSubscriptionIdentityPending
-	}
 
-	priorObjectUID, priorID, err := session.priorObservationForName(ctx, request)
+	priorObjectUID, _, err := session.priorObservationForName(ctx, request)
 	if err != nil {
 		return "", err
 	}
@@ -270,6 +276,70 @@ func (session *postgresObservationSession) ResolveSubscriptionIdentity(ctx conte
 		return "", err
 	}
 	return identityID, nil
+}
+
+func (session *postgresObservationSession) recoverRotatedIdentity(
+	ctx context.Context,
+	request ResolveSubscriptionIdentityRequest,
+	identityID string,
+) (string, error) {
+	var observationCount int
+	var presentOrSettling bool
+	err := session.tx.QueryRowContext(ctx, `
+		SELECT COUNT(*),
+			EXISTS (
+				SELECT 1
+				FROM subscription_observations observation
+				JOIN subscription_observers observer ON observer.observer_id = observation.observer_id
+				WHERE observation.subscription_id = $1
+				  AND observer.retired_at IS NULL
+				  AND observer.tenant = $2
+				  AND (
+					observation.absent_at IS NULL
+					OR observation.absent_at > NOW() - ($3 * INTERVAL '1 second')
+				  )
+			)
+		FROM subscription_observations observation
+		JOIN subscription_observers observer ON observer.observer_id = observation.observer_id
+		WHERE observation.subscription_id = $1
+		  AND observer.retired_at IS NULL
+		  AND observer.tenant = $2
+	`, identityID, session.tenant, settleSeconds(request.Settle)).Scan(&observationCount, &presentOrSettling)
+	if err != nil {
+		return "", fmt.Errorf("failed to evaluate rotated subscription identity: %w", err)
+	}
+	if observationCount > 0 && presentOrSettling {
+		return "", nil
+	}
+
+	var selectedID string
+	err = session.tx.QueryRowContext(ctx, `
+		SELECT id
+		FROM subscription_identities
+		WHERE tenant = $1 AND namespace = $2 AND name = $3 AND deleted_at IS NULL
+		FOR UPDATE
+	`, session.tenant, request.Namespace, request.Name).Scan(&selectedID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return session.insertObservation(ctx, request.Namespace, request.Name, request.ObjectUID)
+	}
+	if err != nil {
+		return "", fmt.Errorf("failed to lock rotated subscription identity: %w", err)
+	}
+	if _, err := session.tx.ExecContext(ctx, `
+		UPDATE subscription_identities
+		SET deleted_at = NOW()
+		WHERE id = $1 AND deleted_at IS NULL
+	`, selectedID); err != nil {
+		return "", fmt.Errorf("failed to tombstone rotated subscription identity: %w", err)
+	}
+	return session.insertObservation(ctx, request.Namespace, request.Name, request.ObjectUID)
+}
+
+func settleSeconds(settle time.Duration) int {
+	if settle > 0 {
+		return int(settle.Seconds())
+	}
+	return 30
 }
 
 func (session *postgresObservationSession) insertObservation(ctx context.Context, namespace, name, objectUID string) (string, error) {
@@ -388,53 +458,61 @@ func (session *postgresObservationSession) RecordAbsenceAndCleanup(
 	request SubscriptionAbsenceRequest,
 	settle, maxObservationAge time.Duration,
 ) (SubscriptionCleanupResult, int, error) {
-	if request.Namespace == "" || request.Name == "" || request.ObjectUID == "" {
-		return "", 0, errors.New("subscription namespace, name, and object UID are required")
-	}
-	if request.SubscriptionIdentityID != "" {
-		if _, err := uuid.Parse(request.SubscriptionIdentityID); err != nil {
-			return "", 0, fmt.Errorf("%w: invalid UUID", ErrSubscriptionIdentityMismatch)
-		}
-	}
-	if settle <= 0 || maxObservationAge <= 0 {
-		return "", 0, errors.New("settle interval and maximum observation age must be positive")
+	if err := validateSubscriptionAbsence(request, settle, maxObservationAge); err != nil {
+		return "", 0, err
 	}
 
 	if _, err := session.tx.ExecContext(ctx, "SELECT pg_advisory_xact_lock(hashtext($1))", session.tenant+":"+request.Namespace+":"+request.Name); err != nil {
 		return "", 0, fmt.Errorf("failed to acquire subscription identity lock: %w", err)
 	}
 
+	identityID, result, err := session.lockIdentityForAbsence(ctx, request)
+	if err != nil {
+		return "", 0, err
+	}
+	if result != "" {
+		return result, 0, nil
+	}
+
+	if err := session.MarkAbsent(ctx, identityID); err != nil {
+		return "", 0, err
+	}
+	if request.RetainAPIKeys {
+		return SubscriptionCleanupRetainedPolicy, 0, nil
+	}
+
+	return session.cleanupAfterAbsence(ctx, identityID, settle, maxObservationAge)
+}
+
+func validateSubscriptionAbsence(request SubscriptionAbsenceRequest, settle, maxObservationAge time.Duration) error {
+	if request.Namespace == "" || request.Name == "" || request.ObjectUID == "" {
+		return errors.New("subscription namespace, name, and object UID are required")
+	}
+	if request.SubscriptionIdentityID != "" {
+		if _, err := uuid.Parse(request.SubscriptionIdentityID); err != nil {
+			return fmt.Errorf("%w: invalid UUID", ErrSubscriptionIdentityMismatch)
+		}
+	}
+	if settle <= 0 || maxObservationAge <= 0 {
+		return errors.New("settle interval and maximum observation age must be positive")
+	}
+	return nil
+}
+
+func (session *postgresObservationSession) lockIdentityForAbsence(
+	ctx context.Context,
+	request SubscriptionAbsenceRequest,
+) (string, SubscriptionCleanupResult, error) {
 	identityID := request.SubscriptionIdentityID
 	if identityID == "" {
-		if err := session.tx.QueryRowContext(ctx, `
-			SELECT identity.id
-			FROM subscription_observations observation
-			JOIN subscription_identities identity ON identity.id = observation.subscription_id
-			WHERE observation.observer_id = $1
-			  AND observation.object_uid = $2
-			  AND identity.tenant = $3
-			  AND identity.namespace = $4
-			  AND identity.name = $5
-			  AND identity.deleted_at IS NULL
-			LIMIT 1
-			`, session.observerID, request.ObjectUID, session.tenant, request.Namespace, request.Name).Scan(&identityID); err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				if err := session.tx.QueryRowContext(ctx, `
-					SELECT id
-					FROM subscription_identities
-					WHERE tenant = $1 AND namespace = $2 AND name = $3 AND deleted_at IS NULL
-					FOR UPDATE
-				`, session.tenant, request.Namespace, request.Name).Scan(&identityID); err != nil {
-					if errors.Is(err, sql.ErrNoRows) {
-						return SubscriptionCleanupCleaned, 0, nil
-					}
-					return "", 0, fmt.Errorf("failed to lock subscription identity by name for cleanup: %w", err)
-				}
-				return SubscriptionCleanupBlockedUnverified, 0, nil
-			}
-			if err != nil {
-				return "", 0, fmt.Errorf("failed to recover subscription identity for absence: %w", err)
-			}
+		var err error
+		var result SubscriptionCleanupResult
+		identityID, result, err = session.recoverIdentityFromObservation(ctx, request)
+		if err != nil {
+			return "", "", err
+		}
+		if result != "" {
+			return "", result, nil
 		}
 	}
 
@@ -446,14 +524,15 @@ func (session *postgresObservationSession) RecordAbsenceAndCleanup(
 		FOR UPDATE
 	`, identityID, session.tenant, request.Namespace, request.Name).Scan(&identityID, &rotationPendingAt, &deletedAt)
 	if errors.Is(err, sql.ErrNoRows) {
-		return SubscriptionCleanupNotFound, 0, nil
+		return "", SubscriptionCleanupNotFound, nil
 	}
 	if err != nil {
-		return "", 0, fmt.Errorf("failed to lock subscription identity for cleanup: %w", err)
+		return "", "", fmt.Errorf("failed to lock subscription identity for cleanup: %w", err)
 	}
 	if deletedAt.Valid {
-		return SubscriptionCleanupCleaned, 0, nil
+		return "", SubscriptionCleanupCleaned, nil
 	}
+
 	var observedObjectUID string
 	var absentAt sql.NullTime
 	err = session.tx.QueryRowContext(ctx, `
@@ -463,21 +542,63 @@ func (session *postgresObservationSession) RecordAbsenceAndCleanup(
 	`, identityID, session.observerID).Scan(&observedObjectUID, &absentAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		if err := session.insertAbsentObservation(ctx, identityID, request.ObjectUID); err != nil {
-			return "", 0, err
+			return "", "", err
 		}
-	} else if err != nil {
-		return "", 0, fmt.Errorf("failed to read subscription observation for cleanup: %w", err)
-	} else if !absentAt.Valid && observedObjectUID != request.ObjectUID {
-		return "", 0, ErrSubscriptionIdentityMismatch
+		return identityID, "", nil
 	}
+	if err != nil {
+		return "", "", fmt.Errorf("failed to read subscription observation for cleanup: %w", err)
+	}
+	if !absentAt.Valid && observedObjectUID != request.ObjectUID {
+		return "", "", ErrSubscriptionIdentityMismatch
+	}
+	return identityID, "", nil
+}
 
-	if err := session.MarkAbsent(ctx, identityID); err != nil {
-		return "", 0, err
+func (session *postgresObservationSession) recoverIdentityFromObservation(
+	ctx context.Context,
+	request SubscriptionAbsenceRequest,
+) (string, SubscriptionCleanupResult, error) {
+	var identityID string
+	err := session.tx.QueryRowContext(ctx, `
+		SELECT identity.id
+		FROM subscription_observations observation
+		JOIN subscription_identities identity ON identity.id = observation.subscription_id
+		WHERE observation.observer_id = $1
+		  AND observation.object_uid = $2
+		  AND identity.tenant = $3
+		  AND identity.namespace = $4
+		  AND identity.name = $5
+		  AND identity.deleted_at IS NULL
+		LIMIT 1
+	`, session.observerID, request.ObjectUID, session.tenant, request.Namespace, request.Name).Scan(&identityID)
+	if errors.Is(err, sql.ErrNoRows) {
+		var nameIdentityID string
+		err = session.tx.QueryRowContext(ctx, `
+			SELECT id
+			FROM subscription_identities
+			WHERE tenant = $1 AND namespace = $2 AND name = $3 AND deleted_at IS NULL
+			FOR UPDATE
+		`, session.tenant, request.Namespace, request.Name).Scan(&nameIdentityID)
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", SubscriptionCleanupCleaned, nil
+		}
+		if err != nil {
+			return "", "", fmt.Errorf("failed to lock subscription identity by name for cleanup: %w", err)
+		}
+		return "", SubscriptionCleanupBlockedUnverified, nil
 	}
-	if request.RetainAPIKeys {
-		return SubscriptionCleanupRetainedPolicy, 0, nil
+	if err != nil {
+		return "", "", fmt.Errorf("failed to recover subscription identity for absence: %w", err)
 	}
+	return identityID, "", nil
+}
 
+func (session *postgresObservationSession) cleanupAfterAbsence(
+	ctx context.Context,
+	identityID string,
+	settle, maxObservationAge time.Duration,
+) (SubscriptionCleanupResult, int, error) {
 	var observerCount int
 	if err := session.tx.QueryRowContext(ctx, `
 		SELECT COUNT(*) FROM subscription_observers
@@ -490,7 +611,7 @@ func (session *postgresObservationSession) RecordAbsenceAndCleanup(
 	}
 
 	var stale bool
-	err = session.tx.QueryRowContext(ctx, `
+	err := session.tx.QueryRowContext(ctx, `
 		SELECT EXISTS (
 			SELECT 1 FROM subscription_observers
 			WHERE tenant = $1 AND retired_at IS NULL AND observed_at < NOW() - ($2 * INTERVAL '1 second')

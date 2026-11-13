@@ -8,6 +8,7 @@ import (
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/dynamic"
 
@@ -15,8 +16,6 @@ import (
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/subscription"
 )
-
-const fieldManager = "maas-subscription-identity"
 
 // SubscriptionObject is the minimal authoritative Kubernetes observation needed
 // to resolve a subscription incarnation.
@@ -36,6 +35,7 @@ type Observer struct {
 	tenant     string
 	observerID string
 	interval   time.Duration
+	settle     time.Duration
 	logger     *logger.Logger
 }
 
@@ -46,6 +46,7 @@ func NewObserver(
 	tenant string,
 	observerID string,
 	interval time.Duration,
+	settle time.Duration,
 	log *logger.Logger,
 ) *Observer {
 	if log == nil {
@@ -58,6 +59,7 @@ func NewObserver(
 		tenant:     tenant,
 		observerID: observerID,
 		interval:   interval,
+		settle:     settle,
 		logger:     log,
 	}
 }
@@ -117,6 +119,7 @@ func (observer *Observer) Refresh(ctx context.Context) {
 			Name:             object.Name,
 			ObjectUID:        object.ObjectUID,
 			StatusIdentityID: object.StatusIdentityID,
+			Settle:           observer.settle,
 		})
 		if resolveErr != nil {
 			observer.logger.Warn("Subscription identity remains pending",
@@ -151,7 +154,7 @@ func (observer *Observer) Refresh(ctx context.Context) {
 	committed = true
 
 	for _, object := range statusWrites {
-		if err := observer.applyStatus(ctx, object); err != nil {
+		if err := observer.ApplyStatus(ctx, object); err != nil {
 			observer.logger.Error("Failed to write subscription identity status",
 				"subscription", object.Namespace+"/"+object.Name,
 				"error", err,
@@ -176,7 +179,7 @@ func (observer *Observer) list(ctx context.Context) ([]SubscriptionObject, error
 		if item.GetDeletionTimestamp() != nil {
 			continue
 		}
-		statusIdentityID, _, _ := unstructuredString(item.Object, "status", "subscriptionIdentityId")
+		statusIdentityID, _, _ := unstructured.NestedString(item.Object, "status", "subscriptionIdentityId")
 		_, statusPresent := item.Object["status"].(map[string]any)
 		objects = append(objects, SubscriptionObject{
 			Namespace:        item.GetNamespace(),
@@ -190,20 +193,7 @@ func (observer *Observer) list(ctx context.Context) ([]SubscriptionObject, error
 	return objects, nil
 }
 
-func unstructuredString(object map[string]any, fields ...string) (string, bool, error) {
-	value := object
-	for _, field := range fields[:len(fields)-1] {
-		nested, ok := value[field].(map[string]any)
-		if !ok {
-			return "", false, nil
-		}
-		value = nested
-	}
-	result, ok := value[fields[len(fields)-1]].(string)
-	return result, ok, nil
-}
-
-func (observer *Observer) applyStatus(ctx context.Context, object SubscriptionObject) error {
+func (observer *Observer) ApplyStatus(ctx context.Context, object SubscriptionObject) error {
 	if err := observer.patchStatus(ctx, object); err == nil {
 		return nil
 	} else if !apierrors.IsConflict(err) && !apierrors.IsInvalid(err) {
@@ -217,7 +207,7 @@ func (observer *Observer) applyStatus(ctx context.Context, object SubscriptionOb
 	if string(current.GetUID()) != object.ObjectUID {
 		return fmt.Errorf("%w: subscription object was replaced during identity status write", api_keys.ErrSubscriptionIdentityMismatch)
 	}
-	currentIdentityID, _, _ := unstructuredString(current.Object, "status", "subscriptionIdentityId")
+	currentIdentityID, _, _ := unstructured.NestedString(current.Object, "status", "subscriptionIdentityId")
 	if currentIdentityID != "" && currentIdentityID != object.StatusIdentityID {
 		return fmt.Errorf("%w: subscription identity changed during status write", api_keys.ErrSubscriptionIdentityMismatch)
 	}

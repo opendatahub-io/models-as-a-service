@@ -225,6 +225,7 @@ type TenantLogsConfig struct {
 }
 
 // TenantAPIKeysConfig defines configuration options for API key management.
+// +kubebuilder:validation:XValidation:rule="(has(self.subscriptionIdentityMode) && self.subscriptionIdentityMode in ['observe', 'strict']) ? (has(self.subscriptionObserverId) && size(self.subscriptionObserverId) > 0) : true",message="subscriptionObserverId is required when subscriptionIdentityMode is observe or strict"
 type TenantAPIKeysConfig struct {
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:Minimum=1

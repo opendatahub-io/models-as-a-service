@@ -1207,6 +1207,16 @@ func (r *MaaSSubscriptionReconciler) ensureSubscriptionAPIKeysRevoked(ctx contex
 	tenant, err := fetchTenantForNamespace(ctx, r.Client, subscription.Namespace)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
+			if r.SubscriptionIdentityMode == subscriptionIdentityModeStrict && !cleanupRequested {
+				log.Info("Skipping subscription API-key cleanup because identity-aware cleanup is disabled in strict mode",
+					"subscription", subscription.Namespace+"/"+subscription.Name)
+				if r.Recorder != nil {
+					r.Recorder.Eventf(subscription, nil, corev1.EventTypeWarning, "APIKeyCleanupSkipped", "InvalidateAPIKeys",
+						"Skipping API-key cleanup for MaaSSubscription %s/%s because identity-aware cleanup is disabled in strict mode",
+						subscription.Namespace, subscription.Name)
+				}
+				return true, nil
+			}
 			identityAwareCleanup := cleanupRequested && r.SubscriptionIdentityMode == subscriptionIdentityModeStrict
 			if identityAwareCleanup {
 				return false, fmt.Errorf("tenant configuration is required to record absence for MaaSSubscription %s/%s", subscription.Namespace, subscription.Name)
@@ -1223,6 +1233,16 @@ func (r *MaaSSubscriptionReconciler) ensureSubscriptionAPIKeysRevoked(ctx contex
 		return false, fmt.Errorf("resolve tenant for MaaSSubscription %s/%s: %w", subscription.Namespace, subscription.Name, err)
 	}
 	effectiveIdentityMode := subscriptionIdentityModeForTenant(tenant, r.SubscriptionIdentityMode)
+	if effectiveIdentityMode == subscriptionIdentityModeStrict && !cleanupRequested {
+		log.Info("Skipping subscription API-key cleanup because identity-aware cleanup is disabled in strict mode",
+			"subscription", subscription.Namespace+"/"+subscription.Name)
+		if r.Recorder != nil {
+			r.Recorder.Eventf(subscription, nil, corev1.EventTypeWarning, "APIKeyCleanupSkipped", "InvalidateAPIKeys",
+				"Skipping API-key cleanup for MaaSSubscription %s/%s because identity-aware cleanup is disabled in strict mode",
+				subscription.Namespace, subscription.Name)
+		}
+		return true, nil
+	}
 	identityAwareCleanup := cleanupRequested && effectiveIdentityMode == subscriptionIdentityModeStrict
 	if retainAPIKeys && !identityAwareCleanup {
 		log.Info("Skipping subscription API-key cleanup because API keys are retained on delete",
@@ -1363,68 +1383,74 @@ func subscriptionIdentityAbsenceJobName(subscription *maasv1alpha1.MaaSSubscript
 // The For() watch drops status-only events, so a failed write (typically a conflict with
 // scanForDuplicatePriority) is only retried through that error-driven requeue.
 func (r *MaaSSubscriptionReconciler) updateStatus(ctx context.Context, subscription *maasv1alpha1.MaaSSubscription, phase maasv1alpha1.Phase, message string, statusSnapshot *maasv1alpha1.MaaSSubscriptionStatus) error {
-	// Build the patch from the latest status so fields owned by other writers
-	// (notably status.subscriptionIdentityId) are omitted from the merge patch.
-	statusTarget := subscription
-	currentStatus := *statusSnapshot
-	latest := &maasv1alpha1.MaaSSubscription{}
-	if err := r.Get(ctx, client.ObjectKeyFromObject(subscription), latest); err == nil {
-		statusTarget = latest
-		currentStatus = latest.Status
-	}
+	updateErr := retry.OnError(retry.DefaultBackoff, apierrors.IsConflict, func() error {
+		reader := r.APIReader
+		if reader == nil {
+			reader = r.Client
+		}
+		latest := &maasv1alpha1.MaaSSubscription{}
+		if err := reader.Get(ctx, client.ObjectKeyFromObject(subscription), latest); err != nil {
+			return err
+		}
 
-	targetStatus := currentStatus
-	targetStatus.Phase = phase
-	targetStatus.Conditions = append([]metav1.Condition(nil), currentStatus.Conditions...)
-	if apimeta.FindStatusCondition(subscription.Status.Conditions, maasv1alpha1.ConditionInferenceObjectivesReady) == nil {
-		apimeta.RemoveStatusCondition(&targetStatus.Conditions, maasv1alpha1.ConditionInferenceObjectivesReady)
-	}
-	for _, condition := range subscription.Status.Conditions {
-		apimeta.SetStatusCondition(&targetStatus.Conditions, condition)
-	}
+		currentStatus := latest.Status
+		targetStatus := currentStatus
+		targetStatus.Phase = phase
+		targetStatus.Conditions = append([]metav1.Condition(nil), currentStatus.Conditions...)
+		if apimeta.FindStatusCondition(subscription.Status.Conditions, maasv1alpha1.ConditionInferenceObjectivesReady) == nil {
+			apimeta.RemoveStatusCondition(&targetStatus.Conditions, maasv1alpha1.ConditionInferenceObjectivesReady)
+		}
+		for _, condition := range subscription.Status.Conditions {
+			if condition.Type == ConditionSpecPriorityDuplicate {
+				continue
+			}
+			apimeta.SetStatusCondition(&targetStatus.Conditions, condition)
+		}
 
-	var status metav1.ConditionStatus
-	var reason maasv1alpha1.ConditionReason
-	switch phase {
-	case maasv1alpha1.PhaseActive:
-		status = metav1.ConditionTrue
-		reason = maasv1alpha1.ReasonReconciled
-	case maasv1alpha1.PhaseDegraded:
-		status = metav1.ConditionFalse
-		reason = maasv1alpha1.ReasonPartialFailure
-	case maasv1alpha1.PhaseFailed:
-		status = metav1.ConditionFalse
-		reason = maasv1alpha1.ReasonReconcileFailed
-	case maasv1alpha1.PhaseInvalid:
-		status = metav1.ConditionFalse
-		reason = maasv1alpha1.ReasonInvalidSpec
-	default:
-		status = metav1.ConditionUnknown
-		reason = maasv1alpha1.ReasonUnknown
-	}
+		var status metav1.ConditionStatus
+		var reason maasv1alpha1.ConditionReason
+		switch phase {
+		case maasv1alpha1.PhaseActive:
+			status = metav1.ConditionTrue
+			reason = maasv1alpha1.ReasonReconciled
+		case maasv1alpha1.PhaseDegraded:
+			status = metav1.ConditionFalse
+			reason = maasv1alpha1.ReasonPartialFailure
+		case maasv1alpha1.PhaseFailed:
+			status = metav1.ConditionFalse
+			reason = maasv1alpha1.ReasonReconcileFailed
+		case maasv1alpha1.PhaseInvalid:
+			status = metav1.ConditionFalse
+			reason = maasv1alpha1.ReasonInvalidSpec
+		default:
+			status = metav1.ConditionUnknown
+			reason = maasv1alpha1.ReasonUnknown
+		}
 
-	apimeta.SetStatusCondition(&targetStatus.Conditions, metav1.Condition{
-		Type:               "Ready",
-		Status:             status,
-		Reason:             string(reason),
-		Message:            message,
-		ObservedGeneration: subscription.GetGeneration(),
+		apimeta.SetStatusCondition(&targetStatus.Conditions, metav1.Condition{
+			Type:               "Ready",
+			Status:             status,
+			Reason:             string(reason),
+			Message:            message,
+			ObservedGeneration: subscription.GetGeneration(),
+		})
+
+		targetStatus.RateLimitIdentity = subscription.Status.RateLimitIdentity
+		targetStatus.ModelRefStatuses = subscription.Status.ModelRefStatuses
+		targetStatus.TokenRateLimitStatuses = subscription.Status.TokenRateLimitStatuses
+		targetStatus.FlowControlStatuses = subscription.Status.FlowControlStatuses
+		if equality.Semantic.DeepEqual(currentStatus, targetStatus) {
+			return nil
+		}
+
+		patchBase := latest.DeepCopy()
+		patchBase.Status = currentStatus
+		patchTarget := latest.DeepCopy()
+		patchTarget.Status = targetStatus
+		return r.Status().Patch(ctx, patchTarget, client.MergeFromWithOptions(patchBase, client.MergeFromWithOptimisticLock{}))
 	})
-
-	targetStatus.RateLimitIdentity = subscription.Status.RateLimitIdentity
-	targetStatus.ModelRefStatuses = subscription.Status.ModelRefStatuses
-	targetStatus.TokenRateLimitStatuses = subscription.Status.TokenRateLimitStatuses
-	targetStatus.FlowControlStatuses = subscription.Status.FlowControlStatuses
-	if equality.Semantic.DeepEqual(currentStatus, targetStatus) {
-		return nil
-	}
-
-	patchBase := statusTarget.DeepCopy()
-	patchBase.Status = currentStatus
-	patchTarget := statusTarget.DeepCopy()
-	patchTarget.Status = targetStatus
-	if err := r.Status().Patch(ctx, patchTarget, client.MergeFrom(patchBase)); err != nil {
-		return fmt.Errorf("failed to patch MaaSSubscription status: %w", err)
+	if updateErr != nil {
+		return fmt.Errorf("failed to patch MaaSSubscription status: %w", updateErr)
 	}
 	return nil
 }
@@ -1520,10 +1546,25 @@ func (r *MaaSSubscriptionReconciler) scanForDuplicatePriority(ctx context.Contex
 		if conditionsSemanticallyEqual(cur, &desired) {
 			continue
 		}
-		patchBase := latest.DeepCopy()
-		apimeta.SetStatusCondition(&latest.Status.Conditions, desired)
-		if err := r.Status().Patch(ctx, latest, client.MergeFrom(patchBase)); err != nil {
-			log.Error(err, "failed to update SpecPriorityDuplicate status", "subscription", selfKey)
+		patchErr := retry.OnError(retry.DefaultBackoff, apierrors.IsConflict, func() error {
+			reader := r.APIReader
+			if reader == nil {
+				reader = r.Client
+			}
+			current := &maasv1alpha1.MaaSSubscription{}
+			if err := reader.Get(ctx, types.NamespacedName{Namespace: s.Namespace, Name: s.Name}, current); err != nil {
+				return err
+			}
+			currentCondition := apimeta.FindStatusCondition(current.Status.Conditions, ConditionSpecPriorityDuplicate)
+			if conditionsSemanticallyEqual(currentCondition, &desired) {
+				return nil
+			}
+			patchBase := current.DeepCopy()
+			apimeta.SetStatusCondition(&current.Status.Conditions, desired)
+			return r.Status().Patch(ctx, current, client.MergeFromWithOptions(patchBase, client.MergeFromWithOptimisticLock{}))
+		})
+		if patchErr != nil {
+			log.Error(patchErr, "failed to update SpecPriorityDuplicate status", "subscription", selfKey)
 		}
 	}
 }

@@ -327,6 +327,7 @@ func registerHandlers(
 			cfg.TenantName,
 			cfg.SubscriptionObserverID,
 			time.Duration(cfg.SubscriptionObservationIntervalSeconds)*time.Second,
+			time.Duration(cfg.SubscriptionObservationSettleSeconds)*time.Second,
 			log,
 		)
 		go observer.Run(ctx)

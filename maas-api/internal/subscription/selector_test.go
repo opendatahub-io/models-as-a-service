@@ -1,11 +1,14 @@
 package subscription_test
 
 import (
+	"context"
 	"errors"
 	"slices"
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/authpolicy"
@@ -103,6 +106,44 @@ func createSubscription(name string, groups []string, users []string, priority i
 			"status":     status,
 		},
 	}
+}
+
+func TestSelectorExplicitSelectionBindsSubscriptionIdentity(t *testing.T) {
+	subscriptionObject := createSubscription("identity-sub", []string{"team-a"}, nil, 100, 1000, "", "")
+	require.NoError(t, unstructured.SetNestedField(
+		subscriptionObject.Object,
+		"0b6fe901-7b52-4a78-9cbf-e398728ef67e",
+		"status", "subscriptionIdentityId",
+	))
+	selector := subscription.NewSelector(
+		logger.New(false),
+		&fakeLister{subscriptions: []*unstructured.Unstructured{subscriptionObject}},
+		nil,
+		nil,
+	)
+
+	_, err := selector.SelectWithIdentity(
+		context.Background(),
+		[]string{"team-a"},
+		"",
+		"test-ns/identity-sub",
+		"6a44ab55-2aa3-47c7-a7e8-80fd58d82fc8",
+		"",
+	)
+	var notFound *subscription.SubscriptionNotFoundError
+	require.ErrorAs(t, err, &notFound)
+
+	selected, err := selector.SelectWithIdentity(
+		context.Background(),
+		[]string{"team-a"},
+		"",
+		"test-ns/identity-sub",
+		"0b6fe901-7b52-4a78-9cbf-e398728ef67e",
+		"",
+	)
+	require.NoError(t, err)
+	assert.Equal(t, "identity-sub", selected.Name)
+	assert.Equal(t, "0b6fe901-7b52-4a78-9cbf-e398728ef67e", selected.SubscriptionIdentityID)
 }
 
 func TestSelector_OrganizationIDPrecedence(t *testing.T) {

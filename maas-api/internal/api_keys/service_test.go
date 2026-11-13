@@ -2,6 +2,7 @@ package api_keys_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -931,6 +932,7 @@ type subSelectorStub struct {
 	namespace  string
 	// lookupIdentityID overrides the identity returned by local status lookup.
 	lookupIdentityID string
+	lookupErr        error
 }
 
 func (s subSelectorStub) Select(_ []string, _ string, requested string, _ string) (*subscription.SelectResponse, error) {
@@ -952,6 +954,9 @@ func (s subSelectorStub) SelectHighestPriority(_ []string, _ string) (*subscript
 }
 
 func (s subSelectorStub) LookupSubscription(namespace, name string) (*subscription.SelectResponse, error) {
+	if s.lookupErr != nil {
+		return nil, s.lookupErr
+	}
 	identityID := s.lookupIdentityID
 	if identityID == "" {
 		identityID = s.identityID
@@ -1062,6 +1067,25 @@ func TestCreateAPIKey_Subscription(t *testing.T) {
 		assert.Equal(t, "key subscription identity does not match local subscription", validation.Reason)
 	})
 
+	t.Run("strict_mode_returns_local_lookup_errors", func(t *testing.T) {
+		identityID := "0b6fe901-7b52-4a78-9cbf-e398728ef67e"
+		store := api_keys.NewMockStore()
+		cfg := &config.Config{SubscriptionIdentityMode: config.SubscriptionIdentityModeStrict}
+		lookupErr := errors.New("local subscription cache unavailable")
+		svc := api_keys.NewServiceWithLogger(
+			store,
+			cfg,
+			subSelectorStub{identityID: identityID, namespace: "test-ns", lookupErr: lookupErr},
+			logger.Development(),
+		)
+
+		result, err := svc.CreateAPIKey(ctx, user, groups, "lookup-error-key", "", nil, false, "identity-sub", "", nil)
+		require.NoError(t, err)
+		validation, err := svc.ValidateAPIKey(ctx, result.Key)
+		require.ErrorIs(t, err, lookupErr)
+		assert.Nil(t, validation)
+	})
+
 	t.Run("selector_errors_do_not_persist_key", func(t *testing.T) {
 		errTests := []struct {
 			name      string
@@ -1136,7 +1160,7 @@ func TestRevokeSubscriptionAPIKeysStrictModeRejectsNameBasedCleanup(t *testing.T
 	svc := api_keys.NewServiceWithLogger(store, cfg, subSelectorStub{}, logger.Development())
 
 	count, err := svc.RevokeSubscriptionAPIKeys(ctx, "test-tenant", "team-a")
-	assert.ErrorIs(t, err, api_keys.ErrSubscriptionIdentityRequired)
+	require.ErrorIs(t, err, api_keys.ErrSubscriptionIdentityRequired)
 	assert.Zero(t, count)
 }
 

@@ -344,50 +344,15 @@ func (c *Config) Validate() error {
 		return errors.New("TENANT_NAME must be non-empty and non-whitespace to ensure tenant isolation")
 	}
 
-	// Validate API key max expiration days
-	if c.APIKeyMaxExpirationDays < 1 {
-		return errors.New("API_KEY_MAX_EXPIRATION_DAYS must be at least 1")
-	}
-
-	if c.AccessCheckTimeoutSeconds < 1 {
-		return errors.New("ACCESS_CHECK_TIMEOUT_SECONDS must be at least 1")
-	}
-
-	if c.LastUsedDebounceSecs < 0 {
-		return errors.New("LAST_USED_DEBOUNCE_SECS must be greater than or equal to 0")
-	}
-
-	if c.APIKeyDeletionRetentionDays == 0 {
-		c.APIKeyDeletionRetentionDays = defaultAPIKeyDeletionRetentionDays
-	}
-	if c.APIKeyDeletionRetentionDays < 1 {
-		return errors.New("API_KEY_DELETION_RETENTION_DAYS must be at least 1")
-	}
-	if c.APIKeyDeletionRetentionDays > maxAPIKeyDeletionRetentionDays {
-		return fmt.Errorf("API_KEY_DELETION_RETENTION_DAYS must be at most %d", maxAPIKeyDeletionRetentionDays)
+	if err := c.validateAPIKeySettings(); err != nil {
+		return err
 	}
 
 	if c.SubscriptionIdentityMode == "" {
 		c.SubscriptionIdentityMode = SubscriptionIdentityModeOff
 	}
-	switch c.SubscriptionIdentityMode {
-	case SubscriptionIdentityModeOff, SubscriptionIdentityModeObserve, SubscriptionIdentityModeStrict:
-	default:
-		return fmt.Errorf("SUBSCRIPTION_IDENTITY_MODE must be one of off, observe, or strict")
-	}
-	if c.SubscriptionIdentityMode != SubscriptionIdentityModeOff {
-		if _, err := uuid.Parse(strings.TrimSpace(c.SubscriptionObserverID)); err != nil {
-			return fmt.Errorf("SUBSCRIPTION_OBSERVER_ID must be a UUID when subscription identity mode is enabled")
-		}
-		if c.SubscriptionObservationIntervalSeconds < 1 {
-			return errors.New("SUBSCRIPTION_OBSERVATION_INTERVAL_SECONDS must be at least 1")
-		}
-		if c.SubscriptionObservationMaxAgeSeconds < c.SubscriptionObservationIntervalSeconds {
-			return errors.New("SUBSCRIPTION_OBSERVATION_MAX_AGE_SECONDS must be at least SUBSCRIPTION_OBSERVATION_INTERVAL_SECONDS")
-		}
-		if c.SubscriptionObservationSettleSeconds < 1 {
-			return errors.New("SUBSCRIPTION_OBSERVATION_SETTLE_SECONDS must be at least 1")
-		}
+	if err := c.validateSubscriptionIdentity(); err != nil {
+		return err
 	}
 
 	if c.MetricsPort < 1 || c.MetricsPort > 65535 {
@@ -405,6 +370,52 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	return nil
+}
+
+func (c *Config) validateAPIKeySettings() error {
+	if c.APIKeyMaxExpirationDays < 1 {
+		return errors.New("API_KEY_MAX_EXPIRATION_DAYS must be at least 1")
+	}
+	if c.AccessCheckTimeoutSeconds < 1 {
+		return errors.New("ACCESS_CHECK_TIMEOUT_SECONDS must be at least 1")
+	}
+	if c.LastUsedDebounceSecs < 0 {
+		return errors.New("LAST_USED_DEBOUNCE_SECS must be greater than or equal to 0")
+	}
+	if c.APIKeyDeletionRetentionDays == 0 {
+		c.APIKeyDeletionRetentionDays = defaultAPIKeyDeletionRetentionDays
+	}
+	if c.APIKeyDeletionRetentionDays < 1 {
+		return errors.New("API_KEY_DELETION_RETENTION_DAYS must be at least 1")
+	}
+	if c.APIKeyDeletionRetentionDays > maxAPIKeyDeletionRetentionDays {
+		return fmt.Errorf("API_KEY_DELETION_RETENTION_DAYS must be at most %d", maxAPIKeyDeletionRetentionDays)
+	}
+	return nil
+}
+
+func (c *Config) validateSubscriptionIdentity() error {
+	switch c.SubscriptionIdentityMode {
+	case SubscriptionIdentityModeOff, SubscriptionIdentityModeObserve, SubscriptionIdentityModeStrict:
+	default:
+		return errors.New("SUBSCRIPTION_IDENTITY_MODE must be one of off, observe, or strict")
+	}
+	if c.SubscriptionIdentityMode == SubscriptionIdentityModeOff {
+		return nil
+	}
+	if _, err := uuid.Parse(strings.TrimSpace(c.SubscriptionObserverID)); err != nil {
+		return fmt.Errorf("SUBSCRIPTION_OBSERVER_ID must be a UUID when subscription identity mode is enabled: %w", err)
+	}
+	if c.SubscriptionObservationIntervalSeconds < 1 {
+		return errors.New("SUBSCRIPTION_OBSERVATION_INTERVAL_SECONDS must be at least 1")
+	}
+	if c.SubscriptionObservationMaxAgeSeconds < c.SubscriptionObservationIntervalSeconds {
+		return errors.New("SUBSCRIPTION_OBSERVATION_MAX_AGE_SECONDS must be at least SUBSCRIPTION_OBSERVATION_INTERVAL_SECONDS")
+	}
+	if c.SubscriptionObservationSettleSeconds < 1 {
+		return errors.New("SUBSCRIPTION_OBSERVATION_SETTLE_SECONDS must be at least 1")
+	}
 	return nil
 }
 

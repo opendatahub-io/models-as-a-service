@@ -235,6 +235,56 @@ func TestEnsureSubscriptionAPIKeysRevoked_CreatesScopedJob(t *testing.T) {
 	}
 }
 
+func TestEnsureSubscriptionAPIKeysRevoked_SkipsStrictModeWhenIdentityCleanupDisabled(t *testing.T) {
+	const (
+		tenantNamespace = "team-a-maas"
+		appNamespace    = "odh-ai-gateway-infra"
+	)
+
+	subscription := newMaaSSubscription("sub-delete", tenantNamespace, "team-a", "llm", 100)
+	subscription.UID = types.UID("subscription-uid")
+	tenant := &maasv1alpha1.MaasTenantConfig{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      maasv1alpha1.MaasTenantConfigInstanceName,
+			Namespace: tenantNamespace,
+			Labels: map[string]string{
+				"maas.opendatahub.io/managed-by-aitenant": "true",
+				"maas.opendatahub.io/tenant-name":         "team-a",
+				"maas.opendatahub.io/tenant-namespace":    tenantNamespace,
+			},
+		},
+	}
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(&batcv1.Job{}).
+		WithObjects(subscription, tenant).
+		Build()
+	r := &MaaSSubscriptionReconciler{
+		Client:                   c,
+		APIReader:                c,
+		Scheme:                   scheme,
+		AppNamespace:             appNamespace,
+		SubscriptionIdentityMode: "strict",
+	}
+
+	complete, err := r.ensureSubscriptionAPIKeysRevoked(context.Background(), ctrl.Log, subscription)
+	if err != nil {
+		t.Fatalf("ensureSubscriptionAPIKeysRevoked: %v", err)
+	}
+	if !complete {
+		t.Fatal("strict mode with identity cleanup disabled must skip incompatible name-based cleanup")
+	}
+
+	jobs := &batcv1.JobList{}
+	if err := c.List(context.Background(), jobs, client.InNamespace(appNamespace)); err != nil {
+		t.Fatalf("list cleanup Jobs: %v", err)
+	}
+	if len(jobs.Items) != 0 {
+		t.Fatalf("cleanup Jobs = %d, want 0", len(jobs.Items))
+	}
+}
+
 func TestEnsureSubscriptionAPIKeysRevoked_CreatesIdentityAbsenceJobDespiteRetention(t *testing.T) {
 	const (
 		tenantNamespace = "team-a-maas"
@@ -2357,10 +2407,14 @@ func TestMaaSSubscriptionReconciler_StatusPatchWithDuplicateScanDoesNotConflict(
 		WithIndex(&maasv1alpha1.MaaSSubscription{}, "spec.modelRef", subscriptionModelRefIndexer).
 		WithInterceptorFuncs(interceptor.Funcs{
 			SubResourcePatch: func(ctx context.Context, cl client.Client, subResource string, obj client.Object, patch client.Patch, opts ...client.SubResourcePatchOption) error {
-				if !raced {
+				if target, ok := obj.(*maasv1alpha1.MaaSSubscription); ok && !raced && target.Status.Phase != "" {
 					raced = true
 					scanner := &MaaSSubscriptionReconciler{Client: cl, APIReader: cl, Scheme: scheme}
 					scanner.scanForDuplicatePriority(ctx)
+					return apierrors.NewConflict(schema.GroupResource{
+						Group:    "maas.opendatahub.io",
+						Resource: "maassubscriptions",
+					}, subName, errors.New("concurrent condition write"))
 				}
 				return cl.SubResource(subResource).Patch(ctx, obj, patch, opts...)
 			},
