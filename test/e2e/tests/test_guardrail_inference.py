@@ -116,24 +116,35 @@ def _infer(gateway_url: str, model: dict, api_key: str, prompt: str, **retry) ->
     )
 
 
+# Bodies that tell the 403s apart. A rails block is Praxis rejecting with the
+# NeMo verdict's reason as the body; the other two refuse without calling NeMo.
+# AGC's static_response for a check whose binding was withdrawn.
+CLOSED_CHECK_BODY = "guardrail_unavailable"
+# maas-api failing selection closed, relayed by Authorino at auth time.
+AUTH_REFUSAL_BODY = "selected guardrails are unavailable"
+
+
 def _wait_blocked(gateway_url: str, model: dict, api_key: str, prompt: str) -> requests.Response:
-    """Poll until the request stops being served, and return the refusal.
+    """Poll until the request is refused with a 403, and return the refusal.
 
     Attaching or withdrawing a check rewrites the extproc ConfigMap and rolls
     the payload-processing pod, so the first request after the config wait can
-    still hit a pod serving the previous config. A refusal that never arrives
-    within ENFORCEMENT_TIMEOUT is the failure, not a transient 200.
+    still hit a pod serving the previous config, or none: a 200 or a 5xx is
+    the rollout, not a verdict. Every deliberate refusal on this path is a 403
+    (rails block, closed check, auth-time refusal), so only a 403 ends the
+    wait; the caller asserts which one. A provider error is a 502 too, so
+    counting 5xx as a refusal would let a broken gateway pass.
     """
     deadline = time.time() + ENFORCEMENT_TIMEOUT
     last = None
     while time.time() < deadline:
         last = _infer(gateway_url, model, api_key, prompt, retries=1, auth_denial_is_transient=False)
-        if not last.ok:
+        if last.status_code == 403:
             return last
         time.sleep(POLL_INTERVAL)
     raise AssertionError(
-        f"the request was still served {ENFORCEMENT_TIMEOUT}s after the guardrail "
-        f"edit: {last.status_code} {last.text[:400]}"
+        f"no 403 refusal {ENFORCEMENT_TIMEOUT}s after the guardrail edit: "
+        f"{last.status_code} {last.text[:400]}"
     )
 
 
@@ -355,20 +366,17 @@ def test_benign_prompt_passes_the_rails(gateway_url, guarded_model):
 def test_tripping_prompt_is_not_served(gateway_url, guarded_model):
     """A prompt the rails block must not come back as a model completion.
 
-    The proposal maps a blocked verdict to a content rejection, so a rejection
-    is asserted as non-2xx rather than as a 200 carrying a refusal body. The
-    refusal must come from the rails: an unavailable guardrail also refuses
-    the request, but at auth time and with an authorization_error body — which
+    Praxis rejects a request-phase block with a 403 carrying the verdict's
+    reason. The refusal must come from the rails: an unavailable guardrail
+    also answers 403, either at auth time or from a closed check, and either
     would otherwise fake this pass.
     """
     response = _wait_blocked(gateway_url, guarded_model, guarded_model["api_key"], TRIPPING_PROMPT)
-    assert not response.ok, (
-        f"the request was served despite a blocking verdict: "
-        f"{response.status_code} {response.text[:400]}"
-    )
     assert "authorization_error" not in response.text, (
-        f"the request was refused at auth time, not by the rails: "
-        f"{response.status_code} {response.text[:400]}"
+        f"the request was refused at auth time, not by the rails: {response.text[:400]}"
+    )
+    assert CLOSED_CHECK_BODY not in response.text, (
+        f"the check is compiled closed, so NeMo was never called: {response.text[:400]}"
     )
 
 
@@ -390,8 +398,10 @@ def test_unreachable_provider_fails_closed(gateway_url, guarded_model):
     gr.wait_for_accepted_reason(_ns(), "ProviderNotFound", name=policy)
     _wait_extproc_compiled(header, closed=True)
 
+    # Either layer may refuse first: maas-api stops selecting the check once
+    # the policy loses Accepted, and until its cache sees that, the request
+    # reaches the closed check. Both are the fail-closed rule holding.
     response = _wait_blocked(gateway_url, guarded_model, guarded_model["api_key"], BENIGN_PROMPT)
-    assert not response.ok, (
-        f"the request was served after the guardrail became unavailable: "
-        f"{response.status_code} {response.text[:400]}"
+    assert CLOSED_CHECK_BODY in response.text or AUTH_REFUSAL_BODY in response.text, (
+        f"the 403 is not a guardrail-unavailable refusal: {response.text[:400]}"
     )
