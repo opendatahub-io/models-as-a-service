@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"crypto/tls"
-	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -128,5 +127,5 @@ func TestNewServer_AES256OnlyTLS12DisablesHTTP2AndStarts(t *testing.T) {
 }
 
 func testLogger() *slog.Logger {
-	return slog.New(slog.NewTextHandler(io.Discard, nil))
+	return slog.New(slog.DiscardHandler)
 }

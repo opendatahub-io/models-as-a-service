@@ -1356,8 +1356,29 @@ func (h *Handler) BulkRevokeAPIKeys(c *gin.Context) {
 	needsAdmin := req.Subscription != "" || (req.Username != "" && req.Username != user.Username)
 	delegatedAdmin := false
 	var delegatedAudit *delegatedAdminAuditEvent
-	if needsAdmin && identity != nil && req.Subscription != "" {
-		scope, _, resolveErr := h.resolveSubscriptionAdmin(identity, req.Subscription, user)
+	var delegatedSubscriptionNames []string
+
+	var platformAdmin bool
+	var platformAdminChecked bool
+	platformAdmin, platformAdminChecked, platformAdminAudit, adminErr := h.checkBulkRevokePlatformAdmin(
+		c.Request.Context(),
+		user,
+		identity,
+		req,
+		needsAdmin,
+	)
+	if adminErr != nil {
+		h.logger.Error("Failed to check admin status", "error", adminErr)
+		h.emitDelegatedAdminAudit(c, platformAdminAudit)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to check authorization"})
+		return
+	}
+
+	if needsAdmin && identity != nil && !platformAdmin {
+		var canonicalSubscription string
+		var resolveErr error
+		delegatedSubscriptionNames, canonicalSubscription, delegatedAudit, resolveErr =
+			h.resolveBulkRevokeDelegatedAdmin(identity, req, user)
 		if resolveErr != nil {
 			h.logger.Error("Failed to resolve subscription administration", "error", resolveErr)
 			h.emitDelegatedAdminAudit(c, &delegatedAdminAuditEvent{
@@ -1372,79 +1393,49 @@ func (h *Handler) BulkRevokeAPIKeys(c *gin.Context) {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to check authorization"})
 			return
 		}
-		if scope != nil {
-			req.Subscription = scope.Subscription
-			delegatedAdmin = true
-			delegatedAudit = &delegatedAdminAuditEvent{
-				Action:             "api-key-bulk-revoke",
-				Outcome:            "allowed",
-				User:               user,
-				Identity:           identity,
-				Scope:              scope,
-				TargetUsername:     req.Username,
-				TargetSubscription: req.Subscription,
-			}
-		} else {
-			delegatedAudit = &delegatedAdminAuditEvent{
-				Action:             "api-key-bulk-revoke",
-				Outcome:            "denied",
-				Reason:             "subscription_admin_denied",
-				User:               user,
-				Identity:           identity,
-				TargetUsername:     req.Username,
-				TargetSubscription: req.Subscription,
-			}
+		delegatedAdmin = len(delegatedSubscriptionNames) > 0
+		if canonicalSubscription != "" {
+			req.Subscription = canonicalSubscription
 		}
 	}
 	if needsAdmin && !delegatedAdmin {
-		isAdmin, adminErr := h.isAdmin(c.Request.Context(), user)
-		if adminErr != nil {
-			h.logger.Error("Failed to check admin status", "error", adminErr)
-			h.emitDelegatedAdminAuditResult(c, delegatedAudit, "error", "admin_status_error")
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to check authorization"})
+		authorized := h.authorizeBulkRevokePlatformAdmin(
+			c,
+			&req,
+			user,
+			delegatedAudit,
+			platformAdminChecked,
+			platformAdmin,
+		)
+		if !authorized {
 			return
-		}
-		if !isAdmin {
-			h.emitDelegatedAdminAudit(c, delegatedAudit)
-			h.logger.Warn("Unauthorized bulk revoke attempt",
-				"requestingUser", logger.RedactValue(user.Username),
-				"targetUser", logger.RedactValue(req.Username),
-				"targetSubscription", logger.RedactValue(req.Subscription),
-			)
-			c.JSON(http.StatusForbidden, gin.H{
-				"error": "Access denied: admin privileges required for this bulk revoke operation",
-			})
-			return
-		}
-		if req.Subscription != "" {
-			canonicalSubscription, adminErr, err := h.canonicalizeSubscription(req.Subscription)
-			if err != nil {
-				h.logger.Error("Failed to canonicalize subscription", "error", err)
-				h.emitDelegatedAdminAuditResult(c, delegatedAudit, "error", "subscription_canonicalization_error")
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to check authorization"})
-				return
-			}
-			if adminErr != nil {
-				h.emitDelegatedAdminAuditResult(c, delegatedAudit, "error", "subscription_canonicalization_failed")
-				c.JSON(http.StatusBadRequest, gin.H{"error": adminErr.Message})
-				return
-			}
-			req.Subscription = canonicalSubscription
-			if delegatedAudit != nil {
-				delegatedAudit.TargetSubscription = canonicalSubscription
-				delegatedAudit.Outcome = "allowed"
-				delegatedAudit.Reason = "platform_admin_fallback"
-				delegatedAudit.AuthorizationPath = "platform-admin-fallback"
-			}
 		}
 	}
 
 	scopeDesc := h.bulkRevokeScopeDescription(req)
 	logScope := h.bulkRevokeLogScope(req)
+	bulkRevoke := func(dryRun bool) (int, error) {
+		if req.Username != "" && len(delegatedSubscriptionNames) > 0 {
+			return h.service.BulkRevokeAPIKeysBySubscriptions(
+				c.Request.Context(),
+				req.Username,
+				delegatedSubscriptionNames,
+				user.Tenant,
+				dryRun,
+			)
+		}
+		return h.service.BulkRevokeAPIKeys(
+			c.Request.Context(),
+			req.Username,
+			req.Subscription,
+			user.Tenant,
+			dryRun,
+		)
+	}
 
 	// Dry-run: return count of keys that would be revoked without mutating
 	if req.DryRun {
-		count, err := h.service.BulkRevokeAPIKeys(c.Request.Context(), req.Username, req.Subscription, user.Tenant, true)
+		count, err := bulkRevoke(true)
 		if err != nil {
 			h.logger.Error("Dry-run bulk revoke failed", "error", err)
 			h.emitDelegatedAdminAuditResult(c, delegatedAudit, "error", "request_failed")
@@ -1471,7 +1462,7 @@ func (h *Handler) BulkRevokeAPIKeys(c *gin.Context) {
 	}
 
 	// Perform bulk revocation (scoped to caller's tenant)
-	count, err := h.service.BulkRevokeAPIKeys(c.Request.Context(), req.Username, req.Subscription, user.Tenant, false)
+	count, err := bulkRevoke(false)
 	if err != nil {
 		h.logger.Error("Failed to bulk revoke API keys",
 			"error", err,
@@ -1496,6 +1487,160 @@ func (h *Handler) BulkRevokeAPIKeys(c *gin.Context) {
 		RevokedCount: count,
 		Message:      fmt.Sprintf("Successfully revoked %d active API key(s) for %s", count, scopeDesc),
 	})
+}
+
+func (h *Handler) checkBulkRevokePlatformAdmin(
+	ctx context.Context,
+	user *token.UserContext,
+	identity *token.VerifiedIdentity,
+	req BulkRevokeRequest,
+	needsAdmin bool,
+) (bool, bool, *delegatedAdminAuditEvent, error) {
+	if !needsAdmin || identity == nil || req.Subscription != "" {
+		return false, false, nil, nil
+	}
+
+	isAdmin, err := h.isAdmin(ctx, user)
+	if err != nil {
+		return false, true, &delegatedAdminAuditEvent{
+			Action:         "api-key-bulk-revoke",
+			Outcome:        "error",
+			Reason:         "admin_status_error",
+			User:           user,
+			Identity:       identity,
+			TargetUsername: req.Username,
+		}, err
+	}
+	return isAdmin, true, nil, nil
+}
+
+func (h *Handler) bulkRevokeIsAdmin(
+	ctx context.Context,
+	user *token.UserContext,
+	platformAdminChecked bool,
+	platformAdmin bool,
+) (bool, error) {
+	if platformAdminChecked {
+		return platformAdmin, nil
+	}
+	return h.isAdmin(ctx, user)
+}
+
+func (h *Handler) authorizeBulkRevokePlatformAdmin(
+	c *gin.Context,
+	req *BulkRevokeRequest,
+	user *token.UserContext,
+	delegatedAudit *delegatedAdminAuditEvent,
+	platformAdminChecked bool,
+	platformAdmin bool,
+) bool {
+	isAdmin, adminErr := h.bulkRevokeIsAdmin(
+		c.Request.Context(),
+		user,
+		platformAdminChecked,
+		platformAdmin,
+	)
+	if adminErr != nil {
+		h.logger.Error("Failed to check admin status", "error", adminErr)
+		h.emitDelegatedAdminAuditResult(c, delegatedAudit, "error", "admin_status_error")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to check authorization"})
+		return false
+	}
+	if !isAdmin {
+		h.emitDelegatedAdminAudit(c, delegatedAudit)
+		h.logger.Warn("Unauthorized bulk revoke attempt",
+			"requestingUser", logger.RedactValue(user.Username),
+			"targetUser", logger.RedactValue(req.Username),
+			"targetSubscription", logger.RedactValue(req.Subscription),
+		)
+		c.JSON(http.StatusForbidden, gin.H{
+			"error": "Access denied: admin privileges required for this bulk revoke operation",
+		})
+		return false
+	}
+	if delegatedAudit != nil {
+		delegatedAudit.Outcome = "allowed"
+		delegatedAudit.Reason = "platform_admin_fallback"
+		delegatedAudit.AuthorizationPath = "platform-admin-fallback"
+	}
+	if req.Subscription == "" {
+		return true
+	}
+
+	canonicalSubscription, canonicalAdminErr, err := h.canonicalizeSubscription(req.Subscription)
+	if err != nil {
+		h.logger.Error("Failed to canonicalize subscription", "error", err)
+		h.emitDelegatedAdminAuditResult(c, delegatedAudit, "error", "subscription_canonicalization_error")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to check authorization"})
+		return false
+	}
+	if canonicalAdminErr != nil {
+		h.emitDelegatedAdminAuditResult(c, delegatedAudit, "error", "subscription_canonicalization_failed")
+		c.JSON(http.StatusBadRequest, gin.H{"error": canonicalAdminErr.Message})
+		return false
+	}
+	req.Subscription = canonicalSubscription
+	if delegatedAudit != nil {
+		delegatedAudit.TargetSubscription = canonicalSubscription
+	}
+	return true
+}
+
+func (h *Handler) resolveBulkRevokeDelegatedAdmin(
+	identity *token.VerifiedIdentity,
+	req BulkRevokeRequest,
+	user *token.UserContext,
+) ([]string, string, *delegatedAdminAuditEvent, error) {
+	var scope *subscription.AdminScope
+	var scopes []*subscription.AdminScope
+	var resolveErr error
+	if req.Subscription != "" {
+		scope, _, resolveErr = h.resolveSubscriptionAdmin(identity, req.Subscription, user)
+	} else {
+		scopes, _, resolveErr = h.resolveSubscriptionAdminScopes(identity, user)
+	}
+	if resolveErr != nil {
+		return nil, "", nil, resolveErr
+	}
+
+	switch {
+	case scope != nil:
+		return []string{scope.Subscription}, scope.Subscription, &delegatedAdminAuditEvent{
+			Action:             "api-key-bulk-revoke",
+			Outcome:            "allowed",
+			User:               user,
+			Identity:           identity,
+			Scope:              scope,
+			TargetUsername:     req.Username,
+			TargetSubscription: scope.Subscription,
+		}, nil
+	case len(scopes) > 0:
+		subscriptionNames := make([]string, 0, len(scopes))
+		for _, administeredScope := range scopes {
+			if administeredScope == nil {
+				continue
+			}
+			subscriptionNames = append(subscriptionNames, administeredScope.Subscription)
+		}
+		return subscriptionNames, "", &delegatedAdminAuditEvent{
+			Action:         "api-key-bulk-revoke",
+			Outcome:        "allowed",
+			User:           user,
+			Identity:       identity,
+			Scopes:         scopes,
+			TargetUsername: req.Username,
+		}, nil
+	default:
+		return nil, "", &delegatedAdminAuditEvent{
+			Action:             "api-key-bulk-revoke",
+			Outcome:            "denied",
+			Reason:             "subscription_admin_denied",
+			User:               user,
+			Identity:           identity,
+			TargetUsername:     req.Username,
+			TargetSubscription: req.Subscription,
+		}, nil
+	}
 }
 
 // bulkRevokeScopeDescription returns a human-readable description for HTTP responses.

@@ -4732,3 +4732,116 @@ func TestBulkRevokeAPIKeys_SubscriptionAdminScopeIsConsistent(t *testing.T) {
 	require.Equal(t, http.StatusForbidden, w.Code)
 	assert.Equal(t, 2, resolver.calls)
 }
+
+func TestBulkRevokeAPIKeys_SubscriptionAdminUsernameScopeIsOrganizationScoped(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store := NewMockStore()
+	addSubscriptionAdminTestKey(t, store, "bob-a", "bob", "subscription-a")
+	addSubscriptionAdminTestKey(t, store, "bob-b", "bob", "subscription-b")
+	addSubscriptionAdminTestKey(t, store, "bob-other-tenant", "bob", "subscription-a")
+	store.mu.Lock()
+	if key, exists := store.keys["bob-other-tenant"]; exists {
+		key.metadata.Tenant = "other-tenant"
+	}
+	store.mu.Unlock()
+
+	resolver := &subscriptionAdminResolverStub{scopes: []*subscription.AdminScope{{
+		Tenant:       "test-tenant",
+		Namespace:    "test-ns",
+		Subscription: "subscription-a",
+	}}}
+	handler := NewHandler(
+		logger.Development(),
+		NewService(store, &config.Config{}, fixedSubSelector{}),
+		newMockAdminChecker(),
+		nil,
+		resolver,
+	)
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(
+		http.MethodPost,
+		"/v1/api-keys/bulk-revoke",
+		strings.NewReader(`{"username":"bob","dryRun":true}`),
+	)
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Set("user", &token.UserContext{Username: "alice", Tenant: "test-tenant"})
+	c.Set("verified_identity", verifiedIdentityForSubscriptionAdmin())
+	handler.BulkRevokeAPIKeys(c)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var dryRun BulkRevokeResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &dryRun))
+	assert.Equal(t, 1, dryRun.RevokedCount)
+
+	w = httptest.NewRecorder()
+	c, _ = gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(
+		http.MethodPost,
+		"/v1/api-keys/bulk-revoke",
+		strings.NewReader(`{"username":"bob"}`),
+	)
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Set("user", &token.UserContext{Username: "alice", Tenant: "test-tenant"})
+	c.Set("verified_identity", verifiedIdentityForSubscriptionAdmin())
+	handler.BulkRevokeAPIKeys(c)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var mutation BulkRevokeResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &mutation))
+	assert.Equal(t, 1, mutation.RevokedCount)
+	assert.Equal(t, 2, resolver.scopeCalls)
+
+	key, err := store.Get(context.Background(), "bob-a")
+	require.NoError(t, err)
+	assert.Equal(t, StatusRevoked, key.Status)
+	key, err = store.Get(context.Background(), "bob-b")
+	require.NoError(t, err)
+	assert.Equal(t, StatusActive, key.Status)
+	key, err = store.Get(context.Background(), "bob-other-tenant")
+	require.NoError(t, err)
+	assert.Equal(t, StatusActive, key.Status)
+}
+
+func TestBulkRevokeAPIKeys_PlatformAdminPreservesUsernameOnlyScope(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store := NewMockStore()
+	addSubscriptionAdminTestKey(t, store, "bob-a", "bob", "subscription-a")
+	addSubscriptionAdminTestKey(t, store, "bob-b", "bob", "subscription-b")
+
+	resolver := &subscriptionAdminResolverStub{scopes: []*subscription.AdminScope{{
+		Tenant:       "test-tenant",
+		Namespace:    "test-ns",
+		Subscription: "subscription-a",
+	}}}
+	handler := NewHandler(
+		logger.Development(),
+		NewService(store, &config.Config{}, fixedSubSelector{}),
+		newMockAdminChecker(),
+		nil,
+		resolver,
+	)
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(
+		http.MethodPost,
+		"/v1/api-keys/bulk-revoke",
+		strings.NewReader(`{"username":"bob","dryRun":true}`),
+	)
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Set("user", &token.UserContext{
+		Username: "alice",
+		Groups:   []string{"admin-users"},
+		Tenant:   "test-tenant",
+	})
+	c.Set("verified_identity", verifiedIdentityForSubscriptionAdmin())
+	handler.BulkRevokeAPIKeys(c)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var response BulkRevokeResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+	assert.Equal(t, 2, response.RevokedCount)
+	assert.Zero(t, resolver.scopeCalls)
+}

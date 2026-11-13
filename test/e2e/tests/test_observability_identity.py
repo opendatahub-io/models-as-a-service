@@ -57,12 +57,8 @@ _EVIDENCE_LABELS = {
 }
 
 
-def _oc_json(*args):
-    result = helper._run_oc(["oc", *args, "-o", "json"])
-    assert result.returncode == 0, (
-        f"oc {' '.join(args)} failed: {result.stderr.strip()}"
-    )
-    return json.loads(result.stdout)
+# Shared with test_echo_auth_leak.py, which also redacts stderr before raising.
+_oc_json = helper._oc_json
 
 
 def _resource(kind, name, namespace):
