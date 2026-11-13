@@ -1,7 +1,14 @@
 version: 2
 updates:
+  # All Go modules are managed as one monorepo entry (directories + root) so
+  # dependabot groups produce a single PR across every module: one
+  # minor-and-patch PR and one kubernetes PR for the whole repository instead
+  # of one per module. New top-level maas-* modules are picked up
+  # automatically by the glob.
   - package-ecosystem: "gomod"
-    directory: "/maas-controller"
+    directories:
+      - "/maas-*"
+    root: true
     schedule:
       interval: "weekly"
       day: "monday"
@@ -13,20 +20,16 @@ updates:
         update-types:
           - "minor"
           - "patch"
-
-  - package-ecosystem: "gomod"
-    directory: "/maas-api"
-    schedule:
-      interval: "weekly"
-      day: "monday"
-    open-pull-requests-limit: 5
-    labels:
-      - "dependencies"
-    groups:
-      minor-and-patch:
-        update-types:
-          - "minor"
-          - "patch"
+        exclude-patterns:
+          - "k8s.io/*"
+          - "sigs.k8s.io/*"
+      # The k8s ecosystem (apimachinery, client-go, controller-runtime,
+      # structured-merge-diff, ...) must move as an aligned set; bumping one
+      # library alone misaligns the module graph and fails to compile.
+      kubernetes:
+        patterns:
+          - "k8s.io/*"
+          - "sigs.k8s.io/*"
 
   - package-ecosystem: "github-actions"
     directory: "/"
