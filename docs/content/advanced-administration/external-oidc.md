@@ -203,6 +203,26 @@ Two PrometheusRule alerts monitor gateway authentication health. They cover all 
 
 See [Metrics & Dashboards](../observability/metrics-and-dashboards.md) for all Authorino metrics.
 
+## Troubleshooting: OIDCReady condition
+
+The MaaS controller probes the issuer's discovery document and JWKS endpoint and reports the outcome as the `OIDCReady` condition on the `AITenant`. It is re-probed every 5 minutes while the condition is `False`, so issuer recovery and trusted-CA fixes are picked up without editing the `AITenant`. A transition to `False` also emits a warning event (visible in `oc describe`). `OIDCReady` is independent of `Ready`: API-key access keeps working during an OIDC outage, so an OIDC failure never marks the tenant degraded.
+
+```sh
+oc get aitenant <name> -n <ns> -o jsonpath='{.status.conditions[?(@.type=="OIDCReady")]}'
+```
+
+| Status | Reason | Meaning | Fix |
+|--------|--------|---------|-----|
+| True | `Available` | Discovery and JWKS are reachable, issuer matches | Nothing. |
+| False | `ClientConfigIncomplete` | `clientId` empty, or the `clientSecretRef` Secret is missing or lacks the key | Set the client ID / fix the Secret. |
+| False | `IssuerUnreachable` | DNS failure, connection refused, timeout — or blocked egress | Check DNS and the IdP; in restricted environments, allow maas-controller egress to the issuer (NetworkPolicy, as for Authorino's JWKS fetch). |
+| False | `TLSUntrusted` | The issuer's TLS certificate is not trusted | Add the issuer CA to the DSCInitialization `spec.trustedCABundle.customCABundle`; picked up within ~5 minutes. |
+| False | `DiscoveryFailed` | Discovery endpoint returned non-200 or invalid JSON | Check the issuer URL and the IdP. |
+| False | `IssuerMismatch` | Discovery `issuer` does not match `spec.oidc.issuerUrl` (trailing `/` ignored) | Correct `spec.oidc.issuerUrl`. |
+| False | `JWKSUnavailable` | `jwks_uri` missing, non-200, or no keys | Check the IdP's JWKS endpoint. |
+
+**Known limitations:** a wrong client **secret value** cannot be detected by probing (it only fails at token exchange), and the condition reports **issuer health, not the auth proxy's own health** — `OIDCReady=True` beside a crash-looping proxy is possible. Proxy health is reported separately by the AI Gateway controller's `ConsumerPortalProxyReady` condition.
+
 ## Security controls and responsibilities
 
 This table covers the non-functional security requirements (NFRs) raised during GA refinement. Each row states who enforces the control and what an operator needs to know.

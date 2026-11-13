@@ -145,6 +145,17 @@ type AITenantRBACSubject struct {
 	Namespace string `json:"namespace,omitempty"`
 }
 
+// AITenantConditionOIDCReady reports whether the AITenant's external OIDC
+// issuer is usable: client config complete, discovery reachable and trusted,
+// issuer match, and JWKS keys available. It is independent of the Ready
+// condition and the phase: API-key access keeps working during an OIDC
+// outage. Reason identifiers (Available, ClientConfigIncomplete,
+// IssuerUnreachable, TLSUntrusted, DiscoveryFailed, IssuerMismatch,
+// JWKSUnavailable) are a stable API contract; they live in
+// pkg/oidcprobe. This condition is owned by maas-controller until AITenant
+// moves to AIGC (ai-gateway-controller).
+const AITenantConditionOIDCReady = "OIDCReady"
+
 // AITenantStatus defines the observed tenant bootstrap state.
 type AITenantStatus struct {
 	// Phase is a high-level lifecycle phase for the tenant bootstrap.
