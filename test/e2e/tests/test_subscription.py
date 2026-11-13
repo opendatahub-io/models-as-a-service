@@ -1799,6 +1799,7 @@ class TestManagedAnnotation:
         ns = _ns()
         trlp_ns = MODEL_NAMESPACE
         parent_snapshot = None
+        baseline_spec = None
         try:
             # 1. Verify the TRLP exists
             trlp = _get_cr("tokenratelimitpolicy", TRLP_NAME, trlp_ns)
@@ -1894,30 +1895,43 @@ class TestManagedAnnotation:
             )
 
         finally:
-            # Remove the annotation (best-effort so parent restore still runs)
+            # Restore the parent while the annotation still shields the TRLP.
+            # Removing it first lets a reconcile render the modified limit.
             try:
-                _annotate(
-                    "tokenratelimitpolicy", TRLP_NAME, f"{MANAGED_ANNOTATION}-", trlp_ns
-                )
-                log.info(
-                    "Removed %s annotation from TokenRateLimitPolicy %s",
-                    MANAGED_ANNOTATION,
-                    TRLP_NAME,
-                )
-            except subprocess.CalledProcessError:
-                log.warning(
-                    "Failed to remove %s annotation from TokenRateLimitPolicy %s (may not exist)",
-                    MANAGED_ANNOTATION,
-                    TRLP_NAME,
-                )
+                if parent_snapshot:
+                    _apply_cr(parent_snapshot)
+                    log.info(
+                        "Restored parent MaaSSubscription %s from snapshot",
+                        SIMULATOR_SUBSCRIPTION,
+                    )
+                    restored = _get_cr("maassubscription", SIMULATOR_SUBSCRIPTION, ns)
+                    _wait_for_subscription_generation_observed(
+                        SIMULATOR_SUBSCRIPTION,
+                        restored["metadata"]["generation"],
+                        namespace=ns,
+                    )
+            finally:
+                try:
+                    _annotate(
+                        "tokenratelimitpolicy", TRLP_NAME, f"{MANAGED_ANNOTATION}-", trlp_ns
+                    )
+                    log.info(
+                        "Removed %s annotation from TokenRateLimitPolicy %s",
+                        MANAGED_ANNOTATION,
+                        TRLP_NAME,
+                    )
+                except subprocess.CalledProcessError:
+                    log.warning(
+                        "Failed to remove %s annotation from TokenRateLimitPolicy %s (may not exist)",
+                        MANAGED_ANNOTATION,
+                        TRLP_NAME,
+                    )
 
-            # Restore the parent MaaSSubscription
-            if parent_snapshot:
-                _apply_cr(parent_snapshot)
-                log.info(
-                    "Restored parent MaaSSubscription %s from snapshot",
-                    SIMULATOR_SUBSCRIPTION,
-                )
+            # The TRLP spec is unchanged when managed=false held, so Kuadrant has
+            # nothing new to enforce. Only a changed spec needs the full wait
+            # before later tests on this worker use the simulator subscription.
+            current = _get_cr("tokenratelimitpolicy", TRLP_NAME, trlp_ns) or {}
+            if baseline_spec is not None and current.get("spec") != baseline_spec:
                 _wait_for_subscription_inference_ready(
                     SIMULATOR_SUBSCRIPTION,
                     MODEL_REF,
