@@ -191,6 +191,41 @@ func TestHandler_SelectSubscription_Success(t *testing.T) {
 	}
 }
 
+func TestHandler_SelectSubscription_GatewayResponseOmitsUnreadFields(t *testing.T) {
+	subscriptionObject := createTestSubscription("large-sub", []string{"basic-users"}, 10, "org-basic", "cc-basic")
+	modelRefs := make([]any, 0, 20)
+	for index := range 20 {
+		modelRefs = append(modelRefs, map[string]any{
+			"name":            "model-" + strings.Repeat("x", index),
+			"tokenRateLimits": []any{map[string]any{"limit": int64(1000), "window": "1m"}},
+		})
+	}
+	require.NoError(t, unstructured.SetNestedSlice(subscriptionObject.Object, modelRefs, "spec", "modelRefs"))
+	subscriptionObject.SetAnnotations(map[string]string{
+		constant.AnnotationDisplayName: "Large subscription",
+		constant.AnnotationDescription: strings.Repeat("d", 500),
+	})
+
+	router := setupTestRouter(&mockLister{subscriptions: []*unstructured.Unstructured{subscriptionObject}})
+	body, err := json.Marshal(subscription.SelectRequest{Groups: []string{"basic-users"}, Username: "alice"})
+	require.NoError(t, err)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/subscriptions/select", bytes.NewReader(body)))
+	require.Equal(t, http.StatusOK, recorder.Code)
+
+	var response map[string]any
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &response))
+	assert.Equal(t, "large-sub", response["name"])
+	assert.Equal(t, "test-ns", response["namespace"])
+	assert.Equal(t, "org-basic", response["organizationId"])
+	assert.Equal(t, "cc-basic", response["costCenter"])
+	assert.Equal(t, "Active", response["phase"])
+	for _, field := range []string{"displayName", "description", "priority", "modelRefs", "labels"} {
+		assert.NotContains(t, response, field)
+	}
+	assert.Less(t, recorder.Body.Len(), 300, "response: %s", recorder.Body.String())
+}
+
 func TestHandler_SelectSubscription_NotFound(t *testing.T) {
 	subscriptions := []*unstructured.Unstructured{
 		createTestSubscription("premium-sub", []string{"premium-users"}, 20, "org-premium", "cc-premium"),

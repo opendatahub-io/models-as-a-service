@@ -90,50 +90,6 @@ func TestRequireGroupMembershipHasWhenGuard(t *testing.T) {
 	}
 }
 
-func TestRequireGroupMembershipCacheKey(t *testing.T) {
-	r := &MaaSAuthPolicyReconciler{
-		InfraNamespace:   "opendatahub",
-		GatewayNamespace: "openshift-ingress",
-		GatewayName:      "maas-default-gateway",
-	}
-
-	spec := r.buildGatewayAuthPolicySpec(nil, false, "", "models-as-a-service", "test-gateway-ns", "test-gateway", nil)
-	defaults, ok := spec["defaults"].(map[string]any)
-	if !ok {
-		t.Fatalf("gateway spec missing defaults block")
-	}
-	rules, ok := defaults["rules"].(map[string]any)
-	if !ok {
-		t.Fatalf("gateway spec missing defaults.rules block")
-	}
-	authorization, ok := rules["authorization"].(map[string]any)
-	if !ok {
-		t.Fatalf("gateway spec missing defaults.rules.authorization block")
-	}
-	requireGroupMembership, ok := authorization["require-group-membership"].(map[string]any)
-	if !ok {
-		t.Fatalf("gateway spec missing require-group-membership rule")
-	}
-
-	cache, ok := requireGroupMembership["cache"].(map[string]any)
-	if !ok {
-		t.Fatalf("require-group-membership must have cache config")
-	}
-	key, ok := cache["key"].(map[string]any)
-	if !ok {
-		t.Fatalf("cache must have key config")
-	}
-	selector, ok := key["selector"].(string)
-	if !ok {
-		t.Fatalf("cache key must have selector")
-	}
-
-	expectedSelector := subscriptionGatewayCacheKeySelector()
-	if selector != expectedSelector {
-		t.Fatalf("cache key selector = %q, want %q (subscriptionGatewayCacheKeySelector)", selector, expectedSelector)
-	}
-}
-
 // The identity filter reads subscription-info, which is only fetched when a model
 // identity is available. Unguarded, it fails on every /maas-api request, and
 // Authorino cancels the other priority-0 response configs evaluated alongside it,

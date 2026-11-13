@@ -1,21 +1,21 @@
 # Authorino Caching Configuration
 
-This document describes how to tune Authorino cache TTLs for metadata and authorization evaluators in MaaS.
+This document describes how to tune the Authorino cache TTL for metadata evaluators in MaaS.
 
 ---
 
 ## What is Cached
 
-MaaS-generated AuthPolicy resources enable caching on:
+MaaS-generated AuthPolicy resources cache the metadata evaluators that call maas-api:
 
-- **Metadata evaluators** (HTTP calls to maas-api):
-  - `apiKeyValidation` - validates API keys and returns user identity + groups
-  - `subscription-info` - selects the appropriate subscription for the request
+- `apiKeyValidation` - validates API keys and returns user identity + groups
+- `subscription-info` - selects the appropriate subscription for the request
 
-- **Authorization evaluators** (OPA policy evaluation):
-  - `auth-valid`, `subscription-valid`, `require-group-membership`
+Authorization evaluators are not cached. They recompute from the cached metadata on
+every request; caching their results could retain an allow decision after newer
+metadata contains a denial.
 
-Caching reduces load on maas-api and OPA CPU by reusing results when the cache key repeats within the TTL window. Cache keys are scoped to the individual API key (using the full unique key string, equivalent to keying on the token JTI), plus groups, subscription, and model, to prevent cross-principal or cross-subscription cache sharing.
+Caching reduces load on maas-api by reusing results when the cache key repeats within the TTL window. Cache keys are scoped to the individual API key (using the full unique key string, equivalent to keying on the token JTI), plus groups, subscription, and model, to prevent cross-principal or cross-subscription cache sharing.
 
 ---
 
@@ -23,25 +23,23 @@ Caching reduces load on maas-api and OPA CPU by reusing results when the cache k
 
 ### CLI Flags
 
-The maas-controller deployment configures cache TTLs with command-line flags:
+The maas-controller deployment configures the cache TTL with a command-line flag:
 
-- `--metadata-cache-ttl`: TTL for metadata HTTP caching in seconds. Default: `60`. Must be `>= 0`.
-- `--authz-cache-ttl`: TTL for OPA authorization caching in seconds. Default: `60`. Must be `>= 0`.
+- `--metadata-cache-ttl`: TTL for metadata HTTP caching in seconds. Default: `60`. Must be `>= 0`; `0` disables caching.
+- `--authz-cache-ttl`: Deprecated and ignored. It remains accepted so existing deployments continue to start.
 
-**Authorization cache TTL capping:** Authorization caches are automatically capped at the metadata cache TTL to prevent stale authorization decisions. If the configured authorization TTL is greater than the configured metadata TTL, the authorization cache uses the metadata TTL instead, and a warning is logged at startup.
 
 ### Deployment Configuration
 
 #### Via controller Deployment args (running cluster)
 
-The cache TTLs are configured as command-line flags on the maas-controller Deployment. To change them on a running cluster, patch the Deployment args and restart:
+The cache TTL is configured as a command-line flag on the maas-controller Deployment. To change it on a running cluster, patch the Deployment args and restart:
 
 ```bash
 CONTROLLER_NS=opendatahub
 
 kubectl patch deployment maas-controller -n "$CONTROLLER_NS" --type='json' -p='[
-  {"op":"replace","path":"/spec/template/spec/containers/0/args/6","value":"--metadata-cache-ttl=300"},
-  {"op":"replace","path":"/spec/template/spec/containers/0/args/7","value":"--authz-cache-ttl=30"}
+  {"op":"replace","path":"/spec/template/spec/containers/0/args/6","value":"--metadata-cache-ttl=300"}
 ]'
 ```
 
@@ -53,7 +51,6 @@ Edit `deployment/base/maas-controller/manager/manager.yaml` to change hardcoded 
 args:
   # ... other args ...
   - --metadata-cache-ttl=300  # 5 minutes
-  - --authz-cache-ttl=30      # 30 seconds
 ```
 
 > **Note on Customization:** Direct modification of Authorino deployments or settings may interact with operator reconciliation during upgrades. Test changes in non-production environments and document any customizations for support handoff.
@@ -67,8 +64,9 @@ args:
 Cache TTL represents the maximum staleness window for access control changes:
 
 - **API key revocation or group membership changes:** May take up to the configured metadata cache TTL to propagate
+- **API key expiry:** Not delayed; maas-api returns expiry with validation, and the gateway checks it on every request
 - **Subscription selection:** If a user's group membership changes, the cached subscription selection uses the old groups until the metadata cache TTL expires
-- **Authorization policy changes:** May take up to the effective authorization cache TTL (the minimum of the configured authorization TTL and metadata TTL) to propagate
+- **Authorization policy changes:** May take up to the metadata cache TTL to propagate because the affected metadata can remain cached
 
 #### Security implication: revocation lag
 
@@ -95,18 +93,13 @@ For **immediate enforcement** after a sensitive revocation (e.g., a compromised 
 - API key metadata changes infrequently
 - Example: `--metadata-cache-ttl=300` (5 minutes) reduces maas-api load by 5x
 
-**Decrease authorization cache TTL** if:
-- Users are frequently added/removed from groups
-- Faster access change propagation is required for compliance
-- Example: `--authz-cache-ttl=30` (30 seconds) for faster group membership updates
-
 **Decrease metadata cache TTL** if:
-- Faster API key revocation propagation is required (e.g., compliance or security policy requires a shorter revocation-lag window)
+- Faster API key revocation or group-membership propagation is required (e.g., compliance or security policy requires a shorter staleness window)
 - Note: this increases load on maas-api's `/internal/v1/api-keys/validate` endpoint proportionally; monitor request rates before and after
 
 **Monitor after changes:**
 - maas-api load: Reduced `/internal/v1/api-keys/validate` and `/internal/v1/subscriptions/select` call rates
-- Authorino CPU: Reduced OPA evaluation usage
+- Authorino CPU: Reduced HTTP evaluator work
 - Request latency: Cache hits should show lower P99 latency
 
 ---
