@@ -11,7 +11,7 @@
 #   deploy-platform.sh    Install cert-manager, ODH, deploy MaaS via deploy.sh
 #   deploy-models.sh      Deploy e2e fixtures (LLMIS, MaaSModelRef, AuthPolicy, Subscription)
 #   setup-test-tokens.sh  Create test users (admin + regular) and extract auth tokens
-#   run_e2e_tests.sh      pytest execution: two-pass xdist (parallel + serial)
+#   run_e2e_tests.sh      pytest execution: three marker-filtered passes
 #
 # USAGE:
 #   ./test/e2e/scripts/prow_run_smoke_test.sh
@@ -51,7 +51,10 @@
 #   AITENANT_NAMESPACE - Namespace for AITenant CRs (default: ai-tenants)
 #   GATEWAY_NAMESPACE - Gateway namespace (default: openshift-ingress)
 #   MODEL_NAMESPACE - Namespace of models (default: llm)
-#   E2E_PARALLEL_WORKERS - pytest-xdist worker count (default: 5)
+#   E2E_SERIAL_WORKERS - pytest-xdist lane count for serial pass 2b (default: 1).
+#                 Lanes are implemented but off: pass-2b files share model auth
+#                 state beyond their xdist_group, so >1 races. Pass 2a is always
+#                 one worker.
 #   E2E_SMOKE_ONLY - Restrict pytest to @pytest.mark.smoke (default: false).
 #                    /group-test sets true via Tekton podTemplate env.
 #   E2E_INCLUDE_NEW_FROM_DIFF - With E2E_SMOKE_ONLY, also run tests added since
@@ -513,6 +516,16 @@ print(f"azp={authorized_party}, audience={token_audience!r}")
     # Full suite by default (nightly / local / unmarked callers). /group-test opts
     # into the low-churn subset via Tekton: E2E_SMOKE_ONLY=true.
     export E2E_SMOKE_ONLY="${E2E_SMOKE_ONLY:-false}"
+    # Serial pass 2b runs on one worker. Lanes are implemented and measurable
+    # (`E2E_SERIAL_WORKERS=2` took 2b from ~17.9 min to 11.5 min) but are NOT
+    # safe yet: grouping is per file, while several pass-2b files read the
+    # stored auth state of the same models. Measured at 3 lanes:
+    # test_models_endpoint::test_empty_model_list failed because a concurrent
+    # test in test_subscription had created a MaaSAuthPolicy on the
+    # UNCONFIGURED model, which made that model appear in the tenant's
+    # /v1/models. Turning lanes on needs a shared-model dependency audit first
+    # (see the PR description), not just more groups.
+    export E2E_SERIAL_WORKERS="${E2E_SERIAL_WORKERS:-1}"
     # Run the whole parallel pass even when some tests fail. The cluster's
     # control plane (kuadrant-operator, maas-controller) is shared by all
     # workers and goes unhealthy in roughly one run in five; a low cap aborts
