@@ -42,13 +42,13 @@ func TestMaaSSubscriptionOrganizationRoundTrip(t *testing.T) {
 var envTest *pkgtest.Client
 
 var _ = BeforeSuite(func(ctx SpecContext) {
+	crdDir := filepath.Join(pkgtest.ProjectRoot(), "deployment", "base", "maas-controller", "crd", "bases")
 	envTest = pkgtest.Configure(
 		pkgtest.WithScheme(clientgoscheme.AddToScheme, maasv1alpha1.AddToScheme),
-		pkgtest.WithCRDs(filepath.Join(
-			pkgtest.ProjectRoot(),
-			"deployment", "base", "maas-controller", "crd", "bases",
-			"maas.opendatahub.io_maassubscriptions.yaml",
-		)),
+		pkgtest.WithCRDs(
+			filepath.Join(crdDir, "maas.opendatahub.io_maassubscriptions.yaml"),
+			filepath.Join(crdDir, "maas.opendatahub.io_maastenantconfigs.yaml"),
+		),
 	).Start()
 	Expect(envTest.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "maas-subscription-organization"}})).To(Succeed())
 })

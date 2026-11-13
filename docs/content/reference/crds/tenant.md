@@ -37,8 +37,8 @@ See [AITenant CRD](ai-tenant.md) for creating additional tenants.
 | apiKeys | TenantAPIKeysConfig | No | Configuration for API key management |
 | telemetry | TenantTelemetryConfig | No | Telemetry and metrics collection configuration |
 | maasApi | MaasAPIConfig | No | Replica count and resource configuration for the maas-api Deployment |
-| payloadProcessing | PayloadProcessingConfig | No | Replica count, autoscaling, and resource configuration for the payload-processing Deployment |
-| payloadPreProcessing | PayloadProcessingConfig | No | Replica count, autoscaling, and resource configuration for the payload-pre-processing Deployment |
+| payloadProcessing | PayloadProcessingConfig | No | Replica count, autoscaling, resource configuration, and ExtProc `maxBodyBytes` for the payload-processing Deployment |
+| payloadPreProcessing | PayloadProcessingConfig | No | Replica count, autoscaling, and resource configuration for the payload-pre-processing Deployment (`maxBodyBytes` is ignored here) |
 
 ---
 
@@ -120,13 +120,14 @@ spec:
 
 ## PayloadProcessingConfig
 
-`spec.payloadProcessing` controls replica count, autoscaling, and resource limits for the tenant's payload-processing Deployment.
+`spec.payloadProcessing` controls replica count, autoscaling, resource limits, and the ExtProc request-body accumulation ceiling for the tenant's payload-processing Deployment.
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
 | replicas | int32 | No | 1 | Sets the Deployment `spec.replicas`. When `autoscaling` is also configured, this value becomes the HPA `minReplicas` floor instead. Valid range: 1–100. |
 | autoscaling | PayloadProcessingAutoscaling | No | - | Presence of this section enables HPA-based autoscaling for payload-processing pods. |
 | resources | [ResourceRequirements](https://kubernetes.io/docs/reference/kubernetes-api/core/pod-v1/#resources) | No | requests: 128Mi/100m, limits: 512Mi/1 | Overrides the resource requests and limits for the payload-processing container. When set, replaces the entire resource block (full replacement, not merge). Resource claims are not supported. |
+| maxBodyBytes | int64 | No | 10485760 (10 MiB) | Bounds ExtProc request-body accumulation (`server.max_body_bytes`) for the Praxis payload-processing dataplane. This is ExtProc's accumulation ceiling, not Envoy's HTTP buffer. Valid range: 1–33554432 (32 MiB). Consumed only under `MaasTenantConfig.spec.payloadProcessing`; ignored under `payloadPreProcessing` and on the deprecated `Tenant` CRD. Keep aligned with AGC `MaxExtProcMaxBodyBytes`. |
 
 ### PayloadProcessingAutoscaling
 
@@ -167,13 +168,14 @@ spec:
 
 ## PayloadPreProcessingConfig
 
-`spec.payloadPreProcessing` controls replica count, autoscaling, and resource limits for the tenant's payload-pre-processing Deployment. It uses the same shape as [`PayloadProcessingConfig`](#payloadprocessingconfig).
+`spec.payloadPreProcessing` controls replica count, autoscaling, and resource limits for the tenant's payload-pre-processing Deployment. It uses the same shape as [`PayloadProcessingConfig`](#payloadprocessingconfig), but `maxBodyBytes` is currently ignored by the AI Gateway controller; only `spec.payloadProcessing.maxBodyBytes` is consumed.
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
 | replicas | int32 | No | 1 | Sets the Deployment `spec.replicas`. When `autoscaling` is also configured, this value becomes the HPA `minReplicas` floor instead. Valid range: 1–100. |
 | autoscaling | PayloadProcessingAutoscaling | No | - | Presence of this section enables HPA-based autoscaling for payload-pre-processing pods. |
 | resources | [ResourceRequirements](https://kubernetes.io/docs/reference/kubernetes-api/core/pod-v1/#resources) | No | requests: 128Mi/100m, limits: 512Mi/1 | Overrides the resource requests and limits for the payload-pre-processing container. When set, replaces the entire resource block (full replacement, not merge). Resource claims are not supported. |
+| maxBodyBytes | int64 | No | 10485760 (10 MiB) | Present in the shared schema but currently unused under `payloadPreProcessing`. Set `spec.payloadProcessing.maxBodyBytes` instead. |
 
 Autoscaling behavior, request requirements when HPA is enabled, and full-replacement resource semantics match `spec.payloadProcessing`.
 
