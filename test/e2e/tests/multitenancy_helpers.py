@@ -111,14 +111,29 @@ def env_bool(name: str, default: bool = False) -> bool:
 
 
 def external_oidc_from_env() -> Optional[dict[str, str]]:
-    """Return the deployed OIDC config used by the default tenant, when enabled."""
+    """Return the deployed OIDC config used by the default tenant, when enabled.
+
+    When Shepard gather-maas-test-config exports Konflux parity fields, include the
+    same strict audience/purpose contract on every AITenant so worker tenants match
+    the config tenant (models-as-a-service on maas-default-gateway).
+    """
     issuer = os.environ.get("OIDC_ISSUER_URL", "")
     if not env_bool("EXTERNAL_OIDC") or not issuer:
         return None
-    return {
+    oidc: dict[str, str] = {
         "issuerUrl": issuer,
         "clientId": os.environ.get("OIDC_CLIENT_ID", "test-client"),
     }
+    audience = os.environ.get("OIDC_AUDIENCE", "").strip()
+    purpose_claim = os.environ.get("OIDC_ACCESS_TOKEN_PURPOSE_CLAIM", "").strip()
+    purpose = os.environ.get("OIDC_ACCESS_TOKEN_PURPOSE", "").strip()
+    if audience:
+        oidc["audience"] = audience
+    if purpose_claim:
+        oidc["accessTokenPurposeClaim"] = purpose_claim
+    if purpose:
+        oidc["accessTokenPurpose"] = purpose
+    return oidc
 
 
 def tenant_b_external_oidc_from_env() -> Optional[dict[str, str]]:
@@ -288,9 +303,11 @@ def wait_for_json(
     namespace: Optional[str] = None,
     *,
     predicate=None,
-    timeout: int = 180,
+    timeout: Optional[int] = None,
     interval: int = 5,
 ) -> dict:
+    if timeout is None:
+        timeout = int(os.environ.get("E2E_AITENANT_READY_TIMEOUT", "180"))
     deadline = time.time() + timeout
     last_obj = None
     while time.time() < deadline:
@@ -1452,9 +1469,17 @@ def deployment_log_snapshot(
         ["logs", f"deployment/{deployment_name}", "-n", namespace, f"--since={since}"],
         ["logs", f"deployment/{deployment_name}", "-n", namespace, f"--since={since}", "--tail=300"],
     ):
-        result = _oc_run(args, timeout=120)
-        if result.returncode == 0 and (result.stdout or "").strip():
-            return result.stdout
+        proc = subprocess.run(
+            [_oc_bin(), *args],
+            capture_output=True,
+            timeout=120,
+            check=False,
+        )
+        if proc.returncode != 0:
+            continue
+        raw = (proc.stdout or b"").decode("utf-8", errors="replace")
+        if raw.strip():
+            return raw
     return ""
 
 
