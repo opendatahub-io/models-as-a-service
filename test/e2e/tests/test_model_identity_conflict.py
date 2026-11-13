@@ -36,7 +36,7 @@ from test_helper import (
 )
 
 pytestmark = [
-    pytest.mark.xdist_group("models"),
+    pytest.mark.xdist_group("models_identity"),
     pytest.mark.worker_tenant,
 ]
 
