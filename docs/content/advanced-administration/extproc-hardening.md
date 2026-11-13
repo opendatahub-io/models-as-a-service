@@ -1,20 +1,22 @@
 # ExtProc Hardening and Tuning
 
-The AI Gateway Controller configures an Envoy External Processing (ExtProc) filter for each tenant's payload-processing sidecar. Starting with ai-gateway-controller PR #217, the default ExtProc configuration enforces fail-closed semantics, TLS certificate validation, bounded request bodies, and reduced pod service-account privileges. This page describes the security posture and the experimental annotations available to tune concurrency and body-size limits.
+The AI Gateway Controller configures an Envoy External Processing (ExtProc) filter for each tenant's payload-processing sidecar. Starting with ai-gateway-controller PR #217, the default ExtProc configuration enforces fail-closed semantics on the post-auth filter, TLS encryption, bounded request bodies, and reduced pod service-account privileges. This page describes the security posture and the experimental annotations available to tune concurrency and body-size limits.
 
-!!! warning "Fail-closed by default"
+!!! warning "Post-auth filter is fail-closed"
 
-    ExtProc now runs with `failure_mode_allow: false`. If the ExtProc sidecar is unavailable or unhealthy, Envoy returns **503 Service Unavailable** to the client instead of bypassing processing. Plan replica counts and health probes accordingly.
+    The post-auth ExtProc filter (`ipp`) runs with `failure_mode_allow: false`. If the ExtProc sidecar is unavailable or unhealthy, Envoy returns **500 Internal Server Error** to the client instead of bypassing processing. Plan replica counts and health probes accordingly.
+
+    The pre-auth filter (`ipp-pre`) runs with `failure_mode_allow: true` (fail-open) so that requests are not blocked before authentication completes.
 
 ## Security Changes
 
 ### TLS Trust
 
-ExtProc connections between Envoy and the payload-processing sidecar use OpenShift service-serving certificates (`tls.mode: provided`) with full certificate and SAN validation. The previous `ACCEPT_UNTRUSTED` mode has been removed.
+ExtProc connections between Envoy and the payload-processing sidecar are encrypted with TLS (`tls.mode: SIMPLE`). However, certificate verification is currently skipped (`insecureSkipVerify: true` in the DestinationRule), so the server certificate and SAN are **not** validated. This is a known gap — a future release will enable full certificate verification.
 
 ### Pod Service-Account Privileges
 
-The `payload-processing-reader` ClusterRole and ClusterRoleBinding have been removed. Payload-processing pods no longer hold cluster-scoped read privileges.
+The `payload-processing-reader` ClusterRole and ClusterRoleBinding have been scoped down. The cluster-scoped read privileges previously granted to payload-processing pods have been reduced to the minimum required for operation.
 
 ### Bounded Request Bodies
 
@@ -22,7 +24,7 @@ The `allow_unbounded_body` option has been removed. All requests processed by Ex
 
 ### No Retry Queue
 
-Requests that exceed the concurrency budget are not queued. Envoy returns **503** immediately when all ExtProc connections are in use. There is no retry or backpressure mechanism — size your gateway replicas and concurrency budget for your expected peak load.
+Envoy allows up to `max_pending_requests` requests (default: 8) to be held pending during connection establishment. Once both the active request limit (`max_requests`) and the pending limit are reached, Envoy returns **503** for additional requests. There is no retry or backpressure mechanism beyond the pending queue — size your gateway replicas and concurrency budget for your expected peak load.
 
 ## Experimental Annotations
 
@@ -78,10 +80,10 @@ Size your gateway replicas and `experimental-extproc-max-requests` value against
 
 | Factor | Guidance |
 |---|---|
-| Concurrent large bodies | Each in-flight request up to `max_body_bytes` is held in memory. Multiply `max_requests` by `max_body_bytes` for peak memory estimate per replica. |
+| Concurrent large bodies | Each in-flight request up to `max_body_bytes` is held in memory. Multiply `max_requests` by `max_body_bytes` for a baseline memory estimate per replica. In practice, expect approximately **5× memory amplification** due to processing copies (e.g., a single 10 MiB body can consume ~50 MiB at peak). Factor this into resource limits. |
 | Gateway replicas | Increase replicas before raising `max_requests` beyond the default. Horizontal scaling distributes memory pressure across pods. |
-| Overflow behavior | Requests exceeding the concurrency budget receive **503** immediately (fail-closed, no queue). |
-| ExtProc unavailability | All requests fail with **503** while the sidecar is down (`failure_mode_allow: false`). |
+| Overflow behavior | Requests exceeding both the active (`max_requests`) and pending (`max_pending_requests`) limits receive **503**. Up to `max_pending_requests` requests may be held during connection setup. |
+| ExtProc unavailability | All requests fail with **500** while the sidecar is down (post-auth filter has `failure_mode_allow: false`). |
 
 !!! note
 
