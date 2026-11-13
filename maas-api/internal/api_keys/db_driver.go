@@ -38,6 +38,10 @@ var concurrentMigrations = []concurrentMigration{
 		name: "idx_api_keys_labels_gin",
 		sql:  "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_api_keys_labels_gin ON api_keys USING GIN (labels jsonb_path_ops)",
 	},
+	{
+		name: "idx_api_keys_tenant_subscription_id_active",
+		sql:  "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_api_keys_tenant_subscription_id_active ON api_keys(tenant, subscription_id) WHERE deleted_at IS NULL",
+	},
 	// Future concurrent indexes go here.
 }
 

@@ -1232,6 +1232,7 @@ func TestMaaSAuthPolicyReconciler_CachingConfiguration(t *testing.T) {
 		name            string
 		metadataTTL     int64
 		authzTTL        int64
+		identityMode    string
 		wantMetadataTTL int64
 		wantAuthzTTL    int64
 	}{
@@ -1270,6 +1271,14 @@ func TestMaaSAuthPolicyReconciler_CachingConfiguration(t *testing.T) {
 			wantMetadataTTL: 60,
 			wantAuthzTTL:    60, // Should be capped at metadata TTL
 		},
+		{
+			name:            "strict identity mode disables caches",
+			metadataTTL:     60,
+			authzTTL:        60,
+			identityMode:    "strict",
+			wantMetadataTTL: 0,
+			wantAuthzTTL:    0,
+		},
 	}
 
 	for _, tc := range tests {
@@ -1286,13 +1295,14 @@ func TestMaaSAuthPolicyReconciler_CachingConfiguration(t *testing.T) {
 				Build()
 
 			r := &MaaSAuthPolicyReconciler{
-				Client:           c,
-				Scheme:           scheme,
-				InfraNamespace:   "maas-system",
-				GatewayName:      "maas-default-gateway",
-				GatewayNamespace: gatewayNS,
-				MetadataCacheTTL: tc.metadataTTL,
-				AuthzCacheTTL:    tc.authzTTL,
+				Client:                   c,
+				Scheme:                   scheme,
+				InfraNamespace:           "maas-system",
+				GatewayName:              "maas-default-gateway",
+				GatewayNamespace:         gatewayNS,
+				MetadataCacheTTL:         tc.metadataTTL,
+				AuthzCacheTTL:            tc.authzTTL,
+				SubscriptionIdentityMode: tc.identityMode,
 			}
 
 			req := ctrl.Request{NamespacedName: types.NamespacedName{Name: maasPolicyName, Namespace: namespace}}
@@ -1377,6 +1387,44 @@ func TestMaaSAuthPolicyReconciler_CachingConfiguration(t *testing.T) {
 				t.Errorf("require-group-membership cache.key.selector is empty")
 			}
 		})
+	}
+}
+
+func TestMaaSAuthPolicyReconciler_TenantIdentityModeOverridesGlobalDefault(t *testing.T) {
+	const namespace = "default"
+	tenant := &maasv1alpha1.Tenant{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      maasv1alpha1.TenantInstanceName,
+			Namespace: namespace,
+		},
+		Spec: maasv1alpha1.TenantSpec{
+			APIKeys: &maasv1alpha1.TenantAPIKeysConfig{
+				SubscriptionIdentityMode: "off",
+			},
+		},
+	}
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(testRESTMapper()).
+		WithObjects(legacyNamespace(namespace), tenant).
+		Build()
+	r := &MaaSAuthPolicyReconciler{
+		Client:                   c,
+		Scheme:                   scheme,
+		SubscriptionIdentityMode: "strict",
+	}
+
+	if r.subscriptionIdentityStrictForNamespace(context.Background(), namespace) {
+		t.Fatal("tenant off mode must override the global strict default")
+	}
+
+	tenant.Spec.APIKeys.SubscriptionIdentityMode = "strict"
+	r.SubscriptionIdentityMode = "off"
+	if err := c.Update(context.Background(), tenant); err != nil {
+		t.Fatalf("update tenant: %v", err)
+	}
+	if !r.subscriptionIdentityStrictForNamespace(context.Background(), namespace) {
+		t.Fatal("tenant strict mode must override the global off default")
 	}
 }
 
@@ -1938,6 +1986,24 @@ func TestMaaSAuthPolicyReconciler_IdentityHeadersUpstream(t *testing.T) {
 			t.Error("filters.identity.metrics must be true for telemetry to access identity data")
 		}
 	})
+
+	t.Run("subscription authorization leaves incarnation binding to API validation", func(t *testing.T) {
+		rego, found, err := unstructured.NestedString(
+			gwPolicy.Object,
+			"spec", "defaults", "rules", "authorization", "subscription-valid", "opa", "rego",
+		)
+		if err != nil || !found {
+			t.Fatalf("subscription-valid rego missing: found=%v err=%v", found, err)
+		}
+		for _, field := range []string{
+			"subscriptionIdentityId",
+			"subscriptionNamespace",
+		} {
+			if strings.Contains(rego, field) {
+				t.Errorf("subscription-valid rego should not compare %s locally; maas-api strict validation owns that decision, got:\n%s", field, rego)
+			}
+		}
+	})
 }
 
 func assertNonEmptySubscriptionHeader(t *testing.T, headers map[string]any, header, field string) {
@@ -2219,6 +2285,52 @@ func TestBuildGatewayAuthPolicySpec_SubscriptionHeaderInjection(t *testing.T) {
 		"spec", "defaults", "rules", "metadata", "subscription-info", "cache", "key", "selector")
 	if !strings.Contains(cacheKey, wantSelection) {
 		t.Errorf("subscription-info cache key must include the client header selection, got %q", cacheKey)
+	}
+}
+
+func TestBuildGatewayAuthPolicySpec_BindsSubscriptionSelectionToAPIKeyIdentity(t *testing.T) {
+	r := &MaaSAuthPolicyReconciler{
+		InfraNamespace:           "maas-system",
+		GatewayName:              "maas-default-gateway",
+		GatewayNamespace:         "gateway-ns",
+		ClusterAudience:          "https://kubernetes.default.svc",
+		MetadataCacheTTL:         60,
+		AuthzCacheTTL:            60,
+		SubscriptionIdentityMode: "strict",
+	}
+	spec := r.buildGatewayAuthPolicySpec(nil, false, "", "models-as-a-service", "test-gateway-ns", "test-gateway", nil)
+	obj := &unstructured.Unstructured{Object: map[string]any{"spec": spec}}
+	bodyExpression := nestedStringRequired(t, obj,
+		"spec", "defaults", "rules", "metadata", "subscription-info", "http", "body", "expression",
+	)
+
+	const identityID = "0b6fe901-7b52-4a78-9cbf-e398728ef67e"
+	auth := map[string]any{
+		"identity": "sk-oai-test",
+		"metadata": map[string]any{
+			"apiKeyValidation": map[string]any{
+				"groups":                 []any{},
+				"username":               "alice",
+				"subscription":           "identity-sub",
+				"subscriptionIdentityId": identityID,
+			},
+		},
+	}
+	body := evaluateGatewayCELMap(t, bodyExpression, auth)
+	if body["requestedSubscription"] != "identity-sub" {
+		t.Fatalf("requestedSubscription = %#v, want identity-sub", body["requestedSubscription"])
+	}
+	if body["requestedSubscriptionIdentityId"] != identityID {
+		t.Fatalf("requestedSubscriptionIdentityId = %#v, want %s", body["requestedSubscriptionIdentityId"], identityID)
+	}
+
+	tokenBody := evaluateGatewayCELMap(t, bodyExpression, map[string]any{
+		"identity": map[string]any{"user": map[string]any{"username": "alice", "groups": []any{}}},
+		"groups":   []any{},
+		"username": "alice",
+	})
+	if tokenBody["requestedSubscriptionIdentityId"] != "" {
+		t.Fatalf("user-token requestedSubscriptionIdentityId = %#v, want empty", tokenBody["requestedSubscriptionIdentityId"])
 	}
 }
 

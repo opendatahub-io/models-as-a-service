@@ -331,8 +331,18 @@ func (r *TenantReconciler) validateConfigAndGateway(ctx context.Context, log log
 
 	fallbackGatewayRef := fallbackTenantGatewayRef(r.GatewayName, r.GatewayNamespace)
 	platformContext, err := tenantreconcile.ResolvePlatformContext(ctx, r.Client, tenant, fallbackGatewayRef)
+	platformContext.SubscriptionIdentityMode = r.SubscriptionIdentityMode
 	if err != nil {
 		if err2 := r.patchStatus(ctx, tenant, "Failed", metav1.ConditionFalse, "InvalidGateway", err.Error()); err2 != nil {
+			return nil, tenantreconcile.PlatformContext{}, nil, err2
+		}
+		res := ctrl.Result{RequeueAfter: 30 * time.Second}
+		return nil, tenantreconcile.PlatformContext{}, &res, nil
+	}
+
+	if err := tenantreconcile.ValidateSubscriptionIdentityConfig(tenant, r.SubscriptionIdentityMode); err != nil {
+		log.Info("subscription identity configuration validation failed", "error", err)
+		if err2 := r.patchStatus(ctx, tenant, "Failed", metav1.ConditionFalse, "InvalidSubscriptionIdentityConfig", err.Error()); err2 != nil {
 			return nil, tenantreconcile.PlatformContext{}, nil, err2
 		}
 		res := ctrl.Result{RequeueAfter: 30 * time.Second}
@@ -932,6 +942,7 @@ func (r *TenantReconciler) ensureGatewayManagementAuth(ctx context.Context, log 
 		ClusterAudience:                 r.ClusterAudience,
 		MetadataCacheTTL:                r.MetadataCacheTTL,
 		AuthzCacheTTL:                   r.MetadataCacheTTL,
+		SubscriptionIdentityMode:        r.SubscriptionIdentityMode,
 		TenantNamespaceDiscoveryEnabled: r.TenantNamespaceDiscoveryEnabled,
 	}
 

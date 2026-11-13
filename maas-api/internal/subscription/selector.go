@@ -188,6 +188,7 @@ type subscription struct {
 	DeletionTimestamp        *string                // metadata.deletionTimestamp (set when being deleted)
 	TokenRateLimitStatuses   []TokenRateLimitStatus // per-model TRLP status from status.tokenRateLimitStatuses
 	UseShortRateLimitID      bool                   // status.rateLimitIdentity=short
+	SubscriptionIdentityID   string                 // status.subscriptionIdentityId
 	Objectives               map[string]string      // "namespace/name" of a model -> InferenceObjective name, from status.flowControlStatuses
 }
 
@@ -615,13 +616,16 @@ func authorizedSelectionSubscription(sub *subscription, authorizedSet map[authpo
 func (s *Selector) selectExplicit(
 	ctx context.Context,
 	subscriptions []subscription,
-	requestedSubscription, requestedModel, username string,
+	requestedSubscription, requestedSubscriptionIdentityID, requestedModel, username string,
 	groups []string,
 	authorizedSet map[authpolicy.ModelKey]bool,
 ) (*SelectResponse, error) {
 	for _, sub := range subscriptions {
 		qualifiedName := fmt.Sprintf("%s/%s", sub.Namespace, sub.Name)
 		if qualifiedName == requestedSubscription {
+			if requestedSubscriptionIdentityID != "" && sub.SubscriptionIdentityID != requestedSubscriptionIdentityID {
+				continue
+			}
 			if subscriptionIsDeleting(&sub) {
 				continue
 			}
@@ -638,6 +642,9 @@ func (s *Selector) selectExplicit(
 	if !strings.Contains(requestedSubscription, "/") {
 		for _, sub := range subscriptions {
 			if sub.Name != requestedSubscription {
+				continue
+			}
+			if requestedSubscriptionIdentityID != "" && sub.SubscriptionIdentityID != requestedSubscriptionIdentityID {
 				continue
 			}
 			if subscriptionIsDeleting(&sub) {
@@ -665,8 +672,22 @@ func (s *Selector) Select(groups []string, username string, requestedSubscriptio
 
 // SelectWithContext selects a subscription and passes ctx to guardrail resolution.
 func (s *Selector) SelectWithContext(ctx context.Context, groups []string, username string, requestedSubscription string, requestedModel string) (*SelectResponse, error) {
+	return s.SelectWithIdentity(ctx, groups, username, requestedSubscription, "", requestedModel)
+}
+
+func (s *Selector) SelectWithIdentity(
+	ctx context.Context,
+	groups []string,
+	username string,
+	requestedSubscription string,
+	requestedSubscriptionIdentityID string,
+	requestedModel string,
+) (*SelectResponse, error) {
 	if len(groups) == 0 && username == "" {
 		return nil, errors.New("either groups or username must be provided")
+	}
+	if requestedSubscriptionIdentityID != "" && requestedSubscription == "" {
+		return nil, errors.New("requestedSubscription is required when requestedSubscriptionIdentityId is provided")
 	}
 
 	requestedModel = s.resolveModelAlias(requestedModel)
@@ -688,7 +709,10 @@ func (s *Selector) SelectWithContext(ctx context.Context, groups []string, usern
 	}
 
 	if requestedSubscription != "" {
-		return s.selectExplicit(ctx, subscriptions, requestedSubscription, requestedModel, username, groups, authorizedSet)
+		return s.selectExplicit(
+			ctx, subscriptions, requestedSubscription, requestedSubscriptionIdentityID,
+			requestedModel, username, groups, authorizedSet,
+		)
 	}
 
 	// Auto-selection
@@ -846,6 +870,26 @@ func (s *Selector) SelectHighestPriority(groups []string, username string) (*Sel
 	return resp, nil
 }
 
+// LookupSubscription returns one local subscription without applying user
+// authorization. It is used to compare an API key's immutable identity binding
+// with the subscription incarnation currently present in this cluster.
+func (s *Selector) LookupSubscription(namespace, name string) (*SelectResponse, error) {
+	if s.subscriptionNamespace != "" && namespace != s.subscriptionNamespace {
+		return nil, fmt.Errorf("subscription namespace %q is not served by this selector", namespace)
+	}
+	subscriptions, err := s.loadSubscriptions()
+	if err != nil {
+		return nil, fmt.Errorf("failed to load subscriptions: %w", err)
+	}
+	for index := range subscriptions {
+		sub := &subscriptions[index]
+		if sub.Namespace == namespace && sub.Name == name {
+			return toResponse(sub), nil
+		}
+	}
+	return nil, &SubscriptionNotFoundError{Subscription: namespace + "/" + name}
+}
+
 func subscriptionIsDeleting(sub *subscription) bool {
 	return sub != nil && sub.DeletionTimestamp != nil
 }
@@ -906,8 +950,6 @@ func (s *Selector) enrichModelRefs(refs []ModelRefInfo, index map[string]*unstru
 }
 
 // parseSubscription extracts subscription data from unstructured object.
-//
-//nolint:gocyclo // TODO: refactor to reduce cyclomatic complexity
 func parseSubscription(obj *unstructured.Unstructured) (subscription, error) {
 	spec, found, err := unstructured.NestedMap(obj.Object, "spec")
 	if err != nil || !found {
@@ -919,48 +961,16 @@ func parseSubscription(obj *unstructured.Unstructured) (subscription, error) {
 		Namespace: obj.GetNamespace(),
 	}
 
-	// Parse annotations for display metadata.
-	if annotations := obj.GetAnnotations(); annotations != nil {
-		sub.DisplayName = annotations[constant.AnnotationDisplayName]
-		sub.Description = annotations[constant.AnnotationDescription]
-		headers, err := parseSubscriptionHeaders(annotations[constant.AnnotationSubscriptionHeaders])
-		if err != nil {
-			return subscription{}, fmt.Errorf("parse subscription headers annotation: %w", err)
-		}
-		sub.Headers = headers
+	if err := parseSubscriptionAnnotations(obj, &sub); err != nil {
+		return subscription{}, err
+	}
+	parseSubscriptionRateLimitIdentity(obj, &sub)
+
+	if subscriptionIdentityID, found, _ := unstructured.NestedString(obj.Object, "status", "subscriptionIdentityId"); found {
+		sub.SubscriptionIdentityID = strings.TrimSpace(subscriptionIdentityID)
 	}
 
-	// Match controller precedence: spec escape hatch, sticky status, then
-	// legacy annotation from early short-ID builds.
-	identity, _, _ := unstructured.NestedString(obj.Object, "spec", "rateLimitIdentity")
-	if identity == "" {
-		identity, _, _ = unstructured.NestedString(obj.Object, "status", "rateLimitIdentity")
-	}
-	if identity == "" {
-		if annotations := obj.GetAnnotations(); annotations != nil {
-			identity = annotations[constant.AnnotationRateLimitIdentity]
-		}
-	}
-	sub.UseShortRateLimitID = UsesShortRateLimitID(identity)
-
-	// Parse owner
-	if owner, found, _ := unstructured.NestedMap(spec, "owner"); found {
-		// Parse groups
-		if groupsRaw, found, _ := unstructured.NestedSlice(owner, "groups"); found {
-			for _, g := range groupsRaw {
-				if groupMap, ok := g.(map[string]any); ok {
-					if name, ok := groupMap["name"].(string); ok {
-						sub.Groups = append(sub.Groups, name)
-					}
-				}
-			}
-		}
-
-		// Parse users
-		if users, found, _ := unstructured.NestedStringSlice(owner, "users"); found {
-			sub.Users = users
-		}
-	}
+	parseSubscriptionOwner(spec, &sub)
 
 	// Parse priority
 	if priority, found, _ := unstructured.NestedInt64(spec, "priority"); found {
@@ -999,64 +1009,7 @@ func parseSubscription(obj *unstructured.Unstructured) (subscription, error) {
 		}
 	}
 
-	// Parse status.phase with validation
-	if status, found, _ := unstructured.NestedMap(obj.Object, "status"); found {
-		if phase, ok := status["phase"].(string); ok {
-			// Normalize whitespace and validate against known phases
-			phase = strings.TrimSpace(phase)
-			switch phase {
-			case PhaseActive, PhaseDegraded, PhaseFailed, PhasePending:
-				sub.Phase = phase
-			default:
-				// Unknown phase value - keep raw for debugging but will be rejected by health checks
-				sub.Phase = phase
-			}
-		}
-
-		// Parse status.conditions to extract Ready condition
-		if conditions, found, _ := unstructured.NestedSlice(status, "conditions"); found {
-			for _, condRaw := range conditions {
-				if condMap, ok := condRaw.(map[string]any); ok {
-					condType, _ := condMap["type"].(string)
-					if condType == "Ready" {
-						condStatus, _ := condMap["status"].(string)
-						sub.Ready = condStatus == "True"
-						break
-					}
-				}
-			}
-		}
-
-		parseFlowControlStatuses(status, &sub)
-
-		// Parse status.tokenRateLimitStatuses to extract TRLP health
-		if trlpStatuses, found, _ := unstructured.NestedSlice(status, "tokenRateLimitStatuses"); found {
-			for _, statusRaw := range trlpStatuses {
-				if statusMap, ok := statusRaw.(map[string]any); ok {
-					trlpStatus := TokenRateLimitStatus{}
-					if model, ok := statusMap["model"].(string); ok {
-						trlpStatus.Model = model
-					}
-					if name, ok := statusMap["name"].(string); ok {
-						trlpStatus.Name = name
-					}
-					if namespace, ok := statusMap["namespace"].(string); ok {
-						trlpStatus.Namespace = namespace
-					}
-					if ready, ok := statusMap["ready"].(bool); ok {
-						trlpStatus.Ready = ready
-					}
-					if reason, ok := statusMap["reason"].(string); ok {
-						trlpStatus.Reason = reason
-					}
-					if message, ok := statusMap["message"].(string); ok {
-						trlpStatus.Message = message
-					}
-					sub.TokenRateLimitStatuses = append(sub.TokenRateLimitStatuses, trlpStatus)
-				}
-			}
-		}
-	}
+	parseSubscriptionStatus(obj, &sub)
 
 	// Parse metadata.deletionTimestamp
 	if metadata := obj.Object["metadata"]; metadata != nil {
@@ -1068,6 +1021,110 @@ func parseSubscription(obj *unstructured.Unstructured) (subscription, error) {
 	}
 
 	return sub, nil
+}
+
+func parseSubscriptionAnnotations(obj *unstructured.Unstructured, sub *subscription) error {
+	annotations := obj.GetAnnotations()
+	if annotations == nil {
+		return nil
+	}
+	sub.DisplayName = annotations[constant.AnnotationDisplayName]
+	sub.Description = annotations[constant.AnnotationDescription]
+	headers, err := parseSubscriptionHeaders(annotations[constant.AnnotationSubscriptionHeaders])
+	if err != nil {
+		return fmt.Errorf("parse subscription headers annotation: %w", err)
+	}
+	sub.Headers = headers
+	return nil
+}
+
+func parseSubscriptionRateLimitIdentity(obj *unstructured.Unstructured, sub *subscription) {
+	identity, _, _ := unstructured.NestedString(obj.Object, "spec", "rateLimitIdentity")
+	if identity == "" {
+		identity, _, _ = unstructured.NestedString(obj.Object, "status", "rateLimitIdentity")
+	}
+	if identity == "" {
+		if annotations := obj.GetAnnotations(); annotations != nil {
+			identity = annotations[constant.AnnotationRateLimitIdentity]
+		}
+	}
+	sub.UseShortRateLimitID = UsesShortRateLimitID(identity)
+}
+
+func parseSubscriptionOwner(spec map[string]any, sub *subscription) {
+	owner, found, _ := unstructured.NestedMap(spec, "owner")
+	if !found {
+		return
+	}
+	if groupsRaw, found, _ := unstructured.NestedSlice(owner, "groups"); found {
+		for _, group := range groupsRaw {
+			groupMap, ok := group.(map[string]any)
+			if !ok {
+				continue
+			}
+			name, ok := groupMap["name"].(string)
+			if !ok || name == "system:authenticated" {
+				continue
+			}
+			sub.Groups = append(sub.Groups, name)
+		}
+	}
+	if users, found, _ := unstructured.NestedStringSlice(owner, "users"); found {
+		sub.Users = users
+	}
+}
+
+func parseSubscriptionStatus(obj *unstructured.Unstructured, sub *subscription) {
+	status, found, _ := unstructured.NestedMap(obj.Object, "status")
+	if !found {
+		return
+	}
+	if phase, ok := status["phase"].(string); ok {
+		sub.Phase = strings.TrimSpace(phase)
+	}
+	parseReadyCondition(status, sub)
+	parseFlowControlStatuses(status, sub)
+	parseTokenRateLimitStatuses(status, sub)
+}
+
+func parseReadyCondition(status map[string]any, sub *subscription) {
+	conditions, found, _ := unstructured.NestedSlice(status, "conditions")
+	if !found {
+		return
+	}
+	for _, condition := range conditions {
+		conditionMap, ok := condition.(map[string]any)
+		if !ok || conditionMap["type"] != "Ready" {
+			continue
+		}
+		sub.Ready = conditionMap["status"] == "True"
+		return
+	}
+}
+
+func parseTokenRateLimitStatuses(status map[string]any, sub *subscription) {
+	statuses, found, _ := unstructured.NestedSlice(status, "tokenRateLimitStatuses")
+	if !found {
+		return
+	}
+	for _, statusRaw := range statuses {
+		statusMap, ok := statusRaw.(map[string]any)
+		if !ok {
+			continue
+		}
+		sub.TokenRateLimitStatuses = append(sub.TokenRateLimitStatuses, parseTokenRateLimitStatus(statusMap))
+	}
+}
+
+func parseTokenRateLimitStatus(statusMap map[string]any) TokenRateLimitStatus {
+	status := TokenRateLimitStatus{}
+	status.Model, _ = statusMap["model"].(string)
+	status.Name, _ = statusMap["name"].(string)
+	status.Namespace, _ = statusMap["namespace"].(string)
+	status.Ready, _ = statusMap["ready"].(bool)
+	status.Reason, _ = statusMap["reason"].(string)
+	status.Message, _ = statusMap["message"].(string)
+	return status
 }
 
 // parseModelRef extracts a ModelRefInfo from an unstructured model ref map.
@@ -1492,6 +1549,7 @@ func toResponse(sub *subscription) *SelectResponse {
 		Headers:                  sub.Headers,
 		Phase:                    sub.Phase,
 		Ready:                    sub.Ready,
+		SubscriptionIdentityID:   sub.SubscriptionIdentityID,
 	}
 	if sub.DeletionTimestamp != nil {
 		resp.DeletionTimestamp = *sub.DeletionTimestamp

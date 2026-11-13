@@ -84,6 +84,8 @@ type TenantReconciler struct {
 	// MetadataCacheTTL is the TTL in seconds for Authorino metadata HTTP caching.
 	// Applies to apiKeyValidation and subscription-info metadata evaluators.
 	MetadataCacheTTL int64
+	// SubscriptionIdentityMode controls strict-mode cache safety for gateway policies.
+	SubscriptionIdentityMode string
 	// MonitoringNamespace is the namespace where the platform monitoring stack is deployed.
 	MonitoringNamespace string
 	// UsageLogsManifestPath is the directory containing usage-logs kustomize manifests

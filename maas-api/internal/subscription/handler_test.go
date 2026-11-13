@@ -527,8 +527,8 @@ func createTestSubscriptionWithLimit(name string, groups []string, priority int3
 func TestHandler_SelectSubscription_MultipleSubscriptions(t *testing.T) {
 	// Create subscriptions with different rate limits that both have the same group
 	subscriptions := []*unstructured.Unstructured{
-		createTestSubscriptionWithLimit("free-tier", []string{"system:authenticated"}, 10, 100, "org-free", "cc-free"),
-		createTestSubscriptionWithLimit("premium-tier", []string{"system:authenticated"}, 10, 1000, "org-premium", "cc-premium"),
+		createTestSubscriptionWithLimit("free-tier", []string{"tier-users"}, 10, 100, "org-free", "cc-free"),
+		createTestSubscriptionWithLimit("premium-tier", []string{"tier-users"}, 10, 1000, "org-premium", "cc-premium"),
 	}
 
 	lister := &mockLister{subscriptions: subscriptions}
@@ -546,14 +546,14 @@ func TestHandler_SelectSubscription_MultipleSubscriptions(t *testing.T) {
 	}{
 		{
 			name:          "multiple subscriptions without explicit selection",
-			groups:        []string{"system:authenticated"},
+			groups:        []string{"tier-users"},
 			username:      "alice",
 			expectedError: "multiple_subscriptions",
 			description:   "User has access to both free and premium. Should return error requiring explicit selection.",
 		},
 		{
 			name:                  "explicit selection with multiple available",
-			groups:                []string{"system:authenticated"},
+			groups:                []string{"tier-users"},
 			username:              "bob",
 			requestedSubscription: "free-tier",
 			expectedName:          "free-tier",
@@ -562,7 +562,7 @@ func TestHandler_SelectSubscription_MultipleSubscriptions(t *testing.T) {
 		},
 		{
 			name:                  "explicit selection of premium with multiple available",
-			groups:                []string{"system:authenticated"},
+			groups:                []string{"tier-users"},
 			username:              "charlie",
 			requestedSubscription: "premium-tier",
 			expectedName:          "premium-tier",
@@ -615,6 +615,30 @@ func TestHandler_SelectSubscription_MultipleSubscriptions(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestHandler_SelectSubscription_IgnoresSystemAuthenticatedOwnerGroup(t *testing.T) {
+	subscriptions := []*unstructured.Unstructured{
+		createTestSubscriptionWithLimit("public", []string{"system:authenticated"}, 10, 100, "org-public", "cc-public"),
+	}
+	router := setupTestRouter(&mockLister{subscriptions: subscriptions})
+
+	requestBody, err := json.Marshal(subscription.SelectRequest{
+		Groups:   []string{"system:authenticated"},
+		Username: "alice",
+	})
+	require.NoError(t, err)
+	request := httptest.NewRequest(http.MethodPost, "/subscriptions/select", bytes.NewBuffer(requestBody))
+	request.Header.Set("Content-Type", "application/json")
+	responseRecorder := httptest.NewRecorder()
+
+	router.ServeHTTP(responseRecorder, request)
+
+	require.Equal(t, http.StatusOK, responseRecorder.Code)
+	var response subscription.SelectResponse
+	require.NoError(t, json.Unmarshal(responseRecorder.Body.Bytes(), &response))
+	assert.Equal(t, "not_found", response.Error)
+	assert.Empty(t, response.Name)
 }
 
 // createTestSubscriptionWithModels creates a subscription with specific model references.

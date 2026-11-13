@@ -188,6 +188,28 @@ type tenantForNamespaceResult struct {
 	legacy *maasv1alpha1.Tenant
 }
 
+const (
+	subscriptionIdentityModeOff     = "off"
+	subscriptionIdentityModeObserve = "observe"
+	subscriptionIdentityModeStrict  = "strict"
+)
+
+func subscriptionIdentityModeForTenant(tenant *tenantForNamespaceResult, defaultMode string) string {
+	if defaultMode == "" {
+		defaultMode = subscriptionIdentityModeOff
+	}
+	if tenant == nil {
+		return defaultMode
+	}
+	if tenant.config != nil && tenant.config.Spec.APIKeys != nil && tenant.config.Spec.APIKeys.SubscriptionIdentityMode != "" {
+		return tenant.config.Spec.APIKeys.SubscriptionIdentityMode
+	}
+	if tenant.legacy != nil && tenant.legacy.Spec.APIKeys != nil && tenant.legacy.Spec.APIKeys.SubscriptionIdentityMode != "" {
+		return tenant.legacy.Spec.APIKeys.SubscriptionIdentityMode
+	}
+	return defaultMode
+}
+
 func (t *tenantForNamespaceResult) identifier() (string, error) {
 	switch {
 	case t.config != nil:

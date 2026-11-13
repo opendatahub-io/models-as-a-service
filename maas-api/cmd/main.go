@@ -31,6 +31,7 @@ import (
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/middleware"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/models"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/subscription"
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/subscriptionidentity"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/tenant"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/tlsprofile"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/token"
@@ -311,6 +312,43 @@ func registerHandlers(
 
 	apiKeyService := api_keys.NewServiceWithLogger(store, cfg, subscriptionSelector, log)
 	apiKeyService.StartDebounceCleanup(ctx)
+	var identityHandler *subscriptionidentity.Handler
+	var identityStore api_keys.SubscriptionIdentityStore
+	if cfg.SubscriptionIdentityMode != config.SubscriptionIdentityModeOff {
+		var ok bool
+		identityStore, ok = store.(api_keys.SubscriptionIdentityStore)
+		if !ok {
+			return errors.New("subscription identity mode requires a PostgreSQL store")
+		}
+		observer := subscriptionidentity.NewObserver(
+			identityStore,
+			cluster.DynamicClient,
+			cfg.MaaSSubscriptionNamespace,
+			cfg.TenantName,
+			cfg.SubscriptionObserverID,
+			time.Duration(cfg.SubscriptionObservationIntervalSeconds)*time.Second,
+			time.Duration(cfg.SubscriptionObservationSettleSeconds)*time.Second,
+			log,
+		)
+		go observer.Run(ctx)
+		log.Info("Subscription identity observer started",
+			"mode", cfg.SubscriptionIdentityMode,
+			"namespace", cfg.MaaSSubscriptionNamespace,
+			"interval", cfg.SubscriptionObservationIntervalSeconds,
+		)
+	}
+	if cfg.SubscriptionIdentityMode == config.SubscriptionIdentityModeStrict {
+		identityHandler = subscriptionidentity.NewHandler(
+			log,
+			identityStore,
+			cluster.DynamicClient,
+			cfg.MaaSSubscriptionNamespace,
+			cfg.TenantName,
+			cfg.SubscriptionObserverID,
+			time.Duration(cfg.SubscriptionObservationSettleSeconds)*time.Second,
+			time.Duration(cfg.SubscriptionObservationMaxAgeSeconds)*time.Second,
+		)
+	}
 	apiKeyHandler := api_keys.NewHandler(
 		log,
 		apiKeyService,
@@ -388,6 +426,9 @@ func registerHandlers(
 	internalRoutes.POST("/api-keys/cleanup", cleanupAuth, apiKeyHandler.CleanupExpiredEphemeralKeys)
 	internalRoutes.DELETE("/tenants/:tenant/api-keys", cleanupAuth, apiKeyHandler.RevokeTenantAPIKeys)
 	internalRoutes.DELETE("/tenants/:tenant/subscriptions/:subscription/api-keys", cleanupAuth, apiKeyHandler.RevokeSubscriptionAPIKeys)
+	if identityHandler != nil {
+		internalRoutes.POST("/subscriptions/:namespace/:name/absence", cleanupAuth, identityHandler.RecordAbsence)
+	}
 	internalRoutes.POST("/subscriptions/select", tokenHandler.RejectTrustedIdentityHeaders(), subscriptionHandler.SelectSubscription)
 
 	// Read-only Loki proxy (GET /v1/logs*). Only registered when

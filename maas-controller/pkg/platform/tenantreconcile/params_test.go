@@ -100,6 +100,59 @@ func TestBuildPlatformParams(t *testing.T) {
 	})
 }
 
+func TestBuildPlatformParamsSubscriptionIdentityModePrecedence(t *testing.T) {
+	platformContext := PlatformContext{
+		GatewayRef: maasv1alpha1.TenantGatewayRef{
+			Namespace: "gateway-ns",
+			Name:      "gateway-name",
+		},
+		SubscriptionIdentityMode: "observe",
+	}
+	tenant := &maasv1alpha1.MaasTenantConfig{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "model-ns"},
+		Spec: maasv1alpha1.MaasTenantConfigSpec{
+			APIKeys: &maasv1alpha1.TenantAPIKeysConfig{
+				SubscriptionIdentityMode: "strict",
+			},
+		},
+	}
+
+	got, err := BuildPlatformParams(tenant, platformContext, "tenant-ns", "controller-ns", "cluster-audience", "opendatahub", logr.Discard())
+	require.NoError(t, err)
+	assert.Equal(t, "strict", got.SubscriptionIdentityMode)
+
+	tenant.Spec.APIKeys.SubscriptionIdentityMode = ""
+	got, err = BuildPlatformParams(tenant, platformContext, "tenant-ns", "controller-ns", "cluster-audience", "opendatahub", logr.Discard())
+	require.NoError(t, err)
+	assert.Equal(t, "observe", got.SubscriptionIdentityMode)
+}
+
+func TestValidateSubscriptionIdentityConfigRequiresObserverID(t *testing.T) {
+	observerID := "11111111-2222-3333-4444-555555555555"
+	tenant := &maasv1alpha1.MaasTenantConfig{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "model-ns"},
+		Spec: maasv1alpha1.MaasTenantConfigSpec{
+			APIKeys: &maasv1alpha1.TenantAPIKeysConfig{
+				SubscriptionIdentityMode: "strict",
+			},
+		},
+	}
+
+	err := ValidateSubscriptionIdentityConfig(tenant, "off")
+	require.ErrorContains(t, err, "subscriptionObserverId is required")
+
+	tenant.Spec.APIKeys.SubscriptionObserverID = observerID
+	require.NoError(t, ValidateSubscriptionIdentityConfig(tenant, "off"))
+
+	tenant.Spec.APIKeys.SubscriptionIdentityMode = ""
+	tenant.Spec.APIKeys.SubscriptionObserverID = ""
+	err = ValidateSubscriptionIdentityConfig(tenant, "observe")
+	require.ErrorContains(t, err, "subscriptionObserverId is required")
+
+	tenant.Spec.APIKeys.SubscriptionObserverID = observerID
+	require.NoError(t, ValidateSubscriptionIdentityConfig(tenant, "observe"))
+}
+
 func TestResolveGatewayBodyBufferLimitMB(t *testing.T) {
 	tests := []struct {
 		name       string

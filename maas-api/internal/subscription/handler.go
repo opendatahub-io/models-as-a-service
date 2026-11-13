@@ -128,10 +128,14 @@ func (h *Handler) SelectSubscription(c *gin.Context) {
 		"username", logger.RedactValue(req.Username),
 		"groups", req.Groups,
 		"requestedSubscription", req.RequestedSubscription,
+		"requestedSubscriptionIdentityId", req.RequestedSubscriptionIdentityID,
 		"requestedModel", req.RequestedModel,
 	)
 
-	response, err := h.selector.SelectWithContext(c.Request.Context(), req.Groups, req.Username, req.RequestedSubscription, req.RequestedModel)
+	response, err := h.selector.SelectWithIdentity(
+		c.Request.Context(), req.Groups, req.Username,
+		req.RequestedSubscription, req.RequestedSubscriptionIdentityID, req.RequestedModel,
+	)
 	if err != nil {
 		// NOTE: All error responses return http.StatusOK with error fields populated in SelectResponse.
 		// This is intentional for Authorino integration, which expects 200 OK responses with metadata

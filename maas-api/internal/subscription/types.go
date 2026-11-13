@@ -23,7 +23,10 @@ type SelectRequest struct {
 	Groups                []string `json:"groups"`                // User's group memberships (optional if username provided)
 	Username              string   `json:"username,omitempty"`    // User's username
 	RequestedSubscription string   `json:"requestedSubscription"` // Optional explicit subscription name
-	RequestedModel        string   `json:"requestedModel"`        // Optional model reference (format: namespace/name) to validate subscription includes this model
+	// RequestedSubscriptionIdentityID binds explicit selection to the API-key
+	// incarnation validated by maas-api. It is empty for non-API-key callers.
+	RequestedSubscriptionIdentityID string `json:"requestedSubscriptionIdentityId,omitempty"`
+	RequestedModel                  string `json:"requestedModel"` // Optional model reference (format: namespace/name) to validate subscription includes this model
 	// Identity is the same bounded verified-identity envelope used by management
 	// routes. It is accepted only in subscription-admin mode.
 	Identity json.RawMessage `json:"identity,omitempty"`
@@ -49,6 +52,9 @@ type SelectResponse struct {
 	Priority       int32          `json:"priority,omitempty"`       // Subscription priority
 	ModelRefs      []ModelRefInfo `json:"modelRefs,omitempty"`      // Model references with rate limits
 	OrganizationID string         `json:"organizationId,omitempty"` // Organization ID for billing
+	// SubscriptionIdentityID is the database incarnation ID cached on the local
+	// MaaSSubscription status. Empty during migration and on unresolved copies.
+	SubscriptionIdentityID string `json:"subscriptionIdentityId,omitempty"`
 	// AssociatedOrganizationID carries the administrative association internally
 	// without changing the Authorino callback response contract.
 	AssociatedOrganizationID string              `json:"-"`

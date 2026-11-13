@@ -22,19 +22,25 @@ func (s Status) String() string {
 // Note: KeyPrefix is NOT included - it's only shown once at creation (show-once pattern).
 // Users should identify keys by name/description for security.
 type ApiKey struct {
-	ID             string            `json:"id"`
-	Name           string            `json:"name"`
-	Description    string            `json:"description,omitempty"`
-	Username       string            `json:"username,omitempty"`
-	Subscription   string            `json:"subscription,omitempty"` // MaaSSubscription name bound at mint time
-	Tenant         string            `json:"tenant,omitempty"`
-	Groups         []string          `json:"groups,omitempty"` // User's groups at creation (immutable snapshot for authorization)
-	CreationDate   string            `json:"creationDate"`
-	ExpirationDate string            `json:"expirationDate,omitempty"` // Empty for permanent keys
-	Status         Status            `json:"status"`                   // "active", "expired", "revoked"
-	LastUsedAt     string            `json:"lastUsedAt,omitempty"`     // Tracks when key was last used for validation
-	Ephemeral      bool              `json:"ephemeral"`                // Short-lived programmatic key
-	Labels         map[string]string `json:"labels,omitempty"`         // Structured key-value pairs for API key metadata
+	ID           string `json:"id"`
+	Name         string `json:"name"`
+	Description  string `json:"description,omitempty"`
+	Username     string `json:"username,omitempty"`
+	Subscription string `json:"subscription,omitempty"` // MaaSSubscription name bound at mint time
+	// SubscriptionIdentityID is the database incarnation UUID bound at mint time.
+	// It is empty for keys that predate identity-aware minting.
+	SubscriptionIdentityID string `json:"subscriptionIdentityId,omitempty"`
+	// SubscriptionNamespace is the namespace of the MaaSSubscription bound at
+	// mint time. It is empty for legacy keys.
+	SubscriptionNamespace string            `json:"subscriptionNamespace,omitempty"`
+	Tenant                string            `json:"tenant,omitempty"`
+	Groups                []string          `json:"groups,omitempty"` // User's groups at creation (immutable snapshot for authorization)
+	CreationDate          string            `json:"creationDate"`
+	ExpirationDate        string            `json:"expirationDate,omitempty"` // Empty for permanent keys
+	Status                Status            `json:"status"`                   // "active", "expired", "revoked"
+	LastUsedAt            string            `json:"lastUsedAt,omitempty"`     // Tracks when key was last used for validation
+	Ephemeral             bool              `json:"ephemeral"`                // Short-lived programmatic key
+	Labels                map[string]string `json:"labels,omitempty"`         // Structured key-value pairs for API key metadata
 }
 
 // ValidationResult holds the result of API key validation (for Authorino HTTP callback).
@@ -47,8 +53,12 @@ type ValidationResult struct {
 	Groups       []string `json:"groups,omitempty"`       // User groups for subscription-based authorization
 	GroupsJSON   string   `json:"groupsJSON,omitempty"`   // JSON-encoded group array for trusted header injection
 	Subscription string   `json:"subscription,omitempty"` // MaaSSubscription name from DB (Authorino → subscription-info)
-	Tenant       string   `json:"tenant"`                 // Tenant bound at key creation (always present, empty string for legacy keys)
-	Reason       string   `json:"reason,omitempty"`       // If invalid: "key not found", "revoked", etc.
+	// SubscriptionIdentityID and SubscriptionNamespace carry the key's bound
+	// incarnation to the local subscription-selection callback.
+	SubscriptionIdentityID string `json:"subscriptionIdentityId,omitempty"`
+	SubscriptionNamespace  string `json:"subscriptionNamespace,omitempty"`
+	Tenant                 string `json:"tenant"`           // Tenant bound at key creation (always present, empty string for legacy keys)
+	Reason                 string `json:"reason,omitempty"` // If invalid: "key not found", "revoked", etc.
 }
 
 // PaginationParams holds pagination parameters.
