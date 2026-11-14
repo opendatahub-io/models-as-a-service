@@ -1,0 +1,16 @@
+# MaaSModelRef for the paced streaming simulator.
+#
+# No MaaSAuthPolicy or MaaSSubscription ships with this fixture: the test creates
+# them, so the model is invisible to every other test's /v1/models listing.
+#   LLMIS:       llm/e2e-slow-stream-simulated
+#   Gateway path /llm/e2e-slow-stream-simulated
+#   Served ID:   test/e2e-slow-stream-model
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: MaaSModelRef
+metadata:
+  name: e2e-slow-stream-simulated
+  namespace: llm
+spec:
+  modelRef:
+    kind: LLMInferenceService
+    name: e2e-slow-stream-simulated
