@@ -28,6 +28,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	batcv1 "k8s.io/api/batch/v1"
@@ -114,6 +115,16 @@ type AITenantReconciler struct {
 	DeletionTimeout time.Duration
 	// Recorder emits Kubernetes events for deletion timeout warnings.
 	Recorder events.EventRecorder
+
+	// OIDCProbe overrides the OIDC issuer probe used for the OIDCReady
+	// condition. Nil uses oidcprobe.Probe. Injected by tests.
+	OIDCProbe oidcProbeFunc
+
+	// oidcProbeMu guards oidcProbeLast.
+	oidcProbeMu sync.Mutex
+	// oidcProbeLast caches the most recent OIDC probe per AITenant so
+	// watch-driven reconciles do not hammer the issuer.
+	oidcProbeLast map[types.NamespacedName]oidcProbeCacheEntry
 }
 
 // +kubebuilder:rbac:groups=maas.opendatahub.io,resources=aitenants,verbs=get;list;watch;create;update;patch;delete
@@ -293,6 +304,9 @@ func (r *AITenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	}
 
 	if !tenantConfigReady {
+		// The infra namespace is known here, so the OIDC condition can be
+		// reported even while the tenant config is still coming up.
+		r.reconcileOIDCReady(ctx, &aitenant)
 		setAITenantPhase(&aitenant, "Pending", "TenantConfigNotReady", "waiting for MaasTenantConfig to report Ready")
 		if err := r.updateAITenantStatus(ctx, &aitenant, statusSnapshot); err != nil {
 			return ctrl.Result{}, err
@@ -300,12 +314,21 @@ func (r *AITenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 
+	// OIDC problems never fail the reconcile or change Ready/phase: API-key
+	// access keeps working during an OIDC outage. The condition is set before
+	// updateAITenantStatus so it lands in the same status write.
+	r.reconcileOIDCReady(ctx, &aitenant)
 	setAITenantPhase(&aitenant, "Active", "Reconciled", "AITenant bootstrap resources are reconciled")
 	if err := r.updateAITenantStatus(ctx, &aitenant, statusSnapshot); err != nil {
 		return ctrl.Result{}, err
 	}
 	if namespaceLabelsFailed {
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+	// Re-probe the OIDC issuer periodically so the condition tracks issuer
+	// health and trusted-CA fixes without editing the AITenant.
+	if oidcConfigured(&aitenant) {
+		return ctrl.Result{RequeueAfter: oidcRequeueInterval}, nil
 	}
 	return ctrl.Result{}, nil
 }
