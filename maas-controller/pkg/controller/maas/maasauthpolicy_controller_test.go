@@ -1961,6 +1961,12 @@ func assertNonEmptySubscriptionHeader(t *testing.T, headers map[string]any, head
 	if !strings.Contains(pred, wantExpr) || !strings.Contains(pred, `!= ""`) {
 		t.Errorf("%s when predicate = %q, want non-empty check on %s", header, pred, wantExpr)
 	}
+	// has() covers the field, not the map index: without the presence guard the
+	// predicate raises on /v1/models and /maas-api and drops the whole
+	// priority-0 response group.
+	if !strings.Contains(pred, celSubscriptionInfoPresent) {
+		t.Errorf("%s when predicate = %q, want the subscription-info presence guard", header, pred)
+	}
 }
 
 func assertClearedResponseHeader(t *testing.T, headers map[string]any, header string) {
@@ -2204,6 +2210,16 @@ func TestBuildGatewayAuthPolicySpec_SubscriptionHeaderInjection(t *testing.T) {
 		t.Errorf("subscription header must be injected only for API keys with a subscription: got %q, want %q", predicate, wantPredicate)
 	}
 
+	// The rate-limit-id predicate indexes subscription-info, so it must carry
+	// the presence guard: on /v1/models and /maas-api the evaluator never ran,
+	// and the raised index drops the other priority-0 response headers too.
+	rateLimitPredicate := nestedWhenPredicateRequired(t, obj,
+		"spec", "defaults", "rules", "response", "success", "headers", "X-MaaS-Subscription-Rate-Limit-Id", "when")
+	if !strings.Contains(rateLimitPredicate, celSubscriptionInfoPresent) ||
+		!strings.Contains(rateLimitPredicate, `rateLimitId != ""`) {
+		t.Errorf("rate-limit-id predicate must guard the subscription-info index and check non-empty rateLimitId: got %q", rateLimitPredicate)
+	}
+
 	// User tokens still use the client header for subscription selection, without
 	// adding another copy of that header to the upstream request.
 	wantSelection := `(has(auth.metadata) && has(auth.metadata.apiKeyValidation)) ` +
@@ -2240,6 +2256,9 @@ func TestSubscriptionInfoStringHeader(t *testing.T) {
 	pred, _ := when0["predicate"].(string)
 	if !strings.Contains(pred, `auth.metadata["subscription-info"].organizationId != ""`) {
 		t.Errorf("predicate = %q, want non-empty organizationId check", pred)
+	}
+	if !strings.Contains(pred, celSubscriptionInfoPresent) {
+		t.Errorf("predicate = %q, want the subscription-info presence guard: without it the map index raises where the evaluator never ran", pred)
 	}
 }
 
