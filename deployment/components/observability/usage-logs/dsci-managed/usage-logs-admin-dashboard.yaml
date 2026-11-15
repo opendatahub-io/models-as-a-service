@@ -349,13 +349,6 @@ spec:
     tokenConsumptionTable:
       kind: Panel
       spec:
-        display:
-          name: "Usage breakdown"
-          description: >-
-            All user/model/subscription pairs, with organization ID and cost
-            center. **View by** changes the chart; **By API key** also splits
-            table rows per key and shows `username (key name)` in the User
-            column.
         plugin:
           kind: Table
           spec:
@@ -536,7 +529,7 @@ spec:
     - kind: Grid
       spec:
         display:
-          title: "Token consumption"
+          title: "Usage breakdown"
           collapse:
             open: true
         items:
