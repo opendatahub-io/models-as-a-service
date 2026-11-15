@@ -359,7 +359,7 @@ spec:
       kind: Panel
       spec:
         display:
-          name: "Usage breakdown"
+          name: "Usage summary"
           description: >-
             All model/subscription/API key pairs. **View by** changes the chart only.
         plugin:
@@ -588,7 +588,7 @@ spec:
     - kind: Grid
       spec:
         display:
-          title: "Token consumption"
+          title: "Usage breakdown"
           collapse:
             open: true
         items:
