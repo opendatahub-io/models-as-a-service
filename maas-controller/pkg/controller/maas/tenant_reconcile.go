@@ -340,7 +340,7 @@ func (r *TenantReconciler) validateConfigAndGateway(ctx context.Context, log log
 		return nil, tenantreconcile.PlatformContext{}, &res, nil
 	}
 
-	if err := tenantreconcile.ValidateSubscriptionIdentityConfig(tenant, r.SubscriptionIdentityMode); err != nil {
+	if err := tenantreconcile.ValidateSubscriptionIdentityMode(r.SubscriptionIdentityMode); err != nil {
 		log.Info("subscription identity configuration validation failed", "error", err)
 		if err2 := r.patchStatus(ctx, tenant, "Failed", metav1.ConditionFalse, "InvalidSubscriptionIdentityConfig", err.Error()); err2 != nil {
 			return nil, tenantreconcile.PlatformContext{}, nil, err2

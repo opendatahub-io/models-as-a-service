@@ -330,9 +330,12 @@ func registerHandlers(
 			time.Duration(cfg.SubscriptionObservationSettleSeconds)*time.Second,
 			log,
 		)
+		if cfg.SubscriptionIdentityMode == config.SubscriptionIdentityModeMigrate {
+			observer.EnableMigrationBackfill()
+		}
 		go observer.Run(ctx)
 		log.Info("Subscription identity observer started",
-			"mode", cfg.SubscriptionIdentityMode,
+			"phase", cfg.SubscriptionIdentityMode,
 			"namespace", cfg.MaaSSubscriptionNamespace,
 			"interval", cfg.SubscriptionObservationIntervalSeconds,
 		)

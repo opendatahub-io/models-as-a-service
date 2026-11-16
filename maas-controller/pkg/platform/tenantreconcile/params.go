@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/go-logr/logr"
+	"github.com/google/uuid"
 	corev1 "k8s.io/api/core/v1"
 	netwv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -43,7 +44,7 @@ type PlatformParams struct {
 	APIKeyMaxExpirationDays     string
 	APIKeyDeletionRetentionDays string
 	// SubscriptionIdentityMode and SubscriptionObserverID configure the
-	// per-tenant maas-api subscription identity observer.
+	// controller-owned subscription identity lifecycle for each tenant.
 	SubscriptionIdentityMode string
 	SubscriptionObserverID   string
 
@@ -146,6 +147,13 @@ func BuildPlatformParams(tenant client.Object, platformContext PlatformContext, 
 	if err != nil {
 		return PlatformParams{}, fmt.Errorf("resolve tenant identifier: %w", err)
 	}
+	tenantName, err := TenantNameFor(tenant)
+	if err != nil {
+		return PlatformParams{}, fmt.Errorf("resolve tenant name: %w", err)
+	}
+	observerID := uuid.NewSHA1(uuid.NameSpaceURL, []byte(
+		"maas-subscription-observer:"+tenant.GetNamespace()+":"+tenantName,
+	)).String()
 
 	params := PlatformParams{
 		AppNamespace:                appNamespace,
@@ -164,8 +172,8 @@ func BuildPlatformParams(tenant client.Object, platformContext PlatformContext, 
 		MaaSAPIKeyCleanupImage:      firstNonEmpty(os.Getenv("RELATED_IMAGE_UBI_MINIMAL_IMAGE"), DefaultMaaSAPIKeyCleanupImage),
 		APIKeyMaxExpirationDays:     resolveAPIKeyMaxExpirationDays(tenant),
 		APIKeyDeletionRetentionDays: resolveAPIKeyDeletionRetentionDays(tenant),
-		SubscriptionIdentityMode:    resolveSubscriptionIdentityMode(tenant, platformContext.SubscriptionIdentityMode),
-		SubscriptionObserverID:      resolveSubscriptionObserverID(tenant),
+		SubscriptionIdentityMode:    normalizeSubscriptionIdentityMode(platformContext.SubscriptionIdentityMode),
+		SubscriptionObserverID:      observerID,
 		SkipIPP:                     platformContext.SkipIPP,
 	}
 
@@ -522,33 +530,20 @@ func resolveAPIKeyDeletionRetentionDays(tenant client.Object) string {
 	return DefaultAPIKeyDeletionRetentionDays
 }
 
-func resolveSubscriptionIdentityMode(tenant client.Object, defaultMode string) string {
-	if defaultMode == "" {
-		defaultMode = "off"
+func normalizeSubscriptionIdentityMode(mode string) string {
+	if mode == "" {
+		return "off"
 	}
-	cfg := apiKeysConfigFor(tenant)
-	if cfg != nil && cfg.SubscriptionIdentityMode != "" {
-		return cfg.SubscriptionIdentityMode
-	}
-	return defaultMode
+	return mode
 }
 
-func resolveSubscriptionObserverID(tenant client.Object) string {
-	cfg := apiKeysConfigFor(tenant)
-	if cfg != nil {
-		return cfg.SubscriptionObserverID
-	}
-	return ""
-}
-
-func ValidateSubscriptionIdentityConfig(tenant client.Object, defaultMode string) error {
-	if resolveSubscriptionIdentityMode(tenant, defaultMode) == "off" {
+func ValidateSubscriptionIdentityMode(mode string) error {
+	switch normalizeSubscriptionIdentityMode(mode) {
+	case "off", "migrate", "strict":
 		return nil
+	default:
+		return fmt.Errorf("invalid subscription identity phase %q", mode)
 	}
-	if strings.TrimSpace(resolveSubscriptionObserverID(tenant)) == "" {
-		return errors.New("subscriptionObserverId is required when subscription identity mode is observe or strict")
-	}
-	return nil
 }
 
 func apiKeysConfigFor(tenant client.Object) *maasv1alpha1.TenantAPIKeysConfig {
@@ -1178,6 +1173,13 @@ func patchMaaSAPIDeployment(log logr.Logger, r *unstructured.Unstructured, param
 	deploymentName := MaaSAPIDeploymentName(params.TenantIdentifier)
 	if err := addPodTemplateLabel(r, "maas.opendatahub.io/tenant-instance", deploymentName); err != nil {
 		return fmt.Errorf("patch tenant-instance label: %w", err)
+	}
+	if err := addPodTemplateAnnotation(
+		r,
+		AnnotationMaaSAPISubscriptionIdentityContract,
+		MaaSAPISubscriptionIdentityContractV1,
+	); err != nil {
+		return fmt.Errorf("patch subscription identity contract annotation: %w", err)
 	}
 
 	return nil
@@ -2009,6 +2011,19 @@ func addPodTemplateLabel(r *unstructured.Unstructured, key, value string) error 
 	}
 	labels[key] = value
 	return unstructured.SetNestedStringMap(r.Object, labels, "spec", "template", "metadata", "labels")
+}
+
+// addPodTemplateAnnotation adds an annotation to the Deployment's pod template.
+func addPodTemplateAnnotation(r *unstructured.Unstructured, key, value string) error {
+	annotations, found, err := unstructured.NestedStringMap(r.Object, "spec", "template", "metadata", "annotations")
+	if err != nil {
+		return fmt.Errorf("read pod template annotations: %w", err)
+	}
+	if !found || annotations == nil {
+		annotations = make(map[string]string)
+	}
+	annotations[key] = value
+	return unstructured.SetNestedStringMap(r.Object, annotations, "spec", "template", "metadata", "annotations")
 }
 
 func setDeploymentSelectorMatchLabels(r *unstructured.Unstructured, labels map[string]string) error {

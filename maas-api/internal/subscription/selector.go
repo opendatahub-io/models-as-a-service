@@ -1063,7 +1063,7 @@ func parseSubscriptionOwner(spec map[string]any, sub *subscription) {
 				continue
 			}
 			name, ok := groupMap["name"].(string)
-			if !ok || name == "system:authenticated" {
+			if !ok {
 				continue
 			}
 			sub.Groups = append(sub.Groups, name)

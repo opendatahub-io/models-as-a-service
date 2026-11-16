@@ -36,6 +36,14 @@ const (
 	// spec.maasApi.replicas takes precedence when both are set.
 	AnnotationMaaSAPIReplicas = "maas.opendatahub.io/maas-api-replicas"
 
+	// AnnotationMaaSAPISubscriptionIdentityContract marks the maas-api pod
+	// template as supporting a specific subscription identity callback contract.
+	AnnotationMaaSAPISubscriptionIdentityContract = "maas.opendatahub.io/subscription-identity-contract"
+
+	// MaaSAPISubscriptionIdentityContractV1 includes the
+	// requestedSubscriptionIdentityId callback field.
+	MaaSAPISubscriptionIdentityContractV1 = "v1"
+
 	// AnnotationPayloadProcessingReplicas overrides the payload-processing Deployment replica count for a tenant.
 	// When autoscaling is enabled via spec.payloadProcessing.autoscaling, this value sets HPA minReplicas instead.
 	//

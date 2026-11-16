@@ -331,6 +331,203 @@ func TestPostgresStore_SubscriptionIdentityRotationRevokesKeys(t *testing.T) {
 	assert.Equal(t, replacementID, replacementKey.SubscriptionIdentityID)
 }
 
+func TestPostgresStore_SubscriptionIdentityRotationMarksPeerObservationAbsent(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+	if os.Getenv("TEST_DATABASE_URL") == "" {
+		t.Skip("Skipping integration test (TEST_DATABASE_URL not set)")
+	}
+
+	ctx := context.Background()
+	tenant := "identity-peer-rotation-" + uuid.NewString()
+	store := setupTestPostgresStoreForTenant(t, tenant)
+	defer store.Close()
+	db, err := sql.Open("pgx", os.Getenv("TEST_DATABASE_URL"))
+	require.NoError(t, err)
+	defer db.Close()
+
+	observerOne := uuid.NewString()
+	observerTwo := uuid.NewString()
+	sessionOne, err := store.BeginSubscriptionObservation(ctx, observerOne, tenant)
+	require.NoError(t, err)
+	require.NoError(t, sessionOne.Heartbeat(ctx))
+	identityID, err := sessionOne.ResolveSubscriptionIdentity(ctx, api_keys.ResolveSubscriptionIdentityRequest{
+		Namespace: "subscriptions",
+		Name:      "peer-rotation-sub",
+		ObjectUID: "old-uid",
+	})
+	require.NoError(t, err)
+	require.NoError(t, sessionOne.Commit())
+
+	sessionTwo, err := store.BeginSubscriptionObservation(ctx, observerTwo, tenant)
+	require.NoError(t, err)
+	require.NoError(t, sessionTwo.Heartbeat(ctx))
+	_, err = sessionTwo.ResolveSubscriptionIdentity(ctx, api_keys.ResolveSubscriptionIdentityRequest{
+		Namespace:        "subscriptions",
+		Name:             "peer-rotation-sub",
+		ObjectUID:        "old-uid",
+		StatusIdentityID: identityID,
+	})
+	require.NoError(t, err)
+	_, err = sessionTwo.ResolveSubscriptionIdentity(ctx, api_keys.ResolveSubscriptionIdentityRequest{
+		Namespace: "subscriptions",
+		Name:      "peer-rotation-sub",
+		ObjectUID: "new-uid",
+	})
+	require.ErrorIs(t, err, api_keys.ErrSubscriptionIdentityPending)
+	require.NoError(t, sessionTwo.Commit())
+
+	_, err = db.ExecContext(ctx, `
+		UPDATE subscription_identities
+		SET rotation_pending_at = NOW() - INTERVAL '2 seconds'
+		WHERE id = $1
+	`, identityID)
+	require.NoError(t, err)
+
+	recoverySession, err := store.BeginSubscriptionObservation(ctx, observerOne, tenant)
+	require.NoError(t, err)
+	require.NoError(t, recoverySession.Heartbeat(ctx))
+	_, err = recoverySession.ResolveSubscriptionIdentity(ctx, api_keys.ResolveSubscriptionIdentityRequest{
+		Namespace: "subscriptions",
+		Name:      "peer-rotation-sub",
+		ObjectUID: "new-uid",
+		Settle:    time.Second,
+	})
+	require.ErrorIs(t, err, api_keys.ErrSubscriptionIdentityPending)
+	require.NoError(t, recoverySession.Commit())
+
+	var absentAt sql.NullTime
+	err = db.QueryRowContext(ctx, `
+		SELECT absent_at
+		FROM subscription_observations
+		WHERE subscription_id = $1 AND observer_id = $2
+	`, identityID, observerOne).Scan(&absentAt)
+	require.NoError(t, err)
+	require.True(t, absentAt.Valid, "superseded peer observation must be marked absent")
+
+	_, err = db.ExecContext(ctx, `
+		UPDATE subscription_observations
+		SET absent_at = NOW() - INTERVAL '2 seconds',
+		    observed_at = NOW() - INTERVAL '2 seconds'
+		WHERE subscription_id = $1
+	`, identityID)
+	require.NoError(t, err)
+
+	replacementSession, err := store.BeginSubscriptionObservation(ctx, observerOne, tenant)
+	require.NoError(t, err)
+	require.NoError(t, replacementSession.Heartbeat(ctx))
+	replacementID, err := replacementSession.ResolveSubscriptionIdentity(ctx, api_keys.ResolveSubscriptionIdentityRequest{
+		Namespace: "subscriptions",
+		Name:      "peer-rotation-sub",
+		ObjectUID: "new-uid",
+		Settle:    time.Second,
+	})
+	require.NoError(t, err)
+	require.NotEqual(t, identityID, replacementID)
+	require.NoError(t, replacementSession.Commit())
+}
+
+func TestPostgresStore_RecordAbsenceRecognizesTombstonedIdentityWithoutID(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+	if os.Getenv("TEST_DATABASE_URL") == "" {
+		t.Skip("Skipping integration test (TEST_DATABASE_URL not set)")
+	}
+
+	ctx := context.Background()
+	tenant := "identity-tombstone-" + uuid.NewString()
+	store := setupTestPostgresStoreForTenant(t, tenant)
+	defer store.Close()
+	db, err := sql.Open("pgx", os.Getenv("TEST_DATABASE_URL"))
+	require.NoError(t, err)
+	defer db.Close()
+
+	observerID := uuid.NewString()
+	session, err := store.BeginSubscriptionObservation(ctx, observerID, tenant)
+	require.NoError(t, err)
+	require.NoError(t, session.Heartbeat(ctx))
+	identityID, err := session.ResolveSubscriptionIdentity(ctx, api_keys.ResolveSubscriptionIdentityRequest{
+		Namespace: "subscriptions",
+		Name:      "tombstone-sub",
+		ObjectUID: "old-uid",
+	})
+	require.NoError(t, err)
+	require.NoError(t, session.Commit())
+
+	absenceSession, err := store.BeginSubscriptionObservation(ctx, observerID, tenant)
+	require.NoError(t, err)
+	require.NoError(t, absenceSession.Heartbeat(ctx))
+	result, _, err := absenceSession.RecordAbsenceAndCleanup(
+		ctx,
+		api_keys.SubscriptionAbsenceRequest{
+			Namespace: "subscriptions",
+			Name:      "tombstone-sub",
+			ObjectUID: "old-uid",
+		},
+		time.Second,
+		time.Hour,
+	)
+	require.NoError(t, err)
+	require.Equal(t, api_keys.SubscriptionCleanupBlockedBarrier, result)
+	require.NoError(t, absenceSession.Commit())
+
+	_, err = db.ExecContext(ctx, `
+		UPDATE subscription_observations
+		SET absent_at = NOW() - INTERVAL '2 seconds',
+		    observed_at = NOW() - INTERVAL '2 seconds'
+		WHERE subscription_id = $1
+	`, identityID)
+	require.NoError(t, err)
+
+	cleanupSession, err := store.BeginSubscriptionObservation(ctx, observerID, tenant)
+	require.NoError(t, err)
+	require.NoError(t, cleanupSession.Heartbeat(ctx))
+	result, _, err = cleanupSession.RecordAbsenceAndCleanup(
+		ctx,
+		api_keys.SubscriptionAbsenceRequest{
+			Namespace: "subscriptions",
+			Name:      "tombstone-sub",
+			ObjectUID: "old-uid",
+		},
+		time.Second,
+		time.Hour,
+	)
+	require.NoError(t, err)
+	require.Equal(t, api_keys.SubscriptionCleanupCleaned, result)
+	require.NoError(t, cleanupSession.Commit())
+
+	replacementSession, err := store.BeginSubscriptionObservation(ctx, observerID, tenant)
+	require.NoError(t, err)
+	require.NoError(t, replacementSession.Heartbeat(ctx))
+	replacementID, err := replacementSession.ResolveSubscriptionIdentity(ctx, api_keys.ResolveSubscriptionIdentityRequest{
+		Namespace: "subscriptions",
+		Name:      "tombstone-sub",
+		ObjectUID: "new-uid",
+	})
+	require.NoError(t, err)
+	require.NotEqual(t, identityID, replacementID)
+	require.NoError(t, replacementSession.Commit())
+
+	tombstoneSession, err := store.BeginSubscriptionObservation(ctx, observerID, tenant)
+	require.NoError(t, err)
+	require.NoError(t, tombstoneSession.Heartbeat(ctx))
+	result, _, err = tombstoneSession.RecordAbsenceAndCleanup(
+		ctx,
+		api_keys.SubscriptionAbsenceRequest{
+			Namespace: "subscriptions",
+			Name:      "tombstone-sub",
+			ObjectUID: "old-uid",
+		},
+		time.Second,
+		time.Hour,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, api_keys.SubscriptionCleanupCleaned, result)
+	require.NoError(t, tombstoneSession.Commit())
+}
+
 func TestPostgresStore_RecordAbsenceAndCleanup(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
@@ -835,6 +1032,156 @@ func TestPostgresStore_RecordAbsenceRetainsAPIKeys(t *testing.T) {
 		ctx, "SELECT deleted_at FROM subscription_identities WHERE id = $1", identityID,
 	).Scan(&deletedAt))
 	assert.False(t, deletedAt.Valid)
+}
+
+func TestPostgresStore_BackfillSubscriptionKeys(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+	if os.Getenv("TEST_DATABASE_URL") == "" {
+		t.Skip("Skipping integration test (TEST_DATABASE_URL not set)")
+	}
+
+	ctx := context.Background()
+	tenant := "identity-backfill-" + uuid.NewString()
+	store := setupTestPostgresStoreForTenant(t, tenant)
+	defer store.Close()
+	observerID := uuid.NewString()
+
+	session, err := store.BeginSubscriptionObservation(ctx, observerID, tenant)
+	require.NoError(t, err)
+	require.NoError(t, session.Heartbeat(ctx))
+	identityID, err := session.ResolveSubscriptionIdentity(ctx, api_keys.ResolveSubscriptionIdentityRequest{
+		Namespace: "subscriptions",
+		Name:      "backfill-sub",
+		ObjectUID: "backfill-uid",
+	})
+	require.NoError(t, err)
+	require.NoError(t, session.Commit())
+
+	keyID := uuid.NewString()
+	require.NoError(t, store.AddKey(
+		ctx, "alice", keyID, uuid.NewString(), "legacy key", "", []string{"users"},
+		"backfill-sub", tenant, nil, false, nil,
+	))
+
+	backfillSession, err := store.BeginSubscriptionObservation(ctx, observerID, tenant)
+	require.NoError(t, err)
+	require.NoError(t, backfillSession.Heartbeat(ctx))
+	resolvedIdentityID, err := backfillSession.ResolveSubscriptionIdentity(ctx, api_keys.ResolveSubscriptionIdentityRequest{
+		Namespace: "subscriptions",
+		Name:      "backfill-sub",
+		ObjectUID: "backfill-uid",
+	})
+	require.NoError(t, err)
+	require.Equal(t, identityID, resolvedIdentityID)
+	backfilled, err := backfillSession.BackfillSubscriptionKeys(ctx, identityID, "subscriptions", "backfill-sub")
+	require.NoError(t, err)
+	assert.Equal(t, 1, backfilled)
+	require.NoError(t, backfillSession.Commit())
+
+	key, err := store.Get(ctx, keyID)
+	require.NoError(t, err)
+	assert.Equal(t, identityID, key.SubscriptionIdentityID)
+	assert.Equal(t, "subscriptions", key.SubscriptionNamespace)
+}
+
+func TestPostgresStore_BackfillSubscriptionKeysRejectsAmbiguousName(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+	if os.Getenv("TEST_DATABASE_URL") == "" {
+		t.Skip("Skipping integration test (TEST_DATABASE_URL not set)")
+	}
+
+	ctx := context.Background()
+	tenant := "identity-backfill-ambiguous-" + uuid.NewString()
+	store := setupTestPostgresStoreForTenant(t, tenant)
+	defer store.Close()
+	observerID := uuid.NewString()
+
+	session, err := store.BeginSubscriptionObservation(ctx, observerID, tenant)
+	require.NoError(t, err)
+	require.NoError(t, session.Heartbeat(ctx))
+	firstIdentityID, err := session.ResolveSubscriptionIdentity(ctx, api_keys.ResolveSubscriptionIdentityRequest{
+		Namespace: "subscriptions-a",
+		Name:      "same-name",
+		ObjectUID: "first-uid",
+	})
+	require.NoError(t, err)
+	_, err = session.ResolveSubscriptionIdentity(ctx, api_keys.ResolveSubscriptionIdentityRequest{
+		Namespace: "subscriptions-b",
+		Name:      "same-name",
+		ObjectUID: "second-uid",
+	})
+	require.NoError(t, err)
+	require.NoError(t, session.Commit())
+
+	require.NoError(t, store.AddKey(
+		ctx, "alice", uuid.NewString(), uuid.NewString(), "ambiguous key", "", []string{"users"},
+		"same-name", tenant, nil, false, nil,
+	))
+
+	backfillSession, err := store.BeginSubscriptionObservation(ctx, observerID, tenant)
+	require.NoError(t, err)
+	require.NoError(t, backfillSession.Heartbeat(ctx))
+	_, err = backfillSession.BackfillSubscriptionKeys(ctx, firstIdentityID, "subscriptions-a", "same-name")
+	require.ErrorIs(t, err, api_keys.ErrSubscriptionIdentityAmbiguous)
+	require.NoError(t, backfillSession.Rollback())
+}
+
+func TestPostgresStore_BackfillSubscriptionKeysRejectsWrongBinding(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+	if os.Getenv("TEST_DATABASE_URL") == "" {
+		t.Skip("Skipping integration test (TEST_DATABASE_URL not set)")
+	}
+
+	ctx := context.Background()
+	tenant := "identity-backfill-wrong-" + uuid.NewString()
+	store := setupTestPostgresStoreForTenant(t, tenant)
+	defer store.Close()
+	db, err := sql.Open("pgx", os.Getenv("TEST_DATABASE_URL"))
+	require.NoError(t, err)
+	defer db.Close()
+	observerID := uuid.NewString()
+
+	session, err := store.BeginSubscriptionObservation(ctx, observerID, tenant)
+	require.NoError(t, err)
+	require.NoError(t, session.Heartbeat(ctx))
+	identityID, err := session.ResolveSubscriptionIdentity(ctx, api_keys.ResolveSubscriptionIdentityRequest{
+		Namespace: "subscriptions",
+		Name:      "wrong-binding-sub",
+		ObjectUID: "wrong-binding-uid",
+	})
+	require.NoError(t, err)
+	otherIdentityID, err := session.ResolveSubscriptionIdentity(ctx, api_keys.ResolveSubscriptionIdentityRequest{
+		Namespace: "subscriptions",
+		Name:      "other-sub",
+		ObjectUID: "other-uid",
+	})
+	require.NoError(t, err)
+	require.NoError(t, session.Commit())
+
+	keyID := uuid.NewString()
+	require.NoError(t, store.AddKey(
+		ctx, "alice", keyID, uuid.NewString(), "wrong binding", "", []string{"users"},
+		"wrong-binding-sub", tenant, nil, false, nil,
+	))
+	_, err = db.ExecContext(ctx, `
+		UPDATE api_keys
+		SET subscription_id = $1, subscription_namespace = 'subscriptions'
+		WHERE id = $2
+	`, otherIdentityID, keyID)
+	require.NoError(t, err)
+
+	backfillSession, err := store.BeginSubscriptionObservation(ctx, observerID, tenant)
+	require.NoError(t, err)
+	require.NoError(t, backfillSession.Heartbeat(ctx))
+	_, err = backfillSession.BackfillSubscriptionKeys(ctx, identityID, "subscriptions", "wrong-binding-sub")
+	require.ErrorIs(t, err, api_keys.ErrSubscriptionIdentityAmbiguous)
+	require.NoError(t, backfillSession.Rollback())
 }
 
 func TestPostgresStore_ObserverTenantIsImmutable(t *testing.T) {

@@ -427,7 +427,7 @@ func TestEnsureSubscriptionAPIKeysRevoked_UsesAbsenceJobWhenStatusIdentityIsMiss
 	}
 }
 
-func TestEnsureSubscriptionAPIKeysRevoked_TenantModeOverridesGlobalDefault(t *testing.T) {
+func TestEnsureSubscriptionAPIKeysRevoked_ControllerWidePhaseSelectsCleanup(t *testing.T) {
 	const (
 		tenantNamespace = "team-a-maas"
 		appNamespace    = "odh-ai-gateway-infra"
@@ -438,11 +438,6 @@ func TestEnsureSubscriptionAPIKeysRevoked_TenantModeOverridesGlobalDefault(t *te
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      maasv1alpha1.MaasTenantConfigInstanceName,
 			Namespace: tenantNamespace,
-		},
-		Spec: maasv1alpha1.MaasTenantConfigSpec{
-			APIKeys: &maasv1alpha1.TenantAPIKeysConfig{
-				SubscriptionIdentityMode: "off",
-			},
 		},
 	}
 	c := fake.NewClientBuilder().
@@ -455,7 +450,7 @@ func TestEnsureSubscriptionAPIKeysRevoked_TenantModeOverridesGlobalDefault(t *te
 		Scheme:                             scheme,
 		AppNamespace:                       appNamespace,
 		SubscriptionIdentityCleanupEnabled: true,
-		SubscriptionIdentityMode:           "strict",
+		SubscriptionIdentityMode:           "off",
 	}
 
 	complete, err := r.ensureSubscriptionAPIKeysRevoked(context.Background(), ctrl.Log, subscription)
@@ -476,7 +471,7 @@ func TestEnsureSubscriptionAPIKeysRevoked_TenantModeOverridesGlobalDefault(t *te
 	}
 }
 
-func TestEnsureSubscriptionAPIKeysRevoked_ObserveModeUsesLegacyCleanup(t *testing.T) {
+func TestEnsureSubscriptionAPIKeysRevoked_MigratePhaseUsesLegacyCleanup(t *testing.T) {
 	const (
 		tenantNamespace = "team-a-maas"
 		appNamespace    = "odh-ai-gateway-infra"
@@ -489,9 +484,7 @@ func TestEnsureSubscriptionAPIKeysRevoked_ObserveModeUsesLegacyCleanup(t *testin
 			Namespace: tenantNamespace,
 		},
 		Spec: maasv1alpha1.MaasTenantConfigSpec{
-			APIKeys: &maasv1alpha1.TenantAPIKeysConfig{
-				SubscriptionIdentityMode: "observe",
-			},
+			APIKeys: &maasv1alpha1.TenantAPIKeysConfig{},
 		},
 	}
 	c := fake.NewClientBuilder().
@@ -504,6 +497,7 @@ func TestEnsureSubscriptionAPIKeysRevoked_ObserveModeUsesLegacyCleanup(t *testin
 		Scheme:                             scheme,
 		AppNamespace:                       appNamespace,
 		SubscriptionIdentityCleanupEnabled: true,
+		SubscriptionIdentityMode:           "migrate",
 	}
 
 	complete, err := r.ensureSubscriptionAPIKeysRevoked(context.Background(), ctrl.Log, subscription)

@@ -33,11 +33,19 @@ type fakeObservationSession struct {
 	observations []api_keys.SubscriptionObservation
 	heartbeat    bool
 	resolved     []api_keys.ResolveSubscriptionIdentityRequest
+	backfills    []fakeSubscriptionKeyBackfill
+	backfillErr  error
 	absent       []string
 	absences     []api_keys.SubscriptionAbsenceRequest
 	committed    bool
 	rolledBack   bool
 	result       api_keys.SubscriptionCleanupResult
+}
+
+type fakeSubscriptionKeyBackfill struct {
+	IdentityID string
+	Namespace  string
+	Name       string
 }
 
 func (session *fakeObservationSession) CurrentObservations(context.Context) ([]api_keys.SubscriptionObservation, error) {
@@ -52,6 +60,21 @@ func (session *fakeObservationSession) Heartbeat(context.Context) error {
 func (session *fakeObservationSession) ResolveSubscriptionIdentity(_ context.Context, request api_keys.ResolveSubscriptionIdentityRequest) (string, error) {
 	session.resolved = append(session.resolved, request)
 	return "0b6fe901-7b52-4a78-9cbf-e398728ef67e", nil
+}
+
+func (session *fakeObservationSession) BackfillSubscriptionKeys(
+	_ context.Context,
+	identityID, namespace, name string,
+) (int, error) {
+	session.backfills = append(session.backfills, fakeSubscriptionKeyBackfill{
+		IdentityID: identityID,
+		Namespace:  namespace,
+		Name:       name,
+	})
+	if session.backfillErr != nil {
+		return 0, session.backfillErr
+	}
+	return 1, nil
 }
 
 func (session *fakeObservationSession) MarkAbsent(_ context.Context, subscriptionID string) error {
@@ -414,6 +437,97 @@ func TestObserverRefreshListsAppliesStatusAndMarksAbsence(t *testing.T) {
 	assert.Equal(t, "add", patch[2]["op"])
 	assert.Equal(t, "/status", patch[2]["path"])
 	assert.Equal(t, map[string]any{"subscriptionIdentityId": "0b6fe901-7b52-4a78-9cbf-e398728ef67e"}, patch[2]["value"])
+}
+
+func TestObserverRefreshBackfillsKeysAndReportsMigrationReady(t *testing.T) {
+	object := &unstructured.Unstructured{}
+	object.SetGroupVersionKind(schema.GroupVersionKind{
+		Group: "maas.opendatahub.io", Version: "v1alpha1", Kind: "MaaSSubscription",
+	})
+	object.SetName("migration-sub")
+	object.SetNamespace("subscriptions")
+	object.SetUID("migration-uid")
+	object.SetResourceVersion("rv-1")
+
+	gvr := subscription.GVR()
+	baseClient := fake.NewSimpleDynamicClientWithCustomListKinds(
+		runtime.NewScheme(),
+		map[schema.GroupVersionResource]string{gvr: "MaaSSubscriptionList"},
+		object,
+	)
+	client := &recordingDynamicClient{Interface: baseClient}
+	session := &fakeObservationSession{}
+	observer := subscriptionidentity.NewObserver(
+		&fakeIdentityStore{session: session},
+		client,
+		"subscriptions",
+		"tenant-a",
+		"11111111-2222-3333-4444-555555555555",
+		time.Hour,
+		30*time.Second,
+		logger.Development(),
+	).EnableMigrationBackfill()
+
+	observer.Refresh(context.Background())
+
+	assert.True(t, session.committed)
+	require.Len(t, session.backfills, 1)
+	assert.Equal(t, "0b6fe901-7b52-4a78-9cbf-e398728ef67e", session.backfills[0].IdentityID)
+	assert.Equal(t, "subscriptions", session.backfills[0].Namespace)
+	assert.Equal(t, "migration-sub", session.backfills[0].Name)
+
+	require.Len(t, client.patches, 1)
+	var patch []map[string]any
+	require.NoError(t, json.Unmarshal(client.patches[0], &patch))
+	require.Len(t, patch, 3)
+	status, ok := patch[2]["value"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, true, status["subscriptionIdentityMigrationReady"])
+	assert.NotEmpty(t, status["subscriptionIdentityObservedAt"])
+	assert.Empty(t, status["subscriptionIdentityMigrationMessage"])
+}
+
+func TestObserverRefreshReportsBlockedMigration(t *testing.T) {
+	object := &unstructured.Unstructured{}
+	object.SetGroupVersionKind(schema.GroupVersionKind{
+		Group: "maas.opendatahub.io", Version: "v1alpha1", Kind: "MaaSSubscription",
+	})
+	object.SetName("blocked-sub")
+	object.SetNamespace("subscriptions")
+	object.SetUID("blocked-uid")
+	object.SetResourceVersion("rv-1")
+
+	gvr := subscription.GVR()
+	baseClient := fake.NewSimpleDynamicClientWithCustomListKinds(
+		runtime.NewScheme(),
+		map[schema.GroupVersionResource]string{gvr: "MaaSSubscriptionList"},
+		object,
+	)
+	client := &recordingDynamicClient{Interface: baseClient}
+	session := &fakeObservationSession{backfillErr: errors.New("ambiguous subscription name")}
+	observer := subscriptionidentity.NewObserver(
+		&fakeIdentityStore{session: session},
+		client,
+		"subscriptions",
+		"tenant-a",
+		"11111111-2222-3333-4444-555555555555",
+		time.Hour,
+		30*time.Second,
+		logger.Development(),
+	).EnableMigrationBackfill()
+
+	observer.Refresh(context.Background())
+
+	assert.True(t, session.committed)
+	require.Len(t, client.patches, 1)
+	var patch []map[string]any
+	require.NoError(t, json.Unmarshal(client.patches[0], &patch))
+	require.Len(t, patch, 3)
+	status, ok := patch[2]["value"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, false, status["subscriptionIdentityMigrationReady"])
+	assert.NotEmpty(t, status["subscriptionIdentityObservedAt"])
+	assert.Equal(t, "ambiguous subscription name", status["subscriptionIdentityMigrationMessage"])
 }
 
 func TestObserverRefreshPreservesExistingStatus(t *testing.T) {

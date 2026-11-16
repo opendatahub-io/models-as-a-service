@@ -27,6 +27,7 @@ import (
 
 	"github.com/go-logr/logr"
 	aigatewayv1alpha1 "github.com/opendatahub-io/ai-gateway-controller/api/aigateway/v1alpha1"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	discv1 "k8s.io/api/discovery/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
@@ -91,9 +92,9 @@ type MaaSAuthPolicyReconciler struct {
 	// Applies to auth-valid, subscription-valid, and require-group-membership authorization evaluators.
 	AuthzCacheTTL int64
 
-	// SubscriptionIdentityMode mirrors the maas-api rollout mode. Strict mode
-	// disables metadata and authorization caches because identity revocation is
-	// not represented in the cached request key.
+	// SubscriptionIdentityMode mirrors the maas-api rollout phase. Migrate and
+	// strict phases disable metadata and authorization caches because identity
+	// revocation is not represented in the cached request key.
 	SubscriptionIdentityMode string
 
 	// Recorder emits Kubernetes events for conflict detection warnings.
@@ -125,11 +126,16 @@ type oidcConfig struct {
 // otherwise stale metadata can lead to incorrect authorization decisions.
 // Returns the minimum of AuthzCacheTTL and MetadataCacheTTL, clamped to non-negative values.
 func (r *MaaSAuthPolicyReconciler) authzCacheTTL() int64 {
-	return r.authzCacheTTLForIdentity(r.SubscriptionIdentityMode == "strict")
+	return r.authzCacheTTLForIdentity(r.identityValidationEnabled())
 }
 
-func (r *MaaSAuthPolicyReconciler) authzCacheTTLForIdentity(strictIdentity bool) int64 {
-	metadata := r.metadataCacheTTLForIdentity(strictIdentity)
+func (r *MaaSAuthPolicyReconciler) identityValidationEnabled() bool {
+	mode := subscriptionIdentityMode(r.SubscriptionIdentityMode)
+	return mode == subscriptionIdentityModeMigrate || mode == subscriptionIdentityModeStrict
+}
+
+func (r *MaaSAuthPolicyReconciler) authzCacheTTLForIdentity(identityValidation bool) int64 {
+	metadata := r.metadataCacheTTLForIdentity(identityValidation)
 	authz := r.AuthzCacheTTL
 
 	// Defensive: clamp negative values to 0 (should be caught at startup, but defensive)
@@ -146,22 +152,11 @@ func (r *MaaSAuthPolicyReconciler) authzCacheTTLForIdentity(strictIdentity bool)
 	return metadata
 }
 
-func (r *MaaSAuthPolicyReconciler) metadataCacheTTLForIdentity(strictIdentity bool) int64 {
-	if strictIdentity {
+func (r *MaaSAuthPolicyReconciler) metadataCacheTTLForIdentity(identityValidation bool) int64 {
+	if identityValidation {
 		return 0
 	}
 	return max(r.MetadataCacheTTL, 0)
-}
-
-func (r *MaaSAuthPolicyReconciler) subscriptionIdentityStrictForNamespace(ctx context.Context, namespace string) bool {
-	tenant, err := fetchTenantForNamespace(ctx, r.Client, namespace)
-	if err != nil {
-		if apierrors.IsNotFound(err) {
-			return r.SubscriptionIdentityMode == subscriptionIdentityModeStrict
-		}
-		return true
-	}
-	return subscriptionIdentityModeForTenant(tenant, r.SubscriptionIdentityMode) == subscriptionIdentityModeStrict
 }
 
 // fetchTenantIdentifier fetches the tenant identifier from the tenant config in the given namespace.
@@ -370,6 +365,47 @@ func (r *MaaSAuthPolicyReconciler) targetMaaSAPIReady(ctx context.Context, tenan
 		}
 	}
 	return false, nil
+}
+
+// maasAPISubscriptionIdentityCallbackReady reports whether the target
+// maas-api Deployment advertises the identity callback contract and has
+// completed its rollout. This prevents a new controller from sending a field
+// that an older callback pod rejects as unknown.
+func (r *MaaSAuthPolicyReconciler) maasAPISubscriptionIdentityCallbackReady(ctx context.Context, tenantID string) (bool, error) {
+	deployment := &appsv1.Deployment{}
+	key := types.NamespacedName{
+		Namespace: r.InfraNamespace,
+		Name:      tenantreconcile.MaaSAPIDeploymentName(tenantID),
+	}
+	if err := r.Get(ctx, key, deployment); err != nil {
+		if apierrors.IsNotFound(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("get target maas-api Deployment for %s/%s: %w", r.InfraNamespace, key.Name, err)
+	}
+
+	annotations := deployment.Spec.Template.Annotations
+	if annotations[tenantreconcile.AnnotationMaaSAPISubscriptionIdentityContract] !=
+		tenantreconcile.MaaSAPISubscriptionIdentityContractV1 {
+		return false, nil
+	}
+	if deployment.Spec.Paused {
+		return false, nil
+	}
+
+	desiredReplicas := int32(1)
+	if deployment.Spec.Replicas != nil {
+		desiredReplicas = *deployment.Spec.Replicas
+	}
+	if desiredReplicas < 1 ||
+		deployment.Status.ObservedGeneration < deployment.Generation ||
+		deployment.Status.Replicas != desiredReplicas ||
+		deployment.Status.UpdatedReplicas != desiredReplicas ||
+		deployment.Status.AvailableReplicas != desiredReplicas ||
+		deployment.Status.ReadyReplicas != desiredReplicas {
+		return false, nil
+	}
+	return true, nil
 }
 
 // hasLegacyModelAuthPolicy detects any route-level policy used by the pre-3.5
@@ -853,7 +889,7 @@ func subscriptionInfoStringHeader(jsonField string) map[string]any {
 func (r *MaaSAuthPolicyReconciler) buildGatewayAuthPolicySpec(oidc *oidcConfig, xAPIKeyEnabled bool, tenantID, tenantName, gatewayNamespace, gatewayName string, guardrailHeaders []guardrailHeader) map[string]any {
 	return r.buildGatewayAuthPolicySpecForIdentity(
 		oidc, xAPIKeyEnabled, tenantID, tenantName, gatewayNamespace, gatewayName, guardrailHeaders,
-		r.SubscriptionIdentityMode == "strict",
+		r.identityValidationEnabled(), r.SubscriptionIdentityMode == "strict",
 	)
 }
 
@@ -862,7 +898,8 @@ func (r *MaaSAuthPolicyReconciler) buildGatewayAuthPolicySpecForIdentity(
 	xAPIKeyEnabled bool,
 	tenantID, tenantName, gatewayNamespace, gatewayName string,
 	guardrailHeaders []guardrailHeader,
-	strictIdentity bool,
+	identityValidation bool,
+	emitSubscriptionIdentityCallback bool,
 ) map[string]any {
 	// Construct tenant-specific maas-api service name using TenantIdentifier
 	// Default tenant (tenantID="") uses "maas-api", others use "maas-api-{tenantID}"
@@ -874,14 +911,22 @@ func (r *MaaSAuthPolicyReconciler) buildGatewayAuthPolicySpecForIdentity(
 	apiKeyValidationURL := fmt.Sprintf("https://%s.%s.svc.cluster.local:8443/internal/v1/api-keys/validate", maasAPIServiceName, r.InfraNamespace)
 	subscriptionSelectorURL := fmt.Sprintf("https://%s.%s.svc.cluster.local:8443/internal/v1/subscriptions/select", maasAPIServiceName, r.InfraNamespace)
 
-	// subscription-info body: same fields as per-model, but requestedModel uses dynamic CEL
+	subscriptionIdentityField := ""
+	if emitSubscriptionIdentityCallback {
+		subscriptionIdentityField = `  "requestedSubscriptionIdentityId": ` + celSubscriptionIdentity + `,
+`
+	}
+
+	// subscription-info body: same fields as per-model, but requestedModel uses dynamic CEL.
+	// The identity field is introduced only after the target API rollout
+	// advertises the contract; omitting it beforehand preserves compatibility
+	// with maas-api versions that reject unknown callback fields.
 	subscriptionInfoBody := fmt.Sprintf(`{
   "groups": %s,
   "username": %s,
   "requestedSubscription": `+celSubscription+`,
-  "requestedSubscriptionIdentityId": `+celSubscriptionIdentity+`,
-  "requestedModel": %s
-}`, celGroups, celUsername, celModelIdentity)
+%s  "requestedModel": %s
+}`, celGroups, celUsername, subscriptionIdentityField, celModelIdentity)
 
 	celIsAPIKey, celIsNotAPIKey, celExtractKey := apiKeyCELPredicates(xAPIKeyEnabled)
 
@@ -1038,7 +1083,7 @@ allow {
 				"key": map[string]any{
 					"selector": authValidCacheKey,
 				},
-				"ttl": r.authzCacheTTLForIdentity(strictIdentity),
+				"ttl": r.authzCacheTTLForIdentity(identityValidation),
 			},
 		},
 		"subscription-valid": map[string]any{
@@ -1062,7 +1107,7 @@ allow {
 				"key": map[string]any{
 					"selector": subscriptionGatewayCacheKeySelector(),
 				},
-				"ttl": r.authzCacheTTLForIdentity(strictIdentity),
+				"ttl": r.authzCacheTTLForIdentity(identityValidation),
 			},
 		},
 		"require-group-membership": map[string]any{
@@ -1080,7 +1125,7 @@ allow {
 				"key": map[string]any{
 					"selector": subscriptionGatewayCacheKeySelector(),
 				},
-				"ttl": r.authzCacheTTLForIdentity(strictIdentity),
+				"ttl": r.authzCacheTTLForIdentity(identityValidation),
 			},
 		},
 	}
@@ -1257,7 +1302,7 @@ allow {
 					"key": map[string]any{
 						"selector": `auth.identity.replace("Bearer ", "")`,
 					},
-					"ttl": r.metadataCacheTTLForIdentity(strictIdentity),
+					"ttl": r.metadataCacheTTLForIdentity(identityValidation),
 				},
 				"metrics":  false,
 				"priority": int64(0),
@@ -1280,7 +1325,7 @@ allow {
 					"key": map[string]any{
 						"selector": subscriptionGatewayCacheKeySelector(),
 					},
-					"ttl": r.metadataCacheTTLForIdentity(strictIdentity),
+					"ttl": r.metadataCacheTTLForIdentity(identityValidation),
 				},
 				"metrics":  false,
 				"priority": int64(1),
@@ -1792,9 +1837,23 @@ func (r *MaaSAuthPolicyReconciler) reconcileGatewayAuthPolicyWithHeaders(
 		subscriptionNamespace = "models-as-a-service"
 	}
 
-	strictIdentity := r.subscriptionIdentityStrictForNamespace(ctx, subscriptionNamespace)
+	strictIdentity := subscriptionIdentityMode(r.SubscriptionIdentityMode) == subscriptionIdentityModeStrict
+	emitSubscriptionIdentityCallback := false
+	if strictIdentity {
+		callbackReady, err := r.maasAPISubscriptionIdentityCallbackReady(ctx, tenantID)
+		if err != nil {
+			return false, err
+		}
+		emitSubscriptionIdentityCallback = callbackReady
+	}
+	if strictIdentity && !emitSubscriptionIdentityCallback {
+		log.Info("Waiting for maas-api subscription identity callback rollout",
+			"tenantID", tenantID,
+			"maasAPINamespace", r.InfraNamespace)
+	}
 	spec := r.buildGatewayAuthPolicySpecForIdentity(
-		oidc, xAPIKeyEnabled, tenantID, tenantName, gatewayNamespace, gatewayName, guardrailHeaders, strictIdentity,
+		oidc, xAPIKeyEnabled, tenantID, tenantName, gatewayNamespace, gatewayName, guardrailHeaders,
+		r.identityValidationEnabled(), emitSubscriptionIdentityCallback,
 	)
 	subscriptionHeaders, headerErr := r.subscriptionHeaderNames(ctx, subscriptionNamespace)
 	if headerErr != nil {
@@ -2427,8 +2486,8 @@ func (r *MaaSAuthPolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return err
 	}
 
-	globalStrict := r.SubscriptionIdentityMode == "strict"
-	if !globalStrict && r.AuthzCacheTTL > r.MetadataCacheTTL {
+	cachesDisabled := r.identityValidationEnabled()
+	if !cachesDisabled && r.AuthzCacheTTL > r.MetadataCacheTTL {
 		log.Info("WARNING: Authorization cache TTL exceeds metadata cache TTL. "+
 			"Authorization caches will be capped at metadata TTL to prevent stale authorization decisions.",
 			"authzCacheTTL", r.AuthzCacheTTL,
@@ -2485,6 +2544,15 @@ func (r *MaaSAuthPolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			predicate.GenerationChangedPredicate{},
 			predicate.AnnotationChangedPredicate{},
 			predicate.Funcs{UpdateFunc: deletionTimestampSet},
+		))).
+		// A maas-api Deployment rollout completes the subscription identity
+		// callback capability handshake. Re-render the affected policies when
+		// that rollout changes.
+		Watches(&appsv1.Deployment{}, handler.EnqueueRequestsFromMapFunc(
+			r.mapMaaSAPIDeploymentToMaaSAuthPolicies,
+		), builder.WithPredicates(predicate.Or(
+			predicate.GenerationChangedPredicate{},
+			predicate.Funcs{UpdateFunc: maasAPIDeploymentRolloutChanged},
 		)))
 
 	// AIGuardrail is provided by the AI Gateway component. Keep standalone MaaS
@@ -2658,6 +2726,26 @@ func (r *MaaSAuthPolicyReconciler) mapNamespaceToMaaSAuthPolicies(ctx context.Co
 // catalog object such as MaasTenantConfig or MaaSSubscription.
 func (r *MaaSAuthPolicyReconciler) mapObjectNamespaceToMaaSAuthPolicies(ctx context.Context, obj client.Object) []reconcile.Request {
 	return r.mapMaaSAuthPoliciesInNamespace(ctx, obj.GetNamespace())
+}
+
+func maasAPIDeploymentRolloutChanged(updateEvent event.UpdateEvent) bool {
+	oldDeployment, oldOK := updateEvent.ObjectOld.(*appsv1.Deployment)
+	newDeployment, newOK := updateEvent.ObjectNew.(*appsv1.Deployment)
+	if !oldOK || !newOK {
+		return false
+	}
+	return !equality.Semantic.DeepEqual(
+		oldDeployment.Spec.Template.Annotations,
+		newDeployment.Spec.Template.Annotations,
+	) || !equality.Semantic.DeepEqual(oldDeployment.Status, newDeployment.Status)
+}
+
+func (r *MaaSAuthPolicyReconciler) mapMaaSAPIDeploymentToMaaSAuthPolicies(ctx context.Context, obj client.Object) []reconcile.Request {
+	tenantNamespace := obj.GetLabels()[tenantreconcile.LabelTenantNamespace]
+	if tenantNamespace == "" {
+		return nil
+	}
+	return r.mapMaaSAuthPoliciesInNamespace(ctx, tenantNamespace)
 }
 
 func (r *MaaSAuthPolicyReconciler) mapMaaSAuthPoliciesInNamespace(ctx context.Context, ns string) []reconcile.Request {

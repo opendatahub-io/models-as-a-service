@@ -991,23 +991,77 @@ func TestCreateAPIKey_Subscription(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, "from-priority", result.Subscription)
 	})
+}
 
-	t.Run("observe_mode_does_not_bind_subscription_identity", func(t *testing.T) {
+func TestCreateAPIKey_MigrateSubscriptionIdentity(t *testing.T) {
+	ctx := context.Background()
+	user := "u"
+	groups := []string{"g"}
+
+	t.Run("migrate_mode_binds_subscription_identity", func(t *testing.T) {
 		identityID := "6a44ab55-2aa3-47c7-a7e8-80fd58d82fc8"
 		store := api_keys.NewMockStore()
-		observeCfg := &config.Config{SubscriptionIdentityMode: config.SubscriptionIdentityModeObserve}
+		cfg := &config.Config{
+			SubscriptionIdentityMode:             config.SubscriptionIdentityModeMigrate,
+			SubscriptionObservationMaxAgeSeconds: 180,
+		}
 		selector := subSelectorStub{identityID: identityID, namespace: "test-ns"}
-		svc := api_keys.NewServiceWithLogger(store, observeCfg, selector, logger.Development())
+		svc := api_keys.NewServiceWithLogger(store, cfg, selector, logger.Development())
 
-		result, err := svc.CreateAPIKey(ctx, user, groups, "observe-key", "", nil, false, "identity-sub", "", nil)
+		result, err := svc.CreateAPIKey(ctx, user, groups, "migrate-key", "", nil, false, "identity-sub", "", nil)
 		require.NoError(t, err)
-		require.Empty(t, result.SubscriptionIdentityID)
+		require.Equal(t, identityID, result.SubscriptionIdentityID)
 
 		meta, err := store.Get(ctx, result.ID)
 		require.NoError(t, err)
-		assert.Empty(t, meta.SubscriptionIdentityID)
-		assert.Empty(t, meta.SubscriptionNamespace)
+		assert.Equal(t, identityID, meta.SubscriptionIdentityID)
+		assert.Equal(t, "test-ns", meta.SubscriptionNamespace)
 	})
+
+	t.Run("migrate_mode_allows_unbound_legacy_key", func(t *testing.T) {
+		identityID := "6a44ab55-2aa3-47c7-a7e8-80fd58d82fc8"
+		store := api_keys.NewMockStore()
+		cfg := &config.Config{}
+		selector := subSelectorStub{identityID: identityID, namespace: "test-ns"}
+		svc := api_keys.NewServiceWithLogger(store, cfg, selector, logger.Development())
+
+		result, err := svc.CreateAPIKey(ctx, user, groups, "legacy-key", "", nil, false, "identity-sub", "", nil)
+		require.NoError(t, err)
+		cfg.SubscriptionIdentityMode = config.SubscriptionIdentityModeMigrate
+
+		validation, err := svc.ValidateAPIKey(ctx, result.Key)
+		require.NoError(t, err)
+		assert.True(t, validation.Valid)
+	})
+
+	t.Run("migrate_mode_rejects_bound_identity_mismatch", func(t *testing.T) {
+		identityID := "0b6fe901-7b52-4a78-9cbf-e398728ef67e"
+		store := api_keys.NewMockStore()
+		cfg := &config.Config{
+			SubscriptionIdentityMode:             config.SubscriptionIdentityModeMigrate,
+			SubscriptionObservationMaxAgeSeconds: 180,
+		}
+		selector := subSelectorStub{
+			identityID:       identityID,
+			namespace:        "test-ns",
+			lookupIdentityID: "6a44ab55-2aa3-47c7-a7e8-80fd58d82fc8",
+		}
+		svc := api_keys.NewServiceWithLogger(store, cfg, selector, logger.Development())
+
+		result, err := svc.CreateAPIKey(ctx, user, groups, "migrate-mismatch-key", "", nil, false, "identity-sub", "", nil)
+		require.NoError(t, err)
+		validation, err := svc.ValidateAPIKey(ctx, result.Key)
+		require.NoError(t, err)
+		assert.False(t, validation.Valid)
+		assert.Equal(t, "key subscription identity does not match local subscription", validation.Reason)
+	})
+}
+
+func TestCreateAPIKey_StrictSubscriptionIdentity(t *testing.T) {
+	ctx := context.Background()
+	cfg := &config.Config{}
+	user := "u"
+	groups := []string{"g"}
 
 	t.Run("strict_mode_binds_subscription_identity", func(t *testing.T) {
 		identityID := "0b6fe901-7b52-4a78-9cbf-e398728ef67e"
@@ -1466,17 +1520,39 @@ func TestCreateAPIKey_GroupNameValidation(t *testing.T) {
 	}
 }
 
-func TestCreateAPIKey_StripsSystemAuthenticated(t *testing.T) {
+func TestCreateAPIKey_PreservesSystemAuthenticated(t *testing.T) {
 	ctx := context.Background()
 	store := api_keys.NewMockStore()
-	svc := api_keys.NewServiceWithLogger(store, &config.Config{}, serviceTestSubSelector{}, logger.Development())
+	selector := &recordingSubSelector{}
+	svc := api_keys.NewServiceWithLogger(store, &config.Config{}, selector, logger.Development())
 
 	result, err := svc.CreateAPIKey(
-		ctx, "user", []string{"team-a", "system:authenticated"}, "test-key", "", nil, false, "", "tenant", nil,
+		ctx, "user", []string{"team-a", "system:authenticated"}, "test-key", "", nil, false, "public", "tenant", nil,
 	)
 	require.NoError(t, err)
 
 	metadata, err := store.Get(ctx, result.ID)
 	require.NoError(t, err)
-	assert.Equal(t, []string{"team-a"}, metadata.Groups)
+	assert.Equal(t, []string{"team-a", "system:authenticated"}, metadata.Groups)
+	assert.Equal(t, []string{"team-a", "system:authenticated"}, selector.groups)
+}
+
+type recordingSubSelector struct {
+	groups []string
+}
+
+func (selector *recordingSubSelector) Select(groups []string, _ string, requested string, _ string) (*subscription.SelectResponse, error) {
+	selector.groups = append([]string(nil), groups...)
+	if requested != "" {
+		return &subscription.SelectResponse{Name: requested, Phase: "Active"}, nil
+	}
+	return &subscription.SelectResponse{Name: "default-sub", Phase: "Active"}, nil
+}
+
+func (selector *recordingSubSelector) SelectHighestPriority(_ []string, _ string) (*subscription.SelectResponse, error) {
+	return &subscription.SelectResponse{Name: "default-sub", Phase: "Active"}, nil
+}
+
+func (selector *recordingSubSelector) LookupSubscription(namespace, name string) (*subscription.SelectResponse, error) {
+	return &subscription.SelectResponse{Name: name, Namespace: namespace, Phase: "Active"}, nil
 }

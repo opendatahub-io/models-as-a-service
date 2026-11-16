@@ -41,8 +41,8 @@ type PlatformContext struct {
 	ExternalOIDC *maasv1alpha1.TenantExternalOIDCConfig
 	SkipIPP      bool
 	Source       string
-	// SubscriptionIdentityMode is the controller-wide default. An explicit
-	// tenant API-keys configuration takes precedence over this value.
+	// SubscriptionIdentityMode is the controller-wide subscription identity
+	// lifecycle phase.
 	SubscriptionIdentityMode string
 }
 

@@ -12,6 +12,8 @@ import (
 
 var ErrSubscriptionIdentityPending = errors.New("subscription identity rotation is pending")
 
+var ErrSubscriptionIdentityAmbiguous = errors.New("subscription identity is ambiguous")
+
 type SubscriptionCleanupResult string
 
 const (
@@ -67,6 +69,7 @@ type SubscriptionObservationSession interface {
 	CurrentObservations(ctx context.Context) ([]SubscriptionObservation, error)
 	Heartbeat(ctx context.Context) error
 	ResolveSubscriptionIdentity(ctx context.Context, request ResolveSubscriptionIdentityRequest) (string, error)
+	BackfillSubscriptionKeys(ctx context.Context, identityID, namespace, name string) (int, error)
 	MarkAbsent(ctx context.Context, subscriptionID string) error
 	RecordAbsenceAndCleanup(ctx context.Context, request SubscriptionAbsenceRequest, settle, maxObservationAge time.Duration) (SubscriptionCleanupResult, int, error)
 	Commit() error
@@ -197,6 +200,9 @@ func (session *postgresObservationSession) ResolveSubscriptionIdentity(ctx conte
 		return "", fmt.Errorf("failed to lock subscription identity: %w", err)
 	}
 	if rotationPendingAt.Valid {
+		if err := session.markSupersededObservationAbsent(ctx, identityID, request.ObjectUID); err != nil {
+			return "", err
+		}
 		newIdentityID, err := session.recoverRotatedIdentity(ctx, request, identityID)
 		if err != nil {
 			return "", err
@@ -278,6 +284,93 @@ func (session *postgresObservationSession) ResolveSubscriptionIdentity(ctx conte
 	return identityID, nil
 }
 
+func (session *postgresObservationSession) BackfillSubscriptionKeys(
+	ctx context.Context,
+	identityID, namespace, name string,
+) (int, error) {
+	if namespace == "" || name == "" {
+		return 0, errors.New("subscription namespace and name are required")
+	}
+	if _, err := uuid.Parse(identityID); err != nil {
+		return 0, fmt.Errorf("%w: invalid UUID", ErrSubscriptionIdentityRequired)
+	}
+
+	var activeIdentityCount int
+	if err := session.tx.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM subscription_identities
+		WHERE tenant = $1
+		  AND name = $2
+		  AND deleted_at IS NULL
+		  AND rotation_pending_at IS NULL
+	`, session.tenant, name).Scan(&activeIdentityCount); err != nil {
+		return 0, fmt.Errorf("failed to count active subscription identities for key backfill: %w", err)
+	}
+	if activeIdentityCount != 1 {
+		return 0, fmt.Errorf("%w: %d active identities for subscription %q", ErrSubscriptionIdentityAmbiguous, activeIdentityCount, name)
+	}
+
+	var selectedIdentityID, selectedNamespace string
+	err := session.tx.QueryRowContext(ctx, `
+		SELECT id, namespace
+		FROM subscription_identities
+		WHERE tenant = $1 AND name = $2 AND deleted_at IS NULL
+		FOR UPDATE
+	`, session.tenant, name).Scan(&selectedIdentityID, &selectedNamespace)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, ErrSubscriptionIdentityRequired
+	}
+	if err != nil {
+		return 0, fmt.Errorf("failed to lock subscription identity for key backfill: %w", err)
+	}
+	if selectedIdentityID != identityID || selectedNamespace != namespace {
+		return 0, fmt.Errorf("%w: identity does not match %s/%s", ErrSubscriptionIdentityAmbiguous, namespace, name)
+	}
+
+	result, err := session.tx.ExecContext(ctx, `
+		UPDATE api_keys
+		SET subscription_id = $1,
+		    subscription_namespace = $2
+		WHERE tenant = $3
+		  AND subscription = $4
+		  AND subscription_id IS NULL
+		  AND subscription_namespace IS NULL
+		  AND status = 'active'
+		  AND deleted_at IS NULL
+	`, identityID, namespace, session.tenant, name)
+	if err != nil {
+		return 0, fmt.Errorf("failed to backfill API-key subscription identities: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("failed to count backfilled API-key subscription identities: %w", err)
+	}
+
+	var unbound bool
+	if err := session.tx.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM api_keys
+			WHERE tenant = $1
+			  AND subscription = $2
+			  AND status = 'active'
+			  AND deleted_at IS NULL
+			  AND (
+				subscription_id IS NULL
+				OR subscription_namespace IS NULL
+				OR subscription_id <> $3::uuid
+				OR subscription_namespace <> $4
+			  )
+		)
+	`, session.tenant, name, identityID, namespace).Scan(&unbound); err != nil {
+		return 0, fmt.Errorf("failed to verify API-key subscription identity bindings: %w", err)
+	}
+	if unbound {
+		return 0, fmt.Errorf("%w: active key has an incorrect binding for subscription %q", ErrSubscriptionIdentityAmbiguous, name)
+	}
+	return int(rows), nil
+}
+
 func (session *postgresObservationSession) recoverRotatedIdentity(
 	ctx context.Context,
 	request ResolveSubscriptionIdentityRequest,
@@ -333,6 +426,24 @@ func (session *postgresObservationSession) recoverRotatedIdentity(
 		return "", fmt.Errorf("failed to tombstone rotated subscription identity: %w", err)
 	}
 	return session.insertObservation(ctx, request.Namespace, request.Name, request.ObjectUID)
+}
+
+func (session *postgresObservationSession) markSupersededObservationAbsent(
+	ctx context.Context,
+	identityID, objectUID string,
+) error {
+	_, err := session.tx.ExecContext(ctx, `
+		UPDATE subscription_observations
+		SET absent_at = NOW()
+		WHERE subscription_id = $1
+		  AND observer_id = $2
+		  AND absent_at IS NULL
+		  AND object_uid <> $3
+	`, identityID, session.observerID, objectUID)
+	if err != nil {
+		return fmt.Errorf("failed to mark superseded subscription observation absent: %w", err)
+	}
+	return nil
 }
 
 func settleSeconds(settle time.Duration) int {
@@ -573,6 +684,26 @@ func (session *postgresObservationSession) recoverIdentityFromObservation(
 		LIMIT 1
 	`, session.observerID, request.ObjectUID, session.tenant, request.Namespace, request.Name).Scan(&identityID)
 	if errors.Is(err, sql.ErrNoRows) {
+		var tombstonedIdentityID string
+		tombstoneErr := session.tx.QueryRowContext(ctx, `
+			SELECT identity.id
+			FROM subscription_observations observation
+			JOIN subscription_identities identity ON identity.id = observation.subscription_id
+			WHERE observation.observer_id = $1
+			  AND observation.object_uid = $2
+			  AND identity.tenant = $3
+			  AND identity.namespace = $4
+			  AND identity.name = $5
+			  AND identity.deleted_at IS NOT NULL
+			LIMIT 1
+		`, session.observerID, request.ObjectUID, session.tenant, request.Namespace, request.Name).Scan(&tombstonedIdentityID)
+		if tombstoneErr == nil {
+			return "", SubscriptionCleanupCleaned, nil
+		}
+		if !errors.Is(tombstoneErr, sql.ErrNoRows) {
+			return "", "", fmt.Errorf("failed to recover tombstoned subscription identity for absence: %w", tombstoneErr)
+		}
+
 		var nameIdentityID string
 		err = session.tx.QueryRowContext(ctx, `
 			SELECT id

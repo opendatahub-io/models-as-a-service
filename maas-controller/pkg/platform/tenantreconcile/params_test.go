@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/go-logr/logr"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
@@ -100,57 +101,36 @@ func TestBuildPlatformParams(t *testing.T) {
 	})
 }
 
-func TestBuildPlatformParamsSubscriptionIdentityModePrecedence(t *testing.T) {
+func TestBuildPlatformParamsSubscriptionIdentityPhaseAndObserverID(t *testing.T) {
 	platformContext := PlatformContext{
 		GatewayRef: maasv1alpha1.TenantGatewayRef{
 			Namespace: "gateway-ns",
 			Name:      "gateway-name",
 		},
-		SubscriptionIdentityMode: "observe",
+		SubscriptionIdentityMode: "migrate",
 	}
 	tenant := &maasv1alpha1.MaasTenantConfig{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "model-ns"},
-		Spec: maasv1alpha1.MaasTenantConfigSpec{
-			APIKeys: &maasv1alpha1.TenantAPIKeysConfig{
-				SubscriptionIdentityMode: "strict",
-			},
-		},
 	}
 
 	got, err := BuildPlatformParams(tenant, platformContext, "tenant-ns", "controller-ns", "cluster-audience", "opendatahub", logr.Discard())
 	require.NoError(t, err)
-	assert.Equal(t, "strict", got.SubscriptionIdentityMode)
+	assert.Equal(t, "migrate", got.SubscriptionIdentityMode)
+	_, err = uuid.Parse(got.SubscriptionObserverID)
+	require.NoError(t, err)
 
-	tenant.Spec.APIKeys.SubscriptionIdentityMode = ""
+	sameObserverID := got.SubscriptionObserverID
 	got, err = BuildPlatformParams(tenant, platformContext, "tenant-ns", "controller-ns", "cluster-audience", "opendatahub", logr.Discard())
 	require.NoError(t, err)
-	assert.Equal(t, "observe", got.SubscriptionIdentityMode)
+	assert.Equal(t, sameObserverID, got.SubscriptionObserverID)
 }
 
-func TestValidateSubscriptionIdentityConfigRequiresObserverID(t *testing.T) {
-	observerID := "11111111-2222-3333-4444-555555555555"
-	tenant := &maasv1alpha1.MaasTenantConfig{
-		ObjectMeta: metav1.ObjectMeta{Namespace: "model-ns"},
-		Spec: maasv1alpha1.MaasTenantConfigSpec{
-			APIKeys: &maasv1alpha1.TenantAPIKeysConfig{
-				SubscriptionIdentityMode: "strict",
-			},
-		},
+func TestValidateSubscriptionIdentityMode(t *testing.T) {
+	for _, mode := range []string{"", "off", "migrate", "strict"} {
+		require.NoError(t, ValidateSubscriptionIdentityMode(mode), "mode %q", mode)
 	}
-
-	err := ValidateSubscriptionIdentityConfig(tenant, "off")
-	require.ErrorContains(t, err, "subscriptionObserverId is required")
-
-	tenant.Spec.APIKeys.SubscriptionObserverID = observerID
-	require.NoError(t, ValidateSubscriptionIdentityConfig(tenant, "off"))
-
-	tenant.Spec.APIKeys.SubscriptionIdentityMode = ""
-	tenant.Spec.APIKeys.SubscriptionObserverID = ""
-	err = ValidateSubscriptionIdentityConfig(tenant, "observe")
-	require.ErrorContains(t, err, "subscriptionObserverId is required")
-
-	tenant.Spec.APIKeys.SubscriptionObserverID = observerID
-	require.NoError(t, ValidateSubscriptionIdentityConfig(tenant, "observe"))
+	err := ValidateSubscriptionIdentityMode("unexpected")
+	require.ErrorContains(t, err, "invalid subscription identity phase")
 }
 
 func TestResolveGatewayBodyBufferLimitMB(t *testing.T) {

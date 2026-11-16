@@ -26,6 +26,10 @@ type SubscriptionObject struct {
 	ResourceVersion  string
 	StatusIdentityID string
 	StatusPresent    bool
+
+	MigrationReady      *bool
+	MigrationMessage    string
+	MigrationObservedAt time.Time
 }
 
 type Observer struct {
@@ -36,6 +40,7 @@ type Observer struct {
 	observerID string
 	interval   time.Duration
 	settle     time.Duration
+	backfill   bool
 	logger     *logger.Logger
 }
 
@@ -62,6 +67,13 @@ func NewObserver(
 		settle:     settle,
 		logger:     log,
 	}
+}
+
+// EnableMigrationBackfill makes the observer bind legacy API keys before it
+// reports migration readiness.
+func (observer *Observer) EnableMigrationBackfill() *Observer {
+	observer.backfill = true
+	return observer
 }
 
 func (observer *Observer) Run(ctx context.Context) {
@@ -112,6 +124,8 @@ func (observer *Observer) Refresh(ctx context.Context) {
 
 	present := make(map[string]struct{}, len(objects))
 	statusWrites := make([]SubscriptionObject, 0, len(objects))
+	migrationBlocked := false
+	observedAt := time.Now().UTC()
 	for _, object := range objects {
 		present[object.Namespace+"/"+object.Name] = struct{}{}
 		identityID, resolveErr := session.ResolveSubscriptionIdentity(ctx, api_keys.ResolveSubscriptionIdentityRequest{
@@ -126,11 +140,38 @@ func (observer *Observer) Refresh(ctx context.Context) {
 				"subscription", object.Namespace+"/"+object.Name,
 				"error", resolveErr,
 			)
+			if observer.backfill {
+				ready := false
+				object.MigrationReady = &ready
+				object.MigrationMessage = truncateMigrationMessage(resolveErr.Error())
+				object.MigrationObservedAt = observedAt
+				statusWrites = append(statusWrites, object)
+				migrationBlocked = true
+			}
 			continue
+		}
+		if observer.backfill {
+			_, backfillErr := session.BackfillSubscriptionKeys(ctx, identityID, object.Namespace, object.Name)
+			ready := backfillErr == nil
+			object.MigrationReady = &ready
+			object.MigrationObservedAt = observedAt
+			if backfillErr != nil {
+				object.MigrationMessage = truncateMigrationMessage(backfillErr.Error())
+				migrationBlocked = true
+				observer.logger.Warn("Subscription identity key backfill blocked",
+					"subscription", object.Namespace+"/"+object.Name,
+					"error", backfillErr,
+				)
+			} else {
+				object.MigrationMessage = ""
+			}
+			statusWrites = append(statusWrites, object)
 		}
 		if object.StatusIdentityID != identityID {
 			object.StatusIdentityID = identityID
-			statusWrites = append(statusWrites, object)
+			if !observer.backfill {
+				statusWrites = append(statusWrites, object)
+			}
 		}
 	}
 
@@ -145,6 +186,10 @@ func (observer *Observer) Refresh(ctx context.Context) {
 			)
 			return
 		}
+	}
+
+	if migrationBlocked {
+		observer.logger.Warn("Subscription identity migration is blocked for one or more subscriptions")
 	}
 
 	if err := session.Commit(); err != nil {
@@ -239,13 +284,38 @@ func (observer *Observer) patchStatus(ctx context.Context, object SubscriptionOb
 			"path":  "/status/subscriptionIdentityId",
 			"value": object.StatusIdentityID,
 		})
+		if object.MigrationReady != nil {
+			patch = append(patch,
+				map[string]any{
+					"op":    "add",
+					"path":  "/status/subscriptionIdentityMigrationReady",
+					"value": *object.MigrationReady,
+				},
+				map[string]any{
+					"op":    "add",
+					"path":  "/status/subscriptionIdentityObservedAt",
+					"value": object.MigrationObservedAt.UTC().Format(time.RFC3339),
+				},
+				map[string]any{
+					"op":    "add",
+					"path":  "/status/subscriptionIdentityMigrationMessage",
+					"value": object.MigrationMessage,
+				},
+			)
+		}
 	} else {
+		status := map[string]any{
+			"subscriptionIdentityId": object.StatusIdentityID,
+		}
+		if object.MigrationReady != nil {
+			status["subscriptionIdentityMigrationReady"] = *object.MigrationReady
+			status["subscriptionIdentityObservedAt"] = object.MigrationObservedAt.UTC().Format(time.RFC3339)
+			status["subscriptionIdentityMigrationMessage"] = object.MigrationMessage
+		}
 		patch = append(patch, map[string]any{
-			"op":   "add",
-			"path": "/status",
-			"value": map[string]any{
-				"subscriptionIdentityId": object.StatusIdentityID,
-			},
+			"op":    "add",
+			"path":  "/status",
+			"value": status,
 		})
 	}
 	data, err := json.Marshal(patch)
@@ -258,4 +328,11 @@ func (observer *Observer) patchStatus(ctx context.Context, object SubscriptionOb
 		return fmt.Errorf("failed to apply UID-guarded subscription identity status: %w", err)
 	}
 	return nil
+}
+
+func truncateMigrationMessage(message string) string {
+	if len(message) <= 1024 {
+		return message
+	}
+	return message[:1024]
 }

@@ -1159,7 +1159,7 @@ func main() {
 	flag.BoolVar(&enableSubscriptionIdentityCleanup, "enable-subscription-identity-cleanup", false,
 		"Use identity-aware MaaSSubscription absence cleanup after the subscription identity rollout reaches its finalizer stage.")
 	flag.StringVar(&subscriptionIdentityMode, "subscription-identity-mode", "off",
-		"Subscription identity rollout mode (off, observe, or strict). Strict mode disables Authorino metadata and authorization caches.")
+		"Subscription identity rollout phase (off, migrate, or strict). Strict phase disables Authorino metadata and authorization caches.")
 
 	opts := zap.Options{Development: false}
 	opts.BindFlags(flag.CommandLine)
@@ -1168,9 +1168,9 @@ func main() {
 
 	maxConcurrentReconciles = clampConcurrentReconciles(maxConcurrentReconciles)
 	switch subscriptionIdentityMode {
-	case "off", "observe", "strict":
+	case "off", "migrate", "strict":
 	default:
-		setupLog.Error(nil, "invalid subscription identity mode", "mode", subscriptionIdentityMode)
+		setupLog.Error(nil, "invalid subscription identity phase", "phase", subscriptionIdentityMode)
 		os.Exit(1)
 	}
 

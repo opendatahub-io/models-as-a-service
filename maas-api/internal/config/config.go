@@ -32,9 +32,10 @@ const (
 const (
 	// SubscriptionIdentityModeOff keeps the existing name-based behavior.
 	SubscriptionIdentityModeOff = "off"
-	// SubscriptionIdentityModeObserve writes identities and status without
-	// enforcing them during API-key mint or validation.
-	SubscriptionIdentityModeObserve = "observe"
+	// SubscriptionIdentityModeMigrate binds newly minted keys, validates keys
+	// that already have an identity, and preserves unbound legacy keys while
+	// the observer backfills them.
+	SubscriptionIdentityModeMigrate = "migrate"
 	// SubscriptionIdentityModeStrict requires an identity for new keys and
 	// validates the locally cached incarnation ID during authorization.
 	SubscriptionIdentityModeStrict = "strict"
@@ -110,8 +111,8 @@ type Config struct {
 	// remain soft-deleted for audit purposes before physical deletion.
 	APIKeyDeletionRetentionDays int
 
-	// SubscriptionIdentityMode controls the staged identity rollout. The default
-	// is off; observe writes identity state without changing authorization.
+	// SubscriptionIdentityMode controls the controller-owned identity lifecycle
+	// phase. The default is off.
 	SubscriptionIdentityMode string
 
 	// SubscriptionObserverID identifies one logical maas-api observer. All
@@ -397,15 +398,15 @@ func (c *Config) validateAPIKeySettings() error {
 
 func (c *Config) validateSubscriptionIdentity() error {
 	switch c.SubscriptionIdentityMode {
-	case SubscriptionIdentityModeOff, SubscriptionIdentityModeObserve, SubscriptionIdentityModeStrict:
+	case SubscriptionIdentityModeOff, SubscriptionIdentityModeMigrate, SubscriptionIdentityModeStrict:
 	default:
-		return errors.New("SUBSCRIPTION_IDENTITY_MODE must be one of off, observe, or strict")
+		return errors.New("SUBSCRIPTION_IDENTITY_MODE must be one of off, migrate, or strict")
 	}
 	if c.SubscriptionIdentityMode == SubscriptionIdentityModeOff {
 		return nil
 	}
 	if _, err := uuid.Parse(strings.TrimSpace(c.SubscriptionObserverID)); err != nil {
-		return fmt.Errorf("SUBSCRIPTION_OBSERVER_ID must be a UUID when subscription identity mode is enabled: %w", err)
+		return fmt.Errorf("SUBSCRIPTION_OBSERVER_ID must be a UUID when subscription identity is enabled: %w", err)
 	}
 	if c.SubscriptionObservationIntervalSeconds < 1 {
 		return errors.New("SUBSCRIPTION_OBSERVATION_INTERVAL_SECONDS must be at least 1")

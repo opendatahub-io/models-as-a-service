@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
@@ -562,4 +563,34 @@ func TestValidateAPIKeyDeletionRetention(t *testing.T) {
 	if err := tooLargeConfig.Validate(); err == nil || !strings.Contains(err.Error(), "at most") {
 		t.Fatalf("too-large retention validation error = %v", err)
 	}
+}
+
+func TestValidateSubscriptionIdentityMode(t *testing.T) {
+	base := Config{
+		DBConnectionURL:                        "postgresql://localhost/test",
+		APIKeyMaxExpirationDays:                30,
+		AccessCheckTimeoutSeconds:              15,
+		MetricsPort:                            9090,
+		MaaSSubscriptionNamespace:              "models-as-a-service",
+		TenantName:                             "test-tenant",
+		SubscriptionObserverID:                 uuid.NewString(),
+		SubscriptionObservationIntervalSeconds: 60,
+		SubscriptionObservationMaxAgeSeconds:   180,
+		SubscriptionObservationSettleSeconds:   30,
+	}
+
+	for _, mode := range []string{
+		SubscriptionIdentityModeOff,
+		SubscriptionIdentityModeMigrate,
+		SubscriptionIdentityModeStrict,
+	} {
+		cfg := base
+		cfg.SubscriptionIdentityMode = mode
+		require.NoError(t, cfg.Validate(), "mode %q", mode)
+	}
+
+	cfg := base
+	cfg.SubscriptionIdentityMode = "unexpected"
+	err := cfg.Validate()
+	require.ErrorContains(t, err, "SUBSCRIPTION_IDENTITY_MODE")
 }

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -116,7 +115,6 @@ func (s *Service) CreateAPIKey(
 	ctx context.Context, username string, userGroups []string, name, description string,
 	expiresIn *time.Duration, ephemeral bool, requestedSubscription string, tenant string, labels map[string]string,
 ) (*CreateAPIKeyResponse, error) {
-	userGroups = withoutSystemAuthenticated(userGroups)
 	// Validate group names against the canonical allowlist (CWE-116/CWE-74 mitigation).
 	// AuthPolicy uses CEL to build JSON arrays from groups, and CEL lacks JSON escaping
 	// functions, so we reject any characters outside the safe allowlist on write.
@@ -185,11 +183,12 @@ func (s *Service) CreateAPIKey(
 	}
 	subscriptionName := subResp.Name
 	subscriptionIdentityID := subResp.SubscriptionIdentityID
-	strictIdentity := s.subscriptionIdentityMode() == config.SubscriptionIdentityModeStrict
-	if strictIdentity && subscriptionIdentityID == "" {
+	bindIdentity := s.subscriptionIdentityMode() == config.SubscriptionIdentityModeStrict ||
+		s.subscriptionIdentityMode() == config.SubscriptionIdentityModeMigrate
+	if bindIdentity && subscriptionIdentityID == "" {
 		return nil, ErrSubscriptionIdentityRequired
 	}
-	if !strictIdentity {
+	if !bindIdentity {
 		subscriptionIdentityID = ""
 	}
 
@@ -200,7 +199,7 @@ func (s *Service) CreateAPIKey(
 	// Note: prefix is NOT stored (security - reduces brute-force attack surface)
 	// userGroups stored as PostgreSQL TEXT[] array (no JSON marshaling needed)
 	// Hash is SHA-256(key_id + secret) where key_id is embedded in the API key as per-key salt
-	if strictIdentity {
+	if bindIdentity {
 		maxObservationAge := time.Duration(constant.DefaultSubscriptionObservationMaxAgeSeconds) * time.Second
 		if s.config != nil && s.config.SubscriptionObservationMaxAgeSeconds > 0 {
 			maxObservationAge = time.Duration(s.config.SubscriptionObservationMaxAgeSeconds) * time.Second
@@ -336,11 +335,14 @@ func (s *Service) ValidateAPIKey(ctx context.Context, key string) (*ValidationRe
 		}, nil
 	}
 
-	if s.subscriptionIdentityMode() == config.SubscriptionIdentityModeStrict {
+	enforceBoundIdentity := s.subscriptionIdentityMode() == config.SubscriptionIdentityModeMigrate ||
+		s.subscriptionIdentityMode() == config.SubscriptionIdentityModeStrict
+	hasIdentityBinding := metadata.SubscriptionIdentityID != "" || metadata.SubscriptionNamespace != ""
+	if hasIdentityBinding && enforceBoundIdentity {
 		if strings.TrimSpace(metadata.SubscriptionIdentityID) == "" || strings.TrimSpace(metadata.SubscriptionNamespace) == "" {
 			return &ValidationResult{
 				Valid:  false,
-				Reason: "key has no subscription identity bound",
+				Reason: "key has an incomplete subscription identity binding",
 			}, nil
 		}
 		localSubscription, lookupErr := s.subSelector.LookupSubscription(metadata.SubscriptionNamespace, metadata.Subscription)
@@ -356,6 +358,15 @@ func (s *Service) ValidateAPIKey(ctx context.Context, key string) (*ValidationRe
 			return &ValidationResult{
 				Valid:  false,
 				Reason: "key subscription identity does not match local subscription",
+			}, nil
+		}
+	}
+
+	if s.subscriptionIdentityMode() == config.SubscriptionIdentityModeStrict {
+		if !hasIdentityBinding {
+			return &ValidationResult{
+				Valid:  false,
+				Reason: "key has no subscription identity bound",
 			}, nil
 		}
 	}
@@ -382,12 +393,6 @@ func (s *Service) ValidateAPIKey(ctx context.Context, key string) (*ValidationRe
 		SubscriptionNamespace:  metadata.SubscriptionNamespace,
 		Tenant:                 metadata.Tenant,
 	}, nil
-}
-
-func withoutSystemAuthenticated(groups []string) []string {
-	return slices.DeleteFunc(slices.Clone(groups), func(group string) bool {
-		return group == "system:authenticated"
-	})
 }
 
 // RevokeAPIKey revokes a specific permanent API key.

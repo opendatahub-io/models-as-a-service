@@ -88,8 +88,8 @@ type MaaSSubscriptionReconciler struct {
 	// SubscriptionIdentityCleanupEnabled gates the finalizer's migration from
 	// legacy name-based revocation to identity-aware absence recording.
 	SubscriptionIdentityCleanupEnabled bool
-	// SubscriptionIdentityMode is the controller-wide default. Explicit tenant
-	// API-keys configuration takes precedence over this value.
+	// SubscriptionIdentityMode is the controller-wide identity lifecycle phase.
+	// Tenant API-keys configuration cannot override it.
 	SubscriptionIdentityMode string
 	// MaxConcurrentReconciles is the maximum number of concurrent Reconciles which can be run.
 	// Defaults to 1 if not set.
@@ -1232,7 +1232,7 @@ func (r *MaaSSubscriptionReconciler) ensureSubscriptionAPIKeysRevoked(ctx contex
 		}
 		return false, fmt.Errorf("resolve tenant for MaaSSubscription %s/%s: %w", subscription.Namespace, subscription.Name, err)
 	}
-	effectiveIdentityMode := subscriptionIdentityModeForTenant(tenant, r.SubscriptionIdentityMode)
+	effectiveIdentityMode := subscriptionIdentityMode(r.SubscriptionIdentityMode)
 	if effectiveIdentityMode == subscriptionIdentityModeStrict && !cleanupRequested {
 		log.Info("Skipping subscription API-key cleanup because identity-aware cleanup is disabled in strict mode",
 			"subscription", subscription.Namespace+"/"+subscription.Name)

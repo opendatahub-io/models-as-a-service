@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	discv1 "k8s.io/api/discovery/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -356,6 +357,97 @@ func TestMaaSAuthPolicyReconciler_TargetMaaSAPIReadyTreatsUnknownAsReady(t *test
 	}
 	if !ready {
 		t.Fatal("an EndpointSlice endpoint with unknown readiness must be treated as ready")
+	}
+}
+
+func TestMaaSAuthPolicyReconciler_SubscriptionIdentityCallbackRolloutGate(t *testing.T) {
+	const infraNS = "redhat-ai-gateway-infra"
+
+	tests := []struct {
+		name               string
+		contractAnnotation string
+		observedGeneration int64
+		replicas           int32
+		updatedReplicas    int32
+		availableReplicas  int32
+		readyReplicas      int32
+		wantReady          bool
+	}{
+		{
+			name:               "missing contract is not ready",
+			observedGeneration: 1,
+			updatedReplicas:    1,
+			availableReplicas:  1,
+			readyReplicas:      1,
+		},
+		{
+			name:               "incomplete rollout is not ready",
+			contractAnnotation: tenantreconcile.MaaSAPISubscriptionIdentityContractV1,
+			observedGeneration: 0,
+			replicas:           0,
+			updatedReplicas:    0,
+			availableReplicas:  0,
+			readyReplicas:      0,
+		},
+		{
+			name:               "complete rollout with contract is ready",
+			contractAnnotation: tenantreconcile.MaaSAPISubscriptionIdentityContractV1,
+			observedGeneration: 1,
+			replicas:           1,
+			updatedReplicas:    1,
+			availableReplicas:  1,
+			readyReplicas:      1,
+			wantReady:          true,
+		},
+		{
+			name:               "surge rollout with old pod is not ready",
+			contractAnnotation: tenantreconcile.MaaSAPISubscriptionIdentityContractV1,
+			observedGeneration: 1,
+			replicas:           2,
+			updatedReplicas:    1,
+			availableReplicas:  1,
+			readyReplicas:      1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			replicas := int32(1)
+			deployment := &appsv1.Deployment{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:       tenantreconcile.MaaSAPIDeploymentName(""),
+					Namespace:  infraNS,
+					Generation: 1,
+				},
+				Spec: appsv1.DeploymentSpec{
+					Replicas: &replicas,
+					Template: corev1.PodTemplateSpec{
+						ObjectMeta: metav1.ObjectMeta{
+							Annotations: map[string]string{
+								tenantreconcile.AnnotationMaaSAPISubscriptionIdentityContract: tt.contractAnnotation,
+							},
+						},
+					},
+				},
+				Status: appsv1.DeploymentStatus{
+					ObservedGeneration: tt.observedGeneration,
+					Replicas:           tt.replicas,
+					UpdatedReplicas:    tt.updatedReplicas,
+					AvailableReplicas:  tt.availableReplicas,
+					ReadyReplicas:      tt.readyReplicas,
+				},
+			}
+			client := fake.NewClientBuilder().WithScheme(scheme).WithObjects(deployment).Build()
+			reconciler := &MaaSAuthPolicyReconciler{Client: client, InfraNamespace: infraNS}
+
+			ready, err := reconciler.maasAPISubscriptionIdentityCallbackReady(context.Background(), "")
+			if err != nil {
+				t.Fatalf("maasAPISubscriptionIdentityCallbackReady: %v", err)
+			}
+			if ready != tt.wantReady {
+				t.Fatalf("ready = %v, want %v", ready, tt.wantReady)
+			}
+		})
 	}
 }
 
@@ -1272,7 +1364,15 @@ func TestMaaSAuthPolicyReconciler_CachingConfiguration(t *testing.T) {
 			wantAuthzTTL:    60, // Should be capped at metadata TTL
 		},
 		{
-			name:            "strict identity mode disables caches",
+			name:            "migrate identity phase disables caches",
+			metadataTTL:     60,
+			authzTTL:        60,
+			identityMode:    "migrate",
+			wantMetadataTTL: 0,
+			wantAuthzTTL:    0,
+		},
+		{
+			name:            "strict identity phase disables caches",
 			metadataTTL:     60,
 			authzTTL:        60,
 			identityMode:    "strict",
@@ -1390,41 +1490,15 @@ func TestMaaSAuthPolicyReconciler_CachingConfiguration(t *testing.T) {
 	}
 }
 
-func TestMaaSAuthPolicyReconciler_TenantIdentityModeOverridesGlobalDefault(t *testing.T) {
-	const namespace = "default"
-	tenant := &maasv1alpha1.Tenant{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      maasv1alpha1.TenantInstanceName,
-			Namespace: namespace,
-		},
-		Spec: maasv1alpha1.TenantSpec{
-			APIKeys: &maasv1alpha1.TenantAPIKeysConfig{
-				SubscriptionIdentityMode: "off",
-			},
-		},
-	}
-	c := fake.NewClientBuilder().
-		WithScheme(scheme).
-		WithRESTMapper(testRESTMapper()).
-		WithObjects(legacyNamespace(namespace), tenant).
-		Build()
-	r := &MaaSAuthPolicyReconciler{
-		Client:                   c,
-		Scheme:                   scheme,
-		SubscriptionIdentityMode: "strict",
+func TestMaaSAuthPolicyReconciler_SubscriptionIdentityPhaseIsControllerWide(t *testing.T) {
+	r := &MaaSAuthPolicyReconciler{SubscriptionIdentityMode: "strict"}
+	if subscriptionIdentityMode(r.SubscriptionIdentityMode) != subscriptionIdentityModeStrict {
+		t.Fatal("controller strict phase must remain strict")
 	}
 
-	if r.subscriptionIdentityStrictForNamespace(context.Background(), namespace) {
-		t.Fatal("tenant off mode must override the global strict default")
-	}
-
-	tenant.Spec.APIKeys.SubscriptionIdentityMode = "strict"
 	r.SubscriptionIdentityMode = "off"
-	if err := c.Update(context.Background(), tenant); err != nil {
-		t.Fatalf("update tenant: %v", err)
-	}
-	if !r.subscriptionIdentityStrictForNamespace(context.Background(), namespace) {
-		t.Fatal("tenant strict mode must override the global off default")
+	if subscriptionIdentityMode(r.SubscriptionIdentityMode) != subscriptionIdentityModeOff {
+		t.Fatal("controller off phase must remain off")
 	}
 }
 
@@ -2331,6 +2405,27 @@ func TestBuildGatewayAuthPolicySpec_BindsSubscriptionSelectionToAPIKeyIdentity(t
 	})
 	if tokenBody["requestedSubscriptionIdentityId"] != "" {
 		t.Fatalf("user-token requestedSubscriptionIdentityId = %#v, want empty", tokenBody["requestedSubscriptionIdentityId"])
+	}
+}
+
+func TestBuildGatewayAuthPolicySpec_OmitsSubscriptionIdentityFieldOutsideStrictMode(t *testing.T) {
+	r := &MaaSAuthPolicyReconciler{
+		InfraNamespace:           "maas-system",
+		GatewayName:              "maas-default-gateway",
+		GatewayNamespace:         "gateway-ns",
+		ClusterAudience:          "https://kubernetes.default.svc",
+		MetadataCacheTTL:         60,
+		AuthzCacheTTL:            60,
+		SubscriptionIdentityMode: "off",
+	}
+	spec := r.buildGatewayAuthPolicySpec(nil, false, "", "models-as-a-service", "test-gateway-ns", "test-gateway", nil)
+	obj := &unstructured.Unstructured{Object: map[string]any{"spec": spec}}
+	bodyExpression := nestedStringRequired(t, obj,
+		"spec", "defaults", "rules", "metadata", "subscription-info", "http", "body", "expression",
+	)
+
+	if strings.Contains(bodyExpression, `"requestedSubscriptionIdentityId"`) {
+		t.Fatal("subscription-info body must omit requestedSubscriptionIdentityId outside strict mode for legacy maas-api compatibility")
 	}
 }
 

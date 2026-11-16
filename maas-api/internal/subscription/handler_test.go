@@ -617,7 +617,7 @@ func TestHandler_SelectSubscription_MultipleSubscriptions(t *testing.T) {
 	}
 }
 
-func TestHandler_SelectSubscription_IgnoresSystemAuthenticatedOwnerGroup(t *testing.T) {
+func TestHandler_SelectSubscription_AllowsSystemAuthenticatedOwnerGroup(t *testing.T) {
 	subscriptions := []*unstructured.Unstructured{
 		createTestSubscriptionWithLimit("public", []string{"system:authenticated"}, 10, 100, "org-public", "cc-public"),
 	}
@@ -637,8 +637,8 @@ func TestHandler_SelectSubscription_IgnoresSystemAuthenticatedOwnerGroup(t *test
 	require.Equal(t, http.StatusOK, responseRecorder.Code)
 	var response subscription.SelectResponse
 	require.NoError(t, json.Unmarshal(responseRecorder.Body.Bytes(), &response))
-	assert.Equal(t, "not_found", response.Error)
-	assert.Empty(t, response.Name)
+	assert.Empty(t, response.Error)
+	assert.Equal(t, "public", response.Name)
 }
 
 // createTestSubscriptionWithModels creates a subscription with specific model references.

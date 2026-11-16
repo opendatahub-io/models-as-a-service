@@ -1439,7 +1439,7 @@ func TestUserCanCreateOwnKey(t *testing.T) {
 	meta, err := store.Get(context.Background(), response.ID)
 	require.NoError(t, err)
 	assert.Equal(t, "alice", meta.Username)
-	assert.Equal(t, []string{"tier-free"}, meta.Groups)
+	assert.Equal(t, []string{"tier-free", "system:authenticated"}, meta.Groups)
 	assert.Equal(t, testSubscriptionName, meta.Subscription)
 }
 
