@@ -86,6 +86,13 @@ const usageLogsTenancyProxyDeploymentName = "usage-logs-tenancy-proxy"
 // usageLogsTenancyProxyContainerName is the proxy container in the tenancy proxy Deployment.
 const usageLogsTenancyProxyContainerName = "proxy"
 
+const prometheusRuleCRD = "prometheusrules.monitoring.rhobs"
+
+var (
+	serviceMonitorGVK = schema.GroupVersionKind{Group: "monitoring.coreos.com", Version: "v1", Kind: "ServiceMonitor"}
+	prometheusRuleGVK = schema.GroupVersionKind{Group: "monitoring.rhobs", Version: "v1", Kind: "PrometheusRule"}
+)
+
 // LifecycleReconciler watches the maas-controller Deployment. It is the sole creator of the
 // cluster-scoped Config/default anchor when the Deployment exists and is not terminating (so
 // standalone installs do not race applying a Config manifest before the Config CRD is ready).
@@ -1317,13 +1324,6 @@ func (r *LifecycleReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	}
 	return nil
 }
-
-const prometheusRuleCRD = "prometheusrules.monitoring.rhobs"
-
-var (
-	serviceMonitorGVK = schema.GroupVersionKind{Group: "monitoring.coreos.com", Version: "v1", Kind: "ServiceMonitor"}
-	prometheusRuleGVK = schema.GroupVersionKind{Group: "monitoring.rhobs", Version: "v1", Kind: "PrometheusRule"}
-)
 
 // managedMonitoringObject returns metadata only: watch predicates need labels and
 // namespace, not full monitoring specifications from every namespace.
