@@ -3,6 +3,7 @@ package tenantreconcile
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -146,6 +147,23 @@ func TestValidateSubscriptionIdentityMode(t *testing.T) {
 	}
 	err := ValidateSubscriptionIdentityMode("unexpected")
 	require.ErrorContains(t, err, "invalid subscription identity phase")
+}
+
+func TestDefaultSubscriptionIdentityMode(t *testing.T) {
+	require.Equal(t, "migrate", DefaultSubscriptionIdentityMode)
+
+	_, file, _, ok := runtime.Caller(0)
+	require.True(t, ok)
+	projectRoot := filepath.Join(filepath.Dir(file), "..", "..", "..", "..")
+
+	for _, relativePath := range []string{
+		"deployment/base/maas-controller/default/params.env",
+		"deployment/base/maas-controller/overlays/xks/params.env",
+	} {
+		data, err := os.ReadFile(filepath.Join(projectRoot, relativePath))
+		require.NoError(t, err)
+		require.Contains(t, string(data), "subscription-identity-mode=migrate")
+	}
 }
 
 func TestResolveGatewayBodyBufferLimitMB(t *testing.T) {

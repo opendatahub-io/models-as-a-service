@@ -152,6 +152,7 @@ const (
 	DefaultMaaSAPIKeyCleanupImage      = "registry.redhat.io/ubi9/ubi-minimal:9.7"
 	DefaultAPIKeyMaxExpirationDays     = "90"
 	DefaultAPIKeyDeletionRetentionDays = "90"
+	DefaultSubscriptionIdentityMode    = "migrate"
 
 	// DefaultOTLPCollectorService is the platform DSCI OpenTelemetry collector Service name.
 	DefaultOTLPCollectorService = "data-science-collector-collector"

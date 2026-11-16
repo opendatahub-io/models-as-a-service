@@ -1158,7 +1158,7 @@ func main() {
 		"Discover AITenant-managed tenant namespaces labeled ai-gateway.opendatahub.io/tenant or maas.opendatahub.io/managed-by-aitenant=true and reconcile MaaS tenant CRs from them.")
 	flag.BoolVar(&enableSubscriptionIdentityCleanup, "enable-subscription-identity-cleanup", false,
 		"Use identity-aware MaaSSubscription absence cleanup after the subscription identity rollout reaches its finalizer stage.")
-	flag.StringVar(&subscriptionIdentityMode, "subscription-identity-mode", "off",
+	flag.StringVar(&subscriptionIdentityMode, "subscription-identity-mode", tenantreconcile.DefaultSubscriptionIdentityMode,
 		"Subscription identity rollout phase (off, migrate, or strict). Strict phase disables Authorino metadata and authorization caches.")
 
 	opts := zap.Options{Development: false}
