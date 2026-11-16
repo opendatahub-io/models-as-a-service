@@ -23,6 +23,7 @@ import json
 import logging
 import os
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import pytest
@@ -185,21 +186,19 @@ def _assert_chain(pod: str, listener: str, filters: list[dict]):
 
 
 def _assert_praxis_chain(pod: str, listener: str, filters: list[dict]):
-    """Default MaaS path has no InferencePool; EPP is optional when present."""
+    """praxis-extproc's overlay moves the EPP in front of the router on every listener,
+    with or without an InferencePool, so it is never optional. Its config is not compared:
+    whether the copy still engages the picker is what the traffic test checks."""
     names = [f.get("name") for f in filters]
-    for name in (IPP_PRE, IPP, ROUTER):
+    for name in (IPP_PRE, IPP, EPP, ROUTER):
         assert names.count(name) == 1, f"{pod} {listener}: {name} x{names.count(name)} in {names}"
-    order = [names.index(IPP_PRE), names.index(IPP), names.index(ROUTER)]
+    order = [names.index(IPP_PRE), names.index(IPP), names.index(EPP), names.index(ROUTER)]
     auth = _auth_index(names)
     if auth >= 0:
         order.insert(1, auth)
     assert order == sorted(order), (
-        f"{pod} {listener}: expected ipp-pre -> auth -> ipp -> router, got {names}"
+        f"{pod} {listener}: expected ipp-pre -> auth -> ipp -> {EPP} -> router, got {names}"
     )
-    if names.count(EPP) == 1:
-        assert names.index(IPP) < names.index(EPP) < names.index(ROUTER), (
-            f"{pod} {listener}: {EPP} must sit after ipp and before router, got {names}"
-        )
 
 
 @dataclass(frozen=True)
@@ -284,6 +283,117 @@ def _chat(api_key, model_name, stream=False):
     return chat("Hello", f"{_gateway_url()}/v1", headers, model_name, stream=stream, max_tokens=5)
 
 
+def _check_endpoint_picker_traffic(assert_chain: Callable[[str, str, list[dict]], None]):
+    """Create a scheduler-backed InferencePool model on the default gateway and prove that
+    body-routed requests reach its endpoint picker while a rejected one does not.
+    `assert_chain` checks the listener chain for the dataplane under test."""
+    suffix = uuid.uuid4().hex[:8]
+    llmis = f"e2e-epp-pool-{suffix}"
+    policy = f"e2e-epp-pool-access-{suffix}"
+    subscription = f"e2e-epp-pool-sub-{suffix}"
+    sa_name = f"e2e-epp-pool-{suffix}"
+    served_id = f"test/e2e-epp-pool-{suffix}"
+    model = f"publishers/{MODEL_NAMESPACE}/models/{served_id}"
+    picker_host = f"{llmis}-epp-service.{MODEL_NAMESPACE}."
+
+    try:
+        log.info("Creating InferencePool model %s/%s", MODEL_NAMESPACE, llmis)
+        _create_llmis(llmis, MODEL_NAMESPACE, DEFAULT_GATEWAY_NAME, GATEWAY_NAMESPACE,
+                      model_name=served_id, scheduler=True)
+        wait_for_llmisvc_backend_ready(llmis, MODEL_NAMESPACE, DEFAULT_GATEWAY_NAME,
+                                       timeout=POOL_READY_TIMEOUT)
+        _create_maas_model_ref(llmis, MODEL_NAMESPACE, llmis)
+
+        # A MaaSModelRef turns Ready only once an auth policy and subscription govern it.
+        log.info("Granting service account %s access to %s", sa_name, llmis)
+        sa_token = _create_sa_token(sa_name, duration="30m")
+        sa_user = _sa_to_user(sa_name)
+        _create_test_auth_policy(policy, llmis, users=[sa_user])
+        _create_test_subscription(subscription, llmis, users=[sa_user], token_limit=100000)
+        _wait_for_maas_auth_policy_phase(policy)
+        _wait_for_maas_subscription_phase(subscription)
+        _wait_for_model_ready(llmis, namespace=MODEL_NAMESPACE)
+        api_key = _create_api_key(sa_token, name=f"e2e-epp-pool-{suffix}", subscription=subscription)
+
+        # Config: every replica binds the model's route to its picker and sends the picker
+        # the request, and the chain reaches it.
+        log.info("Waiting for every %s replica to bind %s", DEFAULT_GATEWAY_NAME, picker_host)
+        routes = wait_until(lambda: _pool_routes(DEFAULT_GATEWAY_NAME, picker_host), ROUTE_BIND_TIMEOUT,
+                            f"not every {DEFAULT_GATEWAY_NAME} replica bound endpoint picker {picker_host}")
+        for pod, route in routes.items():
+            assert route.model == model, f"{pod}: picker-bound route matches model {route.model!r}, expected {model!r}"
+            sent = {mode: route.processing_mode.get(mode) for mode in EPP_ROUTE_PROCESSING}
+            assert sent == EPP_ROUTE_PROCESSING, f"{pod}: pool route does not send requests to the picker"
+        for pod, (chains, rejected) in _listener_state(DEFAULT_GATEWAY_NAME).items():
+            assert not rejected, f"{pod}: Envoy rejected listener config: {rejected}"
+            for listener, filters in chains:
+                assert_chain(pod, listener, filters)
+
+        # Traffic: auth needs to propagate and the pool fails open until its picker serves,
+        # so wait for the first picked response. With the EPP ahead of ipp-pre no response
+        # ever carries the header and this times out.
+        def picked():
+            response = _chat(api_key, model)
+            assert response.status_code == 200 and response.headers.get(EPP_RESPONSE_HEADER) == "true", (
+                f"{response_summary(response)} headers={dict(response.headers)}"
+            )
+            return response
+
+        log.info("Waiting for the first body-routed response picked by the EPP")
+        wait_until(picked, POOL_READY_TIMEOUT, "endpoint picker never answered")
+
+        # Auth rejects ahead of the picker. The picker's response header proves nothing
+        # here: Envoy sends local replies through every encoder filter, so the picker sees
+        # the 401's headers without ever seeing the request. Its request log does: the
+        # picker logs a request before the response goes out, so by the time the two
+        # requests below have been answered and logged, a line for the rejected one sent
+        # first would be in the log too.
+        picker = _picker_selector(llmis)
+        baseline = _picker_request_count(picker)
+        rejected = _chat(None, model)
+        assert rejected.status_code == 401, f"no credentials: {response_summary(rejected)}"
+
+        response = _chat(api_key, model)
+        assert response.status_code == 200, f"completion: {response_summary(response)}"
+        assert response.json().get("choices"), f"completion without choices: {response_summary(response)}"
+        assert response.headers.get(EPP_RESPONSE_HEADER) == "true", (
+            f"completion skipped the endpoint picker: {dict(response.headers)}"
+        )
+
+        with _chat(api_key, model, stream=True) as streamed:
+            assert streamed.headers.get(EPP_RESPONSE_HEADER) == "true", (
+                f"stream skipped the endpoint picker: {dict(streamed.headers)}"
+            )
+            assert_openai_sse_chat_stream(streamed)
+
+        authenticated = 2  # the plain and the streamed completion
+
+        def logged_authenticated():
+            seen = _picker_request_count(picker) - baseline
+            assert seen >= authenticated, f"endpoint picker logged {seen} of {authenticated} authenticated requests"
+            return seen
+
+        seen = wait_until(logged_authenticated, PICKER_LOG_TIMEOUT,
+                          "endpoint picker never logged the authenticated requests")
+        assert seen == authenticated, (
+            f"endpoint picker logged {seen} requests for {authenticated} authenticated and 1 rejected"
+        )
+    except Exception:
+        _log_pool_diagnostics(llmis)
+        raise
+    finally:
+        _delete_cr("maassubscription", subscription)
+        _delete_cr("maasauthpolicy", policy)
+        _delete_cr("maasmodelref", llmis, namespace=MODEL_NAMESPACE)
+        _delete_cr("llminferenceservice", llmis, namespace=MODEL_NAMESPACE)
+        _delete_sa(sa_name)
+        _wait_for_cr_absent("maassubscription", subscription)
+        _wait_for_cr_absent("maasauthpolicy", policy)
+        _wait_for_cr_absent("maasmodelref", llmis, namespace=MODEL_NAMESPACE)
+        # LLMIS teardown can lag the default 30s CR-absent wait under parallel load.
+        _wait_for_cr_absent("llminferenceservice", llmis, namespace=MODEL_NAMESPACE, timeout=180)
+
+
 class TestGatewayFilterChain:
     """The payload-processing EnvoyFilter yields ipp-pre -> auth -> ipp -> EPP -> router."""
 
@@ -312,108 +422,4 @@ class TestEndpointPickerTraffic:
 
     def test_body_routed_requests_reach_the_endpoint_picker(self):
         _skip_unless_maas_payload_processing()
-        suffix = uuid.uuid4().hex[:8]
-        llmis = f"e2e-epp-pool-{suffix}"
-        policy = f"e2e-epp-pool-access-{suffix}"
-        subscription = f"e2e-epp-pool-sub-{suffix}"
-        sa_name = f"e2e-epp-pool-{suffix}"
-        served_id = f"test/e2e-epp-pool-{suffix}"
-        model = f"publishers/{MODEL_NAMESPACE}/models/{served_id}"
-        picker_host = f"{llmis}-epp-service.{MODEL_NAMESPACE}."
-
-        try:
-            log.info("Creating InferencePool model %s/%s", MODEL_NAMESPACE, llmis)
-            _create_llmis(llmis, MODEL_NAMESPACE, DEFAULT_GATEWAY_NAME, GATEWAY_NAMESPACE,
-                          model_name=served_id, scheduler=True)
-            wait_for_llmisvc_backend_ready(llmis, MODEL_NAMESPACE, DEFAULT_GATEWAY_NAME,
-                                           timeout=POOL_READY_TIMEOUT)
-            _create_maas_model_ref(llmis, MODEL_NAMESPACE, llmis)
-
-            # A MaaSModelRef turns Ready only once an auth policy and subscription govern it.
-            log.info("Granting service account %s access to %s", sa_name, llmis)
-            sa_token = _create_sa_token(sa_name, duration="30m")
-            sa_user = _sa_to_user(sa_name)
-            _create_test_auth_policy(policy, llmis, users=[sa_user])
-            _create_test_subscription(subscription, llmis, users=[sa_user], token_limit=100000)
-            _wait_for_maas_auth_policy_phase(policy)
-            _wait_for_maas_subscription_phase(subscription)
-            _wait_for_model_ready(llmis, namespace=MODEL_NAMESPACE)
-            api_key = _create_api_key(sa_token, name=f"e2e-epp-pool-{suffix}", subscription=subscription)
-
-            # Config: every replica binds the model's route to its picker and sends the picker
-            # the request, and the chain reaches it.
-            log.info("Waiting for every %s replica to bind %s", DEFAULT_GATEWAY_NAME, picker_host)
-            routes = wait_until(lambda: _pool_routes(DEFAULT_GATEWAY_NAME, picker_host), ROUTE_BIND_TIMEOUT,
-                                f"not every {DEFAULT_GATEWAY_NAME} replica bound endpoint picker {picker_host}")
-            for pod, route in routes.items():
-                assert route.model == model, f"{pod}: picker-bound route matches model {route.model!r}, expected {model!r}"
-                sent = {mode: route.processing_mode.get(mode) for mode in EPP_ROUTE_PROCESSING}
-                assert sent == EPP_ROUTE_PROCESSING, f"{pod}: pool route does not send requests to the picker"
-            for pod, (chains, rejected) in _listener_state(DEFAULT_GATEWAY_NAME).items():
-                assert not rejected, f"{pod}: Envoy rejected listener config: {rejected}"
-                for listener, filters in chains:
-                    _assert_chain(pod, listener, filters)
-
-            # Traffic: auth needs to propagate and the pool fails open until its picker serves,
-            # so wait for the first picked response. With the EPP ahead of ipp-pre no response
-            # ever carries the header and this times out.
-            def picked():
-                response = _chat(api_key, model)
-                assert response.status_code == 200 and response.headers.get(EPP_RESPONSE_HEADER) == "true", (
-                    f"{response_summary(response)} headers={dict(response.headers)}"
-                )
-                return response
-
-            log.info("Waiting for the first body-routed response picked by the EPP")
-            wait_until(picked, POOL_READY_TIMEOUT, "endpoint picker never answered")
-
-            # Auth rejects ahead of the picker. The picker's response header proves nothing
-            # here: Envoy sends local replies through every encoder filter, so the picker sees
-            # the 401's headers without ever seeing the request. Its request log does: the
-            # picker logs a request before the response goes out, so by the time the two
-            # requests below have been answered and logged, a line for the rejected one sent
-            # first would be in the log too.
-            picker = _picker_selector(llmis)
-            baseline = _picker_request_count(picker)
-            rejected = _chat(None, model)
-            assert rejected.status_code == 401, f"no credentials: {response_summary(rejected)}"
-
-            response = _chat(api_key, model)
-            assert response.status_code == 200, f"completion: {response_summary(response)}"
-            assert response.json().get("choices"), f"completion without choices: {response_summary(response)}"
-            assert response.headers.get(EPP_RESPONSE_HEADER) == "true", (
-                f"completion skipped the endpoint picker: {dict(response.headers)}"
-            )
-
-            with _chat(api_key, model, stream=True) as streamed:
-                assert streamed.headers.get(EPP_RESPONSE_HEADER) == "true", (
-                    f"stream skipped the endpoint picker: {dict(streamed.headers)}"
-                )
-                assert_openai_sse_chat_stream(streamed)
-
-            authenticated = 2  # the plain and the streamed completion
-
-            def logged_authenticated():
-                seen = _picker_request_count(picker) - baseline
-                assert seen >= authenticated, f"endpoint picker logged {seen} of {authenticated} authenticated requests"
-                return seen
-
-            seen = wait_until(logged_authenticated, PICKER_LOG_TIMEOUT,
-                              "endpoint picker never logged the authenticated requests")
-            assert seen == authenticated, (
-                f"endpoint picker logged {seen} requests for {authenticated} authenticated and 1 rejected"
-            )
-        except Exception:
-            _log_pool_diagnostics(llmis)
-            raise
-        finally:
-            _delete_cr("maassubscription", subscription)
-            _delete_cr("maasauthpolicy", policy)
-            _delete_cr("maasmodelref", llmis, namespace=MODEL_NAMESPACE)
-            _delete_cr("llminferenceservice", llmis, namespace=MODEL_NAMESPACE)
-            _delete_sa(sa_name)
-            _wait_for_cr_absent("maassubscription", subscription)
-            _wait_for_cr_absent("maasauthpolicy", policy)
-            _wait_for_cr_absent("maasmodelref", llmis, namespace=MODEL_NAMESPACE)
-            # LLMIS teardown can lag the default 30s CR-absent wait under parallel load.
-            _wait_for_cr_absent("llminferenceservice", llmis, namespace=MODEL_NAMESPACE, timeout=180)
+        _check_endpoint_picker_traffic(_assert_chain)
