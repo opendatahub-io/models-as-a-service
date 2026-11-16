@@ -5,6 +5,7 @@ package api_keys_test
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -1210,7 +1211,7 @@ func TestPostgresStore_SubscriptionNameOperationsUseSharedAdvisoryLock(t *testin
 	require.NoError(t, err)
 	require.NoError(t, setupSession.Commit())
 
-	lockKey := tenant + "\x00same-name"
+	lockKey := fmt.Sprintf("%d:%s%s", len(tenant), tenant, "same-name")
 	resolveSession, err := store.BeginSubscriptionObservation(ctx, observerID, tenant)
 	require.NoError(t, err)
 	require.NoError(t, resolveSession.Heartbeat(ctx))

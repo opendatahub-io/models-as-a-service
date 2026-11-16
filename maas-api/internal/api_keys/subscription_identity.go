@@ -285,7 +285,7 @@ func (session *postgresObservationSession) ResolveSubscriptionIdentity(ctx conte
 }
 
 func (session *postgresObservationSession) lockSubscriptionName(ctx context.Context, name string) error {
-	lockKey := session.tenant + "\x00" + name
+	lockKey := fmt.Sprintf("%d:%s%s", len(session.tenant), session.tenant, name)
 	if _, err := session.tx.ExecContext(ctx, "SELECT pg_advisory_xact_lock(hashtext($1))", lockKey); err != nil {
 		return fmt.Errorf("failed to acquire subscription identity lock: %w", err)
 	}
