@@ -27,7 +27,7 @@ spec:
   - name: odh-konflux-central-git-url
     value: https://github.com/somya-bhatnagar/odh-konflux-central.git
   - name: odh-konflux-central-revision
-    value: 3b44bc1e53d2045fec5fcc0088d8239763a83d03
+    value: d43cd93e5d6fb18ba3f591b20c695b94daad0f88
   # Validation for opendatahub-io/odh-konflux-central#764 — revert fork pin + params after merge.
   pipelineRef:
     resolver: git
@@ -35,7 +35,7 @@ spec:
     - name: url
       value: https://github.com/somya-bhatnagar/odh-konflux-central.git
     - name: revision
-      value: 3b44bc1e53d2045fec5fcc0088d8239763a83d03
+      value: d43cd93e5d6fb18ba3f591b20c695b94daad0f88
     - name: pathInRepo
       value: integration-tests/models-as-a-service/pr-group-testing-pipeline.yaml
   taskRunTemplate:
