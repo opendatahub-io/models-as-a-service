@@ -624,8 +624,14 @@ func TestPostgresStore_RecordAbsenceAndCleanup(t *testing.T) {
 	_, err = db.ExecContext(ctx, `
 		UPDATE subscription_observations
 		SET absent_at = NOW() - INTERVAL '2 hours', observed_at = NOW()
-		WHERE subscription_id = $1
-	`, identityID)
+		WHERE subscription_id = $1 AND observer_id = $2
+	`, identityID, observerOne)
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, `
+		UPDATE subscription_observations
+		SET absent_at = NOW() - INTERVAL '30 minutes', observed_at = NOW()
+		WHERE subscription_id = $1 AND observer_id = $2
+	`, identityID, observerTwo)
 	require.NoError(t, err)
 
 	finalSession, err := store.BeginSubscriptionObservation(ctx, observerOne, tenant)
@@ -778,9 +784,35 @@ func TestPostgresStore_RecordAbsenceAndCleanupIsIdempotent(t *testing.T) {
 		time.Minute,
 	)
 	require.NoError(t, err)
-	assert.Equal(t, api_keys.SubscriptionCleanupCleaned, result)
+	assert.Equal(t, api_keys.SubscriptionCleanupBlockedBarrier, result)
 	assert.Zero(t, revoked)
 	require.NoError(t, finalSession.Commit())
+
+	_, err = db.ExecContext(ctx, `
+		UPDATE subscription_observations
+		SET absent_at = NOW() - INTERVAL '2 hours', observed_at = NOW()
+		WHERE subscription_id = $1 AND observer_id = $2
+	`, identityID, observerTwo)
+	require.NoError(t, err)
+
+	settledSession, err := store.BeginSubscriptionObservation(ctx, observerOne, tenant)
+	require.NoError(t, err)
+	require.NoError(t, settledSession.Heartbeat(ctx))
+	result, revoked, err = settledSession.RecordAbsenceAndCleanup(
+		ctx,
+		api_keys.SubscriptionAbsenceRequest{
+			Namespace:              "subscriptions",
+			Name:                   "cleanup-sub",
+			ObjectUID:              "uid-1",
+			SubscriptionIdentityID: identityID,
+		},
+		time.Hour,
+		time.Minute,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, api_keys.SubscriptionCleanupCleaned, result)
+	assert.Equal(t, 1, revoked)
+	require.NoError(t, settledSession.Commit())
 
 	retrySession, err := store.BeginSubscriptionObservation(ctx, absenceObserver, tenant)
 	require.NoError(t, err)

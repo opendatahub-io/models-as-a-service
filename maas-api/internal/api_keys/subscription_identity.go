@@ -789,7 +789,7 @@ func (session *postgresObservationSession) cleanupAfterAbsence(
 
 	var barrier sql.NullTime
 	err = session.tx.QueryRowContext(ctx, `
-		SELECT MIN(observation.absent_at + ($2 * INTERVAL '1 second'))
+		SELECT MAX(observation.absent_at + ($2 * INTERVAL '1 second'))
 		FROM subscription_observations observation
 		JOIN subscription_observers observer ON observer.observer_id = observation.observer_id
 		WHERE observation.subscription_id = $1
