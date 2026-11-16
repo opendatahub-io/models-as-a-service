@@ -6,13 +6,13 @@ The AI Gateway Controller configures an Envoy External Processing (ExtProc) filt
 
     The post-auth ExtProc filter (`ipp`) runs with `failure_mode_allow: false`. If the ExtProc sidecar is unavailable or unhealthy, Envoy returns **500 Internal Server Error** to the client instead of bypassing processing. Plan replica counts and health probes accordingly.
 
-    The pre-auth filter (`ipp-pre`) runs with `failure_mode_allow: true` (fail-open) so that requests are not blocked before authentication completes.
+    In **Praxis** (the default backend), both the pre-auth (`ipp-pre`) and post-auth (`ipp`) filters are fail-closed (`failure_mode_allow: false`). In **legacy IPP** deployments (this repository's `deployment/` manifests), the pre-auth filter is fail-open (`failure_mode_allow: true`) so that requests are not blocked before authentication completes.
 
 ## Security Changes
 
 ### TLS Trust
 
-ExtProc connections between Envoy and the payload-processing sidecar are encrypted with TLS (`tls.mode: SIMPLE`). However, certificate verification is currently skipped (`insecureSkipVerify: true` in the DestinationRule), so the server certificate and SAN are **not** validated. This is a known gap — a future release will enable full certificate verification.
+ExtProc connections between Envoy and the payload-processing sidecar are encrypted with TLS. In **Praxis** deployments, the server certificate is validated against the service CA and the DNS SAN is checked. In **legacy IPP** deployments, certificate verification is skipped (`insecureSkipVerify: true` in the DestinationRule), so the server certificate and SAN are **not** validated — a known gap addressed by the Praxis backend.
 
 ### Pod Service-Account Privileges
 
@@ -24,7 +24,7 @@ The `allow_unbounded_body` option has been removed. All requests processed by Ex
 
 ### No Retry Queue
 
-Envoy allows up to `max_pending_requests` requests (default: 8) to be held pending during connection establishment. Once both the active request limit (`max_requests`) and the pending limit are reached, Envoy returns **503** for additional requests. There is no retry or backpressure mechanism beyond the pending queue — size your gateway replicas and concurrency budget for your expected peak load.
+Envoy allows up to `max_pending_requests` requests (default: 8) to be held pending during connection establishment. Once both the active request limit (`max_requests`) and the pending limit are reached, Envoy rejects additional requests with an error (**500** or **503** depending on Envoy version and configuration). There is no retry or backpressure mechanism beyond the pending queue — size your ExtProc resources and concurrency budget for your expected peak load.
 
 ## Experimental Annotations
 
@@ -80,9 +80,9 @@ Size your gateway replicas and `experimental-extproc-max-requests` value against
 
 | Factor | Guidance |
 |---|---|
-| Concurrent large bodies | Each in-flight request up to `max_body_bytes` is held in memory. Multiply `max_requests` by `max_body_bytes` for a baseline memory estimate per replica. In practice, expect approximately **5× memory amplification** due to processing copies (e.g., a single 10 MiB body can consume ~50 MiB at peak). Factor this into resource limits. |
-| Gateway replicas | Increase replicas before raising `max_requests` beyond the default. Horizontal scaling distributes memory pressure across pods. |
-| Overflow behavior | Requests exceeding both the active (`max_requests`) and pending (`max_pending_requests`) limits receive **503**. Up to `max_pending_requests` requests may be held during connection setup. |
+| Concurrent large bodies | Each in-flight request up to `max_body_bytes` is held in memory. Each gateway replica can send up to `max_requests` concurrently to the **same** ExtProc pod. Baseline memory estimate: `max_requests × max_body_bytes × gateway_replicas × ~5` (the ~5× factor accounts for processing copies — e.g., a single 10 MiB body can consume ~50 MiB at peak). Factor this into ExtProc resource limits. |
+| Gateway replicas | Adding gateway replicas increases aggregate concurrency against the ExtProc sidecar. Size ExtProc memory to accommodate the combined load from all replicas before scaling the gateway horizontally. |
+| Overflow behavior | Requests exceeding both the active (`max_requests`) and pending (`max_pending_requests`) limits receive an error (**500** or **503** depending on Envoy version and configuration). Up to `max_pending_requests` requests may be held during connection setup. |
 | ExtProc unavailability | All requests fail with **500** while the sidecar is down (post-auth filter has `failure_mode_allow: false`). |
 
 !!! note
