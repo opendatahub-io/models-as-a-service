@@ -78,6 +78,8 @@ type TenantReconciler struct {
 	cleanupCompleted bool
 	// ClusterAudience is the OIDC audience resolved at startup (auto-detected issuer or default).
 	ClusterAudience string
+	// ClusterID is the kube-system namespace UID used to namespace shared-database state.
+	ClusterID string
 	// TenantNamespaceDiscoveryEnabled allows reconciling MaasTenantConfig CRs across all namespaces
 	// instead of only TenantNamespace (enables AITenant multi-tenancy).
 	TenantNamespaceDiscoveryEnabled bool

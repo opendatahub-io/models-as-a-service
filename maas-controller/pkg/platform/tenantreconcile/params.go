@@ -151,8 +151,16 @@ func BuildPlatformParams(tenant client.Object, platformContext PlatformContext, 
 	if err != nil {
 		return PlatformParams{}, fmt.Errorf("resolve tenant name: %w", err)
 	}
+	subscriptionIdentityMode := normalizeSubscriptionIdentityMode(platformContext.SubscriptionIdentityMode)
+	clusterID := platformContext.ClusterID
+	if clusterID == "" {
+		if subscriptionIdentityMode != "off" {
+			return PlatformParams{}, errors.New("cluster ID is required for subscription identity modes other than off")
+		}
+		clusterID = clusterAudience
+	}
 	observerID := uuid.NewSHA1(uuid.NameSpaceURL, []byte(
-		"maas-subscription-observer:"+tenant.GetNamespace()+":"+tenantName,
+		"maas-subscription-observer:"+clusterID+":"+tenant.GetNamespace()+":"+tenantName,
 	)).String()
 
 	params := PlatformParams{
@@ -172,7 +180,7 @@ func BuildPlatformParams(tenant client.Object, platformContext PlatformContext, 
 		MaaSAPIKeyCleanupImage:      firstNonEmpty(os.Getenv("RELATED_IMAGE_UBI_MINIMAL_IMAGE"), DefaultMaaSAPIKeyCleanupImage),
 		APIKeyMaxExpirationDays:     resolveAPIKeyMaxExpirationDays(tenant),
 		APIKeyDeletionRetentionDays: resolveAPIKeyDeletionRetentionDays(tenant),
-		SubscriptionIdentityMode:    normalizeSubscriptionIdentityMode(platformContext.SubscriptionIdentityMode),
+		SubscriptionIdentityMode:    subscriptionIdentityMode,
 		SubscriptionObserverID:      observerID,
 		SkipIPP:                     platformContext.SkipIPP,
 	}

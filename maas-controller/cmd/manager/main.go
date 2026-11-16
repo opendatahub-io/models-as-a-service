@@ -1308,6 +1308,13 @@ func main() {
 		setupLog.Error(err, "unable to auto-detect cluster service account issuer, using default", "default", clusterAudience)
 	}
 
+	kubeSystemNamespace := &corev1.Namespace{}
+	if err := mgr.GetAPIReader().Get(context.Background(), types.NamespacedName{Name: "kube-system"}, kubeSystemNamespace); err != nil {
+		setupLog.Error(err, "unable to read kube-system namespace UID")
+		os.Exit(1)
+	}
+	clusterID := string(kubeSystemNamespace.UID)
+
 	if err := (&maas.MaaSModelRefReconciler{
 		Client:                          mgr.GetClient(),
 		Scheme:                          mgr.GetScheme(),
@@ -1425,6 +1432,7 @@ func main() {
 		GatewayName:                     gatewayName,
 		GatewayNamespace:                gatewayNamespace,
 		ClusterAudience:                 clusterAudience,
+		ClusterID:                       clusterID,
 		TenantNamespaceDiscoveryEnabled: enableTenantNamespaceDiscovery,
 		MetadataCacheTTL:                metadataCacheTTL,
 		SubscriptionIdentityMode:        subscriptionIdentityMode,

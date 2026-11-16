@@ -177,8 +177,8 @@ func (session *postgresObservationSession) ResolveSubscriptionIdentity(ctx conte
 	if request.Namespace == "" || request.Name == "" || request.ObjectUID == "" {
 		return "", errors.New("subscription namespace, name, and object UID are required")
 	}
-	if _, err := session.tx.ExecContext(ctx, "SELECT pg_advisory_xact_lock(hashtext($1))", session.tenant+":"+request.Namespace+":"+request.Name); err != nil {
-		return "", fmt.Errorf("failed to acquire subscription identity lock: %w", err)
+	if err := session.lockSubscriptionName(ctx, request.Name); err != nil {
+		return "", err
 	}
 
 	var identityID string
@@ -284,6 +284,14 @@ func (session *postgresObservationSession) ResolveSubscriptionIdentity(ctx conte
 	return identityID, nil
 }
 
+func (session *postgresObservationSession) lockSubscriptionName(ctx context.Context, name string) error {
+	lockKey := session.tenant + "\x00" + name
+	if _, err := session.tx.ExecContext(ctx, "SELECT pg_advisory_xact_lock(hashtext($1))", lockKey); err != nil {
+		return fmt.Errorf("failed to acquire subscription identity lock: %w", err)
+	}
+	return nil
+}
+
 func (session *postgresObservationSession) BackfillSubscriptionKeys(
 	ctx context.Context,
 	identityID, namespace, name string,
@@ -294,6 +302,9 @@ func (session *postgresObservationSession) BackfillSubscriptionKeys(
 	if _, err := uuid.Parse(identityID); err != nil {
 		return 0, fmt.Errorf("%w: invalid UUID", ErrSubscriptionIdentityRequired)
 	}
+	if err := session.lockSubscriptionName(ctx, name); err != nil {
+		return 0, err
+	}
 
 	var activeIdentityCount int
 	if err := session.tx.QueryRowContext(ctx, `
@@ -302,7 +313,6 @@ func (session *postgresObservationSession) BackfillSubscriptionKeys(
 		WHERE tenant = $1
 		  AND name = $2
 		  AND deleted_at IS NULL
-		  AND rotation_pending_at IS NULL
 	`, session.tenant, name).Scan(&activeIdentityCount); err != nil {
 		return 0, fmt.Errorf("failed to count active subscription identities for key backfill: %w", err)
 	}
@@ -314,7 +324,10 @@ func (session *postgresObservationSession) BackfillSubscriptionKeys(
 	err := session.tx.QueryRowContext(ctx, `
 		SELECT id, namespace
 		FROM subscription_identities
-		WHERE tenant = $1 AND name = $2 AND deleted_at IS NULL
+		WHERE tenant = $1
+		  AND name = $2
+		  AND deleted_at IS NULL
+		  AND rotation_pending_at IS NULL
 		FOR UPDATE
 	`, session.tenant, name).Scan(&selectedIdentityID, &selectedNamespace)
 	if errors.Is(err, sql.ErrNoRows) {

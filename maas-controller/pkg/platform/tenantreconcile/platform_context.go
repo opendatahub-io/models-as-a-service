@@ -41,6 +41,7 @@ type PlatformContext struct {
 	ExternalOIDC *maasv1alpha1.TenantExternalOIDCConfig
 	SkipIPP      bool
 	Source       string
+	ClusterID    string
 	// SubscriptionIdentityMode is the controller-wide subscription identity
 	// lifecycle phase.
 	SubscriptionIdentityMode string

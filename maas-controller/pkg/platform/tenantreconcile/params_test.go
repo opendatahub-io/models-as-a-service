@@ -108,6 +108,7 @@ func TestBuildPlatformParamsSubscriptionIdentityPhaseAndObserverID(t *testing.T)
 			Name:      "gateway-name",
 		},
 		SubscriptionIdentityMode: "migrate",
+		ClusterID:                "cluster-one",
 	}
 	tenant := &maasv1alpha1.MaasTenantConfig{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "model-ns"},
@@ -123,6 +124,20 @@ func TestBuildPlatformParamsSubscriptionIdentityPhaseAndObserverID(t *testing.T)
 	got, err = BuildPlatformParams(tenant, platformContext, "tenant-ns", "controller-ns", "cluster-audience", "opendatahub", logr.Discard())
 	require.NoError(t, err)
 	assert.Equal(t, sameObserverID, got.SubscriptionObserverID)
+
+	got, err = BuildPlatformParams(tenant, platformContext, "tenant-ns", "controller-ns", "other-cluster-audience", "opendatahub", logr.Discard())
+	require.NoError(t, err)
+	assert.Equal(t, sameObserverID, got.SubscriptionObserverID)
+
+	otherClusterContext := platformContext
+	otherClusterContext.ClusterID = "cluster-two"
+	got, err = BuildPlatformParams(tenant, otherClusterContext, "tenant-ns", "controller-ns", "cluster-audience", "opendatahub", logr.Discard())
+	require.NoError(t, err)
+	assert.NotEqual(t, sameObserverID, got.SubscriptionObserverID)
+
+	platformContext.ClusterID = ""
+	_, err = BuildPlatformParams(tenant, platformContext, "tenant-ns", "controller-ns", "cluster-audience", "opendatahub", logr.Discard())
+	require.ErrorContains(t, err, "cluster ID is required")
 }
 
 func TestValidateSubscriptionIdentityMode(t *testing.T) {

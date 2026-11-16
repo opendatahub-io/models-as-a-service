@@ -44,6 +44,11 @@ type Observer struct {
 	logger     *logger.Logger
 }
 
+type resolvedSubscription struct {
+	object     SubscriptionObject
+	identityID string
+}
+
 func NewObserver(
 	store api_keys.SubscriptionIdentityStore,
 	client dynamic.Interface,
@@ -124,6 +129,7 @@ func (observer *Observer) Refresh(ctx context.Context) {
 
 	present := make(map[string]struct{}, len(objects))
 	statusWrites := make([]SubscriptionObject, 0, len(objects))
+	resolvedSubscriptions := make([]resolvedSubscription, 0, len(objects))
 	migrationBlocked := false
 	observedAt := time.Now().UTC()
 	for _, object := range objects {
@@ -150,8 +156,21 @@ func (observer *Observer) Refresh(ctx context.Context) {
 			}
 			continue
 		}
+		statusIdentityChanged := object.StatusIdentityID != identityID
+		object.StatusIdentityID = identityID
+		resolvedSubscriptions = append(resolvedSubscriptions, resolvedSubscription{
+			object:     object,
+			identityID: identityID,
+		})
+		if statusIdentityChanged && !observer.backfill {
+			statusWrites = append(statusWrites, object)
+		}
+	}
+
+	for _, resolved := range resolvedSubscriptions {
 		if observer.backfill {
-			_, backfillErr := session.BackfillSubscriptionKeys(ctx, identityID, object.Namespace, object.Name)
+			object := resolved.object
+			_, backfillErr := session.BackfillSubscriptionKeys(ctx, resolved.identityID, object.Namespace, object.Name)
 			ready := backfillErr == nil
 			object.MigrationReady = &ready
 			object.MigrationObservedAt = observedAt
@@ -166,12 +185,6 @@ func (observer *Observer) Refresh(ctx context.Context) {
 				object.MigrationMessage = ""
 			}
 			statusWrites = append(statusWrites, object)
-		}
-		if object.StatusIdentityID != identityID {
-			object.StatusIdentityID = identityID
-			if !observer.backfill {
-				statusWrites = append(statusWrites, object)
-			}
 		}
 	}
 

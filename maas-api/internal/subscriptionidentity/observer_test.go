@@ -33,6 +33,7 @@ type fakeObservationSession struct {
 	observations []api_keys.SubscriptionObservation
 	heartbeat    bool
 	resolved     []api_keys.ResolveSubscriptionIdentityRequest
+	calls        []string
 	backfills    []fakeSubscriptionKeyBackfill
 	backfillErr  error
 	absent       []string
@@ -59,6 +60,7 @@ func (session *fakeObservationSession) Heartbeat(context.Context) error {
 
 func (session *fakeObservationSession) ResolveSubscriptionIdentity(_ context.Context, request api_keys.ResolveSubscriptionIdentityRequest) (string, error) {
 	session.resolved = append(session.resolved, request)
+	session.calls = append(session.calls, "resolve:"+request.Namespace+"/"+request.Name)
 	return "0b6fe901-7b52-4a78-9cbf-e398728ef67e", nil
 }
 
@@ -66,6 +68,7 @@ func (session *fakeObservationSession) BackfillSubscriptionKeys(
 	_ context.Context,
 	identityID, namespace, name string,
 ) (int, error) {
+	session.calls = append(session.calls, "backfill:"+namespace+"/"+name)
 	session.backfills = append(session.backfills, fakeSubscriptionKeyBackfill{
 		IdentityID: identityID,
 		Namespace:  namespace,
@@ -482,9 +485,63 @@ func TestObserverRefreshBackfillsKeysAndReportsMigrationReady(t *testing.T) {
 	require.Len(t, patch, 3)
 	status, ok := patch[2]["value"].(map[string]any)
 	require.True(t, ok)
+	assert.Equal(t, "0b6fe901-7b52-4a78-9cbf-e398728ef67e", status["subscriptionIdentityId"])
 	assert.Equal(t, true, status["subscriptionIdentityMigrationReady"])
 	assert.NotEmpty(t, status["subscriptionIdentityObservedAt"])
 	assert.Empty(t, status["subscriptionIdentityMigrationMessage"])
+}
+
+func TestObserverRefreshResolvesAllSubscriptionsBeforeBackfill(t *testing.T) {
+	first := &unstructured.Unstructured{}
+	first.SetGroupVersionKind(schema.GroupVersionKind{
+		Group: "maas.opendatahub.io", Version: "v1alpha1", Kind: "MaaSSubscription",
+	})
+	first.SetName("first-sub")
+	first.SetNamespace("subscriptions-a")
+	first.SetUID("first-uid")
+	first.SetResourceVersion("rv-1")
+
+	second := &unstructured.Unstructured{}
+	second.SetGroupVersionKind(schema.GroupVersionKind{
+		Group: "maas.opendatahub.io", Version: "v1alpha1", Kind: "MaaSSubscription",
+	})
+	second.SetName("second-sub")
+	second.SetNamespace("subscriptions-a")
+	second.SetUID("second-uid")
+	second.SetResourceVersion("rv-2")
+
+	gvr := subscription.GVR()
+	client := &recordingDynamicClient{Interface: fake.NewSimpleDynamicClientWithCustomListKinds(
+		runtime.NewScheme(),
+		map[schema.GroupVersionResource]string{gvr: "MaaSSubscriptionList"},
+		first, second,
+	)}
+	session := &fakeObservationSession{}
+	observer := subscriptionidentity.NewObserver(
+		&fakeIdentityStore{session: session},
+		client,
+		"subscriptions-a",
+		"tenant-a",
+		"11111111-2222-3333-4444-555555555555",
+		time.Hour,
+		30*time.Second,
+		logger.Development(),
+	).EnableMigrationBackfill()
+
+	observer.Refresh(context.Background())
+
+	assert.True(t, session.committed)
+	require.Len(t, session.backfills, 2)
+	require.Len(t, session.calls, 4)
+	lastResolveIndex := 0
+	for index, call := range session.calls {
+		if strings.HasPrefix(call, "resolve:") {
+			lastResolveIndex = index
+		}
+	}
+	for _, call := range session.calls[:lastResolveIndex] {
+		assert.False(t, strings.HasPrefix(call, "backfill:"), "backfill ran before all subscriptions were resolved: %s", call)
+	}
 }
 
 func TestObserverRefreshReportsBlockedMigration(t *testing.T) {

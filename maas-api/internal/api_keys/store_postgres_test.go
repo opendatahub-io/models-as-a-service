@@ -1130,6 +1130,116 @@ func TestPostgresStore_BackfillSubscriptionKeysRejectsAmbiguousName(t *testing.T
 	require.NoError(t, backfillSession.Rollback())
 }
 
+func TestPostgresStore_BackfillSubscriptionKeysRejectsRotationPendingName(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+	if os.Getenv("TEST_DATABASE_URL") == "" {
+		t.Skip("Skipping integration test (TEST_DATABASE_URL not set)")
+	}
+
+	ctx := context.Background()
+	tenant := "identity-backfill-rotation-" + uuid.NewString()
+	store := setupTestPostgresStoreForTenant(t, tenant)
+	defer store.Close()
+	db, err := sql.Open("pgx", os.Getenv("TEST_DATABASE_URL"))
+	require.NoError(t, err)
+	defer db.Close()
+
+	observerID := uuid.NewString()
+	session, err := store.BeginSubscriptionObservation(ctx, observerID, tenant)
+	require.NoError(t, err)
+	require.NoError(t, session.Heartbeat(ctx))
+	pendingIdentityID, err := session.ResolveSubscriptionIdentity(ctx, api_keys.ResolveSubscriptionIdentityRequest{
+		Namespace: "subscriptions-a",
+		Name:      "same-name",
+		ObjectUID: "pending-uid",
+	})
+	require.NoError(t, err)
+	eligibleIdentityID, err := session.ResolveSubscriptionIdentity(ctx, api_keys.ResolveSubscriptionIdentityRequest{
+		Namespace: "subscriptions-b",
+		Name:      "same-name",
+		ObjectUID: "eligible-uid",
+	})
+	require.NoError(t, err)
+	require.NoError(t, session.Commit())
+
+	_, err = db.ExecContext(ctx, `
+		UPDATE subscription_identities
+		SET rotation_pending_at = NOW()
+		WHERE id = $1
+	`, pendingIdentityID)
+	require.NoError(t, err)
+
+	backfillSession, err := store.BeginSubscriptionObservation(ctx, observerID, tenant)
+	require.NoError(t, err)
+	require.NoError(t, backfillSession.Heartbeat(ctx))
+	_, err = backfillSession.BackfillSubscriptionKeys(ctx, eligibleIdentityID, "subscriptions-b", "same-name")
+	require.ErrorIs(t, err, api_keys.ErrSubscriptionIdentityAmbiguous)
+	require.NoError(t, backfillSession.Rollback())
+}
+
+func TestPostgresStore_SubscriptionNameOperationsUseSharedAdvisoryLock(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+	if os.Getenv("TEST_DATABASE_URL") == "" {
+		t.Skip("Skipping integration test (TEST_DATABASE_URL not set)")
+	}
+
+	ctx := context.Background()
+	tenant := "identity-name-lock-" + uuid.NewString()
+	store := setupTestPostgresStoreForTenant(t, tenant)
+	defer store.Close()
+	db, err := sql.Open("pgx", os.Getenv("TEST_DATABASE_URL"))
+	require.NoError(t, err)
+	defer db.Close()
+	connection, err := db.Conn(ctx)
+	require.NoError(t, err)
+	defer connection.Close()
+
+	observerID := uuid.NewString()
+	setupSession, err := store.BeginSubscriptionObservation(ctx, observerID, tenant)
+	require.NoError(t, err)
+	require.NoError(t, setupSession.Heartbeat(ctx))
+	identityID, err := setupSession.ResolveSubscriptionIdentity(ctx, api_keys.ResolveSubscriptionIdentityRequest{
+		Namespace: "subscriptions",
+		Name:      "same-name",
+		ObjectUID: "same-uid",
+	})
+	require.NoError(t, err)
+	require.NoError(t, setupSession.Commit())
+
+	lockKey := tenant + "\x00same-name"
+	resolveSession, err := store.BeginSubscriptionObservation(ctx, observerID, tenant)
+	require.NoError(t, err)
+	require.NoError(t, resolveSession.Heartbeat(ctx))
+	_, err = resolveSession.ResolveSubscriptionIdentity(ctx, api_keys.ResolveSubscriptionIdentityRequest{
+		Namespace: "subscriptions",
+		Name:      "same-name",
+		ObjectUID: "same-uid",
+	})
+	require.NoError(t, err)
+	var acquired bool
+	require.NoError(t, connection.QueryRowContext(ctx, "SELECT pg_try_advisory_lock(hashtext($1))", lockKey).Scan(&acquired))
+	assert.False(t, acquired, "identity resolution should hold the tenant-name advisory lock")
+	require.NoError(t, resolveSession.Rollback())
+
+	backfillSession, err := store.BeginSubscriptionObservation(ctx, observerID, tenant)
+	require.NoError(t, err)
+	require.NoError(t, backfillSession.Heartbeat(ctx))
+	_, err = backfillSession.BackfillSubscriptionKeys(ctx, identityID, "subscriptions", "same-name")
+	require.NoError(t, err)
+	require.NoError(t, connection.QueryRowContext(ctx, "SELECT pg_try_advisory_lock(hashtext($1))", lockKey).Scan(&acquired))
+	assert.False(t, acquired, "key backfill should hold the tenant-name advisory lock")
+	require.NoError(t, backfillSession.Rollback())
+
+	require.NoError(t, connection.QueryRowContext(ctx, "SELECT pg_try_advisory_lock(hashtext($1))", lockKey).Scan(&acquired))
+	require.True(t, acquired)
+	_, err = connection.ExecContext(ctx, "SELECT pg_advisory_unlock(hashtext($1))", lockKey)
+	require.NoError(t, err)
+}
+
 func TestPostgresStore_BackfillSubscriptionKeysRejectsWrongBinding(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
