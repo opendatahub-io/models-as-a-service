@@ -23,11 +23,143 @@ import (
 const (
 	aitenantAPIKeysRevokedReasonJobCompleted        = "RevocationJobCompleted"
 	aitenantAPIKeysRevokedReasonOperandsUnavailable = "RevocationOperandsUnavailable"
+	aitenantAPIKeysRevokedReasonRetained            = "APIKeysRetainedByExternalOwner"
 
 	// maasTenantConfigRevocationOperandsRequestedAnnotation nudges MaasTenantConfig reconcile so the
 	// tenant controller can re-apply maas-api operands before the revocation Job runs.
 	maasTenantConfigRevocationOperandsRequestedAnnotation = "maas.opendatahub.io/revocation-operands-requested"
+	maasTenantConfigAPIKeysRetainedCondition              = "APIKeysRetained"
+	maasTenantConfigAPIKeysRetainedReason                 = "ExternalOwner"
 )
+
+func (r *AITenantReconciler) retainTenantAPIKeys(ctx context.Context, aitenant *maasv1alpha1.AITenant) (bool, error) {
+	oteljson.FromContext(ctx).Info("retaining tenant API keys on AITenant deletion",
+		"aitenant", aitenant.Namespace+"/"+aitenant.Name)
+	if r.Recorder != nil {
+		r.Recorder.Eventf(aitenant, nil, corev1.EventTypeNormal, "APIKeyCleanupSkipped", "InvalidateAPIKeys",
+			"Retaining API keys for AITenant %s/%s because an external owner requested retention",
+			aitenant.Namespace, aitenant.Name)
+	}
+
+	if err := r.markTenantConfigAPIKeysRetained(ctx, aitenant); err != nil {
+		return false, err
+	}
+
+	statusSnapshot := aitenant.Status.DeepCopy()
+	apimeta.SetStatusCondition(&aitenant.Status.Conditions, metav1.Condition{
+		Type:               aitenantAPIKeysRevokedCondition,
+		Status:             metav1.ConditionTrue,
+		Reason:             aitenantAPIKeysRevokedReasonRetained,
+		Message:            "API keys are retained by the external owner",
+		ObservedGeneration: aitenant.Generation,
+		LastTransitionTime: metav1.Now(),
+	})
+	if err := r.updateAITenantStatus(ctx, aitenant, statusSnapshot); err != nil {
+		return false, fmt.Errorf("mark retained tenant API keys on AITenant %s/%s: %w",
+			aitenant.Namespace, aitenant.Name, err)
+	}
+	return true, nil
+}
+
+func (r *AITenantReconciler) markTenantConfigAPIKeysRetained(ctx context.Context, aitenant *maasv1alpha1.AITenant) error {
+	tenantNamespace := r.tenantNamespaceName(aitenant)
+	var tenant maasv1alpha1.MaasTenantConfig
+	tenantKey := types.NamespacedName{
+		Namespace: tenantNamespace,
+		Name:      maasv1alpha1.MaasTenantConfigInstanceName,
+	}
+	if err := r.get(ctx, tenantKey, &tenant); err != nil {
+		if isNotFoundError(err) {
+			return nil
+		}
+		return fmt.Errorf("get MaasTenantConfig for API-key retention marker: %w", err)
+	}
+	if !ownedByAITenant(&tenant, aitenant) {
+		return nil
+	}
+
+	marker := revocationOperandsRequestMarker(aitenant)
+	if marker == "" {
+		return errors.New("cannot record API-key retention without AITenant UID")
+	}
+	if condition := apimeta.FindStatusCondition(tenant.Status.Conditions, maasTenantConfigAPIKeysRetainedCondition); condition != nil &&
+		condition.Status == metav1.ConditionTrue &&
+		condition.Reason == maasTenantConfigAPIKeysRetainedReason &&
+		condition.Message == marker {
+		return nil
+	}
+
+	base := tenant.DeepCopy()
+	apimeta.SetStatusCondition(&tenant.Status.Conditions, metav1.Condition{
+		Type:               maasTenantConfigAPIKeysRetainedCondition,
+		Status:             metav1.ConditionTrue,
+		Reason:             maasTenantConfigAPIKeysRetainedReason,
+		Message:            marker,
+		ObservedGeneration: tenant.Generation,
+		LastTransitionTime: metav1.Now(),
+	})
+	if err := r.Status().Patch(ctx, &tenant, client.MergeFrom(base)); err != nil {
+		if isNotFoundError(err) {
+			return nil
+		}
+		return fmt.Errorf("record API-key retention on MaasTenantConfig: %w", err)
+	}
+	return nil
+}
+
+func (r *AITenantReconciler) clearTenantConfigAPIKeysRetained(ctx context.Context, aitenant *maasv1alpha1.AITenant) error {
+	tenantNamespace := r.tenantNamespaceName(aitenant)
+	var tenant maasv1alpha1.MaasTenantConfig
+	tenantKey := types.NamespacedName{
+		Namespace: tenantNamespace,
+		Name:      maasv1alpha1.MaasTenantConfigInstanceName,
+	}
+	if err := r.get(ctx, tenantKey, &tenant); err != nil {
+		if isNotFoundError(err) {
+			return nil
+		}
+		return fmt.Errorf("get MaasTenantConfig to clear API-key retention: %w", err)
+	}
+	if !ownedByAITenant(&tenant, aitenant) {
+		return nil
+	}
+	if apimeta.FindStatusCondition(tenant.Status.Conditions, maasTenantConfigAPIKeysRetainedCondition) == nil {
+		return nil
+	}
+
+	base := tenant.DeepCopy()
+	apimeta.RemoveStatusCondition(&tenant.Status.Conditions, maasTenantConfigAPIKeysRetainedCondition)
+	if err := r.Status().Patch(ctx, &tenant, client.MergeFrom(base)); err != nil {
+		if isNotFoundError(err) {
+			return nil
+		}
+		return fmt.Errorf("clear API-key retention on MaasTenantConfig: %w", err)
+	}
+	return nil
+}
+
+func tenantConfigRecordsAPIKeysRetention(config *maasv1alpha1.MaasTenantConfig) bool {
+	condition := apimeta.FindStatusCondition(config.Status.Conditions, maasTenantConfigAPIKeysRetainedCondition)
+	return condition != nil &&
+		condition.Status == metav1.ConditionTrue &&
+		condition.Reason == maasTenantConfigAPIKeysRetainedReason &&
+		validAPIKeysRetentionMarker(condition.Message)
+}
+
+func validAPIKeysRetentionMarker(marker string) bool {
+	uid, deletionTime, hasDeletionTime := strings.Cut(marker, "/")
+	if uid == "" {
+		return false
+	}
+	if !hasDeletionTime {
+		return true
+	}
+	if deletionTime == "" {
+		return false
+	}
+	_, err := time.Parse(time.RFC3339, deletionTime)
+	return err == nil
+}
 
 // prepareRevocationOperands ensures maas-api and the cleanup ServiceAccount exist before
 // creating the revocation Job. When operands cannot be restored, revocation is skipped

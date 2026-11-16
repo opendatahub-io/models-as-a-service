@@ -66,7 +66,7 @@ from multitenancy_helpers import (
 from test_helper import _get_cluster_token
 
 # Runs on the models worker to even out pass 1; mt_lifecycle alone would set its length.
-pytestmark = [pytest.mark.xdist_group("models"), pytest.mark.worker_tenant]
+pytestmark = [pytest.mark.xdist_group("models_mt_integration"), pytest.mark.worker_tenant]
 
 
 @pytest.fixture(scope="module", autouse=True)

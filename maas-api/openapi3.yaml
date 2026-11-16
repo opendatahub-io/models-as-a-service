@@ -513,12 +513,13 @@ paths:
                 - Regular users can bulk revoke their own keys (username = self).
                 - Subscription-scoped revocation requires platform-admin or delegated
                   subscription-admin authorization.
-                - Cross-user revocation requires platform-admin authorization, or an explicit
-                  subscription for which the SSO caller has delegated admin authority.
+                - Cross-user revocation requires platform-admin authorization, or delegated
+                  organization-admin authorization.
 
-                A username-only request does not authorize a delegated administrator to revoke a
-                user's keys across subscriptions. Dry-run counts and mutations use the same
-                canonical tenant and subscription scope.
+                A username-only request from a delegated administrator is constrained to the
+                subscriptions administered by the caller's organization and cannot affect another
+                organization. Dry-run counts and mutations use the same tenant and subscription
+                scope.
 
                 When `dryRun` is true, the response includes the count of keys that
                 would be revoked without performing any mutation.
@@ -535,7 +536,7 @@ paths:
                             properties:
                                 username:
                                     type: string
-                                    description: Username whose keys should be revoked.
+                                    description: Username whose keys should be revoked. Delegated administrators can revoke this user's keys only within subscriptions administered by their organization.
                                 subscription:
                                     type: string
                                     description: Subscription name or namespace/name alias whose bound keys should be revoked. Delegated administrators must administer this subscription.

@@ -1,6 +1,6 @@
 # Pull request description examples
 
-Right-sized descriptions for `.github/PULL_REQUEST_TEMPLATE.md`, taken from real PRs in this repo. The words are the authors'. They are moved into the template's sections, with titles trimmed to 60 characters and `/area` lines added.
+Right-sized descriptions for `.github/PULL_REQUEST_TEMPLATE.md`, taken from real PRs in this repo. The words are mostly the authors', lightly edited to fit the template's sections, with titles trimmed to 60 characters and `/area` lines added.
 
 ## Bug fix
 
@@ -118,7 +118,7 @@ Follow-up to #1587
 
 ## How Has This Been Tested?
 
-Checked with pytest collection on Python 3.9 and a review of the state the split modules share. The group test here will be the real check.
+Pytest collection passes on Python 3.9, and I reviewed the state the split modules share. The group test on this PR hasn't run yet and will be the real check.
 
 ## Risk analysis
 

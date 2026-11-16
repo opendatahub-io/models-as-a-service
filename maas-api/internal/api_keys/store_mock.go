@@ -539,6 +539,56 @@ func (m *MockStore) BulkRevoke(ctx context.Context, username, subscription, tena
 	return count, nil
 }
 
+func (m *MockStore) BulkRevokeBySubscriptions(
+	ctx context.Context,
+	username string,
+	subscriptions []string,
+	tenant string,
+	dryRun bool,
+) (int, error) {
+	if username == "" || len(subscriptions) == 0 {
+		return 0, errors.New("username and at least one subscription are required")
+	}
+
+	subscriptionSet := make(map[string]struct{}, len(subscriptions))
+	for _, subscription := range subscriptions {
+		subscriptionSet[subscription] = struct{}{}
+	}
+
+	revoke := func(k *storedKey) bool {
+		if !bulkRevokeMatch(k, username, "", tenant) {
+			return false
+		}
+		_, allowed := subscriptionSet[k.metadata.Subscription]
+		return allowed
+	}
+
+	if dryRun {
+		m.mu.RLock()
+		defer m.mu.RUnlock()
+
+		count := 0
+		for _, k := range m.keys {
+			if revoke(k) {
+				count++
+			}
+		}
+		return count, nil
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	count := 0
+	for _, k := range m.keys {
+		if revoke(k) {
+			k.metadata.Status = StatusRevoked
+			count++
+		}
+	}
+	return count, nil
+}
+
 func (m *MockStore) InvalidateTenant(ctx context.Context, tenant string) (int, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

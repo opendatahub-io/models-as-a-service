@@ -871,7 +871,9 @@ def _is_connect_failure(exc: requests.exceptions.ConnectionError) -> bool:
     return isinstance(reason, NewConnectionError)
 
 
-def _request_with_gateway_retry(method, url, retries=None, delay=None, deadline=None, **kwargs):
+def _request_with_gateway_retry(
+    method, url, retries=None, delay=None, deadline=None, extra_transient_statuses=None, **kwargs
+):
     """Make an HTTP request, retrying transient gateway/auth propagation errors.
 
     See ``_is_transient_gateway_response`` for retryable status/body patterns.
@@ -880,6 +882,11 @@ def _request_with_gateway_retry(method, url, retries=None, delay=None, deadline=
 
     Pass ``auth_denial_is_transient=False`` (keyword) for negative tests that
     expect a 401/403: an empty denial is then the answer rather than a flake.
+
+    Pass ``extra_transient_statuses`` (e.g. ``(404,)``) to additionally retry
+    those statuses — used by callers that just toggled a gateway route and must
+    tolerate a brief propagation 404. Default is empty, so other callers (incl.
+    negative tests asserting 404) are unaffected.
 
     When ``deadline`` is set (Unix timestamp), each request timeout, retry delay,
     and gateway-enforcement wait is clamped to the remaining time so polling loops
@@ -894,6 +901,8 @@ def _request_with_gateway_retry(method, url, retries=None, delay=None, deadline=
     timeout = kwargs.pop("timeout", TIMEOUT)
     verify = kwargs.pop("verify", TLS_VERIFY)
     auth_denial_is_transient = kwargs.pop("auth_denial_is_transient", True)
+
+    extra_transient_statuses = extra_transient_statuses or ()
     r = None
     for attempt in range(1, retries + 1):
         if deadline is not None:
@@ -929,8 +938,8 @@ def _request_with_gateway_retry(method, url, retries=None, delay=None, deadline=
             _is_transient_gateway_response(
                 r, auth_denial_is_transient=auth_denial_is_transient
             )
-            and attempt < retries
-        ):
+            or r.status_code in extra_transient_statuses
+        ) and attempt < retries:
             _record_transient_retry(r, attempt, retries)
             log.info(
                 "Gateway returned %d (attempt %d/%d, body_kind=%s), retrying in %ds...",
@@ -1022,8 +1031,15 @@ def _create_api_key_raw(oc_token: str, name: str = None, subscription: str = Non
     return create_api_key_at(_maas_api_url(), oc_token, key_name, subscription=subscription)
 
 
-def _create_api_key(oc_token: str, name: str = None, subscription: str = None) -> str:
-    """Create an API key using the MaaS API and return the plaintext key.
+def _create_api_key_with_id(
+    oc_token: str, name: str | None = None, subscription: str | None = None
+) -> tuple[str, str | None]:
+    """Create an API key using the MaaS API and return ``(plaintext key, key id)``.
+
+    Single source of truth for default-tenant key creation: retries transient
+    gateway/AuthPolicy-propagation errors via ``_create_api_key_raw`` and raises a
+    descriptive error otherwise. The id lets callers revoke the key on teardown;
+    use ``_create_api_key`` when only the plaintext key is needed.
 
     Args:
         oc_token: OC token for authentication with maas-api
@@ -1031,7 +1047,8 @@ def _create_api_key(oc_token: str, name: str = None, subscription: str = None) -
         subscription: Optional MaaSSubscription name to bind (highest-priority auto-bind if omitted)
 
     Returns:
-        The plaintext API key (sk-oai-xxx format)
+        Tuple of the plaintext API key (sk-oai-xxx format) and its id (may be None
+        if the response omits it).
     """
     r = _create_api_key_raw(oc_token, name, subscription)
     if r.status_code not in (200, 201):
@@ -1047,6 +1064,24 @@ def _create_api_key(oc_token: str, name: str = None, subscription: str = None) -
         raise RuntimeError(f"API key response missing 'key' field: {data}")
 
     log.info("Created API key '%s' bound to subscription '%s'", name, subscription)
+    return api_key, data.get("id")
+
+
+def _create_api_key(oc_token: str, name: str = None, subscription: str = None) -> str:
+    """Create an API key using the MaaS API and return the plaintext key.
+
+    Thin wrapper over ``_create_api_key_with_id`` for callers that do not need the
+    key id.
+
+    Args:
+        oc_token: OC token for authentication with maas-api
+        name: Optional name for the key (auto-generated if not provided)
+        subscription: Optional MaaSSubscription name to bind (highest-priority auto-bind if omitted)
+
+    Returns:
+        The plaintext API key (sk-oai-xxx format)
+    """
+    api_key, _ = _create_api_key_with_id(oc_token, name, subscription)
     return api_key
 
 
@@ -1157,6 +1192,20 @@ def _run_oc(cmd, *, input_text=None, timeout=None, retry_budget=None):
                 result.stderr.strip(),
             )
         time.sleep(delay)
+
+
+def _oc_json(*args):
+    """Run `oc <args> -o json` and parse the output; assert failures with redacted stderr.
+
+    Shared so callers stop hand-rolling this (test_observability_identity.py had
+    an identical copy); stderr is redacted here since oc error output can echo
+    back request data a caller passed in, e.g. a token or key in a failed patch.
+    """
+    from multitenancy_helpers import redact_sensitive
+
+    result = _run_oc(["oc", *args, "-o", "json"])
+    assert result.returncode == 0, redact_sensitive(result.stderr)
+    return json.loads(result.stdout)
 
 
 def _get_cr(kind, name, namespace=None, *, oc_timeout=None, oc_retry_budget=None):

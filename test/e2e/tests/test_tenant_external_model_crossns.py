@@ -60,10 +60,7 @@ from test_helper import _delete_cr, _get_cr
 
 log = logging.getLogger(__name__)
 
-# Serialized with tenant_ipp until the legacy IPP controllers skip
-# gatewayRefs ExternalModels (image pin pending): without that guard they
-# adopt this suite's models and flap status.httpRouteName.
-pytestmark = pytest.mark.xdist_group("tenant_ipp")
+pytestmark = pytest.mark.xdist_group("tenant_ipp_ext_crossns")
 
 # Failure text expected when a cross-namespace reference is not authorized.
 GRANT_FAILURE_PATTERN = r"grant|authoriz|not allowed|permission|forbidden|reference"

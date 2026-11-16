@@ -74,14 +74,12 @@ from tenant_external_model_helpers import (
 from test_helper import (
     LLM_D_INFERENCE_SIM_IMAGE,
     _apply_cr,
+    _is_transient_gateway_response,
 )
 
 log = logging.getLogger(__name__)
 
-# Serialized with tenant_ipp until the legacy IPP controllers skip
-# gatewayRefs ExternalModels (image pin pending): without that guard they
-# adopt this suite's models and flap status.httpRouteName.
-pytestmark = pytest.mark.xdist_group("tenant_ipp")
+pytestmark = pytest.mark.xdist_group("tenant_ipp_ext_shared")
 
 # Tenant A gets a tiny budget so quota isolation is observable quickly;
 # tenant B gets a large one (mirrors test_tenant_rate_limit_isolation.py).
@@ -668,9 +666,13 @@ class TestTenantQuotaIsolation:
             elif limited.status_code == 429:
                 if successes:
                     break
+            elif _is_transient_gateway_response(limited):
+                time.sleep(1.0)
+                continue
             else:
                 raise AssertionError(
-                    f"unexpected inference response on tenant A: {redact_sensitive(limited.text)}"
+                    f"unexpected inference response on tenant A "
+                    f"({limited.status_code}): {redact_sensitive(limited.text)}"
                 )
             time.sleep(1.0)
         assert limited is not None and limited.status_code == 429, (

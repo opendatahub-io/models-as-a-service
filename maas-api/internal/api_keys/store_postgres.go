@@ -770,6 +770,80 @@ func (s *PostgresStore) BulkRevoke(ctx context.Context, username, subscription, 
 	return count, nil
 }
 
+func bulkRevokeBySubscriptionsWhereClause(username string, subscriptions []string, tenant string) (string, []any) {
+	conditions := make([]string, 0, 6)
+	conditions = append(conditions,
+		"tenant = $1",
+		"status = 'active'",
+		"deleted_at IS NULL",
+		"(expires_at IS NULL OR expires_at > NOW())",
+	)
+	args := make([]any, 0, 2+len(subscriptions))
+	args = append(args, tenant, username)
+	conditions = append(conditions, "username = $2")
+
+	placeholders := make([]string, len(subscriptions))
+	for index, subscription := range subscriptions {
+		placeholders[index] = fmt.Sprintf("$%d", index+3)
+		args = append(args, subscription)
+	}
+	conditions = append(conditions, fmt.Sprintf("subscription IN (%s)", strings.Join(placeholders, ",")))
+
+	return strings.Join(conditions, " AND "), args
+}
+
+// BulkRevokeBySubscriptions revokes or counts active keys for one user across
+// the supplied delegated-administrator subscription scope.
+func (s *PostgresStore) BulkRevokeBySubscriptions(
+	ctx context.Context,
+	username string,
+	subscriptions []string,
+	tenant string,
+	dryRun bool,
+) (int, error) {
+	if username == "" || len(subscriptions) == 0 {
+		return 0, errors.New("username and at least one subscription are required")
+	}
+	if tenant != s.tenantName {
+		return 0, fmt.Errorf("%w: attempted to revoke keys for tenant %q but store is scoped to %q", ErrTenantMismatch, tenant, s.tenantName)
+	}
+
+	where, args := bulkRevokeBySubscriptionsWhereClause(username, subscriptions, tenant)
+	s.recordQuery("bulk_revoke_by_subscriptions", "write")
+
+	if dryRun {
+		//nolint:gosec // where clause uses static column names with parameterized $N placeholders
+		query := fmt.Sprintf("SELECT COUNT(*) FROM api_keys WHERE %s", where)
+
+		var count int
+		if err := s.writeDB.QueryRowContext(ctx, query, args...).Scan(&count); err != nil {
+			return 0, fmt.Errorf("dry-run count query failed: %w", err)
+		}
+		return count, nil
+	}
+
+	//nolint:gosec // where clause uses static column names with parameterized $N placeholders
+	query := fmt.Sprintf("UPDATE api_keys SET status = 'revoked' WHERE %s", where)
+
+	result, err := s.writeDB.ExecContext(ctx, query, args...)
+	if err != nil {
+		return 0, fmt.Errorf("failed to bulk revoke keys: %w", err)
+	}
+
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("failed to get affected rows: %w", err)
+	}
+
+	count := int(rows)
+	s.logger.Info("Bulk revoked keys by administered subscriptions",
+		"count", count,
+		"user", logger.RedactValue(username),
+		"subscriptionCount", len(subscriptions),
+	)
+	return count, nil
+}
+
 // InvalidateTenant soft-deletes all keys within this tenant and revokes active keys.
 // Returns the count of rows newly soft-deleted.
 func (s *PostgresStore) InvalidateTenant(ctx context.Context, tenant string) (int, error) {
