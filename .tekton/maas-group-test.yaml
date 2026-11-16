@@ -24,14 +24,18 @@ spec:
     value: '{ "odh-maas-api-ci": "opendatahub/maas-api", "odh-maas-controller-ci": "opendatahub/maas-controller", "odh-maas-discovery-ci": "opendatahub/odh-maas-discovery" }'
   - name: gather-on-success
     value: 'false'
-  # Validation for opendatahub-io/odh-konflux-central#764 — revert fork pin after merge.
+  - name: odh-konflux-central-git-url
+    value: https://github.com/somya-bhatnagar/odh-konflux-central.git
+  - name: odh-konflux-central-revision
+    value: 3b44bc1e53d2045fec5fcc0088d8239763a83d03
+  # Validation for opendatahub-io/odh-konflux-central#764 — revert fork pin + params after merge.
   pipelineRef:
     resolver: git
     params:
     - name: url
       value: https://github.com/somya-bhatnagar/odh-konflux-central.git
     - name: revision
-      value: 074413e155ea5f4c3b7f5db2cf4da3e48875ba9e
+      value: 3b44bc1e53d2045fec5fcc0088d8239763a83d03
     - name: pathInRepo
       value: integration-tests/models-as-a-service/pr-group-testing-pipeline.yaml
   taskRunTemplate:
