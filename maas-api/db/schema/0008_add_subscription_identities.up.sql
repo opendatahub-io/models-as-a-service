@@ -39,4 +39,3 @@ ALTER TABLE api_keys
         REFERENCES subscription_identities(id)
         ON DELETE RESTRICT,
     ADD COLUMN IF NOT EXISTS subscription_namespace TEXT;
-
