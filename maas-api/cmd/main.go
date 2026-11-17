@@ -329,7 +329,9 @@ func registerHandlers(
 			time.Duration(cfg.SubscriptionObservationIntervalSeconds)*time.Second,
 			time.Duration(cfg.SubscriptionObservationSettleSeconds)*time.Second,
 			log,
-		)
+		).
+			EnableObserverRejoin(time.Duration(cfg.SubscriptionObservationMaxAgeSeconds) * time.Second).
+			WithMetricsRecorder(metricsRecorder)
 		if cfg.SubscriptionIdentityMode == config.SubscriptionIdentityModeMigrate {
 			observer.EnableMigrationBackfill()
 		}

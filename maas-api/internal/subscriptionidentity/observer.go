@@ -10,6 +10,7 @@ package subscriptionidentity
 import (
 	"context"
 	"encoding/json"
+	stderrors "errors"
 	"fmt"
 	"time"
 
@@ -40,23 +41,40 @@ type SubscriptionObject struct {
 }
 
 type Observer struct {
-	store       api_keys.SubscriptionIdentityStore
-	client      dynamic.Interface
-	namespace   string
-	tenant      string
-	observerID  string
-	interval    time.Duration
-	settle      time.Duration
-	freshness   time.Duration
-	staleAfter  time.Duration
-	retireStale bool
-	backfill    bool
-	logger      *logger.Logger
+	store               api_keys.SubscriptionIdentityStore
+	client              dynamic.Interface
+	namespace           string
+	tenant              string
+	observerID          string
+	interval            time.Duration
+	settle              time.Duration
+	rejoinFreshness     time.Duration
+	retirementFreshness time.Duration
+	staleAfter          time.Duration
+	retireStale         bool
+	backfill            bool
+	metrics             MetricsRecorder
+	logger              *logger.Logger
+}
+
+type MetricsRecorder interface {
+	RecordSubscriptionObserverRetirement(tenant, result string, revokedAPIKeys int)
+	RecordSubscriptionObserverRejoin(tenant, result string)
 }
 
 type resolvedSubscription struct {
 	object     SubscriptionObject
 	identityID string
+}
+
+type resolvedObservations struct {
+	present                    map[string]struct{}
+	statusWrites               []SubscriptionObject
+	resolved                   []resolvedSubscription
+	migrationBlocked           bool
+	resolutionFailed           bool
+	retirementResolutionFailed bool
+	observedAt                 time.Time
 }
 
 func NewObserver(
@@ -91,13 +109,25 @@ func (observer *Observer) EnableMigrationBackfill() *Observer {
 	return observer
 }
 
+// EnableObserverRejoin permits a retired observer to rejoin only after a
+// complete, transactionally refreshed observation cycle and with a fresh peer.
+func (observer *Observer) EnableObserverRejoin(freshWithin time.Duration) *Observer {
+	observer.rejoinFreshness = freshWithin
+	return observer
+}
+
 // EnableStaleObserverRetirement lets a fresh observer retire peers that stopped
 // heartbeating after a cluster leaves the ingress set. The threshold is the
 // safety barrier for identities which only that stale observer observed.
 func (observer *Observer) EnableStaleObserverRetirement(freshWithin, staleAfter time.Duration) *Observer {
-	observer.freshness = freshWithin
+	observer.retirementFreshness = freshWithin
 	observer.staleAfter = staleAfter
 	observer.retireStale = true
+	return observer
+}
+
+func (observer *Observer) WithMetricsRecorder(recorder MetricsRecorder) *Observer {
+	observer.metrics = recorder
 	return observer
 }
 
@@ -123,7 +153,18 @@ func (observer *Observer) Refresh(ctx context.Context) {
 		return
 	}
 	committed := false
+	rejoinPending := false
+	rejoinMetricRecorded := false
+	recordRejoinOutcome := func(result string) {
+		if !rejoinMetricRecorded {
+			observer.recordRejoin(result)
+			rejoinMetricRecorded = true
+		}
+	}
 	defer func() {
+		if rejoinPending && !committed && !rejoinMetricRecorded {
+			recordRejoinOutcome("failure")
+		}
 		if !committed {
 			_ = session.Rollback()
 		}
@@ -142,79 +183,25 @@ func (observer *Observer) Refresh(ctx context.Context) {
 		observer.logger.Error("Failed to list MaaS subscriptions from Kubernetes API", "error", err)
 		return
 	}
-	if err := session.Heartbeat(ctx); err != nil {
-		observer.logger.Error("Failed to refresh subscription observer heartbeat", "error", err)
+	heartbeatErr := session.Heartbeat(ctx)
+	rejoinPending = stderrors.Is(heartbeatErr, api_keys.ErrObserverRetired)
+	if heartbeatErr != nil && !rejoinPending {
+		observer.logger.Error("Failed to refresh subscription observer heartbeat", "error", heartbeatErr)
+		return
+	}
+	if rejoinPending && observer.rejoinFreshness <= 0 {
+		recordRejoinOutcome("blocked")
+		observer.logger.Error("Retired subscription observer cannot rejoin because observer rejoin is not configured")
 		return
 	}
 
-	present := make(map[string]struct{}, len(objects))
-	statusWrites := make([]SubscriptionObject, 0, len(objects))
-	resolvedSubscriptions := make([]resolvedSubscription, 0, len(objects))
-	migrationBlocked := false
-	resolutionFailed := false
-	observedAt := time.Now().UTC()
-	for _, object := range objects {
-		present[object.Namespace+"/"+object.Name] = struct{}{}
-		identityID, resolveErr := session.ResolveSubscriptionIdentity(ctx, api_keys.ResolveSubscriptionIdentityRequest{
-			Namespace:        object.Namespace,
-			Name:             object.Name,
-			ObjectUID:        object.ObjectUID,
-			StatusIdentityID: object.StatusIdentityID,
-			Settle:           observer.settle,
-		})
-		if resolveErr != nil {
-			resolutionFailed = true
-			observer.logger.Warn("Subscription identity remains pending",
-				"subscription", object.Namespace+"/"+object.Name,
-				"error", resolveErr,
-			)
-			if observer.backfill {
-				ready := false
-				object.MigrationReady = &ready
-				object.MigrationMessage = truncateMigrationMessage(resolveErr.Error())
-				object.MigrationObservedAt = observedAt
-				statusWrites = append(statusWrites, object)
-				migrationBlocked = true
-			}
-			continue
-		}
-		statusIdentityChanged := object.StatusIdentityID != identityID
-		object.StatusIdentityID = identityID
-		resolvedSubscriptions = append(resolvedSubscriptions, resolvedSubscription{
-			object:     object,
-			identityID: identityID,
-		})
-		if statusIdentityChanged && !observer.backfill {
-			statusWrites = append(statusWrites, object)
-		}
-	}
-
-	for _, resolved := range resolvedSubscriptions {
-		if observer.backfill {
-			object := resolved.object
-			_, backfillErr := session.BackfillSubscriptionKeys(ctx, resolved.identityID, object.Namespace, object.Name)
-			ready := backfillErr == nil
-			object.MigrationReady = &ready
-			object.MigrationObservedAt = observedAt
-			if backfillErr != nil {
-				object.MigrationMessage = truncateMigrationMessage(backfillErr.Error())
-				migrationBlocked = true
-				observer.logger.Warn("Subscription identity key backfill blocked",
-					"subscription", object.Namespace+"/"+object.Name,
-					"error", backfillErr,
-				)
-			} else {
-				object.MigrationMessage = ""
-			}
-			statusWrites = append(statusWrites, object)
-		}
-	}
+	refreshed := observer.resolvePresentSubscriptions(ctx, session, objects)
 
 	for _, observation := range current {
-		if _, found := present[observation.Namespace+"/"+observation.Name]; found {
+		if _, found := refreshed.present[observation.Namespace+"/"+observation.Name]; found {
 			continue
 		}
-		if err := session.MarkAbsent(ctx, observation.SubscriptionID); err != nil {
+		if err := session.MarkAbsent(ctx, observation.SubscriptionID, false); err != nil {
 			observer.logger.Error("Failed to mark subscription observation absent",
 				"subscription", observation.Namespace+"/"+observation.Name,
 				"error", err,
@@ -223,36 +210,48 @@ func (observer *Observer) Refresh(ctx context.Context) {
 		}
 	}
 
-	if migrationBlocked {
+	if refreshed.migrationBlocked {
 		observer.logger.Warn("Subscription identity migration is blocked for one or more subscriptions")
 	}
 
+	if rejoinPending {
+		if !observer.reactivate(ctx, session, refreshed.resolutionFailed, recordRejoinOutcome) {
+			return
+		}
+	}
+
+	var retirements []api_keys.SubscriptionObserverRetirement
 	if observer.retireStale {
-		if resolutionFailed {
-			observer.logger.Warn("Stale subscription observer retirement skipped because identity resolution failed")
-		} else {
-			retirements, err := session.RetireStaleObservers(ctx, observer.freshness, observer.staleAfter)
-			if err != nil {
-				observer.logger.Error("Failed to retire stale subscription observers", "error", err)
-				return
-			}
-			for _, retirement := range retirements {
-				observer.logger.Warn("Retired stale subscription observer",
-					"observerID", retirement.ObserverID,
-					"result", retirement.Result,
-					"revokedAPIKeys", retirement.RevokedAPIKeys,
-				)
-			}
+		var ok bool
+		retirements, ok = observer.retireStaleObservers(ctx, session, refreshed.retirementResolutionFailed)
+		if !ok {
+			return
 		}
 	}
 
 	if err := session.Commit(); err != nil {
 		observer.logger.Error("Failed to commit subscription observations", "error", err)
+		if observer.retireStale {
+			observer.recordRetirement("failure", 0)
+		}
 		return
 	}
 	committed = true
 
-	for _, object := range statusWrites {
+	if rejoinPending {
+		recordRejoinOutcome("success")
+		observer.logger.Info("Retired subscription observer safely rejoined")
+	}
+	for _, retirement := range retirements {
+		observer.recordRetirement(string(retirement.Result), retirement.RevokedAPIKeys)
+		observer.logger.Warn("Retired stale subscription observer",
+			"observerID", retirement.ObserverID,
+			"result", retirement.Result,
+			"revokedAPIKeys", retirement.RevokedAPIKeys,
+		)
+	}
+
+	for _, object := range refreshed.statusWrites {
 		if err := observer.ApplyStatus(ctx, object); err != nil {
 			observer.logger.Error("Failed to write subscription identity status",
 				"subscription", object.Namespace+"/"+object.Name,
@@ -264,6 +263,140 @@ func (observer *Observer) Refresh(ctx context.Context) {
 
 func (observer *Observer) tenantName() string {
 	return observer.tenant
+}
+
+func (observer *Observer) recordRetirement(result string, revokedAPIKeys int) {
+	if observer.metrics != nil {
+		observer.metrics.RecordSubscriptionObserverRetirement(observer.tenant, result, revokedAPIKeys)
+	}
+}
+
+func (observer *Observer) recordRejoin(result string) {
+	if observer.metrics != nil {
+		observer.metrics.RecordSubscriptionObserverRejoin(observer.tenant, result)
+	}
+}
+
+func (observer *Observer) resolvePresentSubscriptions(
+	ctx context.Context,
+	session api_keys.SubscriptionObservationSession,
+	objects []SubscriptionObject,
+) resolvedObservations {
+	refreshed := resolvedObservations{
+		present:      make(map[string]struct{}, len(objects)),
+		statusWrites: make([]SubscriptionObject, 0, len(objects)),
+		resolved:     make([]resolvedSubscription, 0, len(objects)),
+		observedAt:   time.Now().UTC(),
+	}
+
+	for _, object := range objects {
+		refreshed.present[object.Namespace+"/"+object.Name] = struct{}{}
+		identityID, resolveErr := session.ResolveSubscriptionIdentity(ctx, api_keys.ResolveSubscriptionIdentityRequest{
+			Namespace:        object.Namespace,
+			Name:             object.Name,
+			ObjectUID:        object.ObjectUID,
+			StatusIdentityID: object.StatusIdentityID,
+			Settle:           observer.settle,
+		})
+		if resolveErr != nil {
+			refreshed.resolutionFailed = true
+			if stderrors.Is(resolveErr, api_keys.ErrSubscriptionIdentityPending) {
+				observer.logger.Warn("Subscription identity remains pending",
+					"subscription", object.Namespace+"/"+object.Name,
+					"error", resolveErr,
+				)
+			} else {
+				refreshed.retirementResolutionFailed = true
+				observer.logger.Error("Subscription identity resolution failed",
+					"subscription", object.Namespace+"/"+object.Name,
+					"error", resolveErr,
+				)
+			}
+			if observer.backfill {
+				ready := false
+				object.MigrationReady = &ready
+				object.MigrationMessage = truncateMigrationMessage(resolveErr.Error())
+				object.MigrationObservedAt = refreshed.observedAt
+				refreshed.statusWrites = append(refreshed.statusWrites, object)
+				refreshed.migrationBlocked = true
+			}
+			continue
+		}
+		statusIdentityChanged := object.StatusIdentityID != identityID
+		object.StatusIdentityID = identityID
+		refreshed.resolved = append(refreshed.resolved, resolvedSubscription{
+			object:     object,
+			identityID: identityID,
+		})
+		if statusIdentityChanged && !observer.backfill {
+			refreshed.statusWrites = append(refreshed.statusWrites, object)
+		}
+	}
+
+	for _, resolved := range refreshed.resolved {
+		if !observer.backfill {
+			continue
+		}
+		object := resolved.object
+		_, backfillErr := session.BackfillSubscriptionKeys(ctx, resolved.identityID, object.Namespace, object.Name)
+		ready := backfillErr == nil
+		object.MigrationReady = &ready
+		object.MigrationObservedAt = refreshed.observedAt
+		if backfillErr != nil {
+			object.MigrationMessage = truncateMigrationMessage(backfillErr.Error())
+			refreshed.migrationBlocked = true
+			observer.logger.Warn("Subscription identity key backfill blocked",
+				"subscription", object.Namespace+"/"+object.Name,
+				"error", backfillErr,
+			)
+		} else {
+			object.MigrationMessage = ""
+		}
+		refreshed.statusWrites = append(refreshed.statusWrites, object)
+	}
+	return refreshed
+}
+
+func (observer *Observer) reactivate(
+	ctx context.Context,
+	session api_keys.SubscriptionObservationSession,
+	resolutionFailed bool,
+	recordRejoin func(string),
+) bool {
+	if resolutionFailed {
+		recordRejoin("blocked")
+		observer.logger.Error("Retired subscription observer rejoin blocked because identity resolution failed")
+		return false
+	}
+	if err := session.ReactivateRetiredObserver(ctx, observer.rejoinFreshness); err != nil {
+		result := "failure"
+		if stderrors.Is(err, api_keys.ErrObserverRejoinBlocked) {
+			result = "blocked"
+		}
+		recordRejoin(result)
+		observer.logger.Error("Failed to reactivate retired subscription observer", "error", err)
+		return false
+	}
+	return true
+}
+
+func (observer *Observer) retireStaleObservers(
+	ctx context.Context,
+	session api_keys.SubscriptionObservationSession,
+	retirementResolutionFailed bool,
+) ([]api_keys.SubscriptionObserverRetirement, bool) {
+	if retirementResolutionFailed {
+		observer.recordRetirement("blocked", 0)
+		observer.logger.Warn("Stale subscription observer retirement skipped because identity resolution failed")
+		return nil, true
+	}
+	retirements, err := session.RetireStaleObservers(ctx, observer.retirementFreshness, observer.staleAfter, observer.settle)
+	if err != nil {
+		observer.recordRetirement("failure", 0)
+		observer.logger.Error("Failed to retire stale subscription observers", "error", err)
+		return nil, false
+	}
+	return retirements, true
 }
 
 func (observer *Observer) list(ctx context.Context) ([]SubscriptionObject, error) {

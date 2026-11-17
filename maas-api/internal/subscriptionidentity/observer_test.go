@@ -30,22 +30,27 @@ import (
 )
 
 type fakeObservationSession struct {
-	observations []api_keys.SubscriptionObservation
-	heartbeat    bool
-	resolved     []api_keys.ResolveSubscriptionIdentityRequest
-	calls        []string
-	backfills    []fakeSubscriptionKeyBackfill
-	backfillErr  error
-	absent       []string
-	absences     []api_keys.SubscriptionAbsenceRequest
-	retirements  []api_keys.SubscriptionObserverRetirement
-	retireErr    error
-	resolveErr   error
-	retireFresh  []time.Duration
-	retireStale  []time.Duration
-	committed    bool
-	rolledBack   bool
-	result       api_keys.SubscriptionCleanupResult
+	observations  []api_keys.SubscriptionObservation
+	heartbeat     bool
+	resolved      []api_keys.ResolveSubscriptionIdentityRequest
+	calls         []string
+	backfills     []fakeSubscriptionKeyBackfill
+	backfillErr   error
+	absent        []string
+	absences      []api_keys.SubscriptionAbsenceRequest
+	retirements   []api_keys.SubscriptionObserverRetirement
+	retireErr     error
+	heartbeatErr  error
+	reactivateErr error
+	resolveErr    error
+	retireFresh   []time.Duration
+	retireStale   []time.Duration
+	retireSettle  []time.Duration
+	rejoinFresh   []time.Duration
+	commitErr     error
+	committed     bool
+	rolledBack    bool
+	result        api_keys.SubscriptionCleanupResult
 }
 
 type fakeSubscriptionKeyBackfill struct {
@@ -60,16 +65,23 @@ func (session *fakeObservationSession) CurrentObservations(context.Context) ([]a
 
 func (session *fakeObservationSession) Heartbeat(context.Context) error {
 	session.heartbeat = true
-	return nil
+	return session.heartbeatErr
+}
+
+func (session *fakeObservationSession) ReactivateRetiredObserver(_ context.Context, freshWithin time.Duration) error {
+	session.calls = append(session.calls, "reactivate-retired-observer")
+	session.rejoinFresh = append(session.rejoinFresh, freshWithin)
+	return session.reactivateErr
 }
 
 func (session *fakeObservationSession) RetireStaleObservers(
 	_ context.Context,
-	freshWithin, staleAfter time.Duration,
+	freshWithin, staleAfter, settle time.Duration,
 ) ([]api_keys.SubscriptionObserverRetirement, error) {
 	session.calls = append(session.calls, "retire-stale-observers")
 	session.retireFresh = append(session.retireFresh, freshWithin)
 	session.retireStale = append(session.retireStale, staleAfter)
+	session.retireSettle = append(session.retireSettle, settle)
 	if session.retireErr != nil {
 		return nil, session.retireErr
 	}
@@ -101,7 +113,11 @@ func (session *fakeObservationSession) BackfillSubscriptionKeys(
 	return 1, nil
 }
 
-func (session *fakeObservationSession) MarkAbsent(_ context.Context, subscriptionID string) error {
+func (session *fakeObservationSession) MarkAbsent(
+	_ context.Context,
+	subscriptionID string,
+	_ bool,
+) error {
 	session.absent = append(session.absent, subscriptionID)
 	return nil
 }
@@ -123,6 +139,9 @@ func (session *fakeObservationSession) RecordAbsenceAndCleanup(
 }
 
 func (session *fakeObservationSession) Commit() error {
+	if session.commitErr != nil {
+		return session.commitErr
+	}
 	session.committed = true
 	return nil
 }
@@ -134,6 +153,29 @@ func (session *fakeObservationSession) Rollback() error {
 
 type fakeIdentityStore struct {
 	session *fakeObservationSession
+}
+
+type fakeObserverMetrics struct {
+	retirements []recordedObserverRetirement
+	rejoins     []string
+}
+
+type recordedObserverRetirement struct {
+	tenant         string
+	result         string
+	revokedAPIKeys int
+}
+
+func (metrics *fakeObserverMetrics) RecordSubscriptionObserverRetirement(tenant, result string, revokedAPIKeys int) {
+	metrics.retirements = append(metrics.retirements, recordedObserverRetirement{
+		tenant:         tenant,
+		result:         result,
+		revokedAPIKeys: revokedAPIKeys,
+	})
+}
+
+func (metrics *fakeObserverMetrics) RecordSubscriptionObserverRejoin(tenant, result string) {
+	metrics.rejoins = append(metrics.rejoins, tenant+":"+result)
 }
 
 type recordingDynamicClient struct {
@@ -476,6 +518,7 @@ func TestObserverRefreshRetiresStaleObserversAfterSuccessfulResolution(t *testin
 			RevokedAPIKeys: 2,
 		}},
 	}
+	metrics := &fakeObserverMetrics{}
 	observer := subscriptionidentity.NewObserver(
 		&fakeIdentityStore{session: session},
 		client,
@@ -485,7 +528,9 @@ func TestObserverRefreshRetiresStaleObserversAfterSuccessfulResolution(t *testin
 		time.Hour,
 		30*time.Second,
 		logger.Development(),
-	).EnableStaleObserverRetirement(3*time.Minute, 7*24*time.Hour)
+	).
+		EnableStaleObserverRetirement(3*time.Minute, 7*24*time.Hour).
+		WithMetricsRecorder(metrics)
 
 	observer.Refresh(context.Background())
 
@@ -495,6 +540,11 @@ func TestObserverRefreshRetiresStaleObserversAfterSuccessfulResolution(t *testin
 	require.Equal(t, []string{"retire-stale-observers"}, session.calls)
 	require.Equal(t, []time.Duration{3 * time.Minute}, session.retireFresh)
 	require.Equal(t, []time.Duration{7 * 24 * time.Hour}, session.retireStale)
+	require.Equal(t, []recordedObserverRetirement{{
+		tenant:         "tenant-a",
+		result:         "cleaned",
+		revokedAPIKeys: 2,
+	}}, metrics.retirements)
 }
 
 func TestObserverRefreshSkipsStaleRetirementWhenResolutionFails(t *testing.T) {
@@ -513,6 +563,7 @@ func TestObserverRefreshSkipsStaleRetirementWhenResolutionFails(t *testing.T) {
 		object,
 	)
 	session := &fakeObservationSession{resolveErr: errors.New("identity pending")}
+	metrics := &fakeObserverMetrics{}
 	observer := subscriptionidentity.NewObserver(
 		&fakeIdentityStore{session: session},
 		client,
@@ -522,13 +573,16 @@ func TestObserverRefreshSkipsStaleRetirementWhenResolutionFails(t *testing.T) {
 		time.Hour,
 		30*time.Second,
 		logger.Development(),
-	).EnableStaleObserverRetirement(3*time.Minute, 7*24*time.Hour)
+	).
+		EnableStaleObserverRetirement(3*time.Minute, 7*24*time.Hour).
+		WithMetricsRecorder(metrics)
 
 	observer.Refresh(context.Background())
 
 	assert.True(t, session.heartbeat)
 	assert.True(t, session.committed)
 	assert.Empty(t, session.retireFresh)
+	require.Equal(t, []recordedObserverRetirement{{tenant: "tenant-a", result: "blocked"}}, metrics.retirements)
 }
 
 func TestObserverRefreshRollsBackWhenStaleRetirementFails(t *testing.T) {
@@ -538,6 +592,7 @@ func TestObserverRefreshRollsBackWhenStaleRetirementFails(t *testing.T) {
 		map[schema.GroupVersionResource]string{gvr: "MaaSSubscriptionList"},
 	)
 	session := &fakeObservationSession{retireErr: errors.New("retirement failed")}
+	metrics := &fakeObserverMetrics{}
 	observer := subscriptionidentity.NewObserver(
 		&fakeIdentityStore{session: session},
 		client,
@@ -547,12 +602,263 @@ func TestObserverRefreshRollsBackWhenStaleRetirementFails(t *testing.T) {
 		time.Hour,
 		30*time.Second,
 		logger.Development(),
-	).EnableStaleObserverRetirement(3*time.Minute, 7*24*time.Hour)
+	).
+		EnableStaleObserverRetirement(3*time.Minute, 7*24*time.Hour).
+		WithMetricsRecorder(metrics)
 
 	observer.Refresh(context.Background())
 
 	assert.False(t, session.committed)
 	assert.True(t, session.rolledBack)
+	require.Equal(t, []recordedObserverRetirement{{tenant: "tenant-a", result: "failure"}}, metrics.retirements)
+}
+
+func TestObserverRefreshRetiresStaleObserversWhenIdentityIsOnlyPending(t *testing.T) {
+	object := &unstructured.Unstructured{}
+	object.SetGroupVersionKind(schema.GroupVersionKind{
+		Group: "maas.opendatahub.io", Version: "v1alpha1", Kind: "MaaSSubscription",
+	})
+	object.SetName("pending-retirement-sub")
+	object.SetNamespace("subscriptions")
+	object.SetUID("pending-retirement-uid")
+
+	gvr := subscription.GVR()
+	client := fake.NewSimpleDynamicClientWithCustomListKinds(
+		runtime.NewScheme(),
+		map[schema.GroupVersionResource]string{gvr: "MaaSSubscriptionList"},
+		object,
+	)
+	session := &fakeObservationSession{
+		resolveErr:  api_keys.ErrSubscriptionIdentityPending,
+		retirements: []api_keys.SubscriptionObserverRetirement{{Result: api_keys.SubscriptionCleanupRetained}},
+	}
+	metrics := &fakeObserverMetrics{}
+	observer := subscriptionidentity.NewObserver(
+		&fakeIdentityStore{session: session},
+		client,
+		"subscriptions",
+		"tenant-a",
+		"11111111-2222-3333-4444-555555555555",
+		time.Hour,
+		30*time.Second,
+		logger.Development(),
+	).
+		EnableStaleObserverRetirement(3*time.Minute, 7*24*time.Hour).
+		WithMetricsRecorder(metrics)
+
+	observer.Refresh(context.Background())
+
+	assert.True(t, session.committed)
+	assert.False(t, session.rolledBack)
+	require.Equal(t, []string{
+		"resolve:subscriptions/pending-retirement-sub",
+		"retire-stale-observers",
+	}, session.calls)
+	require.Equal(t, []recordedObserverRetirement{{tenant: "tenant-a", result: "retained"}}, metrics.retirements)
+}
+
+func TestObserverRefreshSafelyRejoinsRetiredObserver(t *testing.T) {
+	object := &unstructured.Unstructured{}
+	object.SetGroupVersionKind(schema.GroupVersionKind{
+		Group: "maas.opendatahub.io", Version: "v1alpha1", Kind: "MaaSSubscription",
+	})
+	object.SetName("rejoin-sub")
+	object.SetNamespace("subscriptions")
+	object.SetUID("rejoin-uid")
+
+	gvr := subscription.GVR()
+	client := fake.NewSimpleDynamicClientWithCustomListKinds(
+		runtime.NewScheme(),
+		map[schema.GroupVersionResource]string{gvr: "MaaSSubscriptionList"},
+		object,
+	)
+	session := &fakeObservationSession{
+		heartbeatErr: api_keys.ErrObserverRetired,
+		observations: []api_keys.SubscriptionObservation{{
+			SubscriptionID: "old-identity",
+			Namespace:      "subscriptions",
+			Name:           "old-sub",
+			ObjectUID:      "old-uid",
+		}},
+	}
+	metrics := &fakeObserverMetrics{}
+	observer := subscriptionidentity.NewObserver(
+		&fakeIdentityStore{session: session},
+		client,
+		"subscriptions",
+		"tenant-a",
+		"11111111-2222-3333-4444-555555555555",
+		time.Hour,
+		30*time.Second,
+		logger.Development(),
+	).
+		EnableObserverRejoin(3 * time.Minute).
+		WithMetricsRecorder(metrics)
+
+	observer.Refresh(context.Background())
+
+	assert.True(t, session.heartbeat)
+	assert.True(t, session.committed)
+	assert.False(t, session.rolledBack)
+	require.Len(t, session.resolved, 1)
+	assert.Equal(t, []string{"old-identity"}, session.absent)
+	require.Equal(t, []time.Duration{3 * time.Minute}, session.rejoinFresh)
+	require.Equal(t, []string{"resolve:subscriptions/rejoin-sub", "reactivate-retired-observer"}, session.calls)
+	require.Equal(t, []string{"tenant-a:success"}, metrics.rejoins)
+}
+
+func TestObserverRefreshBlocksRejoinWhenResolutionFails(t *testing.T) {
+	object := &unstructured.Unstructured{}
+	object.SetGroupVersionKind(schema.GroupVersionKind{
+		Group: "maas.opendatahub.io", Version: "v1alpha1", Kind: "MaaSSubscription",
+	})
+	object.SetName("blocked-rejoin-sub")
+	object.SetNamespace("subscriptions")
+	object.SetUID("blocked-rejoin-uid")
+
+	gvr := subscription.GVR()
+	client := fake.NewSimpleDynamicClientWithCustomListKinds(
+		runtime.NewScheme(),
+		map[schema.GroupVersionResource]string{gvr: "MaaSSubscriptionList"},
+		object,
+	)
+	session := &fakeObservationSession{
+		heartbeatErr: api_keys.ErrObserverRetired,
+		resolveErr:   errors.New("identity pending"),
+	}
+	metrics := &fakeObserverMetrics{}
+	observer := subscriptionidentity.NewObserver(
+		&fakeIdentityStore{session: session},
+		client,
+		"subscriptions",
+		"tenant-a",
+		"11111111-2222-3333-4444-555555555555",
+		time.Hour,
+		30*time.Second,
+		logger.Development(),
+	).
+		EnableObserverRejoin(3 * time.Minute).
+		WithMetricsRecorder(metrics)
+
+	observer.Refresh(context.Background())
+
+	assert.False(t, session.committed)
+	assert.True(t, session.rolledBack)
+	assert.Empty(t, session.rejoinFresh)
+	require.Equal(t, []string{"tenant-a:blocked"}, metrics.rejoins)
+}
+
+func TestObserverRefreshRecordsRejoinFailure(t *testing.T) {
+	tests := []struct {
+		name    string
+		session *fakeObservationSession
+	}{
+		{
+			name: "reactivation fails",
+			session: &fakeObservationSession{
+				heartbeatErr:  api_keys.ErrObserverRetired,
+				reactivateErr: errors.New("reactivation failed"),
+			},
+		},
+		{
+			name: "commit fails",
+			session: &fakeObservationSession{
+				heartbeatErr: api_keys.ErrObserverRetired,
+				commitErr:    errors.New("commit failed"),
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			gvr := subscription.GVR()
+			client := fake.NewSimpleDynamicClientWithCustomListKinds(
+				runtime.NewScheme(),
+				map[schema.GroupVersionResource]string{gvr: "MaaSSubscriptionList"},
+			)
+			metrics := &fakeObserverMetrics{}
+			observer := subscriptionidentity.NewObserver(
+				&fakeIdentityStore{session: test.session},
+				client,
+				"subscriptions",
+				"tenant-a",
+				"11111111-2222-3333-4444-555555555555",
+				time.Hour,
+				30*time.Second,
+				logger.Development(),
+			).
+				EnableObserverRejoin(3 * time.Minute).
+				WithMetricsRecorder(metrics)
+
+			observer.Refresh(context.Background())
+
+			assert.False(t, test.session.committed)
+			assert.True(t, test.session.rolledBack)
+			require.Equal(t, []time.Duration{3 * time.Minute}, test.session.rejoinFresh)
+			require.Equal(t, []string{"tenant-a:failure"}, metrics.rejoins)
+		})
+	}
+}
+
+func TestObserverRefreshBlocksRejoinWhenRejoinIsNotConfigured(t *testing.T) {
+	gvr := subscription.GVR()
+	client := fake.NewSimpleDynamicClientWithCustomListKinds(
+		runtime.NewScheme(),
+		map[schema.GroupVersionResource]string{gvr: "MaaSSubscriptionList"},
+	)
+	session := &fakeObservationSession{heartbeatErr: api_keys.ErrObserverRetired}
+	metrics := &fakeObserverMetrics{}
+	observer := subscriptionidentity.NewObserver(
+		&fakeIdentityStore{session: session},
+		client,
+		"subscriptions",
+		"tenant-a",
+		"11111111-2222-3333-4444-555555555555",
+		time.Hour,
+		30*time.Second,
+		logger.Development(),
+	).WithMetricsRecorder(metrics)
+
+	observer.Refresh(context.Background())
+
+	assert.False(t, session.committed)
+	assert.True(t, session.rolledBack)
+	assert.Empty(t, session.rejoinFresh)
+	require.Equal(t, []string{"tenant-a:blocked"}, metrics.rejoins)
+}
+
+func TestObserverRefreshRecordsRejoinFailureWhenRetirementFailsAfterReactivation(t *testing.T) {
+	gvr := subscription.GVR()
+	client := fake.NewSimpleDynamicClientWithCustomListKinds(
+		runtime.NewScheme(),
+		map[schema.GroupVersionResource]string{gvr: "MaaSSubscriptionList"},
+	)
+	session := &fakeObservationSession{
+		heartbeatErr: api_keys.ErrObserverRetired,
+		retireErr:    errors.New("retirement failed"),
+	}
+	metrics := &fakeObserverMetrics{}
+	observer := subscriptionidentity.NewObserver(
+		&fakeIdentityStore{session: session},
+		client,
+		"subscriptions",
+		"tenant-a",
+		"11111111-2222-3333-4444-555555555555",
+		time.Hour,
+		30*time.Second,
+		logger.Development(),
+	).
+		EnableObserverRejoin(3*time.Minute).
+		EnableStaleObserverRetirement(3*time.Minute, 7*24*time.Hour).
+		WithMetricsRecorder(metrics)
+
+	observer.Refresh(context.Background())
+
+	assert.False(t, session.committed)
+	assert.True(t, session.rolledBack)
+	require.Equal(t, []time.Duration{3 * time.Minute}, session.rejoinFresh)
+	require.Equal(t, []string{"tenant-a:failure"}, metrics.rejoins)
+	require.Equal(t, []recordedObserverRetirement{{tenant: "tenant-a", result: "failure"}}, metrics.retirements)
 }
 
 func TestObserverRefreshBackfillsKeysAndReportsMigrationReady(t *testing.T) {

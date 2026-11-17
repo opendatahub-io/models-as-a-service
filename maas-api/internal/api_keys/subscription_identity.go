@@ -49,6 +49,7 @@ type SubscriptionObservation struct {
 	Name           string
 	ObjectUID      string
 	Absent         bool
+	RetainAPIKeys  bool
 }
 
 // ResolveSubscriptionIdentityRequest describes one authoritative local object
@@ -81,10 +82,11 @@ type SubscriptionIdentityStore interface {
 type SubscriptionObservationSession interface {
 	CurrentObservations(ctx context.Context) ([]SubscriptionObservation, error)
 	Heartbeat(ctx context.Context) error
-	RetireStaleObservers(ctx context.Context, freshWithin, staleAfter time.Duration) ([]SubscriptionObserverRetirement, error)
+	ReactivateRetiredObserver(ctx context.Context, freshWithin time.Duration) error
+	RetireStaleObservers(ctx context.Context, freshWithin, staleAfter, settle time.Duration) ([]SubscriptionObserverRetirement, error)
 	ResolveSubscriptionIdentity(ctx context.Context, request ResolveSubscriptionIdentityRequest) (string, error)
+	MarkAbsent(ctx context.Context, subscriptionID string, retainAPIKeys bool) error
 	BackfillSubscriptionKeys(ctx context.Context, identityID, namespace, name string) (int, error)
-	MarkAbsent(ctx context.Context, subscriptionID string) error
 	RecordAbsenceAndCleanup(ctx context.Context, request SubscriptionAbsenceRequest, settle, maxObservationAge time.Duration) (SubscriptionCleanupResult, int, error)
 	Commit() error
 	Rollback() error
@@ -127,7 +129,8 @@ func (s *PostgresStore) BeginSubscriptionObservation(ctx context.Context, observ
 
 func (session *postgresObservationSession) CurrentObservations(ctx context.Context) ([]SubscriptionObservation, error) {
 	rows, err := session.tx.QueryContext(ctx, `
-		SELECT identity.id, identity.namespace, identity.name, observation.object_uid, observation.absent_at
+		SELECT identity.id, identity.namespace, identity.name, observation.object_uid,
+		       observation.absent_at, observation.retain_api_keys
 		FROM subscription_observations observation
 		JOIN subscription_identities identity ON identity.id = observation.subscription_id
 		WHERE observation.observer_id = $1
@@ -142,7 +145,14 @@ func (session *postgresObservationSession) CurrentObservations(ctx context.Conte
 	for rows.Next() {
 		var observation SubscriptionObservation
 		var absentAt sql.NullTime
-		if err := rows.Scan(&observation.SubscriptionID, &observation.Namespace, &observation.Name, &observation.ObjectUID, &absentAt); err != nil {
+		if err := rows.Scan(
+			&observation.SubscriptionID,
+			&observation.Namespace,
+			&observation.Name,
+			&observation.ObjectUID,
+			&absentAt,
+			&observation.RetainAPIKeys,
+		); err != nil {
 			return nil, fmt.Errorf("failed to scan subscription observation: %w", err)
 		}
 		observation.Absent = absentAt.Valid
@@ -189,6 +199,46 @@ func (session *postgresObservationSession) Heartbeat(ctx context.Context) error 
 	}
 	if retiredAt.Valid {
 		return ErrObserverRetired
+	}
+	return nil
+}
+
+// ReactivateRetiredObserver intentionally does not run during Heartbeat. A
+// retired observer carries observations that stopped being trustworthy when it
+// left the ingress set. The caller must first perform a fresh Kubernetes list,
+// resolve every present identity, and mark every missing prior observation
+// absent in this transaction. Reactivation is also fenced on another fresh
+// observer, so a stale row cannot silently become the only consensus voter.
+// Committing the refreshed observations and retired_at=NULL together prevents
+// peers from observing an active observer with stale present state.
+func (session *postgresObservationSession) ReactivateRetiredObserver(ctx context.Context, freshWithin time.Duration) error {
+	if freshWithin <= 0 {
+		return errors.New("subscription observer freshness window must be positive")
+	}
+
+	var observedAt time.Time
+	err := session.tx.QueryRowContext(ctx, `
+		UPDATE subscription_observers AS rejoining
+		SET retired_at = NULL,
+		    observed_at = NOW()
+		WHERE rejoining.observer_id = $1
+		  AND rejoining.tenant = $2
+		  AND rejoining.retired_at IS NOT NULL
+		  AND EXISTS (
+			SELECT 1
+			FROM subscription_observers AS peer
+			WHERE peer.tenant = rejoining.tenant
+			  AND peer.retired_at IS NULL
+			  AND peer.observer_id <> rejoining.observer_id
+			  AND peer.observed_at >= NOW() - ($3 * INTERVAL '1 second')
+		  )
+		RETURNING rejoining.observed_at
+	`, session.observerID, session.tenant, int(freshWithin.Seconds())).Scan(&observedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrObserverRejoinBlocked
+	}
+	if err != nil {
+		return fmt.Errorf("failed to reactivate retired subscription observer: %w", err)
 	}
 	return nil
 }
@@ -292,7 +342,7 @@ func (session *postgresObservationSession) ResolveSubscriptionIdentity(ctx conte
 		return "", fmt.Errorf("failed to check peer subscription observations: %w", err)
 	}
 	if !observedElsewhere {
-		if err := session.MarkAbsent(ctx, identityID); err != nil {
+		if err := session.MarkAbsent(ctx, identityID, false); err != nil {
 			return "", err
 		}
 		return "", ErrSubscriptionIdentityPending
@@ -507,12 +557,13 @@ func (session *postgresObservationSession) insertObservation(ctx context.Context
 
 func (session *postgresObservationSession) upsertObservation(ctx context.Context, identityID, objectUID string) error {
 	_, err := session.tx.ExecContext(ctx, `
-		INSERT INTO subscription_observations (subscription_id, observer_id, object_uid, absent_at, observed_at)
-		VALUES ($1, $2, $3, NULL, NOW())
+		INSERT INTO subscription_observations (subscription_id, observer_id, object_uid, absent_at, observed_at, retain_api_keys)
+		VALUES ($1, $2, $3, NULL, NOW(), FALSE)
 		ON CONFLICT (subscription_id, observer_id) DO UPDATE
 		SET object_uid = EXCLUDED.object_uid,
 		    absent_at = NULL,
-		    observed_at = NOW()
+		    observed_at = NOW(),
+		    retain_api_keys = FALSE
 	`, identityID, session.observerID, objectUID)
 	if err != nil {
 		return fmt.Errorf("failed to upsert subscription observation: %w", err)
@@ -582,19 +633,32 @@ func (session *postgresObservationSession) rotateIdentity(ctx context.Context, i
 	`, identityID); err != nil {
 		return fmt.Errorf("failed to revoke keys for rotated subscription identity: %w", err)
 	}
-	return session.MarkAbsent(ctx, identityID)
+	return session.MarkAbsent(ctx, identityID, false)
 }
 
-func (session *postgresObservationSession) MarkAbsent(ctx context.Context, subscriptionID string) error {
+func (session *postgresObservationSession) MarkAbsent(
+	ctx context.Context,
+	subscriptionID string,
+	retainAPIKeys bool,
+) error {
+	return session.markAbsent(ctx, subscriptionID, retainAPIKeys)
+}
+
+func (session *postgresObservationSession) markAbsent(
+	ctx context.Context,
+	subscriptionID string,
+	retainAPIKeys bool,
+) error {
 	if _, err := uuid.Parse(subscriptionID); err != nil {
 		return fmt.Errorf("subscription identity ID must be a UUID: %w", err)
 	}
 	if _, err := session.tx.ExecContext(ctx, `
 		UPDATE subscription_observations
 		SET absent_at = COALESCE(absent_at, NOW()),
-		    observed_at = NOW()
+		    observed_at = NOW(),
+		    retain_api_keys = subscription_observations.retain_api_keys OR $3
 		WHERE subscription_id = $1 AND observer_id = $2
-	`, subscriptionID, session.observerID); err != nil {
+	`, subscriptionID, session.observerID, retainAPIKeys); err != nil {
 		return fmt.Errorf("failed to mark subscription observation absent: %w", err)
 	}
 	return nil
@@ -625,7 +689,7 @@ func (session *postgresObservationSession) RecordAbsenceAndCleanup(
 		return result, 0, nil
 	}
 
-	if err := session.MarkAbsent(ctx, identityID); err != nil {
+	if err := session.MarkAbsent(ctx, identityID, request.RetainAPIKeys); err != nil {
 		return "", 0, err
 	}
 	if request.RetainAPIKeys {
@@ -692,7 +756,7 @@ func (session *postgresObservationSession) lockIdentityForAbsence(
 		WHERE subscription_id = $1 AND observer_id = $2
 	`, identityID, session.observerID).Scan(&observedObjectUID, &absentAt)
 	if errors.Is(err, sql.ErrNoRows) {
-		if err := session.insertAbsentObservation(ctx, identityID, request.ObjectUID); err != nil {
+		if err := session.insertAbsentObservation(ctx, identityID, request.ObjectUID, request.RetainAPIKeys); err != nil {
 			return "", "", err
 		}
 		return identityID, "", nil
@@ -879,10 +943,10 @@ func (session *postgresObservationSession) cleanupAfterAbsence(
 // an incarnation that may have existed only on the removed cluster.
 func (session *postgresObservationSession) RetireStaleObservers(
 	ctx context.Context,
-	freshWithin, staleAfter time.Duration,
+	freshWithin, staleAfter, settle time.Duration,
 ) ([]SubscriptionObserverRetirement, error) {
-	if freshWithin <= 0 || staleAfter <= freshWithin {
-		return nil, errors.New("subscription observer stale retirement threshold must be greater than the freshness window")
+	if freshWithin <= 0 || settle <= 0 || staleAfter <= freshWithin {
+		return nil, errors.New("subscription observer stale retirement threshold must be greater than the freshness window and settle must be positive")
 	}
 
 	observerIDs, err := session.queryStrings(ctx, `
@@ -934,7 +998,7 @@ func (session *postgresObservationSession) RetireStaleObservers(
 			ObserverID: observerID,
 			Result:     SubscriptionCleanupRetained,
 		}
-		if err := session.cleanupIdentitiesForRetiredObserver(ctx, observerID, &retirement); err != nil {
+		if err := session.cleanupIdentitiesForRetiredObserver(ctx, observerID, freshWithin, settle, &retirement); err != nil {
 			return nil, err
 		}
 		retirements = append(retirements, retirement)
@@ -945,6 +1009,7 @@ func (session *postgresObservationSession) RetireStaleObservers(
 func (session *postgresObservationSession) cleanupIdentitiesForRetiredObserver(
 	ctx context.Context,
 	observerID string,
+	freshWithin, settle time.Duration,
 	retirement *SubscriptionObserverRetirement,
 ) error {
 	identityIDs, err := session.queryStrings(ctx, `
@@ -965,9 +1030,42 @@ func (session *postgresObservationSession) cleanupIdentitiesForRetiredObserver(
 		return fmt.Errorf("failed to select identities for retired subscription observer: %w", err)
 	}
 
+	var allObserversFresh bool
+	err = session.tx.QueryRowContext(ctx, `
+		SELECT NOT EXISTS (
+			SELECT 1
+			FROM subscription_observers
+			WHERE tenant = $1
+			  AND retired_at IS NULL
+			  AND observed_at < NOW() - ($2 * INTERVAL '1 second')
+		)
+	`, session.tenant, int(freshWithin.Seconds())).Scan(&allObserversFresh)
+	if err != nil {
+		return fmt.Errorf("failed to check freshness of active subscription observers: %w", err)
+	}
+	if !allObserversFresh {
+		return nil
+	}
+
 	for _, identityID := range identityIDs {
-		var present bool
+		var retained bool
 		err := session.tx.QueryRowContext(ctx, `
+			SELECT EXISTS (
+				SELECT 1
+				FROM subscription_observations
+				WHERE subscription_id = $1
+				  AND retain_api_keys
+			)
+		`, identityID).Scan(&retained)
+		if err != nil {
+			return fmt.Errorf("failed to check retained API keys after observer retirement: %w", err)
+		}
+		if retained {
+			continue
+		}
+
+		var present bool
+		err = session.tx.QueryRowContext(ctx, `
 			SELECT EXISTS (
 				SELECT 1
 				FROM subscription_observations AS observation
@@ -984,6 +1082,36 @@ func (session *postgresObservationSession) cleanupIdentitiesForRetiredObserver(
 		}
 		if present {
 			continue
+		}
+
+		var barrier sql.NullTime
+		err = session.tx.QueryRowContext(ctx, `
+			SELECT MAX(absent_at + ($2 * INTERVAL '1 second'))
+			FROM subscription_observations
+			WHERE subscription_id = $1
+			  AND absent_at IS NOT NULL
+		`, identityID, int(settle.Seconds())).Scan(&barrier)
+		if err != nil {
+			return fmt.Errorf("failed to derive observer retirement cleanup barrier: %w", err)
+		}
+		if barrier.Valid {
+			var barrierNotReached, heartbeatPredatesBarrier bool
+			err = session.tx.QueryRowContext(ctx, `
+				SELECT NOW() < $1,
+					EXISTS (
+						SELECT 1
+						FROM subscription_observers
+						WHERE tenant = $2
+						  AND retired_at IS NULL
+						  AND observed_at < $1
+					)
+			`, barrier.Time, session.tenant).Scan(&barrierNotReached, &heartbeatPredatesBarrier)
+			if err != nil {
+				return fmt.Errorf("failed to evaluate observer retirement cleanup barrier: %w", err)
+			}
+			if barrierNotReached || heartbeatPredatesBarrier {
+				continue
+			}
 		}
 
 		revocation, err := session.tx.ExecContext(ctx, `
@@ -1037,11 +1165,15 @@ func (session *postgresObservationSession) queryStrings(
 	return values, nil
 }
 
-func (session *postgresObservationSession) insertAbsentObservation(ctx context.Context, identityID, objectUID string) error {
+func (session *postgresObservationSession) insertAbsentObservation(
+	ctx context.Context,
+	identityID, objectUID string,
+	retainAPIKeys bool,
+) error {
 	_, err := session.tx.ExecContext(ctx, `
-		INSERT INTO subscription_observations (subscription_id, observer_id, object_uid, absent_at, observed_at)
-		VALUES ($1, $2, $3, NOW(), NOW())
-	`, identityID, session.observerID, objectUID)
+		INSERT INTO subscription_observations (subscription_id, observer_id, object_uid, absent_at, observed_at, retain_api_keys)
+		VALUES ($1, $2, $3, NOW(), CURRENT_TIMESTAMP, $4)
+	`, identityID, session.observerID, objectUID, retainAPIKeys)
 	if err != nil {
 		return fmt.Errorf("failed to insert absent subscription observation: %w", err)
 	}

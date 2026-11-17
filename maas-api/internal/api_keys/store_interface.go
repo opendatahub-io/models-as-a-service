@@ -21,6 +21,7 @@ var (
 	ErrSubscriptionIdentityMismatch    = errors.New("subscription identity mismatch")
 	ErrSubscriptionIdentityNotObserved = errors.New("subscription identity is not actively observed")
 	ErrObserverRetired                 = errors.New("subscription observer is retired")
+	ErrObserverRejoinBlocked           = errors.New("subscription observer rejoin is blocked")
 )
 
 // Legacy constants for backward compatibility with database operations.
