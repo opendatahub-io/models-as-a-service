@@ -9,6 +9,29 @@ data:
     import ssl
     from http.server import BaseHTTPRequestHandler, HTTPServer
 
+    MODEL = "test/e2e-rerank-model"
+
+    def route_response(path):
+        if path.endswith("/v1/rerank"):
+            return {"model": MODEL, "results": [{"index": 0, "relevance_score": 0.42}]}
+        if path.endswith("/v1/ocr"):
+            return {"model": MODEL, "text": "mock ocr"}
+        if path.endswith("/v1/moderations"):
+            return {"model": MODEL, "results": [{"flagged": False}]}
+        if path.endswith("/v1/extraction"):
+            return {"model": MODEL, "data": {}}
+        if path.endswith("/v1/decisions"):
+            return {"model": MODEL, "decision": "allow"}
+        if path.endswith("/v1/responses"):
+            return {"model": MODEL, "output": []}
+        if path.endswith("/v1/images/generations"):
+            return {"model": MODEL, "data": [{"url": "https://example.invalid/mock.png"}]}
+        if path.endswith("/v1/audio/voices"):
+            return {"model": MODEL, "voices": []}
+        if path.endswith("/v1/search/query"):
+            return {"model": MODEL, "results": []}
+        return None
+
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, fmt, *args):
             return
@@ -32,17 +55,12 @@ data:
             length = int(self.headers.get("Content-Length", 0) or 0)
             if length:
                 self.rfile.read(length)
-            if self.path.endswith("/v1/rerank"):
-                self._send_json(
-                    200,
-                    {
-                        "model": "test/e2e-rerank-model",
-                        "results": [{"index": 0, "relevance_score": 0.42}],
-                    },
-                )
+            body = route_response(self.path.split("?", 1)[0])
+            if body is None:
+                self.send_response(404)
+                self.end_headers()
                 return
-            self.send_response(404)
-            self.end_headers()
+            self._send_json(200, body)
 
     if __name__ == "__main__":
         httpd = HTTPServer(("0.0.0.0", 8000), Handler)

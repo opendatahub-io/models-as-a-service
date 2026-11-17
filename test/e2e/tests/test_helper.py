@@ -366,12 +366,19 @@ EMBEDDING_MODEL_CANONICAL_ID = os.environ.get(
     "E2E_EMBEDDING_MODEL_CANONICAL_ID",
     f"publishers/{MODEL_NAMESPACE}/models/{EMBEDDING_MODEL_NAME}",
 )
-RERANK_MODEL_REF = os.environ.get("E2E_RERANK_MODEL_REF", "e2e-rerank-simulated")
-RERANK_MODEL_PATH = os.environ.get("E2E_RERANK_MODEL_PATH", "/llm/e2e-rerank-simulated")
-RERANK_MODEL_NAME = os.environ.get("E2E_RERANK_MODEL_NAME", "test/e2e-rerank-model")
+JSON_BBR_MODEL_REF = os.environ.get("E2E_JSON_BBR_MODEL_REF", "e2e-rerank-simulated")
+JSON_BBR_MODEL_PATH = os.environ.get("E2E_JSON_BBR_MODEL_PATH", "/llm/e2e-rerank-simulated")
+JSON_BBR_MODEL_NAME = os.environ.get("E2E_JSON_BBR_MODEL_NAME", "test/e2e-rerank-model")
+JSON_BBR_MODEL_CANONICAL_ID = os.environ.get(
+    "E2E_JSON_BBR_MODEL_CANONICAL_ID",
+    f"publishers/{MODEL_NAMESPACE}/models/{JSON_BBR_MODEL_NAME}",
+)
+RERANK_MODEL_REF = os.environ.get("E2E_RERANK_MODEL_REF", JSON_BBR_MODEL_REF)
+RERANK_MODEL_PATH = os.environ.get("E2E_RERANK_MODEL_PATH", JSON_BBR_MODEL_PATH)
+RERANK_MODEL_NAME = os.environ.get("E2E_RERANK_MODEL_NAME", JSON_BBR_MODEL_NAME)
 RERANK_MODEL_CANONICAL_ID = os.environ.get(
     "E2E_RERANK_MODEL_CANONICAL_ID",
-    f"publishers/{MODEL_NAMESPACE}/models/{RERANK_MODEL_NAME}",
+    JSON_BBR_MODEL_CANONICAL_ID,
 )
 
 
@@ -1760,21 +1767,27 @@ def _embedding_inference(api_key, path=None, extra_headers=None, model_name=None
     )
 
 
+def _json_bbr_post(api_key, path_suffix, body, bbr=True, path=None):
+    """POST a JSON BBR path with API key at {gateway}/v1/{suffix} or path-prefixed URL."""
+    path_suffix = path_suffix.lstrip("/")
+    if bbr:
+        url = f"{_gateway_url()}/{path_suffix}"
+    else:
+        path = path or JSON_BBR_MODEL_PATH
+        url = f"{_gateway_url()}{path}/{path_suffix}"
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    return requests.post(url, headers=headers, json=body, timeout=TIMEOUT, verify=TLS_VERIFY)
+
+
 def _rerank_inference(api_key, path=None, model_name=None, bbr=False):
     """POST /v1/rerank with API key (path-based or BBR at gateway root)."""
     model_name = model_name or RERANK_MODEL_NAME
-    if bbr:
-        url = f"{_gateway_url()}/v1/rerank"
-    else:
-        path = path or RERANK_MODEL_PATH
-        url = f"{_gateway_url()}{path}/v1/rerank"
-    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     body = {
         "model": model_name,
         "query": "what is a vector database?",
         "documents": ["A vector DB stores embeddings.", "Unrelated text."],
     }
-    return requests.post(url, headers=headers, json=body, timeout=TIMEOUT, verify=TLS_VERIFY)
+    return _json_bbr_post(api_key, "v1/rerank", body, bbr=bbr, path=path)
 
 
 # ---------------------------------------------------------------------------
