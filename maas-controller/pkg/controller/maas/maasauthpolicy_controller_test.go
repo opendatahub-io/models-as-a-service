@@ -373,6 +373,7 @@ func TestMaaSAuthPolicyReconciler_SubscriptionIdentityCallbackRolloutGate(t *tes
 		readyReplicas      int32
 		wantReady          bool
 		wantCanEmit        bool
+		desiredReplicas    int32
 	}{
 		{
 			name:               "missing contract is not ready",
@@ -418,11 +419,25 @@ func TestMaaSAuthPolicyReconciler_SubscriptionIdentityCallbackRolloutGate(t *tes
 			updatedReplicas:    1,
 			wantCanEmit:        true,
 		},
+		{
+			name:               "replica deficit with only updated pods can emit identity",
+			contractAnnotation: tenantreconcile.MaaSAPISubscriptionIdentityContractV1,
+			observedGeneration: 1,
+			replicas:           2,
+			updatedReplicas:    2,
+			availableReplicas:  2,
+			readyReplicas:      2,
+			desiredReplicas:    3,
+			wantCanEmit:        true,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			replicas := int32(1)
+			replicas := tt.desiredReplicas
+			if replicas == 0 {
+				replicas = 1
+			}
 			deployment := &appsv1.Deployment{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:       tenantreconcile.MaaSAPIDeploymentName(""),

@@ -410,10 +410,9 @@ func maasAPISubscriptionIdentityCallbackStatus(ctx context.Context, reader clien
 	if deployment.Spec.Replicas != nil {
 		desiredReplicas = *deployment.Spec.Replicas
 	}
-	status.rolloutComplete = desiredReplicas >= 1 &&
-		deployment.Status.ObservedGeneration >= deployment.Generation &&
-		deployment.Status.Replicas == desiredReplicas &&
-		deployment.Status.UpdatedReplicas == desiredReplicas
+	status.rolloutComplete = deployment.Status.ObservedGeneration >= deployment.Generation &&
+		deployment.Status.UpdatedReplicas > 0 &&
+		deployment.Status.Replicas == deployment.Status.UpdatedReplicas
 	status.available = deployment.Status.AvailableReplicas == desiredReplicas &&
 		deployment.Status.ReadyReplicas == desiredReplicas
 	return status, nil
