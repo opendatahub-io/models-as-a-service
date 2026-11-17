@@ -956,6 +956,172 @@ func TestPostgresStore_RecordAbsenceBlocksForStaleAndEmptyObservers(t *testing.T
 	require.NoError(t, emptyBlockSession.Commit())
 }
 
+func TestPostgresStore_RetireStaleObservers(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+	if os.Getenv("TEST_DATABASE_URL") == "" {
+		t.Skip("Skipping integration test (TEST_DATABASE_URL not set)")
+	}
+
+	ctx := context.Background()
+	tenant := "observer-retirement-" + uuid.NewString()
+	store := setupTestPostgresStoreForTenant(t, tenant)
+	defer store.Close()
+	db, err := sql.Open("pgx", os.Getenv("TEST_DATABASE_URL"))
+	require.NoError(t, err)
+	defer db.Close()
+
+	staleObserver := uuid.NewString()
+	staleSession, err := store.BeginSubscriptionObservation(ctx, staleObserver, tenant)
+	require.NoError(t, err)
+	require.NoError(t, staleSession.Heartbeat(ctx))
+	cleanupIdentityID, err := staleSession.ResolveSubscriptionIdentity(ctx, api_keys.ResolveSubscriptionIdentityRequest{
+		Namespace: "subscriptions",
+		Name:      "retirement-cleanup-sub",
+		ObjectUID: "cleanup-uid",
+	})
+	require.NoError(t, err)
+	sharedIdentityID, err := staleSession.ResolveSubscriptionIdentity(ctx, api_keys.ResolveSubscriptionIdentityRequest{
+		Namespace: "subscriptions",
+		Name:      "retirement-shared-sub",
+		ObjectUID: "shared-uid",
+	})
+	require.NoError(t, err)
+	require.NoError(t, staleSession.Commit())
+
+	currentObserver := uuid.NewString()
+	currentSession, err := store.BeginSubscriptionObservation(ctx, currentObserver, tenant)
+	require.NoError(t, err)
+	require.NoError(t, currentSession.Heartbeat(ctx))
+	_, err = currentSession.ResolveSubscriptionIdentity(ctx, api_keys.ResolveSubscriptionIdentityRequest{
+		Namespace:        "subscriptions",
+		Name:             "retirement-shared-sub",
+		ObjectUID:        "shared-uid",
+		StatusIdentityID: sharedIdentityID,
+	})
+	require.NoError(t, err)
+	require.NoError(t, currentSession.Commit())
+
+	cleanupKeyHash := uuid.NewString()
+	require.NoError(t, store.AddKeyWithSubscriptionIdentity(
+		ctx, "alice", uuid.NewString(), cleanupKeyHash, "cleanup key", "", []string{"users"},
+		"retirement-cleanup-sub", cleanupIdentityID, "subscriptions", tenant, nil, false, nil, time.Minute,
+	))
+	sharedKeyHash := uuid.NewString()
+	require.NoError(t, store.AddKeyWithSubscriptionIdentity(
+		ctx, "alice", uuid.NewString(), sharedKeyHash, "shared key", "", []string{"users"},
+		"retirement-shared-sub", sharedIdentityID, "subscriptions", tenant, nil, false, nil, time.Minute,
+	))
+
+	_, err = db.ExecContext(ctx, `
+		UPDATE subscription_observers
+		SET observed_at = NOW() - INTERVAL '1 hour'
+		WHERE observer_id = $1
+	`, staleObserver)
+	require.NoError(t, err)
+
+	youngSession, err := store.BeginSubscriptionObservation(ctx, currentObserver, tenant)
+	require.NoError(t, err)
+	require.NoError(t, youngSession.Heartbeat(ctx))
+	retirements, err := youngSession.RetireStaleObservers(ctx, time.Minute, 7*24*time.Hour)
+	require.NoError(t, err)
+	assert.Empty(t, retirements)
+	require.NoError(t, youngSession.Commit())
+
+	_, err = db.ExecContext(ctx, `
+		UPDATE subscription_observers
+		SET observed_at = NOW() - INTERVAL '8 days'
+		WHERE observer_id = $1
+	`, staleObserver)
+	require.NoError(t, err)
+
+	retireSession, err := store.BeginSubscriptionObservation(ctx, currentObserver, tenant)
+	require.NoError(t, err)
+	require.NoError(t, retireSession.Heartbeat(ctx))
+	retirements, err = retireSession.RetireStaleObservers(ctx, time.Minute, 7*24*time.Hour)
+	require.NoError(t, err)
+	require.Len(t, retirements, 1)
+	assert.Equal(t, staleObserver, retirements[0].ObserverID)
+	assert.Equal(t, api_keys.SubscriptionCleanupCleaned, retirements[0].Result)
+	assert.Equal(t, 1, retirements[0].RevokedAPIKeys)
+	require.NoError(t, retireSession.Commit())
+
+	var currentRetiredAt, staleRetiredAt, cleanupDeletedAt, sharedDeletedAt sql.NullTime
+	err = db.QueryRowContext(ctx, `
+		SELECT
+			MAX(retired_at) FILTER (WHERE observer_id = $1),
+			MAX(retired_at) FILTER (WHERE observer_id = $2)
+		FROM subscription_observers
+		WHERE tenant = $3
+	`, currentObserver, staleObserver, tenant).Scan(&currentRetiredAt, &staleRetiredAt)
+	require.NoError(t, err)
+	assert.False(t, currentRetiredAt.Valid, "the current fresh observer must never be retired")
+	assert.True(t, staleRetiredAt.Valid)
+
+	err = db.QueryRowContext(ctx, `
+		SELECT
+			MAX(deleted_at) FILTER (WHERE id = $1),
+			MAX(deleted_at) FILTER (WHERE id = $2)
+		FROM subscription_identities
+		WHERE tenant = $3
+	`, cleanupIdentityID, sharedIdentityID, tenant).Scan(&cleanupDeletedAt, &sharedDeletedAt)
+	require.NoError(t, err)
+	assert.True(t, cleanupDeletedAt.Valid)
+	assert.False(t, sharedDeletedAt.Valid)
+
+	_, err = store.GetByHash(ctx, cleanupKeyHash)
+	assert.ErrorIs(t, err, api_keys.ErrKeyNotFound)
+	sharedKey, err := store.GetByHash(ctx, sharedKeyHash)
+	require.NoError(t, err)
+	assert.Equal(t, sharedIdentityID, sharedKey.SubscriptionIdentityID)
+
+	retiredHeartbeatSession, err := store.BeginSubscriptionObservation(ctx, staleObserver, tenant)
+	require.NoError(t, err)
+	err = retiredHeartbeatSession.Heartbeat(ctx)
+	assert.ErrorIs(t, err, api_keys.ErrObserverRetired)
+	require.NoError(t, retiredHeartbeatSession.Rollback())
+}
+
+func TestPostgresStore_RetireStaleObserversRequiresFreshPeer(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+	if os.Getenv("TEST_DATABASE_URL") == "" {
+		t.Skip("Skipping integration test (TEST_DATABASE_URL not set)")
+	}
+
+	ctx := context.Background()
+	tenant := "observer-retirement-no-peer-" + uuid.NewString()
+	store := setupTestPostgresStoreForTenant(t, tenant)
+	defer store.Close()
+	db, err := sql.Open("pgx", os.Getenv("TEST_DATABASE_URL"))
+	require.NoError(t, err)
+	defer db.Close()
+
+	staleObserver := uuid.NewString()
+	_, err = db.ExecContext(ctx, `
+		INSERT INTO subscription_observers (observer_id, tenant, observed_at)
+		VALUES ($1, $2, NOW() - INTERVAL '8 days')
+	`, staleObserver, tenant)
+	require.NoError(t, err)
+
+	currentObserver := uuid.NewString()
+	session, err := store.BeginSubscriptionObservation(ctx, currentObserver, tenant)
+	require.NoError(t, err)
+	retirements, err := session.RetireStaleObservers(ctx, time.Minute, 7*24*time.Hour)
+	require.NoError(t, err)
+	assert.Empty(t, retirements)
+	require.NoError(t, session.Rollback())
+
+	var retiredAt sql.NullTime
+	err = db.QueryRowContext(ctx, `
+		SELECT retired_at FROM subscription_observers WHERE observer_id = $1
+	`, staleObserver).Scan(&retiredAt)
+	require.NoError(t, err)
+	assert.False(t, retiredAt.Valid)
+}
+
 func TestPostgresStore_TombstonedIdentityDoesNotPoisonReplacement(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")

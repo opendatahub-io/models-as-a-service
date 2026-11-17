@@ -40,15 +40,18 @@ type SubscriptionObject struct {
 }
 
 type Observer struct {
-	store      api_keys.SubscriptionIdentityStore
-	client     dynamic.Interface
-	namespace  string
-	tenant     string
-	observerID string
-	interval   time.Duration
-	settle     time.Duration
-	backfill   bool
-	logger     *logger.Logger
+	store       api_keys.SubscriptionIdentityStore
+	client      dynamic.Interface
+	namespace   string
+	tenant      string
+	observerID  string
+	interval    time.Duration
+	settle      time.Duration
+	freshness   time.Duration
+	staleAfter  time.Duration
+	retireStale bool
+	backfill    bool
+	logger      *logger.Logger
 }
 
 type resolvedSubscription struct {
@@ -85,6 +88,16 @@ func NewObserver(
 // reports migration readiness.
 func (observer *Observer) EnableMigrationBackfill() *Observer {
 	observer.backfill = true
+	return observer
+}
+
+// EnableStaleObserverRetirement lets a fresh observer retire peers that stopped
+// heartbeating after a cluster leaves the ingress set. The threshold is the
+// safety barrier for identities which only that stale observer observed.
+func (observer *Observer) EnableStaleObserverRetirement(freshWithin, staleAfter time.Duration) *Observer {
+	observer.freshness = freshWithin
+	observer.staleAfter = staleAfter
+	observer.retireStale = true
 	return observer
 }
 
@@ -138,6 +151,7 @@ func (observer *Observer) Refresh(ctx context.Context) {
 	statusWrites := make([]SubscriptionObject, 0, len(objects))
 	resolvedSubscriptions := make([]resolvedSubscription, 0, len(objects))
 	migrationBlocked := false
+	resolutionFailed := false
 	observedAt := time.Now().UTC()
 	for _, object := range objects {
 		present[object.Namespace+"/"+object.Name] = struct{}{}
@@ -149,6 +163,7 @@ func (observer *Observer) Refresh(ctx context.Context) {
 			Settle:           observer.settle,
 		})
 		if resolveErr != nil {
+			resolutionFailed = true
 			observer.logger.Warn("Subscription identity remains pending",
 				"subscription", object.Namespace+"/"+object.Name,
 				"error", resolveErr,
@@ -210,6 +225,25 @@ func (observer *Observer) Refresh(ctx context.Context) {
 
 	if migrationBlocked {
 		observer.logger.Warn("Subscription identity migration is blocked for one or more subscriptions")
+	}
+
+	if observer.retireStale {
+		if resolutionFailed {
+			observer.logger.Warn("Stale subscription observer retirement skipped because identity resolution failed")
+		} else {
+			retirements, err := session.RetireStaleObservers(ctx, observer.freshness, observer.staleAfter)
+			if err != nil {
+				observer.logger.Error("Failed to retire stale subscription observers", "error", err)
+				return
+			}
+			for _, retirement := range retirements {
+				observer.logger.Warn("Retired stale subscription observer",
+					"observerID", retirement.ObserverID,
+					"result", retirement.Result,
+					"revokedAPIKeys", retirement.RevokedAPIKeys,
+				)
+			}
+		}
 	}
 
 	if err := session.Commit(); err != nil {

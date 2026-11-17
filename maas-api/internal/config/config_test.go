@@ -90,6 +90,19 @@ func TestLoad_EnvironmentVariables(t *testing.T) {
 				}
 			},
 		},
+		{
+			name:    "subscription observer retirement defaults",
+			envVars: map[string]string{},
+			check: func(t *testing.T, cfg *Config) {
+				t.Helper()
+				if !cfg.SubscriptionObserverRetirementEnabled {
+					t.Error("expected SubscriptionObserverRetirementEnabled default true")
+				}
+				if cfg.SubscriptionObserverStaleRetirementSeconds != 7*24*60*60 {
+					t.Errorf("unexpected SubscriptionObserverStaleRetirementSeconds %d", cfg.SubscriptionObserverStaleRetirementSeconds)
+				}
+			},
+		},
 	}
 
 	// All env vars that Load() reads, to be cleared before each subtest.
@@ -100,6 +113,7 @@ func TestLoad_EnvironmentVariables(t *testing.T) {
 		"TLS_CERT", "TLS_KEY", "TLS_SELF_SIGNED",
 		"METRICS_PORT", "METRICS_SECURE", "METRICS_CERT_DIR",
 		"API_KEY_DELETION_RETENTION_DAYS",
+		"SUBSCRIPTION_OBSERVER_RETIREMENT_ENABLED", "SUBSCRIPTION_OBSERVER_STALE_RETIREMENT_SECONDS",
 	}
 
 	for _, tt := range tests {
@@ -567,16 +581,18 @@ func TestValidateAPIKeyDeletionRetention(t *testing.T) {
 
 func TestValidateSubscriptionIdentityMode(t *testing.T) {
 	base := Config{
-		DBConnectionURL:                        "postgresql://localhost/test",
-		APIKeyMaxExpirationDays:                30,
-		AccessCheckTimeoutSeconds:              15,
-		MetricsPort:                            9090,
-		MaaSSubscriptionNamespace:              "models-as-a-service",
-		TenantName:                             "test-tenant",
-		SubscriptionObserverID:                 uuid.NewString(),
-		SubscriptionObservationIntervalSeconds: 60,
-		SubscriptionObservationMaxAgeSeconds:   180,
-		SubscriptionObservationSettleSeconds:   30,
+		DBConnectionURL:                            "postgresql://localhost/test",
+		APIKeyMaxExpirationDays:                    30,
+		AccessCheckTimeoutSeconds:                  15,
+		MetricsPort:                                9090,
+		MaaSSubscriptionNamespace:                  "models-as-a-service",
+		TenantName:                                 "test-tenant",
+		SubscriptionObserverID:                     uuid.NewString(),
+		SubscriptionObservationIntervalSeconds:     60,
+		SubscriptionObservationMaxAgeSeconds:       180,
+		SubscriptionObservationSettleSeconds:       30,
+		SubscriptionObserverRetirementEnabled:      true,
+		SubscriptionObserverStaleRetirementSeconds: 7 * 24 * 60 * 60,
 	}
 
 	for _, mode := range []string{
@@ -593,4 +609,16 @@ func TestValidateSubscriptionIdentityMode(t *testing.T) {
 	cfg.SubscriptionIdentityMode = "unexpected"
 	err := cfg.Validate()
 	require.ErrorContains(t, err, "SUBSCRIPTION_IDENTITY_MODE")
+
+	cfg = base
+	cfg.SubscriptionIdentityMode = SubscriptionIdentityModeStrict
+	cfg.SubscriptionObserverStaleRetirementSeconds = cfg.SubscriptionObservationMaxAgeSeconds
+	err = cfg.Validate()
+	require.ErrorContains(t, err, "SUBSCRIPTION_OBSERVER_STALE_RETIREMENT_SECONDS")
+
+	cfg = base
+	cfg.SubscriptionIdentityMode = SubscriptionIdentityModeStrict
+	cfg.SubscriptionObserverRetirementEnabled = false
+	cfg.SubscriptionObserverStaleRetirementSeconds = 0
+	require.NoError(t, cfg.Validate())
 }

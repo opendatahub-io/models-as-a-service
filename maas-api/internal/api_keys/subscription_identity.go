@@ -81,12 +81,19 @@ type SubscriptionIdentityStore interface {
 type SubscriptionObservationSession interface {
 	CurrentObservations(ctx context.Context) ([]SubscriptionObservation, error)
 	Heartbeat(ctx context.Context) error
+	RetireStaleObservers(ctx context.Context, freshWithin, staleAfter time.Duration) ([]SubscriptionObserverRetirement, error)
 	ResolveSubscriptionIdentity(ctx context.Context, request ResolveSubscriptionIdentityRequest) (string, error)
 	BackfillSubscriptionKeys(ctx context.Context, identityID, namespace, name string) (int, error)
 	MarkAbsent(ctx context.Context, subscriptionID string) error
 	RecordAbsenceAndCleanup(ctx context.Context, request SubscriptionAbsenceRequest, settle, maxObservationAge time.Duration) (SubscriptionCleanupResult, int, error)
 	Commit() error
 	Rollback() error
+}
+
+type SubscriptionObserverRetirement struct {
+	ObserverID     string
+	Result         SubscriptionCleanupResult
+	RevokedAPIKeys int
 }
 
 type postgresObservationSession struct {
@@ -860,6 +867,174 @@ func (session *postgresObservationSession) cleanupAfterAbsence(
 		return "", 0, fmt.Errorf("failed to tombstone subscription identity: %w", err)
 	}
 	return SubscriptionCleanupCleaned, int(rows), nil
+}
+
+// RetireStaleObservers removes observers that cannot have run for longer than
+// the retirement threshold, but only while another fresh observer proves that
+// observation remains active for the tenant. Retirement and conditional key
+// cleanup share this transaction: a stale observer can no longer block cleanup,
+// yet an identity remains live if any active observer still reports it present.
+// For an identity with no active present observation, the stale threshold is
+// the safety barrier; this avoids requiring a fresh observer to have ever seen
+// an incarnation that may have existed only on the removed cluster.
+func (session *postgresObservationSession) RetireStaleObservers(
+	ctx context.Context,
+	freshWithin, staleAfter time.Duration,
+) ([]SubscriptionObserverRetirement, error) {
+	if freshWithin <= 0 || staleAfter <= freshWithin {
+		return nil, errors.New("subscription observer stale retirement threshold must be greater than the freshness window")
+	}
+
+	observerIDs, err := session.queryStrings(ctx, `
+		SELECT candidate.observer_id
+		FROM subscription_observers AS candidate
+		WHERE candidate.tenant = $1
+		  AND candidate.retired_at IS NULL
+		  AND candidate.observer_id <> $2
+		  AND candidate.observed_at < NOW() - ($3 * INTERVAL '1 second')
+		  AND EXISTS (
+			SELECT 1
+			FROM subscription_observers AS peer
+			WHERE peer.tenant = candidate.tenant
+			  AND peer.retired_at IS NULL
+			  AND peer.observer_id <> candidate.observer_id
+			  AND peer.observed_at >= NOW() - ($4 * INTERVAL '1 second')
+		  )
+		ORDER BY candidate.observed_at
+		FOR UPDATE OF candidate
+	`, session.tenant, session.observerID, int(staleAfter.Seconds()), int(freshWithin.Seconds()))
+	if err != nil {
+		return nil, fmt.Errorf("failed to select stale subscription observers: %w", err)
+	}
+	if len(observerIDs) == 0 {
+		return nil, nil
+	}
+
+	retirements := make([]SubscriptionObserverRetirement, 0, len(observerIDs))
+	for _, observerID := range observerIDs {
+		updated, err := session.tx.ExecContext(ctx, `
+			UPDATE subscription_observers
+			SET retired_at = NOW()
+			WHERE observer_id = $1
+			  AND tenant = $2
+			  AND retired_at IS NULL
+		`, observerID, session.tenant)
+		if err != nil {
+			return nil, fmt.Errorf("failed to retire stale subscription observer: %w", err)
+		}
+		rowsAffected, err := updated.RowsAffected()
+		if err != nil {
+			return nil, fmt.Errorf("failed to count retired subscription observers: %w", err)
+		}
+		if rowsAffected == 0 {
+			continue
+		}
+
+		retirement := SubscriptionObserverRetirement{
+			ObserverID: observerID,
+			Result:     SubscriptionCleanupRetained,
+		}
+		if err := session.cleanupIdentitiesForRetiredObserver(ctx, observerID, &retirement); err != nil {
+			return nil, err
+		}
+		retirements = append(retirements, retirement)
+	}
+	return retirements, nil
+}
+
+func (session *postgresObservationSession) cleanupIdentitiesForRetiredObserver(
+	ctx context.Context,
+	observerID string,
+	retirement *SubscriptionObserverRetirement,
+) error {
+	identityIDs, err := session.queryStrings(ctx, `
+		SELECT identity.id
+		FROM subscription_identities AS identity
+		WHERE identity.tenant = $2
+		  AND identity.deleted_at IS NULL
+		  AND EXISTS (
+			SELECT 1
+			FROM subscription_observations AS observation
+			WHERE observation.observer_id = $1
+			  AND observation.subscription_id = identity.id
+		  )
+		ORDER BY identity.id
+		FOR UPDATE OF identity
+	`, observerID, session.tenant)
+	if err != nil {
+		return fmt.Errorf("failed to select identities for retired subscription observer: %w", err)
+	}
+
+	for _, identityID := range identityIDs {
+		var present bool
+		err := session.tx.QueryRowContext(ctx, `
+			SELECT EXISTS (
+				SELECT 1
+				FROM subscription_observations AS observation
+				JOIN subscription_observers AS observer
+				  ON observer.observer_id = observation.observer_id
+				WHERE observation.subscription_id = $1
+				  AND observation.absent_at IS NULL
+				  AND observer.retired_at IS NULL
+				  AND observer.tenant = $2
+			)
+		`, identityID, session.tenant).Scan(&present)
+		if err != nil {
+			return fmt.Errorf("failed to check active observations after observer retirement: %w", err)
+		}
+		if present {
+			continue
+		}
+
+		revocation, err := session.tx.ExecContext(ctx, `
+			UPDATE api_keys
+			SET deleted_at = NOW(),
+			    status = CASE WHEN status = 'active' THEN 'revoked' ELSE status END
+			WHERE subscription_id = $1 AND deleted_at IS NULL
+		`, identityID)
+		if err != nil {
+			return fmt.Errorf("failed to revoke keys after observer retirement: %w", err)
+		}
+		rows, err := revocation.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("failed to count revoked keys after observer retirement: %w", err)
+		}
+		if _, err := session.tx.ExecContext(ctx, `
+			UPDATE subscription_identities
+			SET deleted_at = NOW()
+			WHERE id = $1 AND deleted_at IS NULL
+		`, identityID); err != nil {
+			return fmt.Errorf("failed to tombstone identity after observer retirement: %w", err)
+		}
+		retirement.Result = SubscriptionCleanupCleaned
+		retirement.RevokedAPIKeys += int(rows)
+	}
+	return nil
+}
+
+func (session *postgresObservationSession) queryStrings(
+	ctx context.Context,
+	query string,
+	args ...any,
+) ([]string, error) {
+	rows, err := session.tx.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	values := make([]string, 0)
+	for rows.Next() {
+		var value string
+		if err := rows.Scan(&value); err != nil {
+			return nil, err
+		}
+		values = append(values, value)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return values, nil
 }
 
 func (session *postgresObservationSession) insertAbsentObservation(ctx context.Context, identityID, objectUID string) error {

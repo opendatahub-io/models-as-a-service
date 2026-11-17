@@ -131,6 +131,14 @@ type Config struct {
 	// convergence window before the final observer can clean up an identity.
 	SubscriptionObservationSettleSeconds int
 
+	// SubscriptionObserverRetirementEnabled automatically retires observers
+	// that stopped heartbeating after a cluster lost MaaS or database access.
+	SubscriptionObserverRetirementEnabled bool
+
+	// SubscriptionObserverStaleRetirementSeconds is the safety barrier before
+	// an inactive observer can be retired and removed from cleanup consensus.
+	SubscriptionObserverStaleRetirementSeconds int
+
 	MetricsPort int
 
 	// MetricsSecure serves /metrics over HTTPS with authn/authz when true.
@@ -191,6 +199,11 @@ func Load() *Config {
 	subscriptionObservationIntervalSeconds, _ := env.GetInt("SUBSCRIPTION_OBSERVATION_INTERVAL_SECONDS", 60)
 	subscriptionObservationMaxAgeSeconds, _ := env.GetInt("SUBSCRIPTION_OBSERVATION_MAX_AGE_SECONDS", 180)
 	subscriptionObservationSettleSeconds, _ := env.GetInt("SUBSCRIPTION_OBSERVATION_SETTLE_SECONDS", 30)
+	subscriptionObserverRetirementEnabled, _ := env.GetBool("SUBSCRIPTION_OBSERVER_RETIREMENT_ENABLED", true)
+	subscriptionObserverStaleRetirementSeconds, _ := env.GetInt(
+		"SUBSCRIPTION_OBSERVER_STALE_RETIREMENT_SECONDS",
+		constant.DefaultSubscriptionObserverStaleRetirementSeconds,
+	)
 	metricsPort, _ := env.GetInt("METRICS_PORT", constant.DefaultMetricsPort)
 	metricsSecure, _ := env.GetBool("METRICS_SECURE", true)
 	metricsCertDir := env.GetString("METRICS_CERT_DIR", constant.DefaultMetricsCertDir)
@@ -238,16 +251,18 @@ func Load() *Config {
 		SubscriptionObservationIntervalSeconds: subscriptionObservationIntervalSeconds,
 		SubscriptionObservationMaxAgeSeconds:   subscriptionObservationMaxAgeSeconds,
 		SubscriptionObservationSettleSeconds:   subscriptionObservationSettleSeconds,
-		MetricsPort:                            metricsPort,
-		MetricsSecure:                          metricsSecure,
-		MetricsCertDir:                         metricsCertDir,
-		DiscoveryEnableHTTP2:                   discoveryEnableHTTP2,
-		LokiReadEndpoint:                       env.GetString("LOKI_READ_ENDPOINT", ""),
-		LokiReadToken:                          env.GetString("LOKI_READ_TOKEN", ""),
-		LokiReadCA:                             env.GetString("LOKI_READ_CA", ""),
-		OTELEndpoint:                           env.GetString("OTEL_EXPORTER_OTLP_ENDPOINT", ""),
-		OTELInsecure:                           otelInsecure,
-		OTELSampleRate:                         otelSampleRate,
+		SubscriptionObserverRetirementEnabled:  subscriptionObserverRetirementEnabled,
+		SubscriptionObserverStaleRetirementSeconds: subscriptionObserverStaleRetirementSeconds,
+		MetricsPort:          metricsPort,
+		MetricsSecure:        metricsSecure,
+		MetricsCertDir:       metricsCertDir,
+		DiscoveryEnableHTTP2: discoveryEnableHTTP2,
+		LokiReadEndpoint:     env.GetString("LOKI_READ_ENDPOINT", ""),
+		LokiReadToken:        env.GetString("LOKI_READ_TOKEN", ""),
+		LokiReadCA:           env.GetString("LOKI_READ_CA", ""),
+		OTELEndpoint:         env.GetString("OTEL_EXPORTER_OTLP_ENDPOINT", ""),
+		OTELInsecure:         otelInsecure,
+		OTELSampleRate:       otelSampleRate,
 		// Deprecated env var (backward compatibility with pre-TLS version)
 		deprecatedHTTPPort: env.GetString("PORT", ""),
 	}
@@ -416,6 +431,12 @@ func (c *Config) validateSubscriptionIdentity() error {
 	}
 	if c.SubscriptionObservationSettleSeconds < 1 {
 		return errors.New("SUBSCRIPTION_OBSERVATION_SETTLE_SECONDS must be at least 1")
+	}
+	if !c.SubscriptionObserverRetirementEnabled {
+		return nil
+	}
+	if c.SubscriptionObserverStaleRetirementSeconds <= c.SubscriptionObservationMaxAgeSeconds {
+		return errors.New("SUBSCRIPTION_OBSERVER_STALE_RETIREMENT_SECONDS must be greater than SUBSCRIPTION_OBSERVATION_MAX_AGE_SECONDS")
 	}
 	return nil
 }

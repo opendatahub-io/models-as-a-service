@@ -38,6 +38,11 @@ type fakeObservationSession struct {
 	backfillErr  error
 	absent       []string
 	absences     []api_keys.SubscriptionAbsenceRequest
+	retirements  []api_keys.SubscriptionObserverRetirement
+	retireErr    error
+	resolveErr   error
+	retireFresh  []time.Duration
+	retireStale  []time.Duration
 	committed    bool
 	rolledBack   bool
 	result       api_keys.SubscriptionCleanupResult
@@ -58,9 +63,25 @@ func (session *fakeObservationSession) Heartbeat(context.Context) error {
 	return nil
 }
 
+func (session *fakeObservationSession) RetireStaleObservers(
+	_ context.Context,
+	freshWithin, staleAfter time.Duration,
+) ([]api_keys.SubscriptionObserverRetirement, error) {
+	session.calls = append(session.calls, "retire-stale-observers")
+	session.retireFresh = append(session.retireFresh, freshWithin)
+	session.retireStale = append(session.retireStale, staleAfter)
+	if session.retireErr != nil {
+		return nil, session.retireErr
+	}
+	return session.retirements, nil
+}
+
 func (session *fakeObservationSession) ResolveSubscriptionIdentity(_ context.Context, request api_keys.ResolveSubscriptionIdentityRequest) (string, error) {
 	session.resolved = append(session.resolved, request)
 	session.calls = append(session.calls, "resolve:"+request.Namespace+"/"+request.Name)
+	if session.resolveErr != nil {
+		return "", session.resolveErr
+	}
 	return "0b6fe901-7b52-4a78-9cbf-e398728ef67e", nil
 }
 
@@ -440,6 +461,98 @@ func TestObserverRefreshListsAppliesStatusAndMarksAbsence(t *testing.T) {
 	assert.Equal(t, "add", patch[2]["op"])
 	assert.Equal(t, "/status", patch[2]["path"])
 	assert.Equal(t, map[string]any{"subscriptionIdentityId": "0b6fe901-7b52-4a78-9cbf-e398728ef67e"}, patch[2]["value"])
+}
+
+func TestObserverRefreshRetiresStaleObserversAfterSuccessfulResolution(t *testing.T) {
+	gvr := subscription.GVR()
+	client := fake.NewSimpleDynamicClientWithCustomListKinds(
+		runtime.NewScheme(),
+		map[schema.GroupVersionResource]string{gvr: "MaaSSubscriptionList"},
+	)
+	session := &fakeObservationSession{
+		retirements: []api_keys.SubscriptionObserverRetirement{{
+			ObserverID:     "22222222-3333-4444-5555-666666666666",
+			Result:         api_keys.SubscriptionCleanupCleaned,
+			RevokedAPIKeys: 2,
+		}},
+	}
+	observer := subscriptionidentity.NewObserver(
+		&fakeIdentityStore{session: session},
+		client,
+		"subscriptions",
+		"tenant-a",
+		"11111111-2222-3333-4444-555555555555",
+		time.Hour,
+		30*time.Second,
+		logger.Development(),
+	).EnableStaleObserverRetirement(3*time.Minute, 7*24*time.Hour)
+
+	observer.Refresh(context.Background())
+
+	assert.True(t, session.heartbeat)
+	assert.True(t, session.committed)
+	assert.False(t, session.rolledBack)
+	require.Equal(t, []string{"retire-stale-observers"}, session.calls)
+	require.Equal(t, []time.Duration{3 * time.Minute}, session.retireFresh)
+	require.Equal(t, []time.Duration{7 * 24 * time.Hour}, session.retireStale)
+}
+
+func TestObserverRefreshSkipsStaleRetirementWhenResolutionFails(t *testing.T) {
+	object := &unstructured.Unstructured{}
+	object.SetGroupVersionKind(schema.GroupVersionKind{
+		Group: "maas.opendatahub.io", Version: "v1alpha1", Kind: "MaaSSubscription",
+	})
+	object.SetName("pending-sub")
+	object.SetNamespace("subscriptions")
+	object.SetUID("pending-uid")
+
+	gvr := subscription.GVR()
+	client := fake.NewSimpleDynamicClientWithCustomListKinds(
+		runtime.NewScheme(),
+		map[schema.GroupVersionResource]string{gvr: "MaaSSubscriptionList"},
+		object,
+	)
+	session := &fakeObservationSession{resolveErr: errors.New("identity pending")}
+	observer := subscriptionidentity.NewObserver(
+		&fakeIdentityStore{session: session},
+		client,
+		"subscriptions",
+		"tenant-a",
+		"11111111-2222-3333-4444-555555555555",
+		time.Hour,
+		30*time.Second,
+		logger.Development(),
+	).EnableStaleObserverRetirement(3*time.Minute, 7*24*time.Hour)
+
+	observer.Refresh(context.Background())
+
+	assert.True(t, session.heartbeat)
+	assert.True(t, session.committed)
+	assert.Empty(t, session.retireFresh)
+}
+
+func TestObserverRefreshRollsBackWhenStaleRetirementFails(t *testing.T) {
+	gvr := subscription.GVR()
+	client := fake.NewSimpleDynamicClientWithCustomListKinds(
+		runtime.NewScheme(),
+		map[schema.GroupVersionResource]string{gvr: "MaaSSubscriptionList"},
+	)
+	session := &fakeObservationSession{retireErr: errors.New("retirement failed")}
+	observer := subscriptionidentity.NewObserver(
+		&fakeIdentityStore{session: session},
+		client,
+		"subscriptions",
+		"tenant-a",
+		"11111111-2222-3333-4444-555555555555",
+		time.Hour,
+		30*time.Second,
+		logger.Development(),
+	).EnableStaleObserverRetirement(3*time.Minute, 7*24*time.Hour)
+
+	observer.Refresh(context.Background())
+
+	assert.False(t, session.committed)
+	assert.True(t, session.rolledBack)
 }
 
 func TestObserverRefreshBackfillsKeysAndReportsMigrationReady(t *testing.T) {
