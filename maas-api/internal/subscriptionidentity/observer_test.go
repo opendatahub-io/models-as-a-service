@@ -748,6 +748,47 @@ func TestObserverRefreshBlocksRejoinWhenResolutionFails(t *testing.T) {
 	require.Equal(t, []string{"tenant-a:blocked"}, metrics.rejoins)
 }
 
+func TestObserverRefreshPreservesPendingRotationWhileBlockingRejoin(t *testing.T) {
+	object := &unstructured.Unstructured{}
+	object.SetGroupVersionKind(schema.GroupVersionKind{
+		Group: "maas.opendatahub.io", Version: "v1alpha1", Kind: "MaaSSubscription",
+	})
+	object.SetName("rotation-rejoin-sub")
+	object.SetNamespace("subscriptions")
+	object.SetUID("rotation-rejoin-uid")
+
+	gvr := subscription.GVR()
+	client := fake.NewSimpleDynamicClientWithCustomListKinds(
+		runtime.NewScheme(),
+		map[schema.GroupVersionResource]string{gvr: "MaaSSubscriptionList"},
+		object,
+	)
+	session := &fakeObservationSession{
+		heartbeatErr: api_keys.ErrObserverRetired,
+		resolveErr:   api_keys.ErrSubscriptionIdentityPending,
+	}
+	metrics := &fakeObserverMetrics{}
+	observer := subscriptionidentity.NewObserver(
+		&fakeIdentityStore{session: session},
+		client,
+		"subscriptions",
+		"tenant-a",
+		"11111111-2222-3333-4444-555555555555",
+		time.Hour,
+		30*time.Second,
+		logger.Development(),
+	).
+		EnableObserverRejoin(3 * time.Minute).
+		WithMetricsRecorder(metrics)
+
+	observer.Refresh(context.Background())
+
+	assert.True(t, session.committed)
+	assert.False(t, session.rolledBack)
+	assert.Empty(t, session.rejoinFresh)
+	require.Equal(t, []string{"tenant-a:blocked"}, metrics.rejoins)
+}
+
 func TestObserverRefreshRecordsRejoinFailure(t *testing.T) {
 	tests := []struct {
 		name    string

@@ -73,6 +73,7 @@ type resolvedObservations struct {
 	resolved                   []resolvedSubscription
 	migrationBlocked           bool
 	resolutionFailed           bool
+	resolutionPendingOnly      bool
 	retirementResolutionFailed bool
 	observedAt                 time.Time
 }
@@ -214,6 +215,17 @@ func (observer *Observer) Refresh(ctx context.Context) {
 		observer.logger.Warn("Subscription identity migration is blocked for one or more subscriptions")
 	}
 
+	if rejoinPending && refreshed.resolutionPendingOnly {
+		if err := session.Commit(); err != nil {
+			observer.logger.Error("Failed to commit pending subscription identity rotation", "error", err)
+			return
+		}
+		committed = true
+		recordRejoinOutcome("blocked")
+		observer.logger.Warn("Retired subscription observer rejoin blocked until pending identity rotation settles")
+		return
+	}
+
 	if rejoinPending {
 		if !observer.reactivate(ctx, session, refreshed.resolutionFailed, recordRejoinOutcome) {
 			return
@@ -299,13 +311,15 @@ func (observer *Observer) resolvePresentSubscriptions(
 			Settle:           observer.settle,
 		})
 		if resolveErr != nil {
-			refreshed.resolutionFailed = true
 			if stderrors.Is(resolveErr, api_keys.ErrSubscriptionIdentityPending) {
+				refreshed.resolutionPendingOnly = true
 				observer.logger.Warn("Subscription identity remains pending",
 					"subscription", object.Namespace+"/"+object.Name,
 					"error", resolveErr,
 				)
 			} else {
+				refreshed.resolutionFailed = true
+				refreshed.resolutionPendingOnly = false
 				refreshed.retirementResolutionFailed = true
 				observer.logger.Error("Subscription identity resolution failed",
 					"subscription", object.Namespace+"/"+object.Name,

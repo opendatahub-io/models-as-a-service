@@ -1201,6 +1201,32 @@ func TestPostgresStore_RetireStaleObserversRequiresAllActiveObserversFresh(t *te
 	key, err := store.GetByHash(ctx, keyHash)
 	require.NoError(t, err)
 	assert.Equal(t, identityID, key.SubscriptionIdentityID)
+
+	_, err = db.ExecContext(ctx, `
+		UPDATE subscription_observers
+		SET observed_at = NOW()
+		WHERE observer_id = $1
+	`, staleActiveObserver)
+	require.NoError(t, err)
+
+	retrySession, err := store.BeginSubscriptionObservation(ctx, currentObserver, tenant)
+	require.NoError(t, err)
+	require.NoError(t, retrySession.Heartbeat(ctx))
+	retryRetirements, err := retrySession.RetireStaleObservers(ctx, time.Minute, 7*24*time.Hour, time.Second)
+	require.NoError(t, err)
+	require.Len(t, retryRetirements, 1)
+	assert.Equal(t, staleObserver, retryRetirements[0].ObserverID)
+	assert.Equal(t, api_keys.SubscriptionCleanupCleaned, retryRetirements[0].Result)
+	assert.Equal(t, 1, retryRetirements[0].RevokedAPIKeys)
+	require.NoError(t, retrySession.Commit())
+
+	err = db.QueryRowContext(ctx, `
+		SELECT deleted_at FROM subscription_identities WHERE id = $1
+	`, identityID).Scan(&identityDeletedAt)
+	require.NoError(t, err)
+	assert.True(t, identityDeletedAt.Valid)
+	_, err = store.GetByHash(ctx, keyHash)
+	assert.ErrorIs(t, err, api_keys.ErrKeyNotFound)
 }
 
 func TestPostgresStore_RetireStaleObserversPreservesAbsenceSettleBarrier(t *testing.T) {
@@ -1300,6 +1326,33 @@ func TestPostgresStore_RetireStaleObserversPreservesAbsenceSettleBarrier(t *test
 	key, err := store.GetByHash(ctx, keyHash)
 	require.NoError(t, err)
 	assert.Equal(t, identityID, key.SubscriptionIdentityID)
+
+	_, err = db.ExecContext(ctx, `
+		UPDATE subscription_observations
+		SET absent_at = NOW() - INTERVAL '2 hours',
+		    observed_at = NOW()
+		WHERE subscription_id = $1
+	`, identityID)
+	require.NoError(t, err)
+
+	retrySession, err := store.BeginSubscriptionObservation(ctx, currentObserver, tenant)
+	require.NoError(t, err)
+	require.NoError(t, retrySession.Heartbeat(ctx))
+	retryRetirements, err := retrySession.RetireStaleObservers(ctx, time.Minute, 7*24*time.Hour, time.Hour)
+	require.NoError(t, err)
+	require.Len(t, retryRetirements, 1)
+	assert.Equal(t, staleObserver, retryRetirements[0].ObserverID)
+	assert.Equal(t, api_keys.SubscriptionCleanupCleaned, retryRetirements[0].Result)
+	assert.Equal(t, 1, retryRetirements[0].RevokedAPIKeys)
+	require.NoError(t, retrySession.Commit())
+
+	err = db.QueryRowContext(ctx, `
+		SELECT deleted_at FROM subscription_identities WHERE id = $1
+	`, identityID).Scan(&identityDeletedAt)
+	require.NoError(t, err)
+	assert.True(t, identityDeletedAt.Valid)
+	_, err = store.GetByHash(ctx, keyHash)
+	assert.ErrorIs(t, err, api_keys.ErrKeyNotFound)
 }
 
 func TestPostgresStore_RetireStaleObserversPreservesRetainedAPIKeys(t *testing.T) {
@@ -1613,6 +1666,145 @@ func TestPostgresStore_ReactivateRetiredObserverAfterRefreshedObservation(t *tes
 
 	_, err = store.GetByHash(ctx, keyHash)
 	assert.ErrorIs(t, err, api_keys.ErrKeyNotFound)
+}
+
+func TestPostgresStore_PendingRotationPreservesRetiredObserverRejoinProgress(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+	if os.Getenv("TEST_DATABASE_URL") == "" {
+		t.Skip("Skipping integration test (TEST_DATABASE_URL not set)")
+	}
+
+	ctx := context.Background()
+	tenant := "observer-rejoin-rotation-" + uuid.NewString()
+	store := setupTestPostgresStoreForTenant(t, tenant)
+	defer store.Close()
+	db, err := sql.Open("pgx", os.Getenv("TEST_DATABASE_URL"))
+	require.NoError(t, err)
+	defer db.Close()
+
+	rejoiningObserver := uuid.NewString()
+	rejoiningSession, err := store.BeginSubscriptionObservation(ctx, rejoiningObserver, tenant)
+	require.NoError(t, err)
+	require.NoError(t, rejoiningSession.Heartbeat(ctx))
+	oldIdentityID, err := rejoiningSession.ResolveSubscriptionIdentity(ctx, api_keys.ResolveSubscriptionIdentityRequest{
+		Namespace: "subscriptions",
+		Name:      "rotation-rejoin-sub",
+		ObjectUID: "old-uid",
+	})
+	require.NoError(t, err)
+	require.NoError(t, rejoiningSession.Commit())
+
+	freshObserver := uuid.NewString()
+	freshSession, err := store.BeginSubscriptionObservation(ctx, freshObserver, tenant)
+	require.NoError(t, err)
+	require.NoError(t, freshSession.Heartbeat(ctx))
+	_, err = freshSession.ResolveSubscriptionIdentity(ctx, api_keys.ResolveSubscriptionIdentityRequest{
+		Namespace:        "subscriptions",
+		Name:             "rotation-rejoin-sub",
+		ObjectUID:        "old-uid",
+		StatusIdentityID: oldIdentityID,
+	})
+	require.NoError(t, err)
+	require.NoError(t, freshSession.Commit())
+
+	_, err = db.ExecContext(ctx, `
+		UPDATE subscription_observers
+		SET observed_at = NOW() - INTERVAL '8 days'
+		WHERE observer_id = $1
+	`, rejoiningObserver)
+	require.NoError(t, err)
+
+	retireSession, err := store.BeginSubscriptionObservation(ctx, freshObserver, tenant)
+	require.NoError(t, err)
+	require.NoError(t, retireSession.Heartbeat(ctx))
+	retirements, err := retireSession.RetireStaleObservers(ctx, time.Minute, 7*24*time.Hour, time.Second)
+	require.NoError(t, err)
+	require.Len(t, retirements, 1)
+	assert.Equal(t, api_keys.SubscriptionCleanupRetained, retirements[0].Result)
+	require.NoError(t, retireSession.Commit())
+
+	pendingSession, err := store.BeginSubscriptionObservation(ctx, rejoiningObserver, tenant)
+	require.NoError(t, err)
+	require.ErrorIs(t, pendingSession.Heartbeat(ctx), api_keys.ErrObserverRetired)
+	_, err = pendingSession.ResolveSubscriptionIdentity(ctx, api_keys.ResolveSubscriptionIdentityRequest{
+		Namespace: "subscriptions",
+		Name:      "rotation-rejoin-sub",
+		ObjectUID: "new-uid",
+		Settle:    time.Second,
+	})
+	require.ErrorIs(t, err, api_keys.ErrSubscriptionIdentityPending)
+	require.NoError(t, pendingSession.Commit())
+
+	var rotationPendingAt, rejoiningRetiredAt sql.NullTime
+	err = db.QueryRowContext(ctx, `
+		SELECT rotation_pending_at
+		FROM subscription_identities
+		WHERE id = $1
+	`, oldIdentityID).Scan(&rotationPendingAt)
+	require.NoError(t, err)
+	assert.True(t, rotationPendingAt.Valid)
+	err = db.QueryRowContext(ctx, `
+		SELECT retired_at
+		FROM subscription_observers
+		WHERE observer_id = $1
+	`, rejoiningObserver).Scan(&rejoiningRetiredAt)
+	require.NoError(t, err)
+	assert.True(t, rejoiningRetiredAt.Valid)
+
+	freshPendingSession, err := store.BeginSubscriptionObservation(ctx, freshObserver, tenant)
+	require.NoError(t, err)
+	require.NoError(t, freshPendingSession.Heartbeat(ctx))
+	_, err = freshPendingSession.ResolveSubscriptionIdentity(ctx, api_keys.ResolveSubscriptionIdentityRequest{
+		Namespace: "subscriptions",
+		Name:      "rotation-rejoin-sub",
+		ObjectUID: "new-uid",
+		Settle:    time.Second,
+	})
+	require.ErrorIs(t, err, api_keys.ErrSubscriptionIdentityPending)
+	require.NoError(t, freshPendingSession.Commit())
+
+	_, err = db.ExecContext(ctx, `
+		UPDATE subscription_observations
+		SET absent_at = NOW() - INTERVAL '2 seconds',
+		    observed_at = NOW()
+		WHERE subscription_id = $1
+	`, oldIdentityID)
+	require.NoError(t, err)
+
+	freshRecoveredSession, err := store.BeginSubscriptionObservation(ctx, freshObserver, tenant)
+	require.NoError(t, err)
+	require.NoError(t, freshRecoveredSession.Heartbeat(ctx))
+	newIdentityID, err := freshRecoveredSession.ResolveSubscriptionIdentity(ctx, api_keys.ResolveSubscriptionIdentityRequest{
+		Namespace: "subscriptions",
+		Name:      "rotation-rejoin-sub",
+		ObjectUID: "new-uid",
+		Settle:    time.Second,
+	})
+	require.NoError(t, err)
+	require.NotEqual(t, oldIdentityID, newIdentityID)
+	require.NoError(t, freshRecoveredSession.Commit())
+
+	rejoinSession, err := store.BeginSubscriptionObservation(ctx, rejoiningObserver, tenant)
+	require.NoError(t, err)
+	require.ErrorIs(t, rejoinSession.Heartbeat(ctx), api_keys.ErrObserverRetired)
+	resolvedIdentityID, err := rejoinSession.ResolveSubscriptionIdentity(ctx, api_keys.ResolveSubscriptionIdentityRequest{
+		Namespace:        "subscriptions",
+		Name:             "rotation-rejoin-sub",
+		ObjectUID:        "new-uid",
+		StatusIdentityID: newIdentityID,
+		Settle:           time.Second,
+	})
+	require.NoError(t, err)
+	require.Equal(t, newIdentityID, resolvedIdentityID)
+	require.NoError(t, rejoinSession.ReactivateRetiredObserver(ctx, time.Minute))
+	require.NoError(t, rejoinSession.Commit())
+
+	heartbeatSession, err := store.BeginSubscriptionObservation(ctx, rejoiningObserver, tenant)
+	require.NoError(t, err)
+	require.NoError(t, heartbeatSession.Heartbeat(ctx))
+	require.NoError(t, heartbeatSession.Commit())
 }
 
 func TestPostgresStore_TombstonedIdentityDoesNotPoisonReplacement(t *testing.T) {

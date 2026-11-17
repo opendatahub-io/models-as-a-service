@@ -970,11 +970,6 @@ func (session *postgresObservationSession) RetireStaleObservers(
 	if err != nil {
 		return nil, fmt.Errorf("failed to select stale subscription observers: %w", err)
 	}
-	if len(observerIDs) == 0 {
-		return nil, nil
-	}
-
-	retirements := make([]SubscriptionObserverRetirement, 0, len(observerIDs))
 	for _, observerID := range observerIDs {
 		updated, err := session.tx.ExecContext(ctx, `
 			UPDATE subscription_observers
@@ -993,15 +988,32 @@ func (session *postgresObservationSession) RetireStaleObservers(
 		if rowsAffected == 0 {
 			continue
 		}
+	}
 
+	retiredObserverIDs, err := session.queryStrings(ctx, `
+		SELECT observer_id
+		FROM subscription_observers
+		WHERE tenant = $1
+		  AND retired_at IS NOT NULL
+		ORDER BY retired_at, observer_id
+	`, session.tenant)
+	if err != nil {
+		return nil, fmt.Errorf("failed to select retired subscription observers: %w", err)
+	}
+
+	retirements := make([]SubscriptionObserverRetirement, 0, len(retiredObserverIDs))
+	for _, observerID := range retiredObserverIDs {
 		retirement := SubscriptionObserverRetirement{
 			ObserverID: observerID,
 			Result:     SubscriptionCleanupRetained,
 		}
-		if err := session.cleanupIdentitiesForRetiredObserver(ctx, observerID, freshWithin, settle, &retirement); err != nil {
+		hadIdentities, err := session.cleanupIdentitiesForRetiredObserver(ctx, observerID, freshWithin, settle, &retirement)
+		if err != nil {
 			return nil, err
 		}
-		retirements = append(retirements, retirement)
+		if hadIdentities {
+			retirements = append(retirements, retirement)
+		}
 	}
 	return retirements, nil
 }
@@ -1011,7 +1023,7 @@ func (session *postgresObservationSession) cleanupIdentitiesForRetiredObserver(
 	observerID string,
 	freshWithin, settle time.Duration,
 	retirement *SubscriptionObserverRetirement,
-) error {
+) (bool, error) {
 	identityIDs, err := session.queryStrings(ctx, `
 		SELECT identity.id
 		FROM subscription_identities AS identity
@@ -1027,7 +1039,10 @@ func (session *postgresObservationSession) cleanupIdentitiesForRetiredObserver(
 		FOR UPDATE OF identity
 	`, observerID, session.tenant)
 	if err != nil {
-		return fmt.Errorf("failed to select identities for retired subscription observer: %w", err)
+		return false, fmt.Errorf("failed to select identities for retired subscription observer: %w", err)
+	}
+	if len(identityIDs) == 0 {
+		return false, nil
 	}
 
 	var allObserversFresh bool
@@ -1041,10 +1056,10 @@ func (session *postgresObservationSession) cleanupIdentitiesForRetiredObserver(
 		)
 	`, session.tenant, int(freshWithin.Seconds())).Scan(&allObserversFresh)
 	if err != nil {
-		return fmt.Errorf("failed to check freshness of active subscription observers: %w", err)
+		return false, fmt.Errorf("failed to check freshness of active subscription observers: %w", err)
 	}
 	if !allObserversFresh {
-		return nil
+		return true, nil
 	}
 
 	for _, identityID := range identityIDs {
@@ -1058,7 +1073,7 @@ func (session *postgresObservationSession) cleanupIdentitiesForRetiredObserver(
 			)
 		`, identityID).Scan(&retained)
 		if err != nil {
-			return fmt.Errorf("failed to check retained API keys after observer retirement: %w", err)
+			return false, fmt.Errorf("failed to check retained API keys after observer retirement: %w", err)
 		}
 		if retained {
 			continue
@@ -1078,7 +1093,7 @@ func (session *postgresObservationSession) cleanupIdentitiesForRetiredObserver(
 			)
 		`, identityID, session.tenant).Scan(&present)
 		if err != nil {
-			return fmt.Errorf("failed to check active observations after observer retirement: %w", err)
+			return false, fmt.Errorf("failed to check active observations after observer retirement: %w", err)
 		}
 		if present {
 			continue
@@ -1092,7 +1107,7 @@ func (session *postgresObservationSession) cleanupIdentitiesForRetiredObserver(
 			  AND absent_at IS NOT NULL
 		`, identityID, int(settle.Seconds())).Scan(&barrier)
 		if err != nil {
-			return fmt.Errorf("failed to derive observer retirement cleanup barrier: %w", err)
+			return false, fmt.Errorf("failed to derive observer retirement cleanup barrier: %w", err)
 		}
 		if barrier.Valid {
 			var barrierNotReached, heartbeatPredatesBarrier bool
@@ -1107,7 +1122,7 @@ func (session *postgresObservationSession) cleanupIdentitiesForRetiredObserver(
 					)
 			`, barrier.Time, session.tenant).Scan(&barrierNotReached, &heartbeatPredatesBarrier)
 			if err != nil {
-				return fmt.Errorf("failed to evaluate observer retirement cleanup barrier: %w", err)
+				return false, fmt.Errorf("failed to evaluate observer retirement cleanup barrier: %w", err)
 			}
 			if barrierNotReached || heartbeatPredatesBarrier {
 				continue
@@ -1121,23 +1136,23 @@ func (session *postgresObservationSession) cleanupIdentitiesForRetiredObserver(
 			WHERE subscription_id = $1 AND deleted_at IS NULL
 		`, identityID)
 		if err != nil {
-			return fmt.Errorf("failed to revoke keys after observer retirement: %w", err)
+			return false, fmt.Errorf("failed to revoke keys after observer retirement: %w", err)
 		}
 		rows, err := revocation.RowsAffected()
 		if err != nil {
-			return fmt.Errorf("failed to count revoked keys after observer retirement: %w", err)
+			return false, fmt.Errorf("failed to count revoked keys after observer retirement: %w", err)
 		}
 		if _, err := session.tx.ExecContext(ctx, `
 			UPDATE subscription_identities
 			SET deleted_at = NOW()
 			WHERE id = $1 AND deleted_at IS NULL
 		`, identityID); err != nil {
-			return fmt.Errorf("failed to tombstone identity after observer retirement: %w", err)
+			return false, fmt.Errorf("failed to tombstone identity after observer retirement: %w", err)
 		}
 		retirement.Result = SubscriptionCleanupCleaned
 		retirement.RevokedAPIKeys += int(rows)
 	}
-	return nil
+	return true, nil
 }
 
 func (session *postgresObservationSession) queryStrings(
