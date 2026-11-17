@@ -10,13 +10,14 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-
-	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/inferencepaths"
 )
 
 const (
+	// rerankRequestPathSuffix is the JSON BBR path where TokenRateLimitPolicy
+	// cannot extract usage.total_tokens (RHAIRFE-3921 EA1).
+	rerankRequestPathSuffix   = "/v1/rerank"
 	unlimitedRequestLimitName = "requests-unlimited-rerank"
-	requestLimitPathPredicate = `request.path.endsWith("` + inferencepaths.RequestCountPathSuffix + `")`
+	requestLimitPathPredicate = `request.path.endsWith("` + rerankRequestPathSuffix + `")`
 )
 
 // buildRequestCountGroupedLimits mirrors buildGroupedLimits for paths that do

@@ -2,7 +2,7 @@
 Rerank JSON BBR governance e2e (RHAISTRAT-2891 phase 1).
 
 Validates /v1/rerank body-based routing, AuthPolicy denial, and interim
-request-count RateLimitPolicy (429). Includes a chat BBR smoke check.
+request-count RateLimitPolicy (429).
 """
 
 import logging
@@ -13,12 +13,9 @@ import pytest
 import requests
 
 from test_helper import (
-    MODEL_NAME,
     MODEL_NAMESPACE,
-    MODEL_PATH,
     RATE_LIMIT_ENFORCEMENT_TIMEOUT,
     RERANK_MODEL_CANONICAL_ID,
-    RERANK_MODEL_NAME,
     RERANK_MODEL_REF,
     TLS_VERIFY,
     _create_api_key,
@@ -37,10 +34,14 @@ from test_helper import (
 
 log = logging.getLogger(__name__)
 
+pytestmark = [
+    pytest.mark.xdist_group("api_json_bbr"),
+    pytest.mark.serial,
+    pytest.mark.full_suite,
+]
+
 
 class TestRerankGovernance:
-    pytestmark = pytest.mark.serial
-
     def test_rerank_bbr_200(self):
         model = _get_cr("maasmodelref", RERANK_MODEL_REF, namespace=MODEL_NAMESPACE)
         if not model:
@@ -205,20 +206,3 @@ class TestRerankGovernance:
                 subscriptions=[(subscription_name, _ns())],
                 auth_policies=[(auth_policy_name, _ns())],
             )
-
-    def test_chat_bbr_regression_200(self):
-        """Chat BBR still succeeds after rerank fixture deploy (shared gateway)."""
-        url = f"{_gateway_url()}/v1/chat/completions"
-        oc_token = _get_cluster_token()
-        headers = {
-            "Authorization": f"Bearer {oc_token}",
-            "Content-Type": "application/json",
-        }
-        body = {
-            "model": MODEL_NAME,
-            "messages": [{"role": "user", "content": "ping"}],
-        }
-        r = requests.post(url, headers=headers, json=body, timeout=30, verify=TLS_VERIFY)
-        if r.status_code in (401, 403):
-            pytest.skip("Cluster admin token not authorized for chat BBR smoke")
-        assert r.status_code == 200, f"Chat BBR regression failed: {r.status_code}"

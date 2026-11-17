@@ -196,7 +196,7 @@ TRLP=$(kubectl get tokenratelimitpolicy -n ${MODEL_NS} -l maas.opendatahub.io/mo
 
     Until modality-specific quotas ship, the controller mirrors each subscription's **`tokenRateLimits`** into a per-model **`RateLimitPolicy`** (`maas-rlp-<model>`) scoped to **`/v1/rerank` only** — **one request counts as one unit** against that budget (interim RPM). Usage logs include `/v1/rerank` in OTEL path filters; token columns may be `0` when the response has no usage block.
 
-    Multipart paths (for example speech-to-text) are deferred to later RHAISTRAT-2891 phases.
+    Multipart paths (for example speech-to-text) are out of scope for this RFE.
 
 ### Model server must include usage data
 
