@@ -131,6 +131,8 @@ def _collect_stream_content(response: requests.Response) -> tuple[list, str]:
     )
 
     deadline = time.monotonic() + LARGE_IO_TIMEOUT
+    start = time.monotonic()
+    first_event_s = None
     events = []
     parts = []
     for line in response.iter_lines(decode_unicode=True):
@@ -143,6 +145,8 @@ def _collect_stream_content(response: requests.Response) -> tuple[list, str]:
         events.append(line)
         if not line.startswith("data: ") or line == "data: [DONE]":
             continue
+        if first_event_s is None:
+            first_event_s = time.monotonic() - start
         try:
             chunk = json.loads(line[6:])
             for choice in chunk.get("choices", []):
@@ -153,7 +157,8 @@ def _collect_stream_content(response: requests.Response) -> tuple[list, str]:
             raise AssertionError(
                 f"Unparseable SSE event (length={len(line)}): {exc}"
             ) from exc
-    return events, "".join(parts)
+    timing = (first_event_s if first_event_s is not None else 0.0, time.monotonic() - start)
+    return events, "".join(parts), timing
 
 
 @pytest.fixture(scope="module")
@@ -187,18 +192,19 @@ def large_io_access():
 
         # Wait for the MaaSModelRef to reconcile its endpoint; without this the
         # first request can race and return 404/403 before the route is up.
-        _wait_for_model_ready(LARGE_IO_MODEL_REF, namespace=MODEL_NAMESPACE, timeout=120)
+        _wait_for_model_ready(LARGE_IO_MODEL_REF, namespace=MODEL_NAMESPACE)
         _wait_for_gateway_auth_enforced()
 
         # The TRLP derived from the subscription reconciles separately from the
         # model and the gateway AuthPolicy. Until it is ready the gateway rejects
         # every request with 403 "subscription rate limiting policies are not ready".
+        # Uses the helper's default budget (E2E_SUBSCRIPTION_INFERENCE_READY_TIMEOUT,
+        # 300s): a shorter call-site override previously flaked under TRLP backlog.
         _wait_for_subscription_inference_ready(
             subscription_name,
             LARGE_IO_MODEL_REF,
             namespace=ns,
             model_namespace=MODEL_NAMESPACE,
-            timeout=180,
         )
 
         yield _create_api_key(oc_token, subscription=subscription_name)
@@ -233,12 +239,35 @@ class TestLargeIOStream:
             assert r.status_code == 200, (
                 f"status={r.status_code} content-type={r.headers.get('content-type')!r}"
             )
-            events, _ = _collect_stream_content(r)
+            events, _, _ = _collect_stream_content(r)
 
         data_chunks = [e for e in events if e.startswith("data: {")]
         assert data_chunks, f"Stream carried no data chunks ({len(events)} total events)"
         assert events and events[-1] == "data: [DONE]", (
             f"Stream did not close with [DONE] as the final event ({len(events)} total events)"
+        )
+
+    def test_stream_delivered_progressively_not_buffered(self, large_io_access):
+        """The first SSE data event must arrive well before the stream completes.
+
+        Guards against a silent buffering regression: a gateway that holds the
+        entire body until upstream EOF still produces correct assembled
+        content, so the fidelity tests alone cannot detect it. Progressive
+        delivery requires the first data event to land in the first half of
+        the stream (measured: first event ~1s into a 24-32s stream; a fully
+        buffered gateway would deliver everything only at the end).
+        """
+        prompt = _lorem(LARGE_WORDS)
+
+        with _echo_completion_stream(large_io_access, prompt) as r:
+            assert r.status_code == 200, f"status={r.status_code}"
+            _, _, (first_event_s, duration_s) = _collect_stream_content(r)
+
+        assert first_event_s > 0, "no data events received"
+        assert first_event_s * 2 < duration_s, (
+            f"stream was not progressive: first event at {first_event_s:.1f}s "
+            f"of a {duration_s:.1f}s stream - gateway may be buffering the "
+            f"full body until upstream EOF"
         )
 
     def test_stream_content_equals_prompt(self, large_io_access):
@@ -253,7 +282,7 @@ class TestLargeIOStream:
             assert r.status_code == 200, (
                 f"status={r.status_code} content-type={r.headers.get('content-type')!r}"
             )
-            _, content = _collect_stream_content(r)
+            _, content, _ = _collect_stream_content(r)
 
         assert len(content) == len(prompt), (
             f"stream truncated or padded: sent {len(prompt)} bytes, got {len(content)}"
@@ -274,13 +303,13 @@ class TestLargeIOStream:
             assert r.status_code == 200, (
                 f"status={r.status_code} content-type={r.headers.get('content-type')!r}"
             )
-            _, small_content = _collect_stream_content(r)
+            _, small_content, _ = _collect_stream_content(r)
 
         with _echo_completion_stream(large_io_access, large) as r:
             assert r.status_code == 200, (
                 f"status={r.status_code} content-type={r.headers.get('content-type')!r}"
             )
-            _, large_content = _collect_stream_content(r)
+            _, large_content, _ = _collect_stream_content(r)
 
         assert small_content == small, (
             f"small prompt mutated: sent {len(small)} bytes, got {len(small_content)}"
