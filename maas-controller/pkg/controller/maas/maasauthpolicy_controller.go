@@ -1443,7 +1443,7 @@ allow {
 			"unauthorized": map[string]any{
 				"code": int64(403),
 				"body": map[string]any{
-					"expression": `'{"error":{"message":"' + (has(auth.metadata) && has(auth.metadata["subscription-info"]) && has(auth.metadata["subscription-info"].message)` +
+					"expression": `'{"error":{"message":"' + (has(auth.metadata) && ("subscription-info" in auth.metadata) && has(auth.metadata["subscription-info"].message)` +
 						` ? auth.metadata["subscription-info"].message` +
 						`.replace('\\', '\\\\').replace('"', '\\"')` +
 						`.replace('\n', '\\n').replace('\r', '\\r').replace('\t', '\\t')` +
@@ -1451,7 +1451,7 @@ allow {
 				},
 				"headers": map[string]any{
 					"x-ext-auth-reason": map[string]any{
-						"expression": `has(auth.metadata) && has(auth.metadata["subscription-info"]) && has(auth.metadata["subscription-info"].error) ? auth.metadata["subscription-info"].error : "unauthorized"`,
+						"expression": `has(auth.metadata) && ("subscription-info" in auth.metadata) && has(auth.metadata["subscription-info"].error) ? auth.metadata["subscription-info"].error : "unauthorized"`,
 					},
 					"x-maas-api-key-denial": map[string]any{
 						"expression": apiKeyDenial,

@@ -84,6 +84,7 @@ func authDenialFilterPatch(anchor string) map[string]any {
 						},
 					},
 				},
+			},
 		},
 		"patch": map[string]any{
 			"operation": "INSERT_BEFORE",
