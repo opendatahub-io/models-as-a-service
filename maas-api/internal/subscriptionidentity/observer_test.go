@@ -190,6 +190,7 @@ type recordingDynamicClient struct {
 	subresources       [][]string
 	conflictFirstPatch bool
 	invalidFirstPatch  bool
+	conflictIdentityID string
 }
 
 func (client *recordingDynamicClient) Resource(gvr schema.GroupVersionResource) dynamic.NamespaceableResourceInterface {
@@ -238,6 +239,16 @@ func (resource *namespacedRecordingResource) Patch(
 			return nil, err
 		}
 		current.SetResourceVersion("rv-2")
+		if resource.client.conflictIdentityID != "" {
+			if err := unstructured.SetNestedField(
+				current.Object,
+				resource.client.conflictIdentityID,
+				"status",
+				"subscriptionIdentityId",
+			); err != nil {
+				return nil, err
+			}
+		}
 		if _, err := resource.Update(ctx, current, metav1.UpdateOptions{}, subresources...); err != nil {
 			return nil, err
 		}
@@ -1221,6 +1232,7 @@ func TestObserverStatusPatchRetriesConflict(t *testing.T) {
 	object.SetNamespace("subscriptions")
 	object.SetUID("conflict-uid")
 	object.SetResourceVersion("rv-1")
+	require.NoError(t, unstructured.SetNestedField(object.Object, "listed-identity", "status", "subscriptionIdentityId"))
 
 	gvr := subscription.GVR()
 	baseClient := fake.NewSimpleDynamicClientWithCustomListKinds(
@@ -1241,11 +1253,13 @@ func TestObserverStatusPatchRetriesConflict(t *testing.T) {
 	)
 
 	require.NoError(t, observer.ApplyStatus(context.Background(), subscriptionidentity.SubscriptionObject{
-		Namespace:        "subscriptions",
-		Name:             "conflict-sub",
-		ObjectUID:        "conflict-uid",
-		ResourceVersion:  "rv-1",
-		StatusIdentityID: "0b6fe901-7b52-4a78-9cbf-e398728ef67e",
+		Namespace:              "subscriptions",
+		Name:                   "conflict-sub",
+		ObjectUID:              "conflict-uid",
+		ResourceVersion:        "rv-1",
+		ListedStatusIdentityID: "listed-identity",
+		StatusIdentityID:       "0b6fe901-7b52-4a78-9cbf-e398728ef67e",
+		StatusPresent:          true,
 	}))
 
 	require.Len(t, client.patches, 2)
@@ -1254,6 +1268,54 @@ func TestObserverStatusPatchRetriesConflict(t *testing.T) {
 	require.NoError(t, json.Unmarshal(client.patches[1], &second))
 	assert.Equal(t, "rv-1", first[1]["value"])
 	assert.Equal(t, "rv-2", second[1]["value"])
+	assert.Equal(t, "0b6fe901-7b52-4a78-9cbf-e398728ef67e", second[2]["value"])
+}
+
+func TestObserverStatusPatchRejectsUnexpectedIdentityAfterConflict(t *testing.T) {
+	object := &unstructured.Unstructured{}
+	object.SetGroupVersionKind(schema.GroupVersionKind{
+		Group: "maas.opendatahub.io", Version: "v1alpha1", Kind: "MaaSSubscription",
+	})
+	object.SetName("unexpected-identity-sub")
+	object.SetNamespace("subscriptions")
+	object.SetUID("unexpected-identity-uid")
+	object.SetResourceVersion("rv-1")
+	require.NoError(t, unstructured.SetNestedField(object.Object, "listed-identity", "status", "subscriptionIdentityId"))
+
+	gvr := subscription.GVR()
+	baseClient := fake.NewSimpleDynamicClientWithCustomListKinds(
+		runtime.NewScheme(),
+		map[schema.GroupVersionResource]string{gvr: "MaaSSubscriptionList"},
+		object,
+	)
+	client := &recordingDynamicClient{
+		Interface:          baseClient,
+		conflictFirstPatch: true,
+		conflictIdentityID: "unexpected-identity",
+	}
+	observer := subscriptionidentity.NewObserver(
+		&fakeIdentityStore{session: &fakeObservationSession{}},
+		client,
+		"subscriptions",
+		"tenant-a",
+		"11111111-2222-3333-4444-555555555555",
+		time.Hour,
+		30*time.Second,
+		logger.Development(),
+	)
+
+	err := observer.ApplyStatus(context.Background(), subscriptionidentity.SubscriptionObject{
+		Namespace:              "subscriptions",
+		Name:                   "unexpected-identity-sub",
+		ObjectUID:              "unexpected-identity-uid",
+		ResourceVersion:        "rv-1",
+		ListedStatusIdentityID: "listed-identity",
+		StatusIdentityID:       "0b6fe901-7b52-4a78-9cbf-e398728ef67e",
+		StatusPresent:          true,
+	})
+
+	require.ErrorIs(t, err, api_keys.ErrSubscriptionIdentityMismatch)
+	require.Len(t, client.patches, 1)
 }
 
 func TestObserverStatusPatchRetriesStaleResourceVersion(t *testing.T) {

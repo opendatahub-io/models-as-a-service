@@ -28,12 +28,17 @@ import (
 // SubscriptionObject is the minimal authoritative Kubernetes observation needed
 // to resolve a subscription incarnation.
 type SubscriptionObject struct {
-	Namespace        string
-	Name             string
-	ObjectUID        string
-	ResourceVersion  string
-	StatusIdentityID string
-	StatusPresent    bool
+	Namespace       string
+	Name            string
+	ObjectUID       string
+	ResourceVersion string
+	// ListedStatusIdentityID is the identity read from the Kubernetes list
+	// before resolution replaces StatusIdentityID. ApplyStatus uses it to
+	// distinguish a resource-version-only conflict from another writer that
+	// changed the subscription identity.
+	ListedStatusIdentityID string
+	StatusIdentityID       string
+	StatusPresent          bool
 
 	MigrationReady      *bool
 	MigrationMessage    string
@@ -435,12 +440,13 @@ func (observer *Observer) list(ctx context.Context) ([]SubscriptionObject, error
 		statusIdentityID, _, _ := unstructured.NestedString(item.Object, "status", "subscriptionIdentityId")
 		_, statusPresent := item.Object["status"].(map[string]any)
 		objects = append(objects, SubscriptionObject{
-			Namespace:        item.GetNamespace(),
-			Name:             item.GetName(),
-			ObjectUID:        string(item.GetUID()),
-			ResourceVersion:  item.GetResourceVersion(),
-			StatusIdentityID: statusIdentityID,
-			StatusPresent:    statusPresent,
+			Namespace:              item.GetNamespace(),
+			Name:                   item.GetName(),
+			ObjectUID:              string(item.GetUID()),
+			ResourceVersion:        item.GetResourceVersion(),
+			ListedStatusIdentityID: statusIdentityID,
+			StatusIdentityID:       statusIdentityID,
+			StatusPresent:          statusPresent,
 		})
 	}
 	return objects, nil
@@ -461,7 +467,9 @@ func (observer *Observer) ApplyStatus(ctx context.Context, object SubscriptionOb
 		return fmt.Errorf("%w: subscription object was replaced during identity status write", api_keys.ErrSubscriptionIdentityMismatch)
 	}
 	currentIdentityID, _, _ := unstructured.NestedString(current.Object, "status", "subscriptionIdentityId")
-	if currentIdentityID != "" && currentIdentityID != object.StatusIdentityID {
+	if currentIdentityID != "" &&
+		currentIdentityID != object.StatusIdentityID &&
+		currentIdentityID != object.ListedStatusIdentityID {
 		return fmt.Errorf("%w: subscription identity changed during status write", api_keys.ErrSubscriptionIdentityMismatch)
 	}
 	_, statusPresent := current.Object["status"].(map[string]any)
