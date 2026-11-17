@@ -1,12 +1,11 @@
 """
-Rerank JSON BBR governance e2e (RHAISTRAT-2891 phase 1).
+Rerank JSON BBR governance e2e (RHAIRFE-3921).
 
-Validates /v1/rerank body-based routing, AuthPolicy denial, and interim
-request-count RateLimitPolicy (429).
+Validates /v1/rerank body-based routing and AuthPolicy denial. Request-count
+quota is out of scope until subscription RLP design lands.
 """
 
 import logging
-import time
 import uuid
 
 import pytest
@@ -14,7 +13,6 @@ import requests
 
 from test_helper import (
     MODEL_NAMESPACE,
-    RATE_LIMIT_ENFORCEMENT_TIMEOUT,
     RERANK_MODEL_CANONICAL_ID,
     RERANK_MODEL_REF,
     TLS_VERIFY,
@@ -133,73 +131,6 @@ class TestRerankGovernance:
             r = requests.post(url, headers=headers, json=body, timeout=30, verify=TLS_VERIFY)
             assert r.status_code in (401, 403), (
                 f"Expected auth denial for wrong model, got {r.status_code}: {r.text[:300]}"
-            )
-        finally:
-            _delete_governance_and_wait(
-                subscriptions=[(subscription_name, _ns())],
-                auth_policies=[(auth_policy_name, _ns())],
-            )
-
-    def test_rerank_request_rlp_429(self):
-        model = _get_cr("maasmodelref", RERANK_MODEL_REF, namespace=MODEL_NAMESPACE)
-        if not model:
-            pytest.skip(f"MaaSModelRef {RERANK_MODEL_REF} not deployed")
-
-        auth_policy_name = "e2e-rerank-trlp-auth"
-        subscription_name = "e2e-rerank-trlp-sub"
-        request_limit = 5
-        total_requests = 20
-        try:
-            _create_test_auth_policy(
-                name=auth_policy_name,
-                model_refs=[RERANK_MODEL_REF],
-                groups=["system:authenticated"],
-            )
-            _create_test_subscription(
-                name=subscription_name,
-                model_refs=[RERANK_MODEL_REF],
-                groups=["system:authenticated"],
-                token_limit=request_limit,
-                window="1m",
-            )
-            _wait_for_maas_auth_policy_phase(auth_policy_name, require_auth_policies=False)
-            _wait_for_subscription_inference_ready(
-                subscription_name, RERANK_MODEL_REF, model_namespace=MODEL_NAMESPACE
-            )
-            api_key = _create_api_key(
-                _get_cluster_token(),
-                name=f"e2e-rerank-rlp-{uuid.uuid4().hex[:8]}",
-                subscription=subscription_name,
-            )
-
-            rate_limited = False
-            success_count = 0
-            deadline = time.time() + RATE_LIMIT_ENFORCEMENT_TIMEOUT
-            request_num = 0
-            while request_num < total_requests or time.time() < deadline:
-                request_num += 1
-                r = _rerank_inference(
-                    api_key, bbr=True, model_name=RERANK_MODEL_CANONICAL_ID
-                )
-                log.info("Rerank request %d: HTTP %d", request_num, r.status_code)
-                if r.status_code == 200:
-                    success_count += 1
-                elif r.status_code == 429:
-                    rate_limited = True
-                    break
-                elif r.status_code in (401, 403):
-                    raise AssertionError(
-                        f"Unexpected auth denial at request {request_num}: {r.text[:200]}"
-                    )
-                else:
-                    raise AssertionError(
-                        f"Unexpected status {r.status_code}: {r.text[:200]}"
-                    )
-                time.sleep(0.05)
-
-            assert success_count > 0, "No successful rerank requests before limit"
-            assert rate_limited, (
-                f"Expected 429 with request limit {request_limit}, got {success_count} x 200"
             )
         finally:
             _delete_governance_and_wait(

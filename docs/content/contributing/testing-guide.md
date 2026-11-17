@@ -56,7 +56,7 @@ Tests are organized into **xdist groups** for parallel execution. All tests in a
 | `api_keys_sub_endpoints` | `test_subscription_list_endpoints.py` | Subscription listing endpoints (`worker_tenant`) |
 | `api_xkey` | `test_x_api_key_auth.py` | X-API-Key header authentication |
 | `api_embedding` | `test_embedding_inference.py` | Embedding inference (`worker_tenant`) |
-| `api_json_bbr` | `test_json_bbr_authz.py`, `test_rerank_inference.py` | JSON BBR authZ regression + rerank request RLP (`serial`) |
+| `api_json_bbr` | `test_json_bbr_authz.py`, `test_rerank_inference.py` | JSON BBR authZ on `/v1/*` JSON endpoints (`serial`) |
 | `models_endpoint` | `test_models_endpoint.py` | `/v1/models` subscription-aware filtering (`worker_tenant`) |
 | `models_gw_authpolicy` | `test_gateway_scoped_authpolicy.py` | Gateway AuthPolicy structure and enforcement (`worker_tenant`) |
 | `models_identity` | `test_model_identity_conflict.py` | MaaSModelRef model-identity collision (`worker_tenant`) |

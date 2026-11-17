@@ -5,7 +5,7 @@ Regression: API key + subscription allow/deny on POST {gateway}/v1/<suffix> uses
 the same Authorino path as chat (JSON `model` field → X-Gateway-Model-Name). Uses
 the rerank e2e fixture mock, which serves multiple JSON suffixes.
 
-Rerank request-count RateLimitPolicy is covered in test_rerank_inference.py.
+Rerank-specific allow/deny setup also appears in test_rerank_inference.py.
 Chat, completions, and embeddings are covered elsewhere; multipart is out of scope.
 """
 

@@ -192,11 +192,9 @@ TRLP=$(kubectl get tokenratelimitpolicy -n ${MODEL_NS} -l maas.opendatahub.io/mo
     Authentication, subscription validation, and model access controls still apply to all endpoints — only token-based rate limiting enforcement is affected.
 
 !!! note "`/v1/rerank` (JSON body-based routing)"
-    **AuthPolicy** and **MaaSSubscription** apply to **`POST {gateway}/v1/rerank`** the same way as chat: clients send `Authorization` and a JSON **`model`** field; the gateway promotes **`model`** to **`X-Gateway-Model-Name`** internally (Praxis pre-ExtProc). **TokenRateLimitPolicy does not meter rerank** when responses omit `usage.total_tokens` (typical Jina/Cohere-compatible rerank shapes).
+    **AuthPolicy** and **MaaSSubscription** apply to **`POST {gateway}/v1/rerank`** the same way as chat: clients send `Authorization` and a JSON **`model`** field; the gateway promotes **`model`** to **`X-Gateway-Model-Name`** internally (Praxis pre-ExtProc). **TokenRateLimitPolicy does not meter rerank** when responses omit `usage.total_tokens` (typical Jina/Cohere-compatible rerank shapes). Usage logs include `/v1/rerank` in OTEL path matchers; token columns may be **`0`** when the response has no usage block.
 
-    Until modality-specific quotas ship, the controller mirrors each subscription's **`tokenRateLimits`** into a per-model **`RateLimitPolicy`** (`maas-rlp-<model>`) scoped to **`/v1/rerank` only** — **one request counts as one unit** against that budget (interim RPM). Usage logs include `/v1/rerank` in OTEL path filters; token columns may be `0` when the response has no usage block.
-
-    Multipart paths (for example speech-to-text) are out of scope for this RFE.
+    Per-modality request quotas (for example rerank RPM separate from subscription token limits) are not configured here; auth and subscription enforcement apply as for other JSON BBR paths.
 
 ### Model server must include usage data
 
