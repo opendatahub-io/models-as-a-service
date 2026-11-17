@@ -28,6 +28,7 @@ func TestResolveLokiReadEndpoint(t *testing.T) {
 		secret               *corev1.Secret
 		expectedEndpoint     string
 		expectedTokenFromRef bool
+		expectedCAFromRef    bool
 		expectWarning        bool
 	}{
 		{
@@ -43,6 +44,35 @@ func TestResolveLokiReadEndpoint(t *testing.T) {
 				LokiReadTokenSecretKey: []byte("sa-token-123"),
 			}),
 			expectedEndpoint:     "https://data-science-lokistack-gateway-http.opendatahub.svc:8080/api/logs/v1/application",
+			expectedTokenFromRef: true,
+		},
+		{
+			name: "CA key injects the CA secretKeyRef without a warning",
+			secret: lokiSecret(appNs, map[string][]byte{
+				LokiReadSecretKey:   []byte("https://loki.example.svc:8080/api/logs/v1/application"),
+				LokiReadCASecretKey: []byte("-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----\n"),
+			}),
+			expectedEndpoint:  "https://loki.example.svc:8080/api/logs/v1/application",
+			expectedCAFromRef: true,
+			expectWarning:     true, // the missing token key still warns
+		},
+		{
+			name: "missing CA key keeps the proxy enabled on the system pool without a warning",
+			secret: lokiSecret(appNs, map[string][]byte{
+				LokiReadSecretKey:      []byte("https://loki.example.svc:8080/api/logs/v1/application"),
+				LokiReadTokenSecretKey: []byte("sa-token-123"),
+			}),
+			expectedEndpoint:     "https://loki.example.svc:8080/api/logs/v1/application",
+			expectedTokenFromRef: true,
+		},
+		{
+			name: "empty CA key keeps the proxy enabled on the system pool without a warning",
+			secret: lokiSecret(appNs, map[string][]byte{
+				LokiReadSecretKey:      []byte("https://loki.example.svc:8080/api/logs/v1/application"),
+				LokiReadTokenSecretKey: []byte("sa-token-123"),
+				LokiReadCASecretKey:    []byte("   "),
+			}),
+			expectedEndpoint:     "https://loki.example.svc:8080/api/logs/v1/application",
 			expectedTokenFromRef: true,
 		},
 		{
@@ -118,6 +148,7 @@ func TestResolveLokiReadEndpoint(t *testing.T) {
 
 			require.Equal(t, tt.expectedEndpoint, params.LokiReadEndpoint)
 			require.Equal(t, tt.expectedTokenFromRef, params.LokiReadTokenFromSecret)
+			require.Equal(t, tt.expectedCAFromRef, params.LokiReadCAFromSecret)
 			if tt.expectWarning {
 				require.NotEmpty(t, params.Warnings, "expected a warning to be recorded")
 			} else {
@@ -278,6 +309,44 @@ func TestPatchMaaSAPIDeploymentLokiReadEndpoint(t *testing.T) {
 
 		_, _, ok := envSecretRef(dep, "LOKI_READ_TOKEN")
 		require.False(t, ok, "LOKI_READ_TOKEN env should be absent without an endpoint")
+	})
+
+	t.Run("CA flag injects LOKI_READ_CA as a secretKeyRef", func(t *testing.T) {
+		dep := makeDeployment()
+		params := PlatformParams{
+			MaaSAPIImage:         "test-image",
+			GatewayNamespace:     "openshift-ingress",
+			GatewayName:          "test-gateway",
+			LokiReadEndpoint:     "https://loki.example.svc:8080/api/logs/v1/application",
+			LokiReadCAFromSecret: true,
+		}
+
+		require.NoError(t, patchMaaSAPIDeployment(logr.Discard(), dep, params))
+
+		ref, key, ok := envSecretRef(dep, "LOKI_READ_CA")
+		require.True(t, ok, "LOKI_READ_CA env should be present")
+		require.Equal(t, LokiReadSecretName, ref)
+		require.Equal(t, LokiReadCASecretKey, key)
+
+		// The CA bundle must never be copied into the Deployment spec.
+		value, ok := envValue(dep, "LOKI_READ_CA")
+		require.False(t, ok, "LOKI_READ_CA must use valueFrom, not a plain value")
+		require.Empty(t, value)
+	})
+
+	t.Run("CA flag without endpoint leaves LOKI_READ_CA unset", func(t *testing.T) {
+		dep := makeDeployment()
+		params := PlatformParams{
+			MaaSAPIImage:         "test-image",
+			GatewayNamespace:     "openshift-ingress",
+			GatewayName:          "test-gateway",
+			LokiReadCAFromSecret: true,
+		}
+
+		require.NoError(t, patchMaaSAPIDeployment(logr.Discard(), dep, params))
+
+		_, _, ok := envSecretRef(dep, "LOKI_READ_CA")
+		require.False(t, ok, "LOKI_READ_CA env should be absent without an endpoint")
 	})
 
 	t.Run("empty endpoint leaves LOKI_READ_ENDPOINT unset", func(t *testing.T) {

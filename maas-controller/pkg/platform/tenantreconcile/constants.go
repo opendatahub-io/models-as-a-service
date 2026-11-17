@@ -208,6 +208,12 @@ const (
 	// the token value never lands in the Deployment spec).
 	LokiReadTokenSecretKey = "LOKI_READ_TOKEN" //nolint:gosec // secret key reference, not a credential
 
+	// LokiReadCASecretKey holds the PEM CA bundle injected as the LOKI_READ_CA
+	// env var on the maas-api container (via secretKeyRef). The bundle is
+	// appended to the system trust pool for proxied upstream Loki requests; a
+	// missing key keeps the system pool only.
+	LokiReadCASecretKey = "LOKI_READ_CA" //nolint:gosec // secret key reference, not a credential
+
 	// Condition types aligned with ODH internal/controller/status for DSC aggregation parity.
 	ConditionDependenciesAvailable      = "DependenciesAvailable"
 	ConditionMaaSPrerequisitesAvailable = "MaaSPrerequisitesAvailable"

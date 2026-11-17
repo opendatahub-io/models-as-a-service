@@ -90,6 +90,13 @@ type PlatformParams struct {
 	// value). See resolveLokiReadEndpoint.
 	LokiReadTokenFromSecret bool
 
+	// LokiReadCAFromSecret injects LOKI_READ_CA on the maas-api container as a
+	// secretKeyRef to the usage-logs-loki Secret, appending the PEM bundle to
+	// the system trust pool for proxied upstream requests. False leaves the env
+	// var out of the render (and the SSA apply removes any previously applied
+	// value). See resolveLokiReadEndpoint.
+	LokiReadCAFromSecret bool
+
 	// PayloadProcessingRouterExtProcFallback enables router-anchored ext_proc patches when
 	// Kuadrant WASM auth is absent on the gateway (avoids duplicate ext_proc when WASM exists).
 	PayloadProcessingRouterExtProcFallback bool
@@ -1087,6 +1094,14 @@ func patchMaaSAPIDeployment(log logr.Logger, r *unstructured.Unstructured, param
 		if params.LokiReadTokenFromSecret {
 			if err := setOrAddEnvVarFromSecret(r, "maas-api", "LOKI_READ_TOKEN", LokiReadSecretName, LokiReadTokenSecretKey); err != nil {
 				return fmt.Errorf("patch LOKI_READ_TOKEN: %w", err)
+			}
+		}
+		// The CA bundle follows the same secretKeyRef pattern. Omitted when the
+		// Secret has no CA key; the SSA apply then removes any previously applied
+		// reference and maas-api uses the system trust pool alone.
+		if params.LokiReadCAFromSecret {
+			if err := setOrAddEnvVarFromSecret(r, "maas-api", "LOKI_READ_CA", LokiReadSecretName, LokiReadCASecretKey); err != nil {
+				return fmt.Errorf("patch LOKI_READ_CA: %w", err)
 			}
 		}
 		log.V(4).Info("Patched maas-api LOKI_READ_ENDPOINT")

@@ -10,7 +10,7 @@ Lifecycle-invalidated rows, including regular and ephemeral keys, are soft-delet
 
 ## Bulk Key Revocation
 
-Platform administrators can bulk revoke API keys by **user**, by **subscription**, or both. A verified SSO organization administrator can revoke keys only for an explicit MaaS Subscription that is associated with an organization they administer. A **dry-run** mode is available to preview how many keys would be revoked before committing.
+Platform administrators can bulk revoke API keys by **user**, by **subscription**, or both. A verified SSO organization administrator can revoke another user's keys only within MaaS Subscriptions associated with an organization they administer; a username-only request is automatically constrained to that administered subscription set. A **dry-run** mode is available to preview how many keys would be revoked before committing.
 
 ## Organization Association and Subscription Names
 
@@ -106,14 +106,14 @@ curl -sS -X POST "${MAAS_API_URL}/maas-api/v1/api-keys/bulk-revoke" \
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `username` | Optional (at least one of `username` or `subscription` must be provided) | Target user whose keys should be revoked. Regular users can only specify their own username; specifying another user requires admin privileges. |
+| `username` | Optional (at least one of `username` or `subscription` must be provided) | Target user whose keys should be revoked. Regular users can only specify their own username; specifying another user requires platform-admin or organization-admin authorization. |
 | `subscription` | Optional (at least one of `username` or `subscription` must be provided) | MaaSSubscription name or `namespace/name` alias whose bound keys should be revoked. Requires platform-admin authorization, or delegated authorization for that subscription. |
 | `dryRun` | Optional | When `true`, returns the count of keys that would be revoked without performing any mutation. Default: `false`. |
 
 ### Authorization
 
 !!! warning "Administrative privilege required"
-    Subscription-scoped revocation requires platform-admin authorization or delegated subscription-admin authorization. Cross-user revocation requires platform-admin authorization, or delegated subscription-admin authorization when an explicit subscription is supplied. Regular users can only revoke their own keys via `DELETE /v1/api-keys/{id}` or bulk revoke with their own username. A delegated administrator cannot use a username-only request to revoke keys across subscriptions.
+    Subscription-scoped revocation requires platform-admin authorization or delegated subscription-admin authorization. Cross-user revocation requires platform-admin authorization, or delegated organization-admin authorization. A username-only delegated request is constrained to subscriptions in the administrator's organization and cannot affect another organization. Regular users can only revoke their own keys via `DELETE /v1/api-keys/{id}` or bulk revoke with their own username.
 
 ### Use Cases
 

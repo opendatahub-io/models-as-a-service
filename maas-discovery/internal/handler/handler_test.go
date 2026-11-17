@@ -16,12 +16,10 @@ import (
 	"github.com/opendatahub-io/models-as-a-service/maas-discovery/internal/types"
 )
 
-func init() {
-	gin.SetMode(gin.TestMode)
-}
-
 // fakeAuthMiddleware simulates authenticated identity in the gin context,
 // matching what TokenReviewMiddleware does in production.
+//
+//nolint:unparam // test helper; username is kept for symmetry with fakeAdminAuthMiddleware
 func fakeAuthMiddleware(username string, groups []string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.Set(auth.ContextKeyUsername, username)
@@ -41,6 +39,7 @@ func fakeAdminAuthMiddleware(username string, groups []string) gin.HandlerFunc {
 }
 
 func newTestRouter() *gin.Engine {
+	gin.SetMode(gin.TestMode)
 	h := handler.New(cache.NewStub())
 	r := gin.New()
 	h.RegisterRoutes(r, fakeAuthMiddleware("alice", []string{"team-a"}))

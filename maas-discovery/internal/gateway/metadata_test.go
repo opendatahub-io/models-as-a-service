@@ -64,7 +64,11 @@ func routeObj(host, svc string, tls, admitted bool) unstructured.Unstructured {
 		},
 	}}
 	if tls {
-		route.Object["spec"].(map[string]any)["tls"] = map[string]any{"termination": "edge"}
+		spec, ok := route.Object["spec"].(map[string]any)
+		if !ok {
+			panic("route spec is not a map")
+		}
+		spec["tls"] = map[string]any{"termination": "edge"}
 	}
 	statusValue := "False"
 	if admitted {

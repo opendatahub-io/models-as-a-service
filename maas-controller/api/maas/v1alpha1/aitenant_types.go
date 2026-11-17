@@ -86,6 +86,22 @@ type AITenantSpec struct {
 	// +listType=atomic
 	// +kubebuilder:validation:MaxItems=64
 	Guardrails []GuardrailAttachment `json:"guardrails,omitempty"`
+
+	// ConsumerPortal controls the consumer portal auth proxy for this tenant.
+	// ai-gateway-controller reads spec.consumerPortal.enabled to decide whether
+	// to deploy the consumer portal auth proxy, routes and AuthPolicies. When
+	// this field is unset the portal is enabled.
+	// +kubebuilder:validation:Optional
+	ConsumerPortal *AITenantConsumerPortalConfig `json:"consumerPortal,omitempty"`
+}
+
+// AITenantConsumerPortalConfig toggles the consumer portal for this tenant.
+type AITenantConsumerPortalConfig struct {
+	// Enabled controls whether ai-gateway-controller deploys the consumer
+	// portal auth proxy, routes and AuthPolicies for this tenant. Unset
+	// defaults to enabled, matching the ai-gateway-controller reconciler.
+	// +kubebuilder:validation:Optional
+	Enabled *bool `json:"enabled,omitempty"`
 }
 
 // AITenantGatewayRef references the existing Gateway API Gateway for this tenant.
