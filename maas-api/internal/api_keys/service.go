@@ -450,13 +450,10 @@ func (s *Service) RevokeTenantAPIKeys(ctx context.Context, tenant string) (int, 
 	return s.store.InvalidateTenant(ctx, tenant)
 }
 
-// RevokeSubscriptionAPIKeys soft-deletes all keys bound to one subscription
-// within a tenant. The operation is intentionally separate from user-facing
-// bulk revoke so lifecycle cleanup receives retention semantics.
+// RevokeSubscriptionAPIKeys soft-deletes lifecycle-managed keys for one
+// subscription within a tenant. Identity-bound keys are excluded in migrate
+// mode and cleaned up only through identity-aware absence handling.
 func (s *Service) RevokeSubscriptionAPIKeys(ctx context.Context, tenant, subscription string) (int, error) {
-	if s.subscriptionIdentityMode() == config.SubscriptionIdentityModeStrict {
-		return 0, ErrSubscriptionIdentityRequired
-	}
 	tenant = strings.TrimSpace(tenant)
 	subscription = strings.TrimSpace(subscription)
 	if tenant == "" {
@@ -467,6 +464,13 @@ func (s *Service) RevokeSubscriptionAPIKeys(ctx context.Context, tenant, subscri
 	}
 	if configuredTenant := s.GetTenantName(); configuredTenant != "" && tenant != configuredTenant {
 		return 0, fmt.Errorf("%w: requested tenant %q but service is scoped to %q", ErrTenantMismatch, tenant, configuredTenant)
+	}
+
+	switch s.subscriptionIdentityMode() {
+	case config.SubscriptionIdentityModeStrict:
+		return 0, ErrSubscriptionIdentityRequired
+	case config.SubscriptionIdentityModeMigrate:
+		return s.store.InvalidateSubscriptionWithoutIdentity(ctx, tenant, subscription)
 	}
 	return s.store.InvalidateSubscription(ctx, tenant, subscription)
 }

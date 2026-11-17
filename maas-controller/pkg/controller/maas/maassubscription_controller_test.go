@@ -23,6 +23,7 @@ import (
 	"strings"
 	"testing"
 
+	appsv1 "k8s.io/api/apps/v1"
 	batcv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -40,6 +41,7 @@ import (
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
+	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/platform/tenantreconcile"
 )
 
 type clientRejectingJobGets struct {
@@ -471,7 +473,7 @@ func TestEnsureSubscriptionAPIKeysRevoked_ControllerWidePhaseSelectsCleanup(t *t
 	}
 }
 
-func TestEnsureSubscriptionAPIKeysRevoked_MigratePhaseUsesLegacyCleanup(t *testing.T) {
+func TestEnsureSubscriptionAPIKeysRevoked_MigratePhaseWaitsForAPICleanupRollout(t *testing.T) {
 	const (
 		tenantNamespace = "team-a-maas"
 		appNamespace    = "odh-ai-gateway-infra"
@@ -487,35 +489,87 @@ func TestEnsureSubscriptionAPIKeysRevoked_MigratePhaseUsesLegacyCleanup(t *testi
 			APIKeys: &maasv1alpha1.TenantAPIKeysConfig{},
 		},
 	}
-	c := fake.NewClientBuilder().
-		WithScheme(scheme).
-		WithObjects(subscription, tenant).
-		Build()
-	r := &MaaSSubscriptionReconciler{
-		Client:                             c,
-		APIReader:                          c,
-		Scheme:                             scheme,
-		AppNamespace:                       appNamespace,
-		SubscriptionIdentityCleanupEnabled: true,
-		SubscriptionIdentityMode:           "migrate",
+	tests := []struct {
+		name         string
+		readyRollout bool
+		wantJob      bool
+	}{
+		{name: "incomplete rollout creates no cleanup job"},
+		{name: "completed rollout creates cleanup job", readyRollout: true, wantJob: true},
 	}
 
-	complete, err := r.ensureSubscriptionAPIKeysRevoked(context.Background(), ctrl.Log, subscription)
-	if err != nil {
-		t.Fatalf("ensureSubscriptionAPIKeysRevoked: %v", err)
-	}
-	if complete {
-		t.Fatal("legacy cleanup Job must not be reported complete before it runs")
-	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			deployment := newMigrateCleanupAPIDeployment(appNamespace, "", tt.readyRollout)
+			c := fake.NewClientBuilder().
+				WithScheme(scheme).
+				WithObjects(subscription, tenant, deployment).
+				Build()
+			r := &MaaSSubscriptionReconciler{
+				Client:                             c,
+				APIReader:                          c,
+				Scheme:                             scheme,
+				AppNamespace:                       appNamespace,
+				SubscriptionIdentityCleanupEnabled: true,
+				SubscriptionIdentityMode:           "migrate",
+			}
 
-	job := subscriptionAPIKeyRevocationJob(subscription, "team-a", "team-a", appNamespace)
-	var created batcv1.Job
-	if err := c.Get(context.Background(), client.ObjectKeyFromObject(job), &created); err != nil {
-		t.Fatalf("get legacy cleanup Job: %v", err)
+			complete, err := r.ensureSubscriptionAPIKeysRevoked(context.Background(), ctrl.Log, subscription)
+			if err != nil {
+				t.Fatalf("ensureSubscriptionAPIKeysRevoked: %v", err)
+			}
+			if complete {
+				t.Fatal("cleanup must not be reported complete before it runs")
+			}
+
+			job := subscriptionAPIKeyRevocationJob(subscription, tenantreconcile.DefaultAITenantName, "", appNamespace)
+			var created batcv1.Job
+			err = c.Get(context.Background(), client.ObjectKeyFromObject(job), &created)
+			if tt.wantJob {
+				if err != nil {
+					t.Fatalf("get legacy cleanup Job: %v", err)
+				}
+				if created.Annotations["maas.opendatahub.io/cleanup-scope"] != "subscription" {
+					t.Fatalf("cleanup scope annotation = %q, want subscription", created.Annotations["maas.opendatahub.io/cleanup-scope"])
+				}
+				return
+			}
+			if !apierrors.IsNotFound(err) {
+				t.Fatalf("cleanup Job error = %v, want NotFound", err)
+			}
+		})
 	}
-	if created.Annotations["maas.opendatahub.io/cleanup-scope"] != "subscription" {
-		t.Fatalf("cleanup scope annotation = %q, want subscription", created.Annotations["maas.opendatahub.io/cleanup-scope"])
+}
+
+func newMigrateCleanupAPIDeployment(namespace, tenantID string, ready bool) *appsv1.Deployment {
+	replicas := int32(1)
+	deployment := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       tenantreconcile.MaaSAPIDeploymentName(tenantID),
+			Namespace:  namespace,
+			Generation: 1,
+		},
+		Spec: appsv1.DeploymentSpec{
+			Replicas: &replicas,
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Annotations: map[string]string{
+						tenantreconcile.AnnotationMaaSAPISubscriptionIdentityContract: tenantreconcile.MaaSAPISubscriptionIdentityContractV1,
+					},
+				},
+			},
+		},
 	}
+	if ready {
+		deployment.Status = appsv1.DeploymentStatus{
+			ObservedGeneration: 1,
+			Replicas:           1,
+			UpdatedReplicas:    1,
+			AvailableReplicas:  1,
+			ReadyReplicas:      1,
+		}
+	}
+	return deployment
 }
 
 func TestEnsureSubscriptionAPIKeysRevoked_SkipsWhenTenantConfigIsGone(t *testing.T) {

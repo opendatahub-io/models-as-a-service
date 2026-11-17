@@ -162,7 +162,17 @@ func TestDefaultSubscriptionIdentityMode(t *testing.T) {
 	} {
 		data, err := os.ReadFile(filepath.Join(projectRoot, relativePath))
 		require.NoError(t, err)
-		require.Contains(t, string(data), "subscription-identity-mode=migrate")
+		var value string
+		found := false
+		for line := range strings.SplitSeq(string(data), "\n") {
+			key, candidate, isPair := strings.Cut(strings.TrimSpace(line), "=")
+			if isPair && key == "subscription-identity-mode" {
+				require.False(t, found, "duplicate subscription-identity-mode parameter")
+				value, found = candidate, true
+			}
+		}
+		require.True(t, found, "subscription-identity-mode parameter is missing")
+		require.Equal(t, DefaultSubscriptionIdentityMode, value)
 	}
 }
 

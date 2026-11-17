@@ -1283,6 +1283,20 @@ func (r *MaaSSubscriptionReconciler) ensureSubscriptionAPIKeysRevoked(ctx contex
 		tenantName = tenantreconcile.DefaultAITenantName
 	}
 
+	if effectiveIdentityMode == subscriptionIdentityModeMigrate {
+		callbackReady, err := maasAPISubscriptionIdentityCallbackReady(ctx, r.Client, r.AppNamespace, tenantID)
+		if err != nil {
+			return false, err
+		}
+		if !callbackReady {
+			log.Info("Waiting for maas-api subscription identity cleanup rollout",
+				"subscription", subscription.Namespace+"/"+subscription.Name,
+				"tenantID", tenantID,
+				"maasAPINamespace", r.AppNamespace)
+			return false, nil
+		}
+	}
+
 	var job *batcv1.Job
 	if identityAwareCleanup {
 		job = subscriptionIdentityAbsenceJob(subscription, tenantName, tenantID, r.AppNamespace, retainAPIKeys)

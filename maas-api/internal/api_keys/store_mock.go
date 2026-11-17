@@ -675,6 +675,31 @@ func (m *MockStore) InvalidateSubscription(ctx context.Context, tenant, subscrip
 	return count, nil
 }
 
+func (m *MockStore) InvalidateSubscriptionWithoutIdentity(ctx context.Context, tenant, subscription string) (int, error) {
+	if strings.TrimSpace(subscription) == "" {
+		return 0, errors.New("subscription is required")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	count := 0
+	for _, k := range m.keys {
+		if k.metadata.Tenant == tenant &&
+			k.metadata.Subscription == subscription &&
+			k.metadata.SubscriptionIdentityID == "" &&
+			k.metadata.SubscriptionNamespace == "" &&
+			k.deletedAt == nil {
+			now := time.Now().UTC()
+			k.deletedAt = &now
+			if k.metadata.Status == StatusActive {
+				k.metadata.Status = StatusRevoked
+			}
+			count++
+		}
+	}
+	return count, nil
+}
+
 func (m *MockStore) Revoke(ctx context.Context, keyID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

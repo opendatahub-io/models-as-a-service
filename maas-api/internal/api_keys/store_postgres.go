@@ -1063,6 +1063,36 @@ func (s *PostgresStore) InvalidateSubscription(ctx context.Context, tenant, subs
 	return count, nil
 }
 
+// InvalidateSubscriptionWithoutIdentity soft-deletes only unbound legacy keys
+// for one subscription within a tenant.
+func (s *PostgresStore) InvalidateSubscriptionWithoutIdentity(ctx context.Context, tenant, subscription string) (int, error) {
+	if tenant != s.tenantName {
+		return 0, fmt.Errorf("%w: attempted to revoke keys for tenant %q but store is scoped to %q", ErrTenantMismatch, tenant, s.tenantName)
+	}
+	if strings.TrimSpace(subscription) == "" {
+		return 0, errors.New("subscription is required")
+	}
+
+	query := `UPDATE api_keys
+		SET deleted_at = NOW(),
+		    status = CASE WHEN status = 'active' THEN 'revoked' ELSE status END
+		WHERE tenant = $1 AND subscription = $2 AND subscription_id IS NULL AND deleted_at IS NULL`
+	s.recordQuery("invalidate_subscription_without_identity", "write")
+	result, err := s.writeDB.ExecContext(ctx, query, tenant, subscription)
+	if err != nil {
+		return 0, fmt.Errorf("failed to revoke unbound subscription keys: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("failed to get affected rows: %w", err)
+	}
+
+	count := int(rows)
+	s.logger.Info("Invalidated unbound keys for subscription", "count", count,
+		"tenant", s.tenantName, "subscription", logger.RedactValue(subscription))
+	return count, nil
+}
+
 // Revoke marks a specific API key as revoked.
 func (s *PostgresStore) Revoke(ctx context.Context, keyID string) error {
 	query := `UPDATE api_keys SET status = 'revoked' WHERE id = $1 AND tenant = $2 AND status = 'active'`

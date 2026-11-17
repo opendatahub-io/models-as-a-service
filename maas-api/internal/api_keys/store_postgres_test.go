@@ -240,6 +240,50 @@ func TestPostgresStore_LifecycleInvalidation(t *testing.T) {
 	assert.GreaterOrEqual(t, deleted, int64(1))
 }
 
+func TestPostgresStore_InvalidateSubscriptionWithoutIdentity(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+	if os.Getenv("TEST_DATABASE_URL") == "" {
+		t.Skip("Skipping integration test (TEST_DATABASE_URL not set)")
+	}
+
+	ctx := context.Background()
+	tenant := "identity-unbound-" + uuid.NewString()
+	store := setupTestPostgresStoreForTenant(t, tenant)
+	defer store.Close()
+
+	observerID := uuid.NewString()
+	session, err := store.BeginSubscriptionObservation(ctx, observerID, tenant)
+	require.NoError(t, err)
+	require.NoError(t, session.Heartbeat(ctx))
+	identityID, err := session.ResolveSubscriptionIdentity(ctx, api_keys.ResolveSubscriptionIdentityRequest{
+		Namespace: "subscriptions",
+		Name:      "identity-sub",
+		ObjectUID: "object-uid",
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, identityID)
+	require.NoError(t, session.Commit())
+
+	require.NoError(t, store.AddKey(
+		ctx, "alice", uuid.NewString(), uuid.NewString(), "Unbound", "", nil, "identity-sub", tenant, nil, false, nil,
+	))
+	boundKeyID := uuid.NewString()
+	require.NoError(t, store.AddKeyWithSubscriptionIdentity(
+		ctx, "alice", boundKeyID, uuid.NewString(), "Bound", "", nil,
+		"identity-sub", identityID, "subscriptions", tenant, nil, false, nil, time.Minute,
+	))
+
+	count, err := store.InvalidateSubscriptionWithoutIdentity(ctx, tenant, "identity-sub")
+	require.NoError(t, err)
+	assert.Equal(t, 1, count)
+
+	bound, err := store.Get(ctx, boundKeyID)
+	require.NoError(t, err)
+	assert.Equal(t, api_keys.StatusActive, bound.Status)
+}
+
 func TestPostgresStore_SubscriptionIdentityRotationRevokesKeys(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")

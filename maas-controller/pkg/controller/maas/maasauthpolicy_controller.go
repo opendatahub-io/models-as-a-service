@@ -372,16 +372,20 @@ func (r *MaaSAuthPolicyReconciler) targetMaaSAPIReady(ctx context.Context, tenan
 // completed its rollout. This prevents a new controller from sending a field
 // that an older callback pod rejects as unknown.
 func (r *MaaSAuthPolicyReconciler) maasAPISubscriptionIdentityCallbackReady(ctx context.Context, tenantID string) (bool, error) {
+	return maasAPISubscriptionIdentityCallbackReady(ctx, r, r.InfraNamespace, tenantID)
+}
+
+func maasAPISubscriptionIdentityCallbackReady(ctx context.Context, reader client.Reader, namespace, tenantID string) (bool, error) {
 	deployment := &appsv1.Deployment{}
 	key := types.NamespacedName{
-		Namespace: r.InfraNamespace,
+		Namespace: namespace,
 		Name:      tenantreconcile.MaaSAPIDeploymentName(tenantID),
 	}
-	if err := r.Get(ctx, key, deployment); err != nil {
+	if err := reader.Get(ctx, key, deployment); err != nil {
 		if apierrors.IsNotFound(err) {
 			return false, nil
 		}
-		return false, fmt.Errorf("get target maas-api Deployment for %s/%s: %w", r.InfraNamespace, key.Name, err)
+		return false, fmt.Errorf("get target maas-api Deployment for %s/%s: %w", namespace, key.Name, err)
 	}
 
 	annotations := deployment.Spec.Template.Annotations

@@ -1218,6 +1218,36 @@ func TestRevokeSubscriptionAPIKeysStrictModeRejectsNameBasedCleanup(t *testing.T
 	assert.Zero(t, count)
 }
 
+func TestRevokeSubscriptionAPIKeysMigrateModeOnlyRevokesUnboundKeys(t *testing.T) {
+	ctx := context.Background()
+	store := api_keys.NewMockStore()
+	cfg := &config.Config{
+		TenantName:               "test-tenant",
+		SubscriptionIdentityMode: config.SubscriptionIdentityModeMigrate,
+	}
+	svc := api_keys.NewServiceWithLogger(store, cfg, subSelectorStub{}, logger.Development())
+
+	require.NoError(t, store.AddKey(
+		ctx, "alice", "unbound-key", "unbound-key-hash", "Unbound", "", nil, "team-a", "test-tenant", nil, false, nil,
+	))
+	require.NoError(t, store.AddKeyWithSubscriptionIdentity(
+		ctx, "alice", "bound-key", "bound-key-hash", "Bound", "", nil,
+		"team-a", "identity-id", "subscriptions", "test-tenant", nil, false, nil, time.Minute,
+	))
+
+	count, err := svc.RevokeSubscriptionAPIKeys(ctx, "test-tenant", "team-a")
+	require.NoError(t, err)
+	assert.Equal(t, 1, count)
+
+	unbound, err := store.Get(ctx, "unbound-key")
+	require.NoError(t, err)
+	assert.Equal(t, api_keys.StatusRevoked, unbound.Status)
+
+	bound, err := store.Get(ctx, "bound-key")
+	require.NoError(t, err)
+	assert.Equal(t, api_keys.StatusActive, bound.Status)
+}
+
 // ============================================================
 // CLEANUP EXPIRED EPHEMERAL KEYS TESTS
 // ============================================================

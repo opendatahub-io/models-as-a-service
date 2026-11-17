@@ -120,6 +120,11 @@ type MetadataStore interface {
 	// tenant. It must not affect keys belonging to other subscriptions or tenants.
 	InvalidateSubscription(ctx context.Context, tenant, subscription string) (int, error)
 
+	// InvalidateSubscriptionWithoutIdentity soft-deletes only legacy keys that
+	// have no subscription identity binding. Identity-bound keys must be cleaned
+	// up through identity-aware absence handling.
+	InvalidateSubscriptionWithoutIdentity(ctx context.Context, tenant, subscription string) (int, error)
+
 	// Revoke marks a specific API key as revoked (status transition: active → revoked).
 	Revoke(ctx context.Context, keyID string) error
 
