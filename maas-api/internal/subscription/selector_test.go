@@ -1215,6 +1215,7 @@ type selectAccessAllowedTestCase struct {
 	wantError             bool
 	wantAccessDenied      bool
 	wantModelNotInSub     bool
+	wantModelDenied       string // message of the expected ModelAccessDeniedError
 }
 
 func TestSelect_AccessAllowed(t *testing.T) {
@@ -1329,7 +1330,8 @@ func selectAccessAllowedTestCases() []selectAccessAllowedTestCase {
 			accessChecker: &fakeAccessChecker{
 				authorized: map[authpolicy.ModelKey]bool{},
 			},
-			wantAccessAllowed: false,
+			wantError:       true,
+			wantModelDenied: `model "ns1/model-a" is not available in subscription "sub1"`,
 		},
 		{
 			name: "qualified subscription with authorized model",
@@ -1363,7 +1365,8 @@ func selectAccessAllowedTestCases() []selectAccessAllowedTestCase {
 					{Namespace: "ns1", Name: "model-a"}: true,
 				},
 			},
-			wantAccessAllowed: false,
+			wantError:       true,
+			wantModelDenied: `model "ns1/missing-model" is not available in subscription "sub1"`,
 		},
 		{
 			name: "explicit bare subscription without auth policy returns model not in subscription",
@@ -1393,7 +1396,8 @@ func selectAccessAllowedTestCases() []selectAccessAllowedTestCase {
 					{Namespace: "ns1", Name: "model-a"}: true,
 				},
 			},
-			wantAccessAllowed: false,
+			wantError:       true,
+			wantModelDenied: `model "ns1/missing-model" is not available in subscription "test-ns/sub1"`,
 		},
 		{
 			name: "explicit qualified subscription without auth policy returns model not in subscription",
@@ -1477,6 +1481,10 @@ func assertSelectAccessAllowedError(t *testing.T, err error, tt selectAccessAllo
 		if !errors.As(err, &notInSub) {
 			t.Fatalf("expected ModelNotInSubscriptionError, got %T: %v", err, err)
 		}
+	}
+	var denied *subscription.ModelAccessDeniedError
+	if tt.wantModelDenied != "" && (!errors.As(err, &denied) || err.Error() != tt.wantModelDenied) {
+		t.Errorf("error = %T %q, want ModelAccessDeniedError %q", err, err, tt.wantModelDenied)
 	}
 }
 
@@ -1731,6 +1739,7 @@ type selectFiltersModelRefsTestCase struct {
 	wantAccessAllowed  bool
 	expectError        bool
 	expectAccessDenied bool
+	expectModelDenied  bool
 }
 
 func TestSelect_FiltersModelRefsByAuthPolicy(t *testing.T) {
@@ -1930,8 +1939,8 @@ func TestSelectExplicit_FiltersModelRefsByAuthPolicy(t *testing.T) {
 			groups:            []string{"g1"},
 			requestedSub:      "sub1",
 			requestedModel:    "ns2/missing-model",
-			wantModelRefs:     []string{"ns1/model-a"},
-			wantAccessAllowed: false,
+			expectError:       true,
+			expectModelDenied: true,
 		},
 		{
 			name: "Select explicit qualified subscription hides missing model membership",
@@ -1947,11 +1956,11 @@ func TestSelectExplicit_FiltersModelRefsByAuthPolicy(t *testing.T) {
 			groups:            []string{"g1"},
 			requestedSub:      "test-ns/sub1",
 			requestedModel:    "ns2/missing-model",
-			wantModelRefs:     []string{"ns1/model-a"},
-			wantAccessAllowed: false,
+			expectError:       true,
+			expectModelDenied: true,
 		},
 		{
-			name: "Select explicit subscription with unauthorized model returns AccessAllowed false",
+			name: "Select explicit subscription with unauthorized model is denied",
 			subscriptions: []*unstructured.Unstructured{
 				createSubscriptionWithModelRefs("sub1", []string{"g1"}, []map[string]any{
 					{"name": "model-a", "namespace": "ns"},
@@ -1964,8 +1973,8 @@ func TestSelectExplicit_FiltersModelRefsByAuthPolicy(t *testing.T) {
 			groups:            []string{"g1"},
 			requestedSub:      "sub1",
 			requestedModel:    "ns/model-b",
-			wantModelRefs:     []string{"ns/model-a"},
-			wantAccessAllowed: false,
+			expectError:       true,
+			expectModelDenied: true,
 		},
 		{
 			name: "Select skips health checks for unauthorized degraded model",
@@ -1991,11 +2000,11 @@ func TestSelectExplicit_FiltersModelRefsByAuthPolicy(t *testing.T) {
 			groups:            []string{"g1"},
 			requestedSub:      "sub1",
 			requestedModel:    "ns/model-a",
-			wantModelRefs:     []string{"ns/model-b"},
-			wantAccessAllowed: false,
+			expectError:       true,
+			expectModelDenied: true,
 		},
 		{
-			name: "Select qualified subscription with unauthorized model returns AccessAllowed false",
+			name: "Select qualified subscription with unauthorized model is denied",
 			subscriptions: []*unstructured.Unstructured{
 				createSubscriptionWithModelRefs("sub1", []string{"g1"}, []map[string]any{
 					{"name": "model-a", "namespace": "ns"},
@@ -2008,8 +2017,8 @@ func TestSelectExplicit_FiltersModelRefsByAuthPolicy(t *testing.T) {
 			groups:            []string{"g1"},
 			requestedSub:      "test-ns/sub1",
 			requestedModel:    "ns/model-b",
-			wantModelRefs:     []string{"ns/model-a"},
-			wantAccessAllowed: false,
+			expectError:       true,
+			expectModelDenied: true,
 		},
 	})
 }
@@ -2037,6 +2046,10 @@ func runSelectFiltersModelRefsTest(t *testing.T, log *logger.Logger, tt selectFi
 	assertAccessCheckerCall(t, tt)
 	if tt.expectError {
 		requireAccessDeniedError(t, err, tt.expectAccessDenied)
+		var denied *subscription.ModelAccessDeniedError
+		if tt.expectModelDenied && !errors.As(err, &denied) {
+			t.Fatalf("expected ModelAccessDeniedError, got %T: %v", err, err)
+		}
 		return
 	}
 	if err != nil {
@@ -2336,12 +2349,10 @@ func TestSelect_ExactRefNotSubstitutedByAuthorizedAliasCarrier(t *testing.T) {
 	selector := subscription.NewSelector(log, &fakeLister{subscriptions: []*unstructured.Unstructured{sub}}, modelLister, accessChecker)
 
 	t.Run("explicit selection denies the unauthorized exact reference", func(t *testing.T) {
-		result, err := selector.Select([]string{"g1"}, "", "sub1", "tenant-b/client-name")
-		if err != nil {
-			t.Fatalf("Select: %v", err)
-		}
-		if result.AccessAllowed {
-			t.Error("AccessAllowed = true, want false when the exact reference is unauthorized")
+		_, err := selector.Select([]string{"g1"}, "", "sub1", "tenant-b/client-name")
+		var denied *subscription.ModelAccessDeniedError
+		if !errors.As(err, &denied) {
+			t.Fatalf("expected ModelAccessDeniedError when the exact reference is unauthorized, got %T: %v", err, err)
 		}
 	})
 

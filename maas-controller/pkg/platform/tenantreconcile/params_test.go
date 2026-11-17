@@ -650,6 +650,68 @@ func TestAPIKeyCleanupCronJobUserPerPlatform(t *testing.T) {
 	}
 }
 
+// postRenderTenant renders overlay into maas-infra and post-renders it for the
+// default tenant (tenantID "") or the AITenant called tenantID.
+func postRenderTenant(t *testing.T, overlay, tenantID string) []unstructured.Unstructured {
+	t.Helper()
+	tenant := &maasv1alpha1.MaasTenantConfig{ObjectMeta: metav1.ObjectMeta{
+		Name: maasv1alpha1.MaasTenantConfigInstanceName, Namespace: "models-as-a-service",
+	}}
+	if tenantID != "" {
+		tenant.Namespace = "ai-tenant-" + tenantID
+		tenant.Labels = map[string]string{LabelManagedByAITenant: "true", LabelTenantName: tenantID}
+	}
+	resources, err := PostRender(context.Background(), logr.Discard(), tenant,
+		renderPlatformOverlayResources(t, overlay, "maas-infra"), PlatformParams{ //nolint:gosec // MaaSAPIKeyCleanupImage is an image reference, not a credential
+			AppNamespace:           "maas-infra",
+			ControllerNamespace:    "controller-ns",
+			GatewayNamespace:       "openshift-ingress",
+			GatewayName:            "gateway-" + tenant.Namespace,
+			SubscriptionNamespace:  tenant.Namespace,
+			TenantIdentifier:       tenantID,
+			MaaSAPIImage:           "quay.io/example/maas-api:test",
+			PayloadProcessingImage: "quay.io/example/payload:test",
+			MaaSAPIKeyCleanupImage: "quay.io/example/cleanup:test",
+		})
+	require.NoError(t, err)
+	return resources
+}
+
+// The maas-api serving certificate covers <service>.<namespace>.svc, not the short
+// Service name, so the cleanup job must call that name or curl fails verification.
+func TestAPIKeyCleanupCronJobCallsServiceOnCertificate(t *testing.T) {
+	for _, overlay := range []string{"odh", "xks"} {
+		for tenantID, service := range map[string]string{"": "maas-api", "redteam": "maas-api-redteam"} {
+			t.Run(overlay+"/tenant="+tenantID, func(t *testing.T) {
+				resources := postRenderTenant(t, overlay, tenantID)
+				cronJob := requireResource(t, resources, GVKCronJob, MaaSAPIKeyCleanupCronJobName(tenantID))
+				containers, _, err := unstructured.NestedSlice(cronJob.Object, cronJobContainersPath...)
+				require.NoError(t, err)
+				require.Len(t, containers, 1)
+				container, ok := containers[0].(map[string]any)
+				require.True(t, ok)
+				assert.Contains(t, container["env"], map[string]any{"name": "MAAS_API_SERVICE", "value": service})
+				assert.Contains(t, container["env"], map[string]any{
+					"name": "NAMESPACE", "valueFrom": map[string]any{"fieldRef": map[string]any{"fieldPath": "metadata.namespace"}},
+				})
+				assert.Contains(t, fmt.Sprint(container["command"]), `"https://${MAAS_API_SERVICE}.${NAMESPACE}.svc:8443/internal/v1/api-keys/cleanup"`)
+
+				// That host must be on the certificate maas-api serves.
+				svc := requireResource(t, resources, GVKService, service)
+				assert.Equal(t, cronJob.GetNamespace(), svc.GetNamespace())
+				if overlay == "odh" { // OpenShift service-ca issues it for <service>.<namespace>.svc.
+					assert.Equal(t, service+"-serving-cert", svc.GetAnnotations()["service.beta.openshift.io/serving-cert-secret-name"])
+					return
+				}
+				cert := requireResource(t, resources, GVKCertificate, MaaSAPIServingCertName(tenantID))
+				dnsNames, _, err := unstructured.NestedStringSlice(cert.Object, "spec", "dnsNames")
+				require.NoError(t, err)
+				assert.Contains(t, dnsNames, service+".maas-infra.svc")
+			})
+		}
+	}
+}
+
 // The maas-api ClusterRoles carry an OpenShift-only rule (config.openshift.io/apiservers)
 // for honoring the cluster-wide TLS security profile. That API group does not exist on
 // xKS, so the maas-controller SA can never hold the permission and the RBAC escalation

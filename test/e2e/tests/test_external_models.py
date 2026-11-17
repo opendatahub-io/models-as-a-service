@@ -964,13 +964,13 @@ class TestExternalModelBodyRouting:
     IPP pre-processing extracts the ``model`` field from the JSON body and
     resolves it via the model-provider-resolver plugin's store.
 
-    IMPORTANT CAVEAT: every request here hits ``/{ns}/{model}/v1/...``, a
-    path that already encodes a valid model name, so Kuadrant's AuthPolicy
-    authorizes from the path alone and the plugin silently no-ops (rather
-    than rejecting) on an unresolvable body model. The valid-body forwarding
-    contract is covered by TestExternalModelEgress; the "wrong"/"missing"
-    cases below are smoke checks only. Genuine path-agnostic body-only
-    enforcement is future work (RHAISTRAT-1540).
+    Every request here hits ``/{ns}/{model}/v1/...``, a path that already
+    names a valid model. The gateway AuthPolicy authorizes that path model and,
+    when the body names a model, requires it to be the path model's
+    client-facing name, so a body naming another model gets 403. A body without
+    a model is authorized from the path alone. The valid-body forwarding
+    contract is covered by TestExternalModelEgress. Path-agnostic body-only
+    routing is future work (RHAISTRAT-1540).
     """
 
     def _post_chat(self, gateway_url, model_path, api_key, body):
@@ -997,29 +997,30 @@ class TestExternalModelBodyRouting:
     )
     def test_unresolvable_model_body_does_not_error(self, external_models_setup, body, case_name):
         """
-        An unresolvable or missing model field does not crash the request pipeline.
+        A body model that differs from the path model is denied; a missing one is not.
 
-        NOTE: This is a smoke check, not an enforcement check. The URL path
-        already contains a valid model name, so Kuadrant's AuthPolicy
-        authorizes the request from the path alone before the body is
-        considered. IPP's model-provider-resolver plugin does not reject
-        unresolvable models either — it silently no-ops (returns nil) and
-        lets the request pass through unchanged when the body's model isn't
-        found in its store (see plugin.go ProcessRequest). So today there is
-        no code path that actually rejects a mismatched body model for
-        ExternalModel; this test only proves the request isn't dropped or
-        errored (still != 200, since httpbingo never returns 200 for these
-        paths). True body-only enforcement without a path is tracked under
-        RHAISTRAT-1540 (unified BBR routing) and isn't implemented yet.
+        ``wrong-model``: IPP sets X-Gateway-Model-Name from the body, and the
+        gateway AuthPolicy denies a path-routed request whose header is not the
+        path model's client-facing name (403). ``missing-model``: no header is
+        set, so the request is authorized from the path; the
+        model-provider-resolver plugin lets it pass through unchanged (see
+        plugin.go ProcessRequest) and the external upstream answers with a
+        non-auth 4xx (httpbingo never returns 200 for these paths).
         """
         setup = external_models_setup
         model_path = f"/{MODEL_NAMESPACE}/{EXTERNAL_MODEL_NAME}/v1"
         r = self._post_chat(setup["gateway_url"], model_path, setup["api_key"], body)
-        assert 400 <= r.status_code < 500 and r.status_code not in (401, 403), (
-            f"Expected a non-auth 4xx from the external upstream for {case_name} body, "
-            f"got {r.status_code}. A 5xx means the request pipeline errored; "
-            "a 200 means body routing may not be active."
-        )
+        if case_name == "wrong-model":
+            assert r.status_code == 403, (
+                f"Expected 403 for a body model that differs from the path model, "
+                f"got {r.status_code}: {r.text[:200]}"
+            )
+        else:
+            assert 400 <= r.status_code < 500 and r.status_code not in (401, 403), (
+                f"Expected a non-auth 4xx from the external upstream for {case_name} body, "
+                f"got {r.status_code}. A 5xx means the request pipeline errored; "
+                "a 200 means body routing may not be active."
+            )
         log.info("Body routing (%s): HTTP %d", case_name, r.status_code)
 
 

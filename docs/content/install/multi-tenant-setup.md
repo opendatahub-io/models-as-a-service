@@ -344,8 +344,8 @@ The controller finalizer cleans up:
 
 ## Known Limitations
 
-!!! warning "External models are only supported for the default tenant"
-    External models work for the default tenant only. Non-default tenant IPP instances have the ExternalModel controller disabled to prevent HTTPRoute conflicts. See [External Model Setup — Multi-Tenant Limitation](external-model-setup.md#multi-tenant-limitation) for details.
+!!! warning "External models on tenants still on the legacy payload processor"
+    A tenant on Praxis serves the external models in its own namespace. A non-default tenant that still runs the RHOAI 3.5 payload processor (IPP) after an upgrade serves none: its IPP instances have the ExternalModel controller disabled to prevent HTTPRoute conflicts. See [External Model Setup — Tenants](external-model-setup.md#tenants) for details.
 
 ## See Also
 

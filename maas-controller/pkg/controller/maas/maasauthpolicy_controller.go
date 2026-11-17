@@ -488,6 +488,18 @@ const (
 		` : ("x-gateway-model-name" in request.headers` +
 		`   ? request.headers["x-gateway-model-name"]` +
 		`   : ""))`
+	// ExternalModel requests are routed after auth by X-Gateway-Model-Name
+	// (the body model), not by the path, so a path-routed request must carry
+	// the subscription-info.bodyRoutedModel maas-api reports for the path
+	// model. celBodyRoutedModelMatches indexes the header, so it is evaluated
+	// only once celPathRoutedBodyModel holds. An absent field (LLMInferenceService,
+	// or an older maas-api during a rollout) passes; an empty one matches no header.
+	celPathRoutedBodyModel    = `(` + celPathModelIdentityAvailable + ` && "x-gateway-model-name" in request.headers)`
+	celBodyRoutedModelPresent = `(has(auth.metadata) && "subscription-info" in auth.metadata && ` +
+		`has(auth.metadata["subscription-info"].bodyRoutedModel))`
+	celBodyRoutedModelMatches = `(!` + celBodyRoutedModelPresent + ` || ` +
+		`auth.metadata["subscription-info"].bodyRoutedModel == request.headers["x-gateway-model-name"])`
+	celBodyRoutedModelMismatch = `(` + celPathRoutedBodyModel + ` && !` + celBodyRoutedModelMatches + `)`
 	// Prefer MaaSModelRef identity resolved by subscription select (handles BBR
 	// publisher IDs). Fall back to path/header identity for path-based routing.
 	celResolvedModelIdentity = `(has(auth.metadata["subscription-info"].resolvedModel) && ` +
@@ -1038,6 +1050,21 @@ allow {
 				"ttl": r.authzCacheTTL(),
 			},
 		},
+		// Not cached: the header is not part of any cache key.
+		"body-routed-model-matches": map[string]any{
+			"when": []any{
+				map[string]any{
+					"predicate": celPathRoutedBodyModel,
+				},
+			},
+			"metrics":  false,
+			"priority": int64(0),
+			"patternMatching": map[string]any{
+				"patterns": []any{
+					map[string]any{"predicate": celBodyRoutedModelMatches},
+				},
+			},
+		},
 	}
 	// A non-nil catalog is validated even when it has no checks. An empty
 	// catalog permits only an empty selectedGuardrailChecks map. Nil is used by
@@ -1436,11 +1463,14 @@ allow {
 						` ? auth.metadata["subscription-info"].message` +
 						`.replace('\\', '\\\\').replace('"', '\\"')` +
 						`.replace('\n', '\\n').replace('\r', '\\r').replace('\t', '\\t')` +
-						` : "Access denied") + '","type":"authorization_error","code":403}}'`,
+						` : (` + celBodyRoutedModelMismatch +
+						` ? "Access denied: model in the request body does not match model in the request path"` +
+						` : "Access denied")) + '","type":"authorization_error","code":403}}'`,
 				},
 				"headers": map[string]any{
 					"x-ext-auth-reason": map[string]any{
-						"expression": `has(auth.metadata["subscription-info"].error) ? auth.metadata["subscription-info"].error : "unauthorized"`,
+						"expression": `has(auth.metadata["subscription-info"].error) ? auth.metadata["subscription-info"].error : ` +
+							`(` + celBodyRoutedModelMismatch + ` ? "model_mismatch" : "unauthorized")`,
 					},
 					"content-type": map[string]any{
 						"value": "application/json",

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -13,6 +14,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -186,6 +188,12 @@ func RunPlatformWithReader(
 
 	if err := cleanupLegacyMaaSAPIGatewayNetworkPolicy(ctx, c, appNs, mcfg.UID, log); err != nil {
 		return nil, fmt.Errorf("cleanup legacy maas-api gateway networkpolicy: %w", err)
+	}
+
+	if rendersMaaSAPIServiceMonitor(resources) {
+		if err := cleanupLegacyMaaSAPIPodMonitor(ctx, c, appNs, mcfg.UID, log); err != nil {
+			return nil, fmt.Errorf("cleanup legacy maas-api PodMonitor: %w", err)
+		}
 	}
 
 	if err := syncMaaSParametersConfigMap(ctx, c, appNs, params, log); err != nil {
@@ -1218,7 +1226,7 @@ func applyMaaSAPIPreserveEgressConfig(ctx context.Context, c client.Client, para
 		}
 		return fmt.Errorf("get NetworkPolicy %s/%s: %w", appNs, baseMaaSAPIEgressRestrictNetworkPolicyName, err)
 	}
-	if !isMaaSManagedNetworkPolicy(np, mcfg.UID) || !networkPolicyDeclaresEgress(np) {
+	if !isMaaSManagedObject(np, mcfg.UID) || !networkPolicyDeclaresEgress(np) {
 		return nil
 	}
 
@@ -1249,18 +1257,18 @@ func applyMaaSAPIPreserveEgressConfig(ctx context.Context, c client.Client, para
 	return nil
 }
 
-// isMaaSManagedNetworkPolicy reports whether maas-controller may delete a
-// rendered NetworkPolicy during cleanup. External controller ownership wins.
-func isMaaSManagedNetworkPolicy(np *unstructured.Unstructured, configUID types.UID) bool {
-	for _, ref := range np.GetOwnerReferences() {
+// isMaaSManagedObject reports whether maas-controller may delete an object it
+// rendered during cleanup. External controller ownership wins.
+func isMaaSManagedObject(obj *unstructured.Unstructured, configUID types.UID) bool {
+	for _, ref := range obj.GetOwnerReferences() {
 		if ref.Controller != nil && *ref.Controller && ref.UID != configUID {
 			return false
 		}
 	}
-	if hasConfigControllerOwner(np, configUID) {
+	if hasConfigControllerOwner(obj, configUID) {
 		return true
 	}
-	return hasSSAFieldManager(np, ssaFieldOwner)
+	return hasSSAFieldManager(obj, ssaFieldOwner)
 }
 
 // cleanupMaaSAPIEgressNetworkPolicy deletes maas-api-egress-restrict when
@@ -1278,7 +1286,7 @@ func cleanupMaaSAPIEgressNetworkPolicy(ctx context.Context, c client.Client, app
 		return fmt.Errorf("get NetworkPolicy %s/%s: %w", appNs, baseMaaSAPIEgressRestrictNetworkPolicyName, err)
 	}
 
-	if !isMaaSManagedNetworkPolicy(np, configUID) {
+	if !isMaaSManagedObject(np, configUID) {
 		log.V(1).Info("Skipping maas-api egress NetworkPolicy cleanup; not managed by maas-controller",
 			"name", baseMaaSAPIEgressRestrictNetworkPolicyName, "namespace", appNs)
 		return nil
@@ -1313,7 +1321,7 @@ func cleanupLegacyMaaSAPIGatewayNetworkPolicy(
 		}
 		return fmt.Errorf("get NetworkPolicy %s/%s: %w", appNs, baseMaaSAPIGatewayNetworkPolicyName, err)
 	}
-	if !isMaaSManagedNetworkPolicy(np, configUID) {
+	if !isMaaSManagedObject(np, configUID) {
 		log.V(1).Info("Skipping legacy maas-api gateway NetworkPolicy cleanup; not managed by maas-controller",
 			"name", baseMaaSAPIGatewayNetworkPolicyName, "namespace", appNs)
 		return nil
@@ -1348,7 +1356,7 @@ func cleanupLegacyMaaSAPIGatewayNetworkPolicy(
 			}
 			return fmt.Errorf("get tenant scoped NetworkPolicy %s/%s: %w", appNs, scopedName, err)
 		}
-		if !isMaaSManagedNetworkPolicy(scopedPolicy, configUID) {
+		if !isMaaSManagedObject(scopedPolicy, configUID) {
 			log.Info("Deferring legacy maas-api gateway NetworkPolicy cleanup; tenant scoped policy is not managed by maas-controller",
 				"sharedName", baseMaaSAPIGatewayNetworkPolicyName,
 				"scopedName", scopedName,
@@ -1367,6 +1375,47 @@ func cleanupLegacyMaaSAPIGatewayNetworkPolicy(
 	}
 	if err := c.Delete(ctx, np, deleteOptions...); err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("delete NetworkPolicy %s/%s: %w", appNs, baseMaaSAPIGatewayNetworkPolicyName, err)
+	}
+	return nil
+}
+
+// rendersMaaSAPIServiceMonitor reports whether resources hold the maas-api-metrics
+// ServiceMonitor that replaced the 3.5.x PodMonitor; overlays without it (xKS) never
+// rendered the PodMonitor.
+func rendersMaaSAPIServiceMonitor(resources []unstructured.Unstructured) bool {
+	return slices.ContainsFunc(resources, func(r unstructured.Unstructured) bool {
+		return r.GroupVersionKind() == GVKServiceMonitor && r.GetName() == maasAPIMetricsServiceMonitorName
+	})
+}
+
+// cleanupLegacyMaaSAPIPodMonitor deletes the maas-api-metrics PodMonitor that 3.5.x
+// rendered in the app namespace. Applying the render never deletes, so it would keep
+// scraping over plain HTTP next to the ServiceMonitor that replaced it. No later
+// release renders a PodMonitor of that name, so maas-controller ownership identifies it.
+func cleanupLegacyMaaSAPIPodMonitor(ctx context.Context, c client.Client, appNs string, configUID types.UID, log logr.Logger) error {
+	pm := &unstructured.Unstructured{}
+	pm.SetGroupVersionKind(GVKPodMonitor)
+	key := types.NamespacedName{Namespace: appNs, Name: maasAPIMetricsServiceMonitorName}
+	if err := c.Get(ctx, key, pm); err != nil {
+		if apierrors.IsNotFound(err) || apimeta.IsNoMatchError(err) {
+			return nil
+		}
+		return fmt.Errorf("get PodMonitor %s: %w", key, err)
+	}
+	if !isMaaSManagedObject(pm, configUID) {
+		log.V(1).Info("Skipping legacy maas-api PodMonitor cleanup; not managed by maas-controller",
+			"name", maasAPIMetricsServiceMonitorName, "namespace", appNs)
+		return nil
+	}
+
+	log.Info("Deleting legacy maas-api PodMonitor; the maas-api-metrics ServiceMonitor replaced it",
+		"name", maasAPIMetricsServiceMonitorName, "namespace", appNs)
+	deleteOptions, err := validatedDeleteOptions(pm)
+	if err != nil {
+		return fmt.Errorf("prepare PodMonitor %s deletion: %w", key, err)
+	}
+	if err := c.Delete(ctx, pm, deleteOptions...); err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("delete PodMonitor %s: %w", key, err)
 	}
 	return nil
 }
