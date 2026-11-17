@@ -372,6 +372,7 @@ func TestMaaSAuthPolicyReconciler_SubscriptionIdentityCallbackRolloutGate(t *tes
 		availableReplicas  int32
 		readyReplicas      int32
 		wantReady          bool
+		wantCanEmit        bool
 	}{
 		{
 			name:               "missing contract is not ready",
@@ -398,6 +399,7 @@ func TestMaaSAuthPolicyReconciler_SubscriptionIdentityCallbackRolloutGate(t *tes
 			availableReplicas:  1,
 			readyReplicas:      1,
 			wantReady:          true,
+			wantCanEmit:        true,
 		},
 		{
 			name:               "surge rollout with old pod is not ready",
@@ -407,6 +409,14 @@ func TestMaaSAuthPolicyReconciler_SubscriptionIdentityCallbackRolloutGate(t *tes
 			updatedReplicas:    1,
 			availableReplicas:  1,
 			readyReplicas:      1,
+		},
+		{
+			name:               "temporary unavailability after rollout can emit identity",
+			contractAnnotation: tenantreconcile.MaaSAPISubscriptionIdentityContractV1,
+			observedGeneration: 1,
+			replicas:           1,
+			updatedReplicas:    1,
+			wantCanEmit:        true,
 		},
 	}
 
@@ -440,12 +450,15 @@ func TestMaaSAuthPolicyReconciler_SubscriptionIdentityCallbackRolloutGate(t *tes
 			client := fake.NewClientBuilder().WithScheme(scheme).WithObjects(deployment).Build()
 			reconciler := &MaaSAuthPolicyReconciler{Client: client, InfraNamespace: infraNS}
 
-			ready, err := reconciler.maasAPISubscriptionIdentityCallbackReady(context.Background(), "")
+			status, err := reconciler.maasAPISubscriptionIdentityCallbackStatus(context.Background(), "")
 			if err != nil {
-				t.Fatalf("maasAPISubscriptionIdentityCallbackReady: %v", err)
+				t.Fatalf("maasAPISubscriptionIdentityCallbackStatus: %v", err)
 			}
-			if ready != tt.wantReady {
-				t.Fatalf("ready = %v, want %v", ready, tt.wantReady)
+			if status.Ready() != tt.wantReady {
+				t.Fatalf("ready = %v, want %v", status.Ready(), tt.wantReady)
+			}
+			if status.CanEmitIdentityCallback() != tt.wantCanEmit {
+				t.Fatalf("canEmitIdentityCallback = %v, want %v", status.CanEmitIdentityCallback(), tt.wantCanEmit)
 			}
 		})
 	}

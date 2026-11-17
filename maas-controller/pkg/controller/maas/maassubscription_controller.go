@@ -1284,11 +1284,11 @@ func (r *MaaSSubscriptionReconciler) ensureSubscriptionAPIKeysRevoked(ctx contex
 	}
 
 	if effectiveIdentityMode == subscriptionIdentityModeMigrate {
-		callbackReady, err := maasAPISubscriptionIdentityCallbackReady(ctx, r.Client, r.AppNamespace, tenantID)
+		callbackStatus, err := maasAPISubscriptionIdentityCallbackStatus(ctx, r.Client, r.AppNamespace, tenantID)
 		if err != nil {
 			return false, err
 		}
-		if !callbackReady {
+		if !callbackStatus.Ready() {
 			log.Info("Waiting for maas-api subscription identity cleanup rollout",
 				"subscription", subscription.Namespace+"/"+subscription.Name,
 				"tenantID", tenantID,

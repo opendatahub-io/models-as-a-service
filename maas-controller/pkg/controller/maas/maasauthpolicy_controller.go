@@ -367,15 +367,28 @@ func (r *MaaSAuthPolicyReconciler) targetMaaSAPIReady(ctx context.Context, tenan
 	return false, nil
 }
 
-// maasAPISubscriptionIdentityCallbackReady reports whether the target
-// maas-api Deployment advertises the identity callback contract and has
-// completed its rollout. This prevents a new controller from sending a field
-// that an older callback pod rejects as unknown.
-func (r *MaaSAuthPolicyReconciler) maasAPISubscriptionIdentityCallbackReady(ctx context.Context, tenantID string) (bool, error) {
-	return maasAPISubscriptionIdentityCallbackReady(ctx, r, r.InfraNamespace, tenantID)
+// maasAPISubscriptionIdentityCallbackStatus reports whether the target
+// maas-api Deployment advertises the identity callback contract, whether its
+// rollout has replaced every legacy pod, and whether replicas are available.
+func (r *MaaSAuthPolicyReconciler) maasAPISubscriptionIdentityCallbackStatus(ctx context.Context, tenantID string) (subscriptionIdentityCallbackStatus, error) {
+	return maasAPISubscriptionIdentityCallbackStatus(ctx, r, r.InfraNamespace, tenantID)
 }
 
-func maasAPISubscriptionIdentityCallbackReady(ctx context.Context, reader client.Reader, namespace, tenantID string) (bool, error) {
+type subscriptionIdentityCallbackStatus struct {
+	contractAdvertised bool
+	rolloutComplete    bool
+	available          bool
+}
+
+func (status subscriptionIdentityCallbackStatus) Ready() bool {
+	return status.CanEmitIdentityCallback() && status.available
+}
+
+func (status subscriptionIdentityCallbackStatus) CanEmitIdentityCallback() bool {
+	return status.contractAdvertised && status.rolloutComplete
+}
+
+func maasAPISubscriptionIdentityCallbackStatus(ctx context.Context, reader client.Reader, namespace, tenantID string) (subscriptionIdentityCallbackStatus, error) {
 	deployment := &appsv1.Deployment{}
 	key := types.NamespacedName{
 		Namespace: namespace,
@@ -383,33 +396,27 @@ func maasAPISubscriptionIdentityCallbackReady(ctx context.Context, reader client
 	}
 	if err := reader.Get(ctx, key, deployment); err != nil {
 		if apierrors.IsNotFound(err) {
-			return false, nil
+			return subscriptionIdentityCallbackStatus{}, nil
 		}
-		return false, fmt.Errorf("get target maas-api Deployment for %s/%s: %w", namespace, key.Name, err)
+		return subscriptionIdentityCallbackStatus{}, fmt.Errorf("get target maas-api Deployment for %s/%s: %w", namespace, key.Name, err)
 	}
 
-	annotations := deployment.Spec.Template.Annotations
-	if annotations[tenantreconcile.AnnotationMaaSAPISubscriptionIdentityContract] !=
-		tenantreconcile.MaaSAPISubscriptionIdentityContractV1 {
-		return false, nil
-	}
-	if deployment.Spec.Paused {
-		return false, nil
+	status := subscriptionIdentityCallbackStatus{
+		contractAdvertised: deployment.Spec.Template.Annotations[tenantreconcile.AnnotationMaaSAPISubscriptionIdentityContract] ==
+			tenantreconcile.MaaSAPISubscriptionIdentityContractV1,
 	}
 
 	desiredReplicas := int32(1)
 	if deployment.Spec.Replicas != nil {
 		desiredReplicas = *deployment.Spec.Replicas
 	}
-	if desiredReplicas < 1 ||
-		deployment.Status.ObservedGeneration < deployment.Generation ||
-		deployment.Status.Replicas != desiredReplicas ||
-		deployment.Status.UpdatedReplicas != desiredReplicas ||
-		deployment.Status.AvailableReplicas != desiredReplicas ||
-		deployment.Status.ReadyReplicas != desiredReplicas {
-		return false, nil
-	}
-	return true, nil
+	status.rolloutComplete = desiredReplicas >= 1 &&
+		deployment.Status.ObservedGeneration >= deployment.Generation &&
+		deployment.Status.Replicas == desiredReplicas &&
+		deployment.Status.UpdatedReplicas == desiredReplicas
+	status.available = deployment.Status.AvailableReplicas == desiredReplicas &&
+		deployment.Status.ReadyReplicas == desiredReplicas
+	return status, nil
 }
 
 // hasLegacyModelAuthPolicy detects any route-level policy used by the pre-3.5
@@ -1844,11 +1851,11 @@ func (r *MaaSAuthPolicyReconciler) reconcileGatewayAuthPolicyWithHeaders(
 	strictIdentity := subscriptionIdentityMode(r.SubscriptionIdentityMode) == subscriptionIdentityModeStrict
 	emitSubscriptionIdentityCallback := false
 	if strictIdentity {
-		callbackReady, err := r.maasAPISubscriptionIdentityCallbackReady(ctx, tenantID)
+		callbackStatus, err := r.maasAPISubscriptionIdentityCallbackStatus(ctx, tenantID)
 		if err != nil {
 			return false, err
 		}
-		emitSubscriptionIdentityCallback = callbackReady
+		emitSubscriptionIdentityCallback = callbackStatus.CanEmitIdentityCallback()
 	}
 	if strictIdentity && !emitSubscriptionIdentityCallback {
 		log.Info("Waiting for maas-api subscription identity callback rollout",
