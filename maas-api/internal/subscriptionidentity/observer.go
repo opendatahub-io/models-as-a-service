@@ -223,6 +223,7 @@ func (observer *Observer) Refresh(ctx context.Context) {
 		committed = true
 		recordRejoinOutcome("blocked")
 		observer.logger.Warn("Retired subscription observer rejoin blocked until pending identity rotation settles")
+		observer.applyStatusWrites(ctx, refreshed.statusWrites)
 		return
 	}
 
@@ -263,7 +264,15 @@ func (observer *Observer) Refresh(ctx context.Context) {
 		)
 	}
 
-	for _, object := range refreshed.statusWrites {
+	observer.applyStatusWrites(ctx, refreshed.statusWrites)
+}
+
+func (observer *Observer) tenantName() string {
+	return observer.tenant
+}
+
+func (observer *Observer) applyStatusWrites(ctx context.Context, objects []SubscriptionObject) {
+	for _, object := range objects {
 		if err := observer.ApplyStatus(ctx, object); err != nil {
 			observer.logger.Error("Failed to write subscription identity status",
 				"subscription", object.Namespace+"/"+object.Name,
@@ -271,10 +280,6 @@ func (observer *Observer) Refresh(ctx context.Context) {
 			)
 		}
 	}
-}
-
-func (observer *Observer) tenantName() string {
-	return observer.tenant
 }
 
 func (observer *Observer) recordRetirement(result string, revokedAPIKeys int) {
@@ -312,7 +317,9 @@ func (observer *Observer) resolvePresentSubscriptions(
 		})
 		if resolveErr != nil {
 			if stderrors.Is(resolveErr, api_keys.ErrSubscriptionIdentityPending) {
-				refreshed.resolutionPendingOnly = true
+				if !refreshed.resolutionFailed {
+					refreshed.resolutionPendingOnly = true
+				}
 				observer.logger.Warn("Subscription identity remains pending",
 					"subscription", object.Namespace+"/"+object.Name,
 					"error", resolveErr,

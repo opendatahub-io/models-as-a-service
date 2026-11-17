@@ -47,6 +47,7 @@ type fakeObservationSession struct {
 	retireStale   []time.Duration
 	retireSettle  []time.Duration
 	rejoinFresh   []time.Duration
+	resolveErrs   map[string]error
 	commitErr     error
 	committed     bool
 	rolledBack    bool
@@ -91,6 +92,9 @@ func (session *fakeObservationSession) RetireStaleObservers(
 func (session *fakeObservationSession) ResolveSubscriptionIdentity(_ context.Context, request api_keys.ResolveSubscriptionIdentityRequest) (string, error) {
 	session.resolved = append(session.resolved, request)
 	session.calls = append(session.calls, "resolve:"+request.Namespace+"/"+request.Name)
+	if err, found := session.resolveErrs[request.Namespace+"/"+request.Name]; found {
+		return "", err
+	}
 	if session.resolveErr != nil {
 		return "", session.resolveErr
 	}
@@ -787,6 +791,127 @@ func TestObserverRefreshPreservesPendingRotationWhileBlockingRejoin(t *testing.T
 	assert.False(t, session.rolledBack)
 	assert.Empty(t, session.rejoinFresh)
 	require.Equal(t, []string{"tenant-a:blocked"}, metrics.rejoins)
+}
+
+func TestObserverRefreshBlocksRejoinWhenResolutionHasMixedFailures(t *testing.T) {
+	failedObject := &unstructured.Unstructured{}
+	failedObject.SetGroupVersionKind(schema.GroupVersionKind{
+		Group: "maas.opendatahub.io", Version: "v1alpha1", Kind: "MaaSSubscription",
+	})
+	failedObject.SetName("failed-sub")
+	failedObject.SetNamespace("subscriptions")
+	failedObject.SetUID("failed-uid")
+
+	pendingObject := &unstructured.Unstructured{}
+	pendingObject.SetGroupVersionKind(schema.GroupVersionKind{
+		Group: "maas.opendatahub.io", Version: "v1alpha1", Kind: "MaaSSubscription",
+	})
+	pendingObject.SetName("pending-sub")
+	pendingObject.SetNamespace("subscriptions")
+	pendingObject.SetUID("pending-uid")
+
+	gvr := subscription.GVR()
+	client := fake.NewSimpleDynamicClientWithCustomListKinds(
+		runtime.NewScheme(),
+		map[schema.GroupVersionResource]string{gvr: "MaaSSubscriptionList"},
+		failedObject,
+		pendingObject,
+	)
+	session := &fakeObservationSession{
+		heartbeatErr: api_keys.ErrObserverRetired,
+		resolveErrs: map[string]error{
+			"subscriptions/failed-sub":  errors.New("identity resolution failed"),
+			"subscriptions/pending-sub": api_keys.ErrSubscriptionIdentityPending,
+		},
+	}
+	metrics := &fakeObserverMetrics{}
+	observer := subscriptionidentity.NewObserver(
+		&fakeIdentityStore{session: session},
+		client,
+		"subscriptions",
+		"tenant-a",
+		"11111111-2222-3333-4444-555555555555",
+		time.Hour,
+		30*time.Second,
+		logger.Development(),
+	).
+		EnableObserverRejoin(3 * time.Minute).
+		WithMetricsRecorder(metrics)
+
+	observer.Refresh(context.Background())
+
+	assert.False(t, session.committed)
+	assert.True(t, session.rolledBack)
+	assert.Empty(t, session.rejoinFresh)
+	require.Equal(t, []string{"tenant-a:blocked"}, metrics.rejoins)
+}
+
+func TestObserverRefreshAppliesStatusWritesAfterPendingRotationCommit(t *testing.T) {
+	recoveredObject := &unstructured.Unstructured{}
+	recoveredObject.SetGroupVersionKind(schema.GroupVersionKind{
+		Group: "maas.opendatahub.io", Version: "v1alpha1", Kind: "MaaSSubscription",
+	})
+	recoveredObject.SetName("recovered-sub")
+	recoveredObject.SetNamespace("subscriptions")
+	recoveredObject.SetUID("recovered-uid")
+	recoveredObject.SetResourceVersion("rv-1")
+	require.NoError(t, unstructured.SetNestedField(
+		recoveredObject.Object,
+		"old-identity",
+		"status",
+		"subscriptionIdentityId",
+	))
+
+	pendingObject := &unstructured.Unstructured{}
+	pendingObject.SetGroupVersionKind(schema.GroupVersionKind{
+		Group: "maas.opendatahub.io", Version: "v1alpha1", Kind: "MaaSSubscription",
+	})
+	pendingObject.SetName("pending-sub")
+	pendingObject.SetNamespace("subscriptions")
+	pendingObject.SetUID("pending-uid")
+
+	gvr := subscription.GVR()
+	baseClient := fake.NewSimpleDynamicClientWithCustomListKinds(
+		runtime.NewScheme(),
+		map[schema.GroupVersionResource]string{gvr: "MaaSSubscriptionList"},
+		recoveredObject,
+		pendingObject,
+	)
+	client := &recordingDynamicClient{Interface: baseClient}
+	session := &fakeObservationSession{
+		heartbeatErr: api_keys.ErrObserverRetired,
+		resolveErrs: map[string]error{
+			"subscriptions/pending-sub": api_keys.ErrSubscriptionIdentityPending,
+		},
+	}
+	metrics := &fakeObserverMetrics{}
+	observer := subscriptionidentity.NewObserver(
+		&fakeIdentityStore{session: session},
+		client,
+		"subscriptions",
+		"tenant-a",
+		"11111111-2222-3333-4444-555555555555",
+		time.Hour,
+		30*time.Second,
+		logger.Development(),
+	).
+		EnableObserverRejoin(3 * time.Minute).
+		WithMetricsRecorder(metrics)
+
+	observer.Refresh(context.Background())
+
+	assert.True(t, session.committed)
+	assert.False(t, session.rolledBack)
+	assert.Empty(t, session.rejoinFresh)
+	require.Equal(t, []string{"tenant-a:blocked"}, metrics.rejoins)
+	require.Len(t, client.patches, 1)
+	var patch []map[string]any
+	require.NoError(t, json.Unmarshal(client.patches[0], &patch))
+	require.Len(t, patch, 3)
+	assert.Equal(t, "/metadata/uid", patch[0]["path"])
+	assert.Equal(t, "recovered-uid", patch[0]["value"])
+	assert.Equal(t, "/status/subscriptionIdentityId", patch[2]["path"])
+	assert.Equal(t, "0b6fe901-7b52-4a78-9cbf-e398728ef67e", patch[2]["value"])
 }
 
 func TestObserverRefreshRecordsRejoinFailure(t *testing.T) {
