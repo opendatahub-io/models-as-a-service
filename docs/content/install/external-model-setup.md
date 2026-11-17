@@ -265,7 +265,7 @@ curl -sS "https://${GW_HOST}/v1/chat/completions" \
 ```
 
 !!! note "Legacy path-based endpoint"
-    You can also use the path-based URL: `https://${GW_HOST}/llm/gpt-4o/v1/chat/completions`. Both routing modes are supported. See [Inference - Path-Based Routing](../user-guide/inference.md#path-based-routing-legacy) for details.
+    You can also use the path-based URL: `https://${GW_HOST}/llm/gpt-4o/v1/chat/completions`. Both routing modes are supported. On the path-based URL, a `model` field in the body must be the model's client-facing name (`gpt-4o` here); any other value is rejected with `403`. See [Inference - Path-Based Routing](../user-guide/inference.md#path-based-routing-legacy) for details.
 
 ### Verify Auth Enforcement
 
