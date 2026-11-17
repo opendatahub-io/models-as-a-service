@@ -1,5 +1,18 @@
 package api_keys
 
+// Subscription identity persistence deliberately separates the stable database
+// identity from Kubernetes object identity. The database UUID identifies one
+// subscription incarnation across every projected cluster copy, while a
+// Kubernetes UID is only that cluster's observation fingerprint. Keeping the
+// two concepts distinct prevents same-name replacement in one cluster from
+// selecting or revoking keys that belong to another incarnation.
+//
+// Observer sessions combine the observer fence, per-name locks, and row locks
+// in one transaction. Cleanup is therefore a consensus operation: it waits for
+// fresh observers and a barrier proving that none still report the identity
+// present. The observer and observation state exists so deletion never has to
+// trust namespace and name alone.
+
 import (
 	"context"
 	"database/sql"
@@ -284,6 +297,9 @@ func (session *postgresObservationSession) ResolveSubscriptionIdentity(ctx conte
 	return identityID, nil
 }
 
+// lockSubscriptionName serializes identity resolution for one tenant and
+// subscription name. The tenant length is included in the advisory-lock key so
+// tenant/name concatenations cannot collide with a different split.
 func (session *postgresObservationSession) lockSubscriptionName(ctx context.Context, name string) error {
 	lockKey := fmt.Sprintf("%d:%s%s", len(session.tenant), session.tenant, name)
 	if _, err := session.tx.ExecContext(ctx, "SELECT pg_advisory_xact_lock(hashtext($1))", lockKey); err != nil {
@@ -577,6 +593,10 @@ func (session *postgresObservationSession) MarkAbsent(ctx context.Context, subsc
 	return nil
 }
 
+// RecordAbsenceAndCleanup first records this observer's absence, then revokes
+// keys only after the settle window and active-observer barrier prove that no
+// projected copy still observes the subscription incarnation. Conflict results
+// are intentional: they retain keys until identity-aware consensus is safe.
 func (session *postgresObservationSession) RecordAbsenceAndCleanup(
 	ctx context.Context,
 	request SubscriptionAbsenceRequest,

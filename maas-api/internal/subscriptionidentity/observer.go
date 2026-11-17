@@ -1,5 +1,12 @@
 package subscriptionidentity
 
+// The observer is the Kubernetes-side source of truth for subscription
+// presence. Refresh intentionally holds the database observation transaction
+// across an uncached Kubernetes list: current observations, the fresh list, and
+// peer barriers must describe the same observation cycle. Status writes happen
+// after commit and are UID/resource-version guarded so a replacement object
+// cannot inherit the identity of the incarnation that was observed.
+
 import (
 	"context"
 	"encoding/json"

@@ -1,5 +1,11 @@
 package subscriptionidentity
 
+// The absence handler is the controller's identity-aware cleanup callback. It
+// verifies the deleting Kubernetes object and its recorded identity before
+// entering the database transaction. The database layer may then return a
+// conflict instead of deleting keys until every active observer agrees that
+// the incarnation is absent.
+
 import (
 	"context"
 	"errors"
