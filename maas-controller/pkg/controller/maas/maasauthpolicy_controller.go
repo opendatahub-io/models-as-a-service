@@ -839,6 +839,7 @@ func (r *MaaSAuthPolicyReconciler) buildGatewayAuthPolicySpec(oidc *oidcConfig, 
 }`, celGroups, celUsername, celModelIdentity)
 
 	celIsAPIKey, celIsNotAPIKey, celExtractKey := apiKeyCELPredicates(xAPIKeyEnabled)
+	apiKeyDenial := apiKeyDenialCEL(xAPIKeyEnabled)
 
 	authenticationRules := map[string]any{
 		"api-keys": map[string]any{
@@ -911,7 +912,12 @@ func (r *MaaSAuthPolicyReconciler) buildGatewayAuthPolicySpec(oidc *oidcConfig, 
 			"priority": int64(1),
 		}
 	}
-	authValidCacheKey := `"api-key|" + (` + celExtractKey + `) + "|" + ` + celModelIdentity
+	// Separate valid, invalid, and missing validation results in the authz cache.
+	// Otherwise a cached allow could outlive expiry or bypass an outage, and a
+	// cached outage denial could persist after validation recovers.
+	authValidCacheKey := `"api-key|" + (` + celExtractKey + `) + "|" + ` + celModelIdentity +
+		` + "|" + (has(auth.metadata) && has(auth.metadata.apiKeyValidation) && has(auth.metadata.apiKeyValidation.valid)` +
+		` ? (auth.metadata.apiKeyValidation.valid ? "valid" : "invalid") : "unavailable")`
 
 	requireGroupMembershipRego := `allow {
   object.get(input.auth.metadata["subscription-info"], "accessAllowed", false) == true
@@ -987,6 +993,11 @@ func (r *MaaSAuthPolicyReconciler) buildGatewayAuthPolicySpec(oidc *oidcConfig, 
 }
 allow {
   not input.auth.metadata.apiKeyValidation
+  not is_api_key
+}
+is_api_key {
+  is_string(input.auth.identity)
+  regex.match("^(Bearer )?sk-oai-.*", input.auth.identity)
 }`,
 			},
 			"cache": map[string]any{
@@ -1432,7 +1443,7 @@ allow {
 			"unauthorized": map[string]any{
 				"code": int64(403),
 				"body": map[string]any{
-					"expression": `'{"error":{"message":"' + (has(auth.metadata["subscription-info"].message)` +
+					"expression": `'{"error":{"message":"' + (has(auth.metadata) && has(auth.metadata["subscription-info"]) && has(auth.metadata["subscription-info"].message)` +
 						` ? auth.metadata["subscription-info"].message` +
 						`.replace('\\', '\\\\').replace('"', '\\"')` +
 						`.replace('\n', '\\n').replace('\r', '\\r').replace('\t', '\\t')` +
@@ -1440,7 +1451,10 @@ allow {
 				},
 				"headers": map[string]any{
 					"x-ext-auth-reason": map[string]any{
-						"expression": `has(auth.metadata["subscription-info"].error) ? auth.metadata["subscription-info"].error : "unauthorized"`,
+						"expression": `has(auth.metadata) && has(auth.metadata["subscription-info"]) && has(auth.metadata["subscription-info"].error) ? auth.metadata["subscription-info"].error : "unauthorized"`,
+					},
+					"x-maas-api-key-denial": map[string]any{
+						"expression": apiKeyDenial,
 					},
 					"content-type": map[string]any{
 						"value": "application/json",
@@ -2201,6 +2215,19 @@ func apiKeyCELPredicates(xAPIKeyEnabled bool) (isAPIKey, isNotAPIKey, extractRaw
 		authorizationAPIKey + ` ? request.headers["authorization"].replace("Bearer ", "") : ` +
 		xAPIKey + ` ? request.headers["x-api-key"] : "")`
 	return isAPIKey, isNotAPIKey, extractRawKey
+}
+
+// apiKeyDenialCEL marks only API-key authorization denials for the gateway's
+// response filter. A failed validation HTTP call has no apiKeyValidation
+// metadata; a successful call with valid:false is an invalid credential.
+func apiKeyDenialCEL(xAPIKeyEnabled bool) string {
+	isAPIKey := `("authorization" in request.headers && request.headers["authorization"].matches("^Bearer sk-oai-.*"))`
+	if xAPIKeyEnabled {
+		isAPIKey += ` || ("x-api-key" in request.headers && request.headers["x-api-key"].matches("^sk-oai-.*"))`
+	}
+	return `(` + isAPIKey + `) ? (` +
+		`has(auth.metadata) && has(auth.metadata.apiKeyValidation) && has(auth.metadata.apiKeyValidation.valid)` +
+		` ? (auth.metadata.apiKeyValidation.valid == false ? "invalid" : "") : "unavailable") : ""`
 }
 
 func (r *MaaSAuthPolicyReconciler) updateAuthPolicyRefStatus(ctx context.Context, log logr.Logger, policy *maasv1alpha1.MaaSAuthPolicy, refs []authPolicyRef) {

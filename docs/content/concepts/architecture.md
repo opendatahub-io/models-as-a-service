@@ -161,7 +161,7 @@ graph TB
 
 1. User sends inference request with an API key.
 2. **Validate identity** — request reaches **MaaSAuthPolicy (Authorino)** via the Gateway.
-3. **MaaSAuthPolicy** validates the key via **MaaS API**; on failure returns 401/403.
+3. **MaaSAuthPolicy** validates the key via **MaaS API**; invalid keys return 401, validation service failures return 503, and permission denials return 403 (see [API Key Validation Flow](api-key-authentication.md#api-key-validation-flow)).
 4. **Check limits** — **MaaSSubscription (Limitador)** enforces token rate limits; on exceed returns 429.
 5. Request reaches Inference Service when within limits.
 6. Inference Service forwards to the LLM.
