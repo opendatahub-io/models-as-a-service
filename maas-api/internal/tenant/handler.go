@@ -294,7 +294,7 @@ func isLocalHostname(hostname string) bool {
 	}
 
 	if ip := net.ParseIP(hostname); ip != nil {
-		return ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast()
+		return ip.IsLoopback() || ip.IsLinkLocalUnicast()
 	}
 
 	clusterDomain := "." + strings.TrimPrefix(network.GetClusterDomainName(), ".")
@@ -393,6 +393,11 @@ func admittedHostOnlyRouteEndpoint(route unstructured.Unstructured, serviceNames
 
 	targetName, _, _ := unstructured.NestedString(route.Object, "spec", "to", "name")
 	if _, targetsGateway := serviceNames[targetName]; !targetsGateway {
+		return routeEndpoint{}, false
+	}
+
+	targetWeight, weightFound, _ := unstructured.NestedInt64(route.Object, "spec", "to", "weight")
+	if weightFound && targetWeight == 0 {
 		return routeEndpoint{}, false
 	}
 

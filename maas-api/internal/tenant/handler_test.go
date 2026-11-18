@@ -350,6 +350,35 @@ func TestExtractGatewayMetadata_PrefersHTTPSOpenShiftRoute(t *testing.T) {
 	assert.Equal(t, "https://zz-maas.apps.example.com", metadata.ExternalURL)
 }
 
+func TestExtractGatewayMetadata_IgnoresDisabledOpenShiftRouteBackend(t *testing.T) {
+	disabledRoute := gatewayRoute(true)
+	disabledRoute.Name = "test-gateway-route-disabled"
+	disabledRoute.Status.Ingress[0].Host = "a-maas.apps.example.com"
+	disabledWeight := int32(0)
+	disabledRoute.Spec.To.Weight = &disabledWeight
+
+	workingRoute := gatewayRoute(true)
+	workingRoute.Name = "test-gateway-route-working"
+	workingRoute.Status.Ingress[0].Host = "z-maas.apps.example.com"
+	client := fakeClusterWithGatewayRoutes(t, disabledRoute, workingRoute)
+
+	handler := NewHandler(logger.New(false), client, fakeRouteDiscovery(), "test-tenant", "test-gateway", "test-ns")
+
+	metadata, err := handler.extractGatewayMetadata(context.Background(), internalGatewayWithClusterLocalAddress())
+
+	require.NoError(t, err)
+	assert.Equal(t, "https://z-maas.apps.example.com", metadata.ExternalURL)
+}
+
+func TestExtractGatewayMetadata_PreservesPrivateIPAddressWhenRouteAPIUnavailable(t *testing.T) {
+	handler := NewHandler(logger.New(false), nil, nil, "test-tenant", "test-gateway", "test-ns")
+
+	metadata, err := handler.extractGatewayMetadata(context.Background(), internalGatewayWithAddress("10.20.30.40"))
+
+	require.NoError(t, err)
+	assert.Equal(t, "https://10.20.30.40", metadata.ExternalURL)
+}
+
 func TestIsLocalHostname(t *testing.T) {
 	tests := []struct {
 		hostname string
@@ -361,7 +390,9 @@ func TestIsLocalHostname(t *testing.T) {
 		{hostname: "service.internal", expected: true},
 		{hostname: "localhost", expected: true},
 		{hostname: "127.0.0.1", expected: true},
-		{hostname: "10.0.0.1", expected: true},
+		{hostname: "10.0.0.1", expected: false},
+		{hostname: "192.168.1.1", expected: false},
+		{hostname: "169.254.1.1", expected: true},
 		{hostname: "maas.apps.example.com", expected: false},
 		{hostname: "clusterlocal.example.com", expected: false},
 	}
@@ -372,6 +403,10 @@ func TestIsLocalHostname(t *testing.T) {
 }
 
 func internalGatewayWithClusterLocalAddress() map[string]any {
+	return internalGatewayWithAddress("test-gateway.test-ns.svc.cluster.local")
+}
+
+func internalGatewayWithAddress(address string) map[string]any {
 	return map[string]any{
 		"spec": map[string]any{
 			"listeners": []any{
@@ -382,7 +417,7 @@ func internalGatewayWithClusterLocalAddress() map[string]any {
 			"addresses": []any{
 				map[string]any{
 					"type":  "Hostname",
-					"value": "test-gateway.test-ns.svc.cluster.local",
+					"value": address,
 				},
 			},
 			"listeners": []any{

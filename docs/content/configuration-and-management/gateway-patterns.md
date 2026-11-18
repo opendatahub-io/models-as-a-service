@@ -37,7 +37,8 @@ Use this table to decide which pattern fits your deployment:
     The Gateway Service does not need a hostname in `spec.listeners`. When `/v1/tenants`
     resolves a local Gateway address, maas-api discovers an admitted, host-only OpenShift
     Route that targets a Service selecting the Gateway. If no compatible Route exists, the
-    endpoint reports that the Gateway is not externally reachable.
+    endpoint returns HTTP 500 with `Failed to resolve gateway` and `Unable to determine
+    external hostname from Gateway status`.
 
 This pattern deploys a Gateway API Gateway as a **ClusterIP** service (no external
 LoadBalancer) and uses an **OpenShift Route** with **re-encrypt** TLS termination
