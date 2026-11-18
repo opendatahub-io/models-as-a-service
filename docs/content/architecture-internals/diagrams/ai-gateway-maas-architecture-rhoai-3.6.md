@@ -110,7 +110,7 @@ graph TB
     %% ── Operator deploys control plane ──
     AGO -->|deploys & manages| AGC
     AGO -->|deploys & manages| MaaSCtrl
-    AGO -.->|reconciles| AIGatewayCR
+    AGO -.->|reconciles — determines<br/>installed sub-components| AIGatewayCR
 
     %% ── AI Gateway Controller relationships ──
     AGC -.->|reconciles| ExternalModel
@@ -179,6 +179,7 @@ graph TB
 | Component | Role | Deployed By |
 |-----------|------|-------------|
 | **AI Gateway Operator** | Module operator; lifecycle manager for sub-components | opendatahub-operator |
+| **AIGateway CR** | Declarative spec consumed by the AI Gateway Operator to determine which sub-components (controllers, services) are installed | User / opendatahub-operator |
 | **AI Gateway Controller** | Reconciles ExternalModel/ExternalProvider; installs per-tenant Praxis ExtProc; publishes routing overlay | AI Gateway Operator |
 | **MaaS Controller** | Manages tenant lifecycle, subscriptions, auth policies; self-deploys maas-api per tenant; creates InferenceObjective per subscription | AI Gateway Operator |
 | **maas-api** | Per-tenant HTTP API for model listing, API key CRUD, subscription queries | MaaS Controller |
