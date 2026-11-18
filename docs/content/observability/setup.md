@@ -103,6 +103,8 @@ When tenant telemetry is enabled and `usageLogging` is `false` or omitted, `Maas
 - **Perses Dashboard** (`dashboard-4-maas-usage-logs-admin`) - usage dashboard for administrators (shows information on all users)
 - **Perses Dashboard** (`dashboard-5-maas-usage-logs`) - user-scoped usage dashboard
 
+The API-key filter and **By API key** breakdown identify each key by its name and full, non-secret key ID (and show the user in the administrator filter). Keys with the same name therefore appear separately. Per-key filtering applies to usage logs written after the key ID is added to gateway telemetry; **All** still includes older logs.
+
 !!! warning "Privacy"
     Structured access logs record request attributes.
     User identity (`user_id`) is included only when `MaasTenantConfig.spec.telemetry.logs.captureUser` is `true`.

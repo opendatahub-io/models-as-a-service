@@ -956,6 +956,9 @@ func (r *MaaSAuthPolicyReconciler) buildGatewayAuthPolicySpec(oidc *oidcConfig, 
 						"predicate": `!("x-maas-keyname" in request.headers)`,
 					},
 					map[string]any{
+						"predicate": `!("x-maas-key-id" in request.headers)`,
+					},
+					map[string]any{
 						"predicate": `!("x-maas-subscription-rate-limit-id" in request.headers)`,
 					},
 					map[string]any{
@@ -1335,6 +1338,18 @@ allow {
 							"expression": `auth.metadata.apiKeyValidation.keyName`,
 						},
 						"key":      "x-maas-keyname",
+						"metrics":  false,
+						"priority": int64(0),
+					},
+					// The database UUID identifies a key without exposing its secret.
+					"X-MaaS-Key-Id": map[string]any{
+						"when": []any{
+							map[string]any{"predicate": celIsAPIKey},
+						},
+						"plain": map[string]any{
+							"expression": `auth.metadata.apiKeyValidation.keyId`,
+						},
+						"key":      "x-maas-key-id",
 						"metrics":  false,
 						"priority": int64(0),
 					},

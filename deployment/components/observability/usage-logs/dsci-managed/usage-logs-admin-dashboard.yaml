@@ -3,7 +3,7 @@
 # All four dropdowns (user, subscription, model, API key) follow the dashboard time
 # picker. User and API key use LokiLogQLVariable with [$__range] — auto-populates
 # from structured metadata via count by (...), bypassing /label/values
-# (which requires stream labels). API key values are "key_name (user_id)".
+# (which requires stream labels). API key values include the name, user, and full non-secret key ID.
 # Subscription/model use LokiLabelValuesVariable.
 # customAllValue: ".*" on ListVariables ensures "All" matches entries with
 # absent labels (e.g. subscription when capturing is disabled). Do not remove.
@@ -86,7 +86,7 @@ spec:
         name: api_key
         display:
           name: "API key"
-          description: "Filter by API key. Shown as name (user)."
+          description: "Filter by API key. Shown as name (user) [full key ID]."
         allowMultiple: true
         allowAllValue: true
         customAllValue: ".*"
@@ -97,7 +97,7 @@ spec:
             datasource:
               kind: LokiDatasource
               name: usage-logs-all
-            expr: 'count by (api_key) (count_over_time({service_name="models-as-a-service"} | user_id=~"$user" | key_name!="" | key_name!="-" | label_format api_key="{{.key_name}} ({{.user_id}})" | keep api_key [$__range]))'
+            expr: 'count by (api_key) (count_over_time({service_name="models-as-a-service"} | user_id=~"$user" | key_name!="" | key_name!="-" | key_id!="" | key_id!="-" | label_format api_key="{{.key_name}} ({{.user_id}}) [{{.key_id}}]" | keep api_key [$__range]))'
             labelName: api_key
     - kind: ListVariable
       spec:
@@ -115,7 +115,7 @@ spec:
                 label: By model
               - value: "subscription"
                 label: By subscription
-              # api_key is "key_name (user_id)"; grouping by key_name would merge users.
+              # api_key contains the full key ID; grouping by name would merge distinct keys.
               - value: "api_key"
                 label: By API key
 
@@ -147,7 +147,7 @@ spec:
                     sum(sum_over_time({service_name="models-as-a-service",
                     subscription=~"$subscription", model=~"$model", response_type="hit"}
                     | user_id=~"$user"
-                    | label_format api_key="{{.key_name}} ({{.user_id}})"
+                    | label_format api_key="{{.key_name}} ({{.user_id}}) [{{.key_id}}]"
                     | label_format __ak_sel="${api_key:regexliteral}"
                     | label_format __ak_keep="{{if eq .__ak_sel \"(\\\\.\\\\*)\"}}true{{else if (count (printf \"^%s$\" .__ak_sel) .api_key)}}true{{else}}false{{end}}"
                     | __ak_keep="true"
@@ -181,7 +181,7 @@ spec:
                     sum(count_over_time({service_name="models-as-a-service",
                     subscription=~"$subscription", subscription!="-", model=~"$model"}
                     | user_id=~"$user"
-                    | label_format api_key="{{.key_name}} ({{.user_id}})"
+                    | label_format api_key="{{.key_name}} ({{.user_id}}) [{{.key_id}}]"
                     | label_format __ak_sel="${api_key:regexliteral}"
                     | label_format __ak_keep="{{if eq .__ak_sel \"(\\\\.\\\\*)\"}}true{{else if (count (printf \"^%s$\" .__ak_sel) .api_key)}}true{{else}}false{{end}}"
                     | __ak_keep="true" [$__range]))
@@ -214,7 +214,7 @@ spec:
                     sum(count_over_time({service_name="models-as-a-service",
                     subscription=~"$subscription", model=~"$model", response_type="rate_limit"}
                     | user_id=~"$user"
-                    | label_format api_key="{{.key_name}} ({{.user_id}})"
+                    | label_format api_key="{{.key_name}} ({{.user_id}}) [{{.key_id}}]"
                     | label_format __ak_sel="${api_key:regexliteral}"
                     | label_format __ak_keep="{{if eq .__ak_sel \"(\\\\.\\\\*)\"}}true{{else if (count (printf \"^%s$\" .__ak_sel) .api_key)}}true{{else}}false{{end}}"
                     | __ak_keep="true" [$__range]))
@@ -248,7 +248,7 @@ spec:
                         sum(count_over_time({service_name="models-as-a-service",
                         subscription=~"$subscription", subscription!="-",model=~"$model", response_type="hit"}
                         | user_id=~"$user"
-                        | label_format api_key="{{.key_name}} ({{.user_id}})"
+                        | label_format api_key="{{.key_name}} ({{.user_id}}) [{{.key_id}}]"
                         | label_format __ak_sel="${api_key:regexliteral}"
                         | label_format __ak_keep="{{if eq .__ak_sel \"(\\\\.\\\\*)\"}}true{{else if (count (printf \"^%s$\" .__ak_sel) .api_key)}}true{{else}}false{{end}}"
                         | __ak_keep="true" [$__range]))
@@ -258,7 +258,7 @@ spec:
                       sum(count_over_time({service_name="models-as-a-service",
                       subscription=~"$subscription", subscription!="-", model=~"$model"}
                       | user_id=~"$user"
-                      | label_format api_key="{{.key_name}} ({{.user_id}})"
+                      | label_format api_key="{{.key_name}} ({{.user_id}}) [{{.key_id}}]"
                       | label_format __ak_sel="${api_key:regexliteral}"
                       | label_format __ak_keep="{{if eq .__ak_sel \"(\\\\.\\\\*)\"}}true{{else if (count (printf \"^%s$\" .__ak_sel) .api_key)}}true{{else}}false{{end}}"
                       | __ak_keep="true" [$__range]))
@@ -291,7 +291,7 @@ spec:
                     count(sum by (user_id) (count_over_time({service_name="models-as-a-service",
                     subscription=~"$subscription", model=~"$model"}
                     | user_id=~"$user"
-                    | label_format api_key="{{.key_name}} ({{.user_id}})"
+                    | label_format api_key="{{.key_name}} ({{.user_id}}) [{{.key_id}}]"
                     | label_format __ak_sel="${api_key:regexliteral}"
                     | label_format __ak_keep="{{if eq .__ak_sel \"(\\\\.\\\\*)\"}}true{{else if (count (printf \"^%s$\" .__ak_sel) .api_key)}}true{{else}}false{{end}}"
                     | __ak_keep="true"
@@ -340,7 +340,7 @@ spec:
                     sum by (${view_by:raw}) (sum_over_time({service_name="models-as-a-service",
                     subscription=~"$subscription", model=~"$model", response_type="hit"}
                     | user_id=~"$user"
-                    | label_format api_key="{{.key_name}} ({{.user_id}})"
+                    | label_format api_key="{{.key_name}} ({{.user_id}}) [{{.key_id}}]"
                     | label_format __ak_sel="${api_key:regexliteral}"
                     | label_format __ak_keep="{{if eq .__ak_sel \"(\\\\.\\\\*)\"}}true{{else if (count (printf \"^%s$\" .__ak_sel) .api_key)}}true{{else}}false{{end}}"
                     | __ak_keep="true"
@@ -354,7 +354,7 @@ spec:
           description: >-
             All user/model/subscription pairs, with organization ID and cost
             center. **View by** changes the chart; **By API key** also splits
-            table rows per key and shows `username (key name)` in the User
+            table rows per key and shows `username (key name [key ID])` in the User
             column.
         plugin:
           kind: Table
@@ -429,11 +429,11 @@ spec:
                     sum by (user_id, model, subscription, organization_id, cost_center) (sum_over_time(
                     {service_name="models-as-a-service", subscription=~"$subscription", subscription!="-", model=~"$model"}
                     | user_id=~"$user"
-                    | label_format api_key="{{.key_name}} ({{.user_id}})"
+                    | label_format api_key="{{.key_name}} ({{.user_id}}) [{{.key_id}}]"
                     | label_format __ak_sel="${api_key:regexliteral}"
                     | label_format __ak_keep="{{if eq .__ak_sel \"(\\\\.\\\\*)\"}}true{{else if (count (printf \"^%s$\" .__ak_sel) .api_key)}}true{{else}}false{{end}}"
                     | __ak_keep="true"
-                    | label_format user_id="{{.user_id}}{{if eq \"${view_by:raw}\" \"api_key\"}} ({{.key_name}}){{end}}"
+                    | label_format user_id="{{.user_id}}{{if eq \"${view_by:raw}\" \"api_key\"}} ({{.key_name}} [{{.key_id}}]){{end}}"
                     | label_format target_tokens=`{{ if eq .response_type "hit" }}{{ .tokens_total }}{{ else }}0{{ end }}`
                     | unwrap target_tokens [$__range]))
           - kind: TimeSeriesQuery
@@ -449,11 +449,11 @@ spec:
                     {service_name="models-as-a-service",
                     subscription=~"$subscription", subscription!="-", model=~"$model"}
                     | user_id=~"$user"
-                    | label_format api_key="{{.key_name}} ({{.user_id}})"
+                    | label_format api_key="{{.key_name}} ({{.user_id}}) [{{.key_id}}]"
                     | label_format __ak_sel="${api_key:regexliteral}"
                     | label_format __ak_keep="{{if eq .__ak_sel \"(\\\\.\\\\*)\"}}true{{else if (count (printf \"^%s$\" .__ak_sel) .api_key)}}true{{else}}false{{end}}"
                     | __ak_keep="true"
-                    | label_format user_id="{{.user_id}}{{if eq \"${view_by:raw}\" \"api_key\"}} ({{.key_name}}){{end}}"
+                    | label_format user_id="{{.user_id}}{{if eq \"${view_by:raw}\" \"api_key\"}} ({{.key_name}} [{{.key_id}}]){{end}}"
                     | label_format is_hit=`{{ if eq .response_type "hit" }}1{{ else }}0{{ end }}`
                     | unwrap is_hit [$__range]))
           - kind: TimeSeriesQuery
@@ -468,11 +468,11 @@ spec:
                     sum by (user_id, model, subscription, organization_id, cost_center) (sum_over_time(
                     {service_name="models-as-a-service", subscription=~"$subscription", subscription!="-", model=~"$model"}
                     | user_id=~"$user"
-                    | label_format api_key="{{.key_name}} ({{.user_id}})"
+                    | label_format api_key="{{.key_name}} ({{.user_id}}) [{{.key_id}}]"
                     | label_format __ak_sel="${api_key:regexliteral}"
                     | label_format __ak_keep="{{if eq .__ak_sel \"(\\\\.\\\\*)\"}}true{{else if (count (printf \"^%s$\" .__ak_sel) .api_key)}}true{{else}}false{{end}}"
                     | __ak_keep="true"
-                    | label_format user_id="{{.user_id}}{{if eq \"${view_by:raw}\" \"api_key\"}} ({{.key_name}}){{end}}"
+                    | label_format user_id="{{.user_id}}{{if eq \"${view_by:raw}\" \"api_key\"}} ({{.key_name}} [{{.key_id}}]){{end}}"
                     | label_format is_rate_limit=`{{ if eq .response_type "rate_limit" }}1{{ else }}0{{ end }}`
                     | unwrap is_rate_limit [$__range]))
           - kind: TimeSeriesQuery
@@ -487,11 +487,11 @@ spec:
                     sum by (user_id, model, subscription, organization_id, cost_center) (sum_over_time(
                     {service_name="models-as-a-service", subscription=~"$subscription", subscription!="-", model=~"$model"}
                     | user_id=~"$user"
-                    | label_format api_key="{{.key_name}} ({{.user_id}})"
+                    | label_format api_key="{{.key_name}} ({{.user_id}}) [{{.key_id}}]"
                     | label_format __ak_sel="${api_key:regexliteral}"
                     | label_format __ak_keep="{{if eq .__ak_sel \"(\\\\.\\\\*)\"}}true{{else if (count (printf \"^%s$\" .__ak_sel) .api_key)}}true{{else}}false{{end}}"
                     | __ak_keep="true"
-                    | label_format user_id="{{.user_id}}{{if eq \"${view_by:raw}\" \"api_key\"}} ({{.key_name}}){{end}}"
+                    | label_format user_id="{{.user_id}}{{if eq \"${view_by:raw}\" \"api_key\"}} ({{.key_name}} [{{.key_id}}]){{end}}"
                     | label_format is_error=`{{ if eq .response_type "error" }}1{{ else }}0{{ end }}`
                     | unwrap is_error [$__range]))
   layouts:
