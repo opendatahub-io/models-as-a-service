@@ -6,7 +6,7 @@ import (
 	"errors"
 	"testing"
 
-	routev1 "github.com/openshift/api/route/v1"
+	routv1 "github.com/openshift/api/route/v1"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
@@ -393,15 +393,17 @@ func internalGatewayWithClusterLocalAddress() map[string]any {
 }
 
 func fakeClusterWithGatewayRoute(t *testing.T, tlsEnabled bool) *dynamicfake.FakeDynamicClient {
+	t.Helper()
+
 	return fakeClusterWithGatewayRoutes(t, gatewayRoute(tlsEnabled))
 }
 
-func fakeClusterWithGatewayRoutes(t *testing.T, routes ...*routev1.Route) *dynamicfake.FakeDynamicClient {
+func fakeClusterWithGatewayRoutes(t *testing.T, routes ...*routv1.Route) *dynamicfake.FakeDynamicClient {
 	t.Helper()
 
 	scheme := runtime.NewScheme()
 	require.NoError(t, corev1.AddToScheme(scheme))
-	require.NoError(t, routev1.AddToScheme(scheme))
+	require.NoError(t, routv1.AddToScheme(scheme))
 
 	service := &corev1.Service{
 		TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "Service"},
@@ -423,26 +425,26 @@ func fakeClusterWithGatewayRoutes(t *testing.T, routes ...*routev1.Route) *dynam
 	return dynamicfake.NewSimpleDynamicClient(scheme, objects...)
 }
 
-func gatewayRoute(tlsEnabled bool) *routev1.Route {
-	route := &routev1.Route{
+func gatewayRoute(tlsEnabled bool) *routv1.Route {
+	route := &routv1.Route{
 		TypeMeta: metav1.TypeMeta{APIVersion: "route.openshift.io/v1", Kind: "Route"},
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "test-gateway-route",
 			Namespace: "test-ns",
 		},
-		Spec: routev1.RouteSpec{
-			To: routev1.RouteTargetReference{
+		Spec: routv1.RouteSpec{
+			To: routv1.RouteTargetReference{
 				Kind: "Service",
 				Name: "test-gateway-service",
 			},
 		},
-		Status: routev1.RouteStatus{
-			Ingress: []routev1.RouteIngress{
+		Status: routv1.RouteStatus{
+			Ingress: []routv1.RouteIngress{
 				{
 					Host: "maas.apps.example.com",
-					Conditions: []routev1.RouteIngressCondition{
+					Conditions: []routv1.RouteIngressCondition{
 						{
-							Type:   routev1.RouteAdmitted,
+							Type:   routv1.RouteAdmitted,
 							Status: corev1.ConditionTrue,
 						},
 					},
@@ -451,7 +453,7 @@ func gatewayRoute(tlsEnabled bool) *routev1.Route {
 		},
 	}
 	if tlsEnabled {
-		route.Spec.TLS = &routev1.TLSConfig{Termination: routev1.TLSTerminationEdge}
+		route.Spec.TLS = &routv1.TLSConfig{Termination: routv1.TLSTerminationEdge}
 	}
 
 	return route
