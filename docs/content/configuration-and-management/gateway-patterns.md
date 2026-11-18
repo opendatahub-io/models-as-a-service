@@ -33,19 +33,11 @@ Use this table to decide which pattern fits your deployment:
 
 ## ClusterIP Gateway with OpenShift Route (re-encrypt)
 
-!!! warning "Unsupported Configuration"
-    This pattern mixes incompatible routing paradigms by connecting OpenShift Routes 
-    (HAProxy-based) to Kubernetes Gateway API resources (Envoy-based).
-    
-    **Known limitations:**
-    
-    - The `/v1/tenants` endpoint cannot discover the external hostname (Gateway has no hostname 
-      in `spec.listeners`, returns error instead of internal service name)
-    - Not compliant with Gateway API specification
-    - May have unexpected behavior or compatibility issues
-    
-    **Recommended alternative:** Deploy Gateway with LoadBalancer service type and configure
-    `spec.listeners[].hostname` to follow the Gateway API standard pattern.
+!!! note "Tenant discovery"
+    The Gateway Service does not need a hostname in `spec.listeners`. When `/v1/tenants`
+    resolves a local Gateway address, maas-api discovers an admitted, host-only OpenShift
+    Route that targets a Service selecting the Gateway. If no compatible Route exists, the
+    endpoint reports that the Gateway is not externally reachable.
 
 This pattern deploys a Gateway API Gateway as a **ClusterIP** service (no external
 LoadBalancer) and uses an **OpenShift Route** with **re-encrypt** TLS termination
