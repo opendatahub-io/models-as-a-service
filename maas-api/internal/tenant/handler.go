@@ -248,7 +248,7 @@ func (h *Handler) extractGatewayMetadata(ctx context.Context, gateway map[string
 		scheme = "http"
 	}
 
-	externalURL := fmt.Sprintf("%s://%s", scheme, externalHost)
+	externalURL := fmt.Sprintf("%s://%s", scheme, bracketIPv6Literal(externalHost))
 	// Include port if non-standard
 	if (scheme == "https" && port != 443) || (scheme == "http" && port != 80) {
 		externalURL = fmt.Sprintf("%s:%d", externalURL, port)
@@ -306,6 +306,14 @@ func isLocalHostname(hostname string) bool {
 	}
 
 	return false
+}
+
+func bracketIPv6Literal(host string) string {
+	if ip := net.ParseIP(host); ip != nil && strings.Contains(host, ":") {
+		return "[" + host + "]"
+	}
+
+	return host
 }
 
 // openShiftRouteFallback mirrors Kserve's Route discovery for Gateways that only

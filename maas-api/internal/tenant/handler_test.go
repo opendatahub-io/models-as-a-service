@@ -379,6 +379,29 @@ func TestExtractGatewayMetadata_PreservesPrivateIPAddressWhenRouteAPIUnavailable
 	assert.Equal(t, "https://10.20.30.40", metadata.ExternalURL)
 }
 
+func TestExtractGatewayMetadata_BracketsIPv6Addresses(t *testing.T) {
+	tests := []struct {
+		port     int64
+		expected string
+	}{
+		{port: int64(443), expected: "https://[fd00::1]"},
+		{port: int64(8443), expected: "https://[fd00::1]:8443"},
+	}
+
+	for _, test := range tests {
+		handler := NewHandler(logger.New(false), nil, nil, "test-tenant", "test-gateway", "test-ns")
+
+		metadata, err := handler.extractGatewayMetadata(
+			context.Background(),
+			internalGatewayWithAddressAndPort("fd00::1", test.port),
+		)
+
+		require.NoError(t, err)
+		assert.Equal(t, test.expected, metadata.ExternalURL)
+		assert.Equal(t, test.port, metadata.Port)
+	}
+}
+
 func TestIsLocalHostname(t *testing.T) {
 	tests := []struct {
 		hostname string
@@ -407,10 +430,14 @@ func internalGatewayWithClusterLocalAddress() map[string]any {
 }
 
 func internalGatewayWithAddress(address string) map[string]any {
+	return internalGatewayWithAddressAndPort(address, int64(443))
+}
+
+func internalGatewayWithAddressAndPort(address string, port int64) map[string]any {
 	return map[string]any{
 		"spec": map[string]any{
 			"listeners": []any{
-				map[string]any{"name": "https", "port": int64(443), "protocol": "HTTPS"},
+				map[string]any{"name": "https", "port": port, "protocol": "HTTPS"},
 			},
 		},
 		"status": map[string]any{
