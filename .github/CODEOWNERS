@@ -1,1 +1,5 @@
 * @opendatahub-io/model-as-a-service-maintainers
+
+# API contract configuration — baseline and policy changes need owner review
+/.rhoai/ @opendatahub-io/model-as-a-service-maintainers
+/.github/workflows/api-contract.yml @opendatahub-io/model-as-a-service-maintainers

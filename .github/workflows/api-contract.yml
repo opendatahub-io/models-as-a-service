@@ -38,5 +38,5 @@ jobs:
       yq-version: "4.45.1"
       crd-globs: deployment/base/maas-controller/crd/bases/maas.opendatahub.io_*.yaml
       # CRD of another project (inference.opendatahub.io group), bundled here for deployment
-      crd-excludes: deployment/base/maas-controller/crd/bases/inference.opendatahub.io_external*.yaml
+      crd-exclude-globs: deployment/base/maas-controller/crd/bases/inference.opendatahub.io_external*.yaml
       mode: enforce
