@@ -41,6 +41,8 @@ func TestCleanupLegacyMaaSAPIPodMonitor(t *testing.T) {
 		}})
 		return pm
 	}
+	optedOut := podMonitor(configUID, ssaFieldOwner)
+	optedOut.SetAnnotations(map[string]string{AnnotationManaged: "false"})
 	forbidden := apierrors.NewForbidden(schema.GroupResource{Group: GVKPodMonitor.Group, Resource: "podmonitors"}, "maas-api-metrics", errors.New("denied"))
 
 	tests := []struct {
@@ -51,9 +53,8 @@ func TestCleanupLegacyMaaSAPIPodMonitor(t *testing.T) {
 		wantErr  bool
 	}{
 		{name: "owned by Config", existing: podMonitor(configUID, "kubectl")},
-		{name: "applied by maas-controller", existing: podMonitor("", ssaFieldOwner)},
 		{name: "owned by another controller", existing: podMonitor("other-uid", ssaFieldOwner), wantKept: true},
-		{name: "not applied by maas-controller", existing: podMonitor("", "kubectl"), wantKept: true},
+		{name: "annotated managed=false", existing: optedOut, wantKept: true},
 		{name: "absent"},
 		{name: "PodMonitor CRD not installed", getErr: &meta.NoKindMatchError{GroupKind: GVKPodMonitor.GroupKind()}},
 		{name: "other read error", getErr: forbidden, wantErr: true},

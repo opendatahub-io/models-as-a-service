@@ -746,8 +746,8 @@ func (s *Selector) SelectWithContext(ctx context.Context, groups []string, usern
 }
 
 // completeSelection builds the response for the selected subscription. label
-// names the subscription in denials: the caller's own reference for explicit
-// selection, otherwise the selected subscription's name.
+// names the subscription in a denial, which only explicit selection reaches:
+// the caller's own reference.
 func (s *Selector) completeSelection(
 	ctx context.Context,
 	sub *subscription,
@@ -761,8 +761,6 @@ func (s *Selector) completeSelection(
 		return response, err
 	}
 	if !response.AccessAllowed {
-		// Same denial whether the subscription lacks the model or the caller
-		// is not authorized for it, so it is no membership oracle (CWE-203).
 		return nil, &ModelAccessDeniedError{Subscription: label, Model: clientModel}
 	}
 	// The body-routed model and guardrail resolution select within the
@@ -789,9 +787,7 @@ func (s *Selector) completeSelection(
 	return response, nil
 }
 
-// bodyRoutedModel returns SelectResponse.BodyRoutedModel for ref: nil for an
-// LLMInferenceService, otherwise the ExternalModel's client-facing name, or ""
-// when the kind or name is unknown so the gateway check fails closed.
+// bodyRoutedModel returns SelectResponse.BodyRoutedModel for ref.
 func bodyRoutedModel(ref *ModelRefInfo) *string {
 	if ref != nil && ref.Source == "internal" {
 		return nil

@@ -3,7 +3,7 @@
 !!! warning "Tech Preview"
     ExternalModel support is a tech preview feature. APIs and behavior may change in future releases.
 
-This guide walks through serving an external AI/ML model (e.g., OpenAI, Anthropic) through the MaaS gateway. External models are hosted outside the cluster. MaaS handles authentication, rate limiting, and API key management, and routes inference requests to the external provider.
+This guide walks through deploying an external AI/ML model (e.g., OpenAI, Anthropic) through the MaaS gateway. External models are hosted outside the cluster — MaaS handles authentication, rate limiting, and API key management while routing inference requests to the external provider.
 
 You describe an external model with two `inference.opendatahub.io/v1alpha1` resources:
 
@@ -121,7 +121,7 @@ EOF
 | `spec.endpoint` | Yes | Provider FQDN, without scheme or path (e.g., `api.openai.com`) |
 | `spec.auth.type` | Yes | `apikey` |
 | `spec.auth.secretRef.name` | Yes | Secret with the `api-key` data key, in the ExternalProvider namespace |
-| `spec.config` | No | Provider-specific key-value settings, such as the [private CA settings](#provider-endpoint-options) |
+| `spec.config` | No | Provider-specific key-value settings |
 
 Verify the provider is ready:
 
@@ -160,7 +160,7 @@ spec:
 EOF
 ```
 
-Clients send the model's name, `metadata.name`, in the `model` field of their requests. Set `spec.modelName` when the client-facing name is not a valid resource name, for example `gpt-4.1`.
+Clients send the model's name, `metadata.name`, in the `model` field of their requests. Set `spec.modelName` when the client-facing name is not a valid resource name, for example `meta-llama/Llama-3.1-8B-Instruct`.
 
 Each entry in `spec.externalProviderRefs` binds the model to one provider:
 
@@ -169,7 +169,7 @@ Each entry in `spec.externalProviderRefs` binds the model to one provider:
 | `ref.name` | Yes | ExternalProvider name. Leave out `ref.namespace` to use a provider in the model's namespace; a provider in another namespace needs a ReferenceGrant there. |
 | `targetModel` | Yes | Model identifier the provider expects. If it differs from the client-facing name, the tenant needs [API translation](#api-translation). |
 | `apiFormat` | Yes | `openai-chat` (OpenAI Chat Completions) or `messages` (Anthropic Messages) |
-| `path` | Yes | Request path sent to the provider, e.g. `/v1/chat/completions`. `{key}` placeholders are filled from the merged provider and binding `config`, and `{model}` from `targetModel`. |
+| `path` | Yes | Request path sent to the provider, e.g. `/v1/chat/completions`. `{key}` placeholders are filled from the merged provider and binding `config`, and `{model}` from `targetModel`. Applied only with [API translation](#api-translation): without it the provider receives the path the client called, without the `/<namespace>/<model>` prefix of a path-based URL, and the model still reports `Ready`. |
 | `config` | No | Overrides the provider's `spec.config` for this binding |
 | `auth` | No | Overrides the provider's credential; its Secret is in the ExternalModel namespace |
 
@@ -183,11 +183,11 @@ kubectl get maasmodelref -n llm
 Expected output for the MaaSModelRef:
 
 ```text
-NAME     PHASE   ENDPOINT                                   HTTPROUTE               GATEWAY                AGE
-gpt-4o   Ready   https://maas.<cluster-domain>/llm/gpt-4o   external-model-gpt-4o   maas-default-gateway   1m
+NAME     PHASE   ENDPOINT                                   HTTPROUTE                      GATEWAY                AGE
+gpt-4o   Ready   https://maas.<cluster-domain>/llm/gpt-4o   external-model-gpt-4o-<hash>   maas-default-gateway   1m
 ```
 
-`Ready` reports that ai-gateway-controller reconciled the model, not that requests succeed. Step 6 sends a request.
+`llm` belongs to no tenant, so the route name ends in a hash. A model in a tenant's own namespace gets `external-model-<name>`.
 
 ## Provider endpoint options
 
@@ -196,8 +196,6 @@ ai-gateway-controller connects to the provider over HTTPS on port `443`.
 | Setting | Where | Description |
 |---------|-------|-------------|
 | `inference.opendatahub.io/port` annotation | ExternalProvider | Another HTTPS port (1–65535) |
-| `tls.credentialName` in `spec.config` | ExternalProvider | Trusts a provider certificate signed by a private CA: the name of a Secret in the Gateway namespace whose `cacert` key holds the PEM CA chain |
-| `tls.caCertificates` in `spec.config` | ExternalProvider | The same, as the absolute path of a CA file already mounted in the Gateway |
 
 Plain HTTP is not supported: `inference.opendatahub.io/tls: "false"` is rejected, because the provider credential would travel in cleartext. Serve internal endpoints, such as a self-hosted vLLM, over TLS.
 
@@ -298,12 +296,12 @@ The model `gpt-4o` should appear in the list.
 
 Clients call every external model with the OpenAI Chat Completions API. ai-gateway-controller serves these provider bindings:
 
-| Provider | `spec.provider` | `apiFormat` | `path` | Credential sent as | Needs API translation |
-|----------|-----------------|-------------|--------|--------------------|-----------------------|
-| OpenAI | `openai` | `openai-chat` | `/v1/chat/completions` | `Authorization: Bearer` | Only if `targetModel` differs from the client-facing name |
-| Anthropic | `anthropic` | `messages` | `/v1/messages` | `x-api-key` | Yes |
-| Azure OpenAI | `azure-openai` (or `azure`) | `openai-chat` | `/openai/v1/chat/completions` | `api-key` | Yes |
-| AWS Bedrock (Mantle) | `bedrock-openai` | `openai-chat` | `/v1/chat/completions` | `Authorization: Bearer` | Only if `targetModel` differs from the client-facing name |
+| Provider | `spec.provider` | `apiFormat` | `path` | Credential sent as |
+|----------|-----------------|-------------|--------|--------------------|
+| OpenAI | `openai` | `openai-chat` | `/v1/chat/completions` | `Authorization: Bearer` |
+| Anthropic | `anthropic` | `messages` | `/v1/messages` | `x-api-key` |
+| Azure OpenAI | `azure-openai` (or `azure`) | `openai-chat` | `/openai/v1/chat/completions` | `api-key` |
+| AWS Bedrock (Mantle) | `bedrock-openai` | `openai-chat` | `/v1/chat/completions` | `Authorization: Bearer` |
 
 Any other provider and format combination, Vertex AI included, is not served: the ExternalModel fails reconciliation. The upgrade migration from the RHOAI 3.5 payload processor treats only the OpenAI and Anthropic bindings as compatible; see [Upgrade to 3.6](../migration/upgrade-to-3.6.md#ipp-praxis-api-translation-migration).
 
@@ -345,7 +343,7 @@ Routes to the OpenAI-compatible Bedrock Mantle endpoint. Pass-through, like Open
 
 After an upgrade, a tenant keeps the RHOAI 3.5 Inference Payload Processor (IPP) until its migration to Praxis completes; see [Upgrade to 3.6](../migration/upgrade-to-3.6.md#ipp-praxis-api-translation-migration). While a tenant runs IPP:
 
-- Only the default tenant's IPP serves ExternalModels. Other tenants' IPP instances have their ExternalModel controller disabled.
+- The default tenant's IPP serves ExternalModels. For other tenants, RHOAI 3.5 disabled the ExternalModel controller in `payload-processing` but not in `payload-pre-processing`, and a blocked migration leaves both Deployments as they are.
 - IPP reads a provider Secret only when it has the label `inference.llm-d.ai/ipp-managed=true`:
 
     ```bash
@@ -391,14 +389,15 @@ kubectl delete maasmodelref gpt-4o -n llm
 # Delete the ExternalModel; ai-gateway-controller removes its route and Praxis configuration
 kubectl delete externalmodels.inference.opendatahub.io gpt-4o -n llm
 
-# Delete the provider once no ExternalModel uses it
-kubectl delete externalproviders.inference.opendatahub.io openai -n llm
-
 # Delete auth and subscription
 kubectl delete maasauthpolicy gpt-4o-access -n models-as-a-service
 kubectl delete maassubscription gpt-4o-subscription -n models-as-a-service
+```
 
-# Delete the provider secret
+Delete the provider and its Secret only when no other ExternalModel, in this or another namespace, references them:
+
+```bash
+kubectl delete externalproviders.inference.opendatahub.io openai -n llm
 kubectl delete secret openai-api-key -n llm
 ```
 

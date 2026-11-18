@@ -345,7 +345,7 @@ The controller finalizer cleans up:
 ## Known Limitations
 
 !!! warning "External models on tenants still on the legacy payload processor"
-    A tenant on Praxis serves the external models in its own namespace. A non-default tenant that still runs the RHOAI 3.5 payload processor (IPP) after an upgrade serves none: its IPP instances have the ExternalModel controller disabled to prevent HTTPRoute conflicts. See [External Model Setup — Tenants](external-model-setup.md#tenants) for details.
+    A tenant on Praxis serves the external models in its own namespace. For a tenant that still runs the RHOAI 3.5 payload processor (IPP) after an upgrade, see [External Model Setup — Tenants still on the legacy payload processor](external-model-setup.md#tenants-still-on-the-legacy-payload-processor).
 
 ## See Also
 

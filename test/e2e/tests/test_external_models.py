@@ -995,17 +995,11 @@ class TestExternalModelBodyRouting:
         ],
         ids=["wrong-model", "missing-model"],
     )
-    def test_unresolvable_model_body_does_not_error(self, external_models_setup, body, case_name):
+    def test_body_model_must_match_path_model(self, external_models_setup, body, case_name):
         """
-        A body model that differs from the path model is denied; a missing one is not.
-
-        ``wrong-model``: IPP sets X-Gateway-Model-Name from the body, and the
-        gateway AuthPolicy denies a path-routed request whose header is not the
-        path model's client-facing name (403). ``missing-model``: no header is
-        set, so the request is authorized from the path; the
-        model-provider-resolver plugin lets it pass through unchanged (see
-        plugin.go ProcessRequest) and the external upstream answers with a
-        non-auth 4xx (httpbingo never returns 200 for these paths).
+        A body model that differs from the path model gets 403; a body without
+        one reaches the upstream, which answers a non-auth 4xx (httpbingo never
+        returns 200 for these paths).
         """
         setup = external_models_setup
         model_path = f"/{MODEL_NAMESPACE}/{EXTERNAL_MODEL_NAME}/v1"

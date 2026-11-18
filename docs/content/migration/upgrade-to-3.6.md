@@ -60,9 +60,7 @@ maas-controller inspects the live `payload-processing-plugins` ConfigMap
 | Unknown or customized ConfigMap | Migration **blocked**; the controller does not infer equivalent Praxis behavior. |
 
 The legacy IPP request translator was a multi-provider catch-all documented for
-OpenAI, Anthropic, Azure OpenAI, Vertex AI, and Bedrock Mantle. The migration
-counts only OpenAI `openai-chat` pass-through and Anthropic `messages`
-translation as compatible with it. The `apiTranslation` permission is not a
+OpenAI, Anthropic, Azure OpenAI, Vertex AI, and Bedrock Mantle. The `apiTranslation` permission is not a
 tenant-wide translator choice: it permits both the shared **Anthropic Messages
 client → OpenAI-compatible backend** flow and the ExternalModel **OpenAI Chat
 Completions client → selected Anthropic Messages provider** flow. In the
@@ -73,12 +71,11 @@ translation. OpenAI-compatible candidates remain pass-through.
 An active Azure OpenAI, Vertex AI, Bedrock, custom provider, or unqualified
 format/auth binding is not claimed as compatible, so the migration
 compatibility check keeps IPP state until that binding is qualified or an
-operator explicitly accepts the compatibility risk. On Praxis,
-ai-gateway-controller serves Azure OpenAI and Bedrock Mantle (`bedrock-openai`)
-`openai-chat` bindings, Azure OpenAI only with
-`spec.apiTranslation.enabled: true`. For Vertex AI, a custom provider, or
-another format, its resolver fails that reconcile before publishing or cleaning
-serving resources, preserving the last-known route and overlay. A passing
+operator explicitly accepts the compatibility risk. For the bindings
+ai-gateway-controller serves on Praxis, see
+[External Model Setup](../install/external-model-setup.md#providers); for any
+other, its resolver fails that reconcile before publishing or cleaning serving
+resources, preserving the last-known route and overlay. A passing
 shared `/v1/messages` request does not prove ExternalModel compatibility, and a
 recognized IPP ConfigMap fingerprint alone does not prove every historical
 provider direction.

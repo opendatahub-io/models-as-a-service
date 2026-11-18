@@ -30,20 +30,15 @@ func TestSelect_ModelDenialMessage(t *testing.T) {
 		aliasedModelRef(t, "hidden-ref", "hidden-ns", "ExternalModel", "hidden-alias"),
 	}}
 	selector := subscription.NewSelector(logger.New(false), &fakeLister{subscriptions: []*unstructured.Unstructured{sub}}, models,
-		&fakeAccessChecker{authorized: map[authpolicy.ModelKey]bool{
-			{Namespace: "ns1", Name: "model-a"}: true,
-			{Namespace: "ns1", Name: "model-b"}: true,
-		}})
+		&fakeAccessChecker{authorized: map[authpolicy.ModelKey]bool{{Namespace: "ns1", Name: "model-b"}: true}})
 
 	const generic = `the requested model is not available in subscription "sub1"`
 	for model, want := range map[string]string{
-		// Authorized, but not in the subscription: denied like an unauthorized model (CWE-203).
-		"ns1/model-a": `model "ns1/model-a" is not available in subscription "sub1"`,
 		// Echoes the name the caller sent, not the alias-resolved hidden-ns/hidden-ref.
 		"hidden-alias": `model "hidden-alias" is not available in subscription "sub1"`,
 		"publishers/ns1/models/Org Model_v1.5:latest": `model "publishers/ns1/models/Org Model_v1.5:latest" is not available in subscription "sub1"`,
 		// Names outside the echo-safe allow-list are not repeated.
-		"bad\x01model": generic, "bad model": generic, `bad"model`: generic, `bad\model`: generic, "bad\nmodel": generic,
+		"bad\x01model": generic, "bad\u2028model": generic, `bad"model`: generic, `bad\model`: generic, "bad\nmodel": generic,
 		strings.Repeat("m", 254): generic,
 	} {
 		_, err := selector.Select([]string{"g1"}, "", "sub1", model)

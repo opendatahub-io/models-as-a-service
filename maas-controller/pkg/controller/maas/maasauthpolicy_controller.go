@@ -493,12 +493,14 @@ const (
 	// the subscription-info.bodyRoutedModel maas-api reports for the path
 	// model. celBodyRoutedModelMatches indexes the header, so it is evaluated
 	// only once celPathRoutedBodyModel holds. An absent field (LLMInferenceService,
-	// or an older maas-api during a rollout) passes; an empty one matches no header.
+	// or an older maas-api during a rollout) passes; an empty one matches no
+	// header, not even an empty one.
 	celPathRoutedBodyModel    = `(` + celPathModelIdentityAvailable + ` && "x-gateway-model-name" in request.headers)`
 	celBodyRoutedModelPresent = `(has(auth.metadata) && "subscription-info" in auth.metadata && ` +
 		`has(auth.metadata["subscription-info"].bodyRoutedModel))`
 	celBodyRoutedModelMatches = `(!` + celBodyRoutedModelPresent + ` || ` +
-		`auth.metadata["subscription-info"].bodyRoutedModel == request.headers["x-gateway-model-name"])`
+		`(auth.metadata["subscription-info"].bodyRoutedModel != "" && ` +
+		`auth.metadata["subscription-info"].bodyRoutedModel == request.headers["x-gateway-model-name"]))`
 	celBodyRoutedModelMismatch = `(` + celPathRoutedBodyModel + ` && !` + celBodyRoutedModelMatches + `)`
 	// Prefer MaaSModelRef identity resolved by subscription select (handles BBR
 	// publisher IDs). Fall back to path/header identity for path-based routing.

@@ -39,9 +39,12 @@ func subscriptionInfoAuth(info map[string]any) map[string]any {
 	return auth
 }
 
+// noHeader leaves X-Gateway-Model-Name out; "" sends it empty.
+const noHeader = "\x00"
+
 func inferenceRequest(path, bodyModel string) map[string]any {
 	headers := map[string]any{"authorization": "Bearer sk-oai-test"}
-	if bodyModel != "" {
+	if bodyModel != noHeader {
 		headers["x-gateway-model-name"] = bodyModel
 	}
 	return map[string]any{"path": path, "headers": headers}
@@ -90,9 +93,11 @@ func TestGatewayAuthPolicy_BodyRoutedModelRule(t *testing.T) {
 		{"namespace/name form", pathRoutedInference, "llm/q-plain", field("q-plain"), true},
 		{"case differs", pathRoutedInference, "Q-Plain", field("q-plain"), true},
 		{"unknown alias is present but empty", pathRoutedInference, "q-plain", field(""), true},
+		{"empty field and empty header", pathRoutedInference, "", field(""), true},
+		{"empty header", pathRoutedInference, "", field("q-plain"), true},
 		{"field absent (KServe or older maas-api)", pathRoutedInference, "x", map[string]any{"name": "sub"}, false},
 		{"subscription-info absent", pathRoutedInference, "x", nil, false},
-		{"no header", pathRoutedInference, "", field("q-plain"), false},
+		{"no header", pathRoutedInference, noHeader, field("q-plain"), false},
 		{"body-routed request", "/v1/chat/completions", "gpt-4o-mini", field("q-plain"), false},
 		{"maas-api request", "/maas-api/v1/models", "gpt-4o-mini", field("q-plain"), false},
 	}

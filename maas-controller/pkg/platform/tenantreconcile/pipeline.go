@@ -191,8 +191,9 @@ func RunPlatformWithReader(
 	}
 
 	if rendersMaaSAPIServiceMonitor(resources) {
+		// Best effort: nothing the tenant serves depends on it.
 		if err := cleanupLegacyMaaSAPIPodMonitor(ctx, c, appNs, mcfg.UID, log); err != nil {
-			return nil, fmt.Errorf("cleanup legacy maas-api PodMonitor: %w", err)
+			log.Error(err, "Cleanup of the legacy maas-api PodMonitor failed; retrying on the next reconcile")
 		}
 	}
 
@@ -1392,6 +1393,7 @@ func rendersMaaSAPIServiceMonitor(resources []unstructured.Unstructured) bool {
 // rendered in the app namespace. Applying the render never deletes, so it would keep
 // scraping over plain HTTP next to the ServiceMonitor that replaced it. No later
 // release renders a PodMonitor of that name, so maas-controller ownership identifies it.
+// One annotated opendatahub.io/managed=false is kept.
 func cleanupLegacyMaaSAPIPodMonitor(ctx context.Context, c client.Client, appNs string, configUID types.UID, log logr.Logger) error {
 	pm := &unstructured.Unstructured{}
 	pm.SetGroupVersionKind(GVKPodMonitor)
@@ -1402,7 +1404,7 @@ func cleanupLegacyMaaSAPIPodMonitor(ctx context.Context, c client.Client, appNs 
 		}
 		return fmt.Errorf("get PodMonitor %s: %w", key, err)
 	}
-	if !isMaaSManagedObject(pm, configUID) {
+	if !isMaaSManagedObject(pm, configUID) || pm.GetAnnotations()[AnnotationManaged] == "false" {
 		log.V(1).Info("Skipping legacy maas-api PodMonitor cleanup; not managed by maas-controller",
 			"name", maasAPIMetricsServiceMonitorName, "namespace", appNs)
 		return nil
