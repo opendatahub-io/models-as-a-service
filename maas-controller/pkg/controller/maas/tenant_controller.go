@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	netwv1 "k8s.io/api/networking/v1"
@@ -160,7 +161,7 @@ func (r *TenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		// doesn't log "Reconciler error" or apply exponential back-off; the next reconcile
 		// will re-read a fresh copy. Conflicts on child resources are propagated unchanged.
 		oteljson.FromContext(ctx).V(1).Info("requeuing after stale-cache conflict on MaasTenantConfig", "error", err)
-		return ctrl.Result{Requeue: true}, nil
+		return ctrl.Result{RequeueAfter: time.Second}, nil
 	}
 	return result, err
 }
