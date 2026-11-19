@@ -2,7 +2,8 @@
 Negative-path and security-oriented E2E tests for MaaS.
 
 Validates that the platform correctly rejects abuse scenarios:
-- Header spoofing: client-supplied X-MaaS identity headers are rejected at the gateway
+- Header spoofing: client-supplied X-MaaS identity and guardrail-selection headers are
+  rejected at the gateway
 - API key delegation: API keys cannot access the API-key management surface
 - Expired API keys: rejected at gateway level
 - Cross-model access: subscription-model binding enforced
@@ -54,6 +55,7 @@ from test_helper import (
     _inference,
     _maas_api_url,
     _poll_status,
+    _request_with_gateway_retry,
     _revoke_api_key,
     _wait_for_gateway_auth_enforced,
     _wait_for_maas_auth_policy_phase,
@@ -136,16 +138,104 @@ class TestAPIKeyManagementIsolation:
 # P0: Header Spoofing Tests
 # ============================================================================
 
+# Everything Authorino injects after auth. Upstream cannot tell an injected
+# value from one the caller sent, so the request is refused rather than
+# overwritten -- an overwrite only holds for headers someone remembered to list.
+INJECTED_IDENTITY_HEADERS = [
+    "x-maas-username",
+    "x-maas-group",
+    "x-maas-keyname",
+    "x-maas-subscription-rate-limit-id",
+    "x-maas-organization-id",
+    "x-maas-cost-center",
+    "x-maas-identity",
+    "x-maas-admin-scope",
+]
+
+# Guardrail selection is one header per check, so the policy refuses the whole
+# prefix: a check the catalog gains later must not arrive as a new hole. The
+# mixed-case spelling rides on Envoy lowercasing names before CEL sees them,
+# which is the half of the rule no unit test can reach.
+FORGED_GUARDRAIL_HEADERS = [
+    "x-aigateway-guardrail-content-safety",
+    "x-aigateway-guardrail-no-such-check",
+    "X-AIGateway-Guardrail-Content-Safety",
+]
+
+
+def _probe_models(base_url: str, headers: dict, forged: dict | None = None):
+    """GET /v1/models, optionally carrying forged headers.
+
+    /v1/models needs no model and no subscription of its own, and the deny rule
+    carries no "when", so it applies to this request like any other.
+    """
+    sent = dict(headers)
+    if forged:
+        sent.update(forged)
+    return _request_with_gateway_retry(requests.get, f"{base_url}/v1/models", headers=sent)
+
+
+def _assert_refused_by_policy(response):
+    """A refusal has to come from the AuthPolicy, not from a gateway still loading.
+
+    An empty 401/403 is what Envoy returns before the AuthPolicy is in place,
+    and _request_with_gateway_retry retries that as propagation. The policy's
+    own refusal carries the authorization_error body, so the body is what
+    proves it. It also pins the CEL guard on that body: /v1/models never runs
+    the subscription-info evaluator, and an unguarded index there makes
+    Authorino drop the body and answer with a bare 403.
+    """
+    assert response.status_code == 403, (
+        f"a forged header must be refused, got {response.status_code}: "
+        f"{response.text[:300]}"
+    )
+    assert "authorization_error" in response.text, (
+        f"the 403 did not come from the AuthPolicy's unauthorized response: "
+        f"{response.text[:300]}"
+    )
+
+
 @pytest.mark.smoke
 class TestHeaderSpoofing:
     """Verify that client-supplied identity headers cannot forge authorization.
 
     AuthPolicy deny-client-identity-headers rejects requests that already carry
-    X-MaaS-Username / X-MaaS-Group / X-MaaS-KeyName. Authorino then injects trusted
-    identity headers only after successful authentication.
+    an X-MaaS identity header or any x-aigateway-guardrail-* selection header.
+    Authorino then injects trusted values only after successful authentication.
 
     Security invariant: client-supplied identity headers are denied, not trusted.
     """
+
+    @pytest.fixture(scope="class")
+    def unforged_models_request_served(self, maas_api_base_url, headers):
+        """The control: the same request without a forged header is served.
+
+        Without it every refusal below passes just as well against a gateway
+        that is refusing everything.
+        """
+        response = _probe_models(maas_api_base_url, headers)
+        assert response.status_code == 200, (
+            f"the unforged request must be served: {response.status_code} "
+            f"{response.text[:300]}"
+        )
+
+    @pytest.mark.parametrize("header", INJECTED_IDENTITY_HEADERS)
+    def test_each_identity_header_is_refused_on_its_own(
+        self, maas_api_base_url, headers, unforged_models_request_served, header
+    ):
+        """One forged header per request.
+
+        test_injected_identity_headers_rejected_on_inference sends them all at
+        once, where the rest still refuse the request if one stops matching.
+        """
+        _assert_refused_by_policy(_probe_models(maas_api_base_url, headers, {header: "forged"}))
+
+    @pytest.mark.parametrize("header", FORGED_GUARDRAIL_HEADERS)
+    def test_client_supplied_guardrail_selection_is_refused(
+        self, maas_api_base_url, headers, unforged_models_request_served, header
+    ):
+        """Choosing your own checks is choosing which rails run on your prompt."""
+        _assert_refused_by_policy(_probe_models(maas_api_base_url, headers, {header: "true"}))
 
     @pytest.mark.parametrize(
         "forged_header,label",
