@@ -169,32 +169,34 @@ func (m *Manager) FilterModelsByAccess(ctx context.Context, models []Model, _ st
 
 	log := m.logger.WithContext(ctx)
 	log.Debug("FilterModelsByAccess: filtering models by readiness", "count", len(models))
+	out := FilterReadyModels(models)
+	log.Debug("FilterModelsByAccess: complete", "input", len(models), "accessible", len(out))
+	return out
+}
+
+// FilterReadyModels returns the models that are ready and carry a recognized
+// kind. It applies the readiness/kind contract without requiring a live model
+// manager, so standalone deployments can serve /v1/models without subscription
+// selection or gateway access probes.
+func FilterReadyModels(models []Model) []Model {
+	if len(models) == 0 {
+		return models
+	}
+
 	// Initialize to empty slice (not nil) so JSON marshals as [] instead of null.
 	out := make([]Model, 0, len(models))
 	for _, model := range models {
+		if !model.Ready {
+			continue
+		}
 		switch model.Kind {
-		case kindExternalModel:
+		case kindExternalModel, kindLLMISvc, kindLLMISvcAlternate, "":
 			// ExternalModel endpoints require the provider API key injected by IPP;
 			// probing is not possible with the user's MaaS token.
-			if model.Ready {
-				log.Debug("FilterModelsByAccess: including ExternalModel (no probe)", "id", model.ID)
-				out = append(out, model)
-			} else {
-				log.Debug("FilterModelsByAccess: skipping ExternalModel (not ready)", "id", model.ID)
-			}
-		case kindLLMISvc, kindLLMISvcAlternate, "":
-			// Both kindLLMISvc ("llmisvc") and kindLLMISvcAlternate ("LLMInferenceService") are
-			// valid values for MaaSModelRef spec.modelRef.kind; empty defaults to kindLLMISvc.
-			if model.Ready {
-				log.Debug("FilterModelsByAccess: including LLMInferenceService (no probe)", "id", model.ID)
-				out = append(out, model)
-			} else {
-				log.Debug("FilterModelsByAccess: skipping LLMInferenceService (not ready)", "id", model.ID)
-			}
-		default:
-			log.Debug("FilterModelsByAccess: skipping model with unknown kind", "id", model.ID, "kind", model.Kind)
+			// Both kindLLMISvc ("llmisvc") and kindLLMISvcAlternate ("LLMInferenceService")
+			// are valid values for MaaSModelRef spec.modelRef.kind; empty defaults to kindLLMISvc.
+			out = append(out, model)
 		}
 	}
-	log.Debug("FilterModelsByAccess: complete", "input", len(models), "accessible", len(out))
 	return out
 }

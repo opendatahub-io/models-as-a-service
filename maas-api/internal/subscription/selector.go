@@ -49,6 +49,9 @@ type Selector struct {
 	subscriptionNamespace string
 }
 
+// Enabled reports that the selector is backed by a subscription system.
+func (s *Selector) Enabled() bool { return s != nil }
+
 // SelectorOption configures a Selector.
 type SelectorOption func(*Selector)
 

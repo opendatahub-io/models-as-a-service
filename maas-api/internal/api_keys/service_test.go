@@ -19,6 +19,8 @@ import (
 
 type serviceTestSubSelector struct{}
 
+func (serviceTestSubSelector) Enabled() bool { return true }
+
 func (serviceTestSubSelector) Select(_ []string, _ string, requested string, _ string) (*subscription.SelectResponse, error) {
 	if requested != "" {
 		return &subscription.SelectResponse{Name: requested, Phase: "Active"}, nil
@@ -36,6 +38,28 @@ func createTestService(t *testing.T) (*api_keys.Service, *api_keys.MockStore) {
 	cfg := &config.Config{}
 	svc := api_keys.NewServiceWithLogger(store, cfg, serviceTestSubSelector{}, logger.Development())
 	return svc, store
+}
+
+func TestStandaloneModeCreatesAndValidatesUnboundKey(t *testing.T) {
+	ctx := context.Background()
+	store := api_keys.NewMockStore()
+	cfg := &config.Config{
+		APIKeyMaxExpirationDays: 30,
+		SubscriptionMode:        config.SubscriptionModeStandalone,
+	}
+	svc := api_keys.NewServiceWithLogger(store, cfg, nil, logger.Development())
+
+	created, err := svc.CreateAPIKey(ctx, "alice", []string{"enmaas-testing"}, "standalone-key", "", nil, false, "", "", nil)
+	require.NoError(t, err)
+	require.NotEmpty(t, created.Key)
+	assert.Empty(t, created.Subscription)
+
+	validated, err := svc.ValidateAPIKey(ctx, created.Key)
+	require.NoError(t, err)
+	assert.True(t, validated.Valid)
+	assert.Equal(t, "alice", validated.Username)
+	assert.Equal(t, []string{"enmaas-testing"}, validated.Groups)
+	assert.Empty(t, validated.Subscription)
 }
 
 // ============================================================
@@ -924,6 +948,8 @@ type subSelectorStub struct {
 	highestName string
 }
 
+func (s subSelectorStub) Enabled() bool { return true }
+
 func (s subSelectorStub) Select(_ []string, _ string, requested string, _ string) (*subscription.SelectResponse, error) {
 	if s.selectErr != nil {
 		return nil, s.selectErr
@@ -1265,6 +1291,8 @@ func (m *mockHealthSelector) Select(_ []string, _ string, _ string, _ string) (*
 	}
 	return resp, nil
 }
+
+func (m *mockHealthSelector) Enabled() bool { return true }
 
 func (m *mockHealthSelector) SelectHighestPriority(_ []string, _ string) (*subscription.SelectResponse, error) {
 	return m.Select(nil, "", "", "")

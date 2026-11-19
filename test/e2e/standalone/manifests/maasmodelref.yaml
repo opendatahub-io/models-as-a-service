@@ -1,0 +1,12 @@
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: MaaSModelRef
+metadata:
+  name: standalone-ready-model
+  namespace: maas-standalone-e2e
+spec:
+  modelRef:
+    kind: llmisvc
+    name: standalone-ready-model
+status:
+  phase: Ready
+  endpoint: http://example.invalid
