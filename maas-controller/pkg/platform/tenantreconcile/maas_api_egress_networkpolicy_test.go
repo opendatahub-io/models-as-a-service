@@ -500,10 +500,10 @@ func TestIsMaaSManagedMaaSAPIEgressNetworkPolicy(t *testing.T) {
 
 	unrelated := sampleMaaSAPIEgressRestrictNetworkPolicy()
 
-	assert.True(t, isMaaSManagedNetworkPolicy(owned, configUID))
-	assert.True(t, isMaaSManagedNetworkPolicy(ssaManaged, configUID))
-	assert.False(t, isMaaSManagedNetworkPolicy(external, configUID))
-	assert.False(t, isMaaSManagedNetworkPolicy(unrelated, configUID))
+	assert.True(t, isMaaSManagedObject(owned, configUID))
+	assert.True(t, isMaaSManagedObject(ssaManaged, configUID))
+	assert.False(t, isMaaSManagedObject(external, configUID))
+	assert.False(t, isMaaSManagedObject(unrelated, configUID))
 }
 
 func TestMaasAPIEgressNetworkPolicyDisabled(t *testing.T) {

@@ -444,7 +444,10 @@ func TestCELTokenGroupsHeaderJSONReservesQualifiedGroups(t *testing.T) {
 	}
 }
 
-func evaluateGatewayCELList(t *testing.T, expression string, auth map[string]any) []any {
+// evaluateGatewayCEL evaluates an AuthPolicy CEL expression against an
+// Authorino auth context and request, converting the result to T. Any compile
+// or evaluation error fails the test.
+func evaluateGatewayCEL[T any](t *testing.T, expression string, auth, request map[string]any) T {
 	t.Helper()
 	env, err := cel.NewEnv(cel.Variable("auth", cel.DynType), cel.Variable("request", cel.DynType), ext.Strings())
 	if err != nil {
@@ -458,82 +461,38 @@ func evaluateGatewayCELList(t *testing.T, expression string, auth map[string]any
 	if err != nil {
 		t.Fatalf("Program: %v", err)
 	}
-	value, _, err := program.Eval(map[string]any{
-		"auth":    auth,
-		"request": map[string]any{"path": "/v1/models", "headers": map[string]any{}},
-	})
+	value, _, err := program.Eval(map[string]any{"auth": auth, "request": request})
 	if err != nil {
 		t.Fatalf("Eval: %v", err)
 	}
-	native, err := value.ConvertToNative(reflect.TypeFor[[]any]())
+	native, err := value.ConvertToNative(reflect.TypeFor[T]())
 	if err != nil {
 		t.Fatalf("ConvertToNative: %v", err)
 	}
-	groups, ok := native.([]any)
+	result, ok := native.(T)
 	if !ok {
-		t.Fatalf("groups value = %#v, want []any", native)
-	}
-	return groups
-}
-
-func evaluateGatewayCELString(t *testing.T, expression string, auth map[string]any) string {
-	t.Helper()
-	env, err := cel.NewEnv(cel.Variable("auth", cel.DynType), cel.Variable("request", cel.DynType), ext.Strings())
-	if err != nil {
-		t.Fatalf("NewEnv: %v", err)
-	}
-	ast, issues := env.Compile(expression)
-	if issues.Err() != nil {
-		t.Fatalf("Compile: %v", issues.Err())
-	}
-	program, err := env.Program(ast)
-	if err != nil {
-		t.Fatalf("Program: %v", err)
-	}
-	value, _, err := program.Eval(map[string]any{
-		"auth":    auth,
-		"request": map[string]any{"path": "/v1/model/default/llm", "headers": map[string]any{"x-maas-subscription": "gold"}},
-	})
-	if err != nil {
-		t.Fatalf("Eval: %v", err)
-	}
-	result, ok := value.Value().(string)
-	if !ok {
-		t.Fatalf("value = %#v, want string", value.Value())
+		t.Fatalf("value = %#v, want %v", native, reflect.TypeFor[T]())
 	}
 	return result
 }
 
+func evaluateGatewayCELList(t *testing.T, expression string, auth map[string]any) []any {
+	t.Helper()
+	return evaluateGatewayCEL[[]any](t, expression, auth, map[string]any{"path": "/v1/models", "headers": map[string]any{}})
+}
+
+func evaluateGatewayCELString(t *testing.T, expression string, auth map[string]any) string {
+	t.Helper()
+	return evaluateGatewayCEL[string](t, expression, auth, subscriptionHeaderRequest())
+}
+
 func evaluateGatewayCELMap(t *testing.T, expression string, auth map[string]any) map[string]any {
 	t.Helper()
-	env, err := cel.NewEnv(cel.Variable("auth", cel.DynType), cel.Variable("request", cel.DynType), ext.Strings())
-	if err != nil {
-		t.Fatalf("NewEnv: %v", err)
-	}
-	ast, issues := env.Compile(expression)
-	if issues.Err() != nil {
-		t.Fatalf("Compile: %v", issues.Err())
-	}
-	program, err := env.Program(ast)
-	if err != nil {
-		t.Fatalf("Program: %v", err)
-	}
-	value, _, err := program.Eval(map[string]any{
-		"auth":    auth,
-		"request": map[string]any{"path": "/v1/model/default/llm", "headers": map[string]any{"x-maas-subscription": "gold"}},
-	})
-	if err != nil {
-		t.Fatalf("Eval: %v", err)
-	}
-	native, err := value.ConvertToNative(reflect.TypeFor[map[string]any]())
-	if err != nil {
-		t.Fatalf("ConvertToNative: %v", err)
-	}
-	body, ok := native.(map[string]any)
-	if !ok {
-		t.Fatalf("value = %#v, want map[string]any", native)
-	}
-	return body
+	return evaluateGatewayCEL[map[string]any](t, expression, auth, subscriptionHeaderRequest())
+}
+
+func subscriptionHeaderRequest() map[string]any {
+	return map[string]any{"path": "/v1/model/default/llm", "headers": map[string]any{"x-maas-subscription": "gold"}}
 }
 
 func TestMaaSAPIAuthPolicyYAML_CEL_RHCLCompatible(t *testing.T) {

@@ -59,12 +59,12 @@ to `/v1/messages`. The ExternalModel flow is **OpenAI Chat Completions client
 profile determines whether translation runs. An OpenAI-compatible provider
 remains pass-through.
 
-The currently qualified ExternalModel profiles are OpenAI `openai-chat`
-pass-through and Anthropic `messages` translation. The Anthropic profile
-requires this permission to be enabled. Azure OpenAI, Vertex AI, Bedrock, and
-custom provider or format combinations are not qualified by this runtime; an
-active unqualified binding fails reconciliation and retains the last-known
-serving route rather than being silently removed.
+Anthropic `messages` bindings, Azure OpenAI bindings, and bindings whose
+`targetModel` differs from the model's client-facing name require this
+permission; without it ai-gateway-controller skips them with reason
+`APITranslationDisabled`. A binding's `path` also takes effect only with it,
+but is not flagged. See
+[External Model Setup](../../install/external-model-setup.md#api-translation).
 
 The shared translator stays strict for Anthropic-only fields that Chat
 Completions cannot represent. Requests using `cache_control` prompt-caching

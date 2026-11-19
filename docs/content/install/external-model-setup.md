@@ -5,12 +5,21 @@
 
 This guide walks through deploying an external AI/ML model (e.g., OpenAI, Anthropic) through the MaaS gateway. External models are hosted outside the cluster — MaaS handles authentication, rate limiting, and API key management while routing inference requests to the external provider.
 
-## Multi-Tenant Limitation
+You describe an external model with two `inference.opendatahub.io/v1alpha1` resources:
 
-!!! warning "External models are only supported for the default tenant"
-    In multi-tenant deployments, external models work for the **default tenant only**. Non-default tenant IPP (Inference Payload Processor) instances have the ExternalModel controller disabled, in both the `payload-pre-processing` and `payload-processing` Deployments, to prevent HTTPRoute conflicts between tenants.
+- An **ExternalProvider** holds the provider type, its endpoint, and the credential.
+- An **ExternalModel** gives the model its client-facing name and binds it to one or more providers.
 
-    External model support for non-default tenants is planned for a future release.
+ai-gateway-controller turns them into routes and Praxis configuration on the tenant's Gateway.
+
+!!! note "Legacy API"
+    The `maas.opendatahub.io/v1alpha1` ExternalModel is deprecated, and RHOAI 3.6 rejects new ones. For existing objects, see [Upgrade to 3.6](../migration/upgrade-to-3.6.md#legacy-maasopendatahubio-externalmodels).
+
+## Tenants
+
+An ExternalModel without `spec.gatewayRefs` is served by the tenant whose `MaasTenantConfig` is in the model's namespace. In a namespace that belongs to no tenant, the default tenant's Gateway serves it.
+
+A tenant that still runs the RHOAI 3.5 payload processor after an upgrade behaves differently; see [Tenants still on the legacy payload processor](#tenants-still-on-the-legacy-payload-processor).
 
 ## Prerequisites
 
@@ -18,111 +27,61 @@ This guide walks through deploying an external AI/ML model (e.g., OpenAI, Anthro
 - `kubectl`/`oc` access as cluster-admin
 - An API key from the external provider (e.g., OpenAI)
 
+## API translation
+
+!!! important "Enable `spec.apiTranslation` for translated models"
+    `MaasTenantConfig.spec.apiTranslation.enabled` is off for new tenants unless you set it. The tenant that serves the model needs it for:
+
+    - Anthropic (`messages`) providers
+    - Azure OpenAI providers
+    - a binding whose `targetModel` differs from the model's client-facing name
+
+    Without it, ai-gateway-controller does not serve such a binding and reports it with reason `APITranslationDisabled`; a model left with no served binding is `Failed`.
+
+For the default tenant:
+
+```bash
+kubectl patch maastenantconfig default-tenant -n models-as-a-service --type=merge \
+  -p '{"spec":{"apiTranslation":{"enabled":true}}}'
+```
+
+For an AITenant, patch `default-tenant` in its tenant namespace (`ai-tenant-<name>`). An upgrade from a recognized RHOAI 3.5 configuration sets the field to `true` during the migration to Praxis. See the [MaasTenantConfig reference](../reference/crds/tenant.md#tenantapitranslationconfig) for what else the setting permits, and [Upgrade to 3.6](../migration/upgrade-to-3.6.md#ipp-praxis-api-translation-migration) for the migration.
+
 ## Architecture
 
 An external model deployment involves the following resources:
 
 | Resource | Created by | Purpose |
 |----------|-----------|---------|
-| **ExternalModel** | User | Defines the external provider, endpoint, and credential reference |
+| **Secret** | User | Holds the provider API key |
+| **ExternalProvider** | User | Defines the provider type, endpoint, and credential |
+| **ExternalModel** | User | Defines the client-facing model name and its provider bindings |
 | **MaaSModelRef** | User | Registers the model in the MaaS catalog |
 | **MaaSAuthPolicy** | User | Defines which groups can access the model |
 | **MaaSSubscription** | User | Defines token rate limits for the model |
-| **Service** (ExternalName) | ExternalModel reconciler | Maps an in-cluster DNS name to the external FQDN |
-| **ServiceEntry** | ExternalModel reconciler | Registers the external host in the Istio mesh |
-| **DestinationRule** | ExternalModel reconciler | Configures TLS origination for the external endpoint |
-| **HTTPRoute** | ExternalModel reconciler | Routes gateway traffic to the external provider |
+| **HTTPRoute** | ai-gateway-controller | Routes gateway traffic for the model |
+| **Service**, **ServiceEntry**, **DestinationRule** | ai-gateway-controller | Reach the provider endpoint and originate TLS |
 | **Kuadrant AuthPolicy** | MaaSAuthPolicy controller | Per-route auth enforcement via Authorino |
 | **TokenRateLimitPolicy** | MaaSSubscription controller | Per-route rate limiting via Limitador |
 
-The RHOAI 3.5 Inference Payload Processor (IPP) component handled provider API key injection, model routing, and the formats registered by its `api-translation` plugin. Its default profile enabled request processing but left response processing empty. That legacy behavior is not proof that the 3.6 Praxis ExternalModel runtime preserves every provider direction or stream mode; see the [3.6 upgrade guide](../migration/upgrade-to-3.6.md#ipp-praxis-api-translation-migration).
+Praxis selects the provider, injects its credential, and rewrites the request for it. It buffers each request body up to 10 MiB for validation and target-model rewriting; larger requests are rejected before they reach the provider.
 
-## Step 1: Deploy Inference Payload Processor (IPP)
+## Step 1: Create the Model Namespace
 
-IPP is required for external models — it injects the provider API key and translates between OpenAI-compatible format and the provider's native API.
-
-MaaS deploys the payload-processing component from the [`ai-gateway-payload-processing`](https://github.com/opendatahub-io/ai-gateway-payload-processing) repository. For detailed configuration and usage, see that project's documentation.
-
-### IPP response translation (opt-in)
-
-The exact 3.5 product-default profile ran `api-translation` on the **request** path; response-side `api-translation` was off. Thus pure-default already had request-side translation. Baseline #2 (default plus response `api-translation`) additionally enabled response processing.
-
-The legacy IPP `api-translation` plugin was a multi-provider catch-all documented for OpenAI, Anthropic, Azure OpenAI, Vertex AI, and Bedrock Mantle. Current Praxis qualification is narrower. `spec.apiTranslation.enabled` is one tenant permission for the shared Anthropic Messages client → OpenAI-compatible backend flow and the ExternalModel OpenAI Chat Completions client → selected Anthropic Messages provider flow. For ExternalModels, `intelligent_route` selects the provider first; its trusted profile controls request and response translation. OpenAI `openai-chat` candidates remain pass-through. The currently qualified ExternalModel profiles are OpenAI `openai-chat` and Anthropic `messages`; Azure OpenAI, Vertex AI, Bedrock, custom provider types, and other formats are not claimed as supported. Do not infer their support from the legacy IPP ConfigMap.
-
-The current ExternalModel ExtProc configuration buffers each selected-provider request body up to 10 MiB for validation and target-model rewriting. Larger requests are rejected before reaching the provider, including for OpenAI-compatible candidates.
-
-```bash
-GATEWAY_NAMESPACE="${GATEWAY_NAMESPACE:-openshift-ingress}"
-
-# 1. Edit the live ConfigMap — under profiles[0].plugins.response add:
-#      - pluginRef: api-translation
-kubectl edit configmap payload-processing-plugins -n "${GATEWAY_NAMESPACE}"
-
-# 2. Reload IPP
-kubectl rollout restart deployment/payload-processing -n "${GATEWAY_NAMESPACE}"
-```
-
-To reset the ConfigMap to product defaults once, remove the opt-out annotation (or set `opendatahub.io/managed=true` for continuous reconciler management), wait for reconcile, then optionally set `opendatahub.io/managed=false` again after editing:
-
-```bash
-# One-shot reset to defaults (controller re-applies, then stamps managed=false again)
-kubectl annotate configmap payload-processing-plugins -n "${GATEWAY_NAMESPACE}" opendatahub.io/managed-
-
-# Or keep the reconciler owning the ConfigMap continuously:
-kubectl annotate configmap payload-processing-plugins -n "${GATEWAY_NAMESPACE}" opendatahub.io/managed=true --overwrite
-```
-
-!!! note
-    If MaaS was deployed via the MaasTenantConfig CR (standard RHOAI path), IPP is already deployed as a subcomponent. Verify with:
-
-    ```bash
-    kubectl get pods -n openshift-ingress -l app=payload-processing
-    ```
-
-    If the pod is already running, skip to Step 2.
-
-```bash
-PROJECT_DIR=$(git rev-parse --show-toplevel)
-
-# RBAC
-kubectl apply -f ${PROJECT_DIR}/deployment/base/payload-processing/rbac/serviceaccount.yaml
-kubectl apply -f ${PROJECT_DIR}/deployment/base/payload-processing/rbac/clusterrole.yaml
-kubectl apply -f ${PROJECT_DIR}/deployment/base/payload-processing/rbac/clusterrolebinding.yaml
-
-# ConfigMap, Service, DestinationRule, EnvoyFilter
-kubectl apply -f ${PROJECT_DIR}/deployment/base/payload-processing/manager/plugins-configmap.yaml
-kubectl apply -f ${PROJECT_DIR}/deployment/base/payload-processing/manager/service.yaml
-kubectl apply -f ${PROJECT_DIR}/deployment/base/payload-processing/manager/destination-rule.yaml
-kubectl apply -f ${PROJECT_DIR}/deployment/base/payload-processing/manager/envoy-filter.yaml
-
-# Deployment (substitute the image placeholder)
-PAYLOAD_PROCESSING_IMAGE="${PAYLOAD_PROCESSING_IMAGE:-$(grep '^payload-processing-image=' "${PROJECT_DIR}/deployment/base/maas-controller/default/params.env" | cut -d= -f2-)}"
-cat ${PROJECT_DIR}/deployment/base/payload-processing/manager/deployment.yaml | \
-  sed "s|image: payload-processing|image: ${PAYLOAD_PROCESSING_IMAGE}|" | \
-  kubectl apply -f -
-
-# Verify
-kubectl get pods -n openshift-ingress -l app=payload-processing
-```
-
-The pod should be `1/1 Running`.
-
-## Step 2: Create the Model Namespace
-
-External models deploy to a model namespace (e.g., `llm`). If it doesn't exist:
+This guide uses the `llm` namespace for the model. If it doesn't exist:
 
 ```bash
 kubectl create namespace llm
-kubectl label namespace llm istio-injection=enabled
 ```
 
-## Step 3: Create the Provider API Key Secret
+The model's HTTPRoute lives in this namespace, so the Gateway must admit routes from it. If the Gateway selects namespaces by label, label `llm` as described in [Gateway Patterns](../configuration-and-management/gateway-patterns.md#automatic-infrastructure-and-tenant-namespace-labeling). Tenant namespaces are labeled automatically.
+
+## Step 2: Create the Provider API Key Secret
 
 Store the external provider's API key in a Kubernetes Secret. The Secret must:
 
-- Be in the same namespace as the ExternalModel
+- Be in the same namespace as the ExternalProvider
 - Use the data key `api-key`
-- Have the label `inference.llm-d.ai/ipp-managed=true` so IPP can read it
 
 ```bash
 TMP_KEY_FILE="$(mktemp)"
@@ -133,27 +92,61 @@ kubectl create secret generic openai-api-key -n llm \
   --from-file=api-key="${TMP_KEY_FILE}"
 
 rm -f "${TMP_KEY_FILE}"
+```
 
-kubectl label secret openai-api-key -n llm inference.llm-d.ai/ipp-managed=true
+## Step 3: Create the ExternalProvider
+
+The ExternalProvider defines the provider connection. Several ExternalModels can use the same provider.
+
+```bash
+kubectl apply -f - <<'EOF'
+apiVersion: inference.opendatahub.io/v1alpha1
+kind: ExternalProvider
+metadata:
+  name: openai
+  namespace: llm
+spec:
+  provider: openai
+  endpoint: api.openai.com
+  auth:
+    type: apikey
+    secretRef:
+      name: openai-api-key
+EOF
+```
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `spec.provider` | Yes | Provider type, such as `openai`, `anthropic`, `azure-openai`, or `bedrock-openai`. See [Providers](#providers). |
+| `spec.endpoint` | Yes | Provider FQDN, without scheme or path (e.g., `api.openai.com`) |
+| `spec.auth.type` | Yes | `apikey` |
+| `spec.auth.secretRef.name` | Yes | Secret with the `api-key` data key, in the ExternalProvider namespace |
+| `spec.config` | No | Provider-specific key-value settings |
+
+Verify the provider is ready:
+
+```bash
+kubectl get externalproviders.inference.opendatahub.io -n llm
 ```
 
 ## Step 4: Create the ExternalModel and MaaSModelRef
 
-The ExternalModel defines the provider connection. The MaaSModelRef registers it in the MaaS catalog.
+The ExternalModel binds a client-facing model name to the provider. The MaaSModelRef registers it in the MaaS catalog.
 
 ```bash
 kubectl apply -f - <<'EOF'
-apiVersion: maas.opendatahub.io/v1alpha1
+apiVersion: inference.opendatahub.io/v1alpha1
 kind: ExternalModel
 metadata:
   name: gpt-4o
   namespace: llm
 spec:
-  provider: openai
-  endpoint: api.openai.com
-  targetModel: gpt-4o
-  credentialRef:
-    name: openai-api-key
+  externalProviderRefs:
+  - ref:
+      name: openai
+    targetModel: gpt-4o
+    apiFormat: openai-chat
+    path: /v1/chat/completions
 ---
 apiVersion: maas.opendatahub.io/v1alpha1
 kind: MaaSModelRef
@@ -167,55 +160,44 @@ spec:
 EOF
 ```
 
-Verify the model is ready:
+Clients send the model's client-facing name in the `model` field of their requests: `spec.modelName` when it is set, otherwise `metadata.name`. Set `spec.modelName` when that name is not a valid resource name, for example `meta-llama/Llama-3.1-8B-Instruct`.
+
+Each entry in `spec.externalProviderRefs` binds the model to one provider:
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `ref.name` | Yes | ExternalProvider name. Leave out `ref.namespace` to use a provider in the model's namespace; a provider in another namespace needs a ReferenceGrant there. |
+| `targetModel` | Yes | Model identifier the provider expects. If it differs from the client-facing name, the tenant needs [API translation](#api-translation). |
+| `apiFormat` | Yes | `openai-chat` (OpenAI Chat Completions) or `messages` (Anthropic Messages) |
+| `path` | Yes | Request path sent to the provider, e.g. `/v1/chat/completions`. `{key}` placeholders are filled from the merged provider and binding `config`, and `{model}` from `targetModel`. Applied only with [API translation](#api-translation): without it the provider receives the path the client called, without the `/<namespace>/<model>` prefix of a path-based URL, and the model still reports `Ready`. |
+| `config` | No | Overrides the provider's `spec.config` for this binding |
+| `auth` | No | Overrides the provider's credential; its Secret is in the ExternalModel namespace |
+
+Verify the model is ready. Both API groups define an `ExternalModel` kind, so use the full resource name:
 
 ```bash
+kubectl get externalmodels.inference.opendatahub.io -n llm
 kubectl get maasmodelref -n llm
 ```
 
-Expected output:
+Expected output for the MaaSModelRef:
 
 ```text
-NAME     PHASE   ENDPOINT                                    HTTPROUTE   GATEWAY
-gpt-4o   Ready   https://maas.<cluster-domain>/llm/gpt-4o   maas-gpt-4o maas-default-gateway
+NAME     PHASE   ENDPOINT                                   HTTPROUTE                      GATEWAY                AGE
+gpt-4o   Ready   https://maas.<cluster-domain>/llm/gpt-4o   external-model-gpt-4o-<hash>   maas-default-gateway   1m
 ```
 
-## Annotations
+`llm` belongs to no tenant, so the route name ends in a hash. A model in a tenant's own namespace gets `external-model-<name>`.
 
-ExternalModel supports optional annotations to control networking behavior:
+## Provider endpoint options
 
-| Annotation | Required | Default | Description |
-|------------|----------|---------|-------------|
-| `maas.opendatahub.io/tls` | No | `true` | Controls TLS origination to the external endpoint. Set to `false` for non-TLS endpoints. |
-| `maas.opendatahub.io/port` | No | `443` | Overrides the default port for the external endpoint. Valid range: 1–65535; values outside this range are rejected during reconciliation. |
+ai-gateway-controller connects to the provider over HTTPS on port `443`.
 
-By default, the ExternalModel reconciler enables TLS origination — the Istio sidecar performs the TLS handshake with the external provider. This is the correct setting for public providers like OpenAI and Anthropic.
+| Setting | Where | Description |
+|---------|-------|-------------|
+| `inference.opendatahub.io/port` annotation | ExternalProvider | Another HTTPS port (1–65535) |
 
-For internal endpoints that do not use TLS (e.g., a self-hosted vLLM instance), disable TLS origination and set the appropriate port:
-
-!!! warning "Cleartext credential traffic"
-    Disabling TLS while `credentialRef` is set means the provider API key is sent in cleartext between the gateway and the endpoint. Only use non-TLS mode on a trusted, isolated network.
-
-```yaml
-apiVersion: maas.opendatahub.io/v1alpha1
-kind: ExternalModel
-metadata:
-  name: internal-vllm
-  namespace: llm
-  annotations:
-    maas.opendatahub.io/tls: "false"
-    maas.opendatahub.io/port: "8000"
-spec:
-  provider: openai
-  endpoint: vllm.internal.example.com
-  targetModel: my-model
-  credentialRef:
-    name: vllm-api-key
-```
-
-When TLS is disabled, the reconciler creates the ServiceEntry with HTTP protocol instead of HTTPS and does not create a DestinationRule. Any existing controller-managed DestinationRule is deleted; DestinationRules annotated with `opendatahub.io/managed: "false"` are preserved.
-
-For full annotation details, see the [ExternalModel CRD Reference](../reference/crds/external-model.md#annotations).
+Plain HTTP is not supported: `inference.opendatahub.io/tls: "false"` is rejected, because the provider credential would travel in cleartext. Serve internal endpoints, such as a self-hosted vLLM, over TLS.
 
 ## Step 5: Configure Access and Rate Limits
 
@@ -281,7 +263,7 @@ curl -sS "https://${GW_HOST}/v1/chat/completions" \
 ```
 
 !!! note "Legacy path-based endpoint"
-    You can also use the path-based URL: `https://${GW_HOST}/llm/gpt-4o/v1/chat/completions`. Both routing modes are supported. See [Inference - Path-Based Routing](../user-guide/inference.md#path-based-routing-legacy) for details.
+    You can also use the path-based URL: `https://${GW_HOST}/llm/gpt-4o/v1/chat/completions`. Both routing modes are supported. On the path-based URL, a `model` field in the body must be the model's client-facing name (`gpt-4o` here); any other value is rejected with `403`. See [Inference - Path-Based Routing](../user-guide/inference.md#path-based-routing-legacy) for details.
 
 ### Verify Auth Enforcement
 
@@ -310,118 +292,119 @@ The model `gpt-4o` should appear in the list.
 !!! tip "TLS certificate errors"
     If `curl` returns `curl: (60) SSL certificate problem`, see [Troubleshooting - TLS Certificate Validation](troubleshooting.md#tls-certificate-validation).
 
-## Supported Providers
+## Providers
 
-The table below records the **RHOAI 3.5 IPP** guide's documented provider
-behavior. It is historical coverage, not a support matrix for the 3.6 Praxis
-ExternalModel dataplane. The Phase 1 Kind qualification proves the separate
-shared Anthropic Messages client → OpenAI-compatible backend path. It does not
-prove OpenAI-client → Anthropic-provider parity or Praxis support for Azure
-OpenAI, Vertex AI, or Bedrock. See the [3.6 upgrade guide](../migration/upgrade-to-3.6.md#ipp-praxis-api-translation-migration)
-for the migration gate and currently supported ExternalModel formats.
+Clients call every external model with the OpenAI Chat Completions API. ai-gateway-controller serves these provider bindings:
 
-| Provider | `spec.provider` | Translation | Auth Header |
-|----------|----------------|-------------|-------------|
-| OpenAI | `openai` | Pass-through | `Authorization: Bearer` |
-| Anthropic | `anthropic` | OpenAI ↔ Messages API | `x-api-key` |
-| Azure OpenAI | `azure-openai` | Path rewrite + field stripping | `api-key` |
-| Vertex AI | `vertex-openai` | Path rewrite + field stripping | `Authorization: Bearer` (OAuth) |
-| AWS Bedrock | `bedrock-openai` | Pass-through (Mantle) | `Authorization: Bearer` |
+| Provider | `spec.provider` | `apiFormat` | `path` | Credential sent as |
+|----------|-----------------|-------------|--------|--------------------|
+| OpenAI | `openai` | `openai-chat` | `/v1/chat/completions` | `Authorization: Bearer` |
+| Anthropic | `anthropic` | `messages` | `/v1/messages` | `x-api-key` |
+| Azure OpenAI | `azure-openai` (or `azure`) | `openai-chat` | `/openai/v1/chat/completions` | `api-key` |
+| AWS Bedrock (Mantle) | `bedrock-openai` | `openai-chat` | `/v1/chat/completions` | `Authorization: Bearer` |
+
+Any other provider and format combination, Vertex AI included, is not served: the ExternalModel fails reconciliation. The upgrade migration from the RHOAI 3.5 payload processor treats only the OpenAI and Anthropic bindings as compatible; see [Upgrade to 3.6](../migration/upgrade-to-3.6.md#ipp-praxis-api-translation-migration).
 
 ### OpenAI
 
-Pass-through — no body translation needed. Auth uses `Authorization: Bearer`.
+Pass-through: Praxis does not translate the request or the response.
 
 - Set `endpoint: api.openai.com`
 - Models: `gpt-4o`, `gpt-4o-mini`, `gpt-4.1`, `gpt-4.1-mini`, `o1`, `o3-mini`, etc.
 
-See the [OpenAI provider guide](https://github.com/opendatahub-io/ai-gateway-payload-processing/blob/main/docs/providers/openai.md).
-
 ### Anthropic
 
-Translates OpenAI Chat Completions to Anthropic Messages API format. Auth uses `x-api-key` header (not `Authorization: Bearer`).
+Praxis translates OpenAI Chat Completions requests to the Anthropic Messages API and the responses back.
 
-- System messages extracted to top-level `system` field
-- `tools[]` converted to Anthropic format with `input_schema`
-- `tool_choice` mapped: `auto` → `{"type":"auto"}`, `required` → `{"type":"any"}`
-- `stream` field forwarded for streaming support
-- `anthropic-version: 2023-06-01` header added automatically
-- Response `stop_reason` mapped back to OpenAI `finish_reason`
-- Unsupported parameters silently dropped by the 3.5 IPP: `frequency_penalty`, `presence_penalty`, `logprobs`, `n`, `response_format`, `seed` (3.6 Praxis rejects some of them; see below)
-- Set `endpoint: api.anthropic.com`
+- Set `endpoint: api.anthropic.com`, `apiFormat: messages`, and `path: /v1/messages`
 - Models: `claude-sonnet-4-20250514`, `claude-haiku-4-5-20251001`, `claude-opus-4-20250514`
 
-See the [Anthropic provider guide](https://github.com/opendatahub-io/ai-gateway-payload-processing/blob/main/docs/providers/anthropic.md).
-
-!!! note "RHOAI 3.6 (Praxis)"
-    An Anthropic ExternalModel binding (`spec.provider: anthropic` on the ExternalProvider, `apiFormat: messages` on the ExternalModel) is served only while the tenant's `MaasTenantConfig` has `spec.apiTranslation.enabled: true`; Praxis then translates OpenAI Chat Completions requests to Anthropic Messages. Such a binding does not block the IPP → Praxis migration while translation is enabled (see the [3.6 upgrade guide](../migration/upgrade-to-3.6.md#ipp-praxis-api-translation-migration)).
-
-    Unlike the 3.5 IPP, Praxis rejects a Chat Completions request that carries a field it cannot map to Anthropic Messages: `response_format`, `frequency_penalty`, `presence_penalty` and `logprobs` each return `400` with `unsupported Chat Completions field "<name>" cannot be preserved by Anthropic Messages`. `max_tokens`, `user`, `stop`, `temperature`, `top_p`, `tools`, `n` and `seed` are accepted.
+Praxis rejects a Chat Completions request that carries a field it cannot map to Anthropic Messages: `response_format`, `frequency_penalty`, `presence_penalty` and `logprobs` each return `400` with `unsupported Chat Completions field "<name>" cannot be preserved by Anthropic Messages`. `max_tokens`, `user`, `stop`, `temperature`, `top_p`, `tools`, `n` and `seed` are accepted. The RHOAI 3.5 payload processor dropped the unmappable fields silently.
 
 ### Azure OpenAI
 
-Uses Azure's OpenAI-compatible endpoint with a different auth header and path. Auth uses `api-key` header (not `Authorization: Bearer`).
+Uses Azure's OpenAI-compatible endpoint, with the `api-key` header instead of `Authorization: Bearer`.
 
-- Path rewritten to `/openai/v1/chat/completions`
-- Response strips Azure-specific fields: `content_filter_results`, `prompt_filter_results`
-- `targetModel` must match the deployment name in your Azure OpenAI resource
 - Set `endpoint: <resource>.openai.azure.com` (e.g., `my-deployment.openai.azure.com`)
-
-See the [Azure OpenAI provider guide](https://github.com/opendatahub-io/ai-gateway-payload-processing/blob/main/docs/providers/azure-openai.md).
+- Set `path: /openai/v1/chat/completions`
+- `targetModel` must be the deployment name in your Azure OpenAI resource, not the OpenAI model version
 
 ### AWS Bedrock (OpenAI-compatible)
 
-Routes to AWS Bedrock's OpenAI-compatible Mantle endpoint. Pass-through — no body translation. Auth uses `Authorization: Bearer` with a Bedrock API Key (starts with `ABSK`, not AWS access keys).
+Routes to the OpenAI-compatible Bedrock Mantle endpoint. Pass-through, like OpenAI, with a Bedrock API key (starts with `ABSK`, not AWS access keys) sent as `Authorization: Bearer`.
 
 !!! warning
-    Use `bedrock-mantle.<region>.api.aws`, **not** `bedrock-runtime.<region>.amazonaws.com`. The IPP translator uses `/v1/chat/completions` which is only available on the Bedrock Mantle endpoint. Using `bedrock-runtime` will result in `404` errors.
+    Use `bedrock-mantle.<region>.api.aws`, **not** `bedrock-runtime.<region>.amazonaws.com`. Only the Mantle endpoint serves `/v1/chat/completions`; Bedrock Runtime returns `404`.
 
 - Set `endpoint: bedrock-mantle.<region>.api.aws` (e.g., `bedrock-mantle.us-east-2.api.aws`)
 - Models vary by region. List available models: `curl -s "https://bedrock-mantle.<region>.api.aws/v1/models" -H "Authorization: Bearer <KEY>"`
 
-See the [Bedrock provider guide](https://github.com/opendatahub-io/ai-gateway-payload-processing/blob/main/docs/providers/bedrock-openai.md).
+## Tenants still on the legacy payload processor
 
-### Vertex AI (OpenAI-compatible)
+After an upgrade, a tenant keeps the RHOAI 3.5 Inference Payload Processor (IPP) until its migration to Praxis completes; see [Upgrade to 3.6](../migration/upgrade-to-3.6.md#ipp-praxis-api-translation-migration). While a tenant runs IPP:
 
-Routes to Google Vertex AI's OpenAI-compatible endpoint. Auth uses OAuth2 Bearer tokens.
+- The default tenant's IPP serves ExternalModels. For other tenants, RHOAI 3.5 disabled the ExternalModel controller in `payload-processing` but not in `payload-pre-processing`, and a blocked migration leaves both Deployments as they are.
+- IPP reads a provider Secret only when it has the label `inference.llm-d.ai/ipp-managed=true`:
 
-!!! warning
-    Unlike other providers, `vertex-openai` requires IPP plugin configuration with your GCP project, location, and endpoint. Without this configuration, the translator will not be registered and requests will fail.
+    ```bash
+    kubectl label secret openai-api-key -n llm inference.llm-d.ai/ipp-managed=true
+    ```
 
-- Requires plugin-level config: `project`, `location`, `endpoint` (set in Helm values or ConfigMap)
-- OAuth2 tokens **expire every hour** — the Secret must be refreshed with `gcloud auth print-access-token`
-- `targetModel` must use `publisher/model` format (e.g., `google/gemini-2.5-flash`, not `gemini-2.5-flash`)
-- Response strips `usage.extra_properties`
-- Set `endpoint: <region>-aiplatform.googleapis.com` (e.g., `us-central1-aiplatform.googleapis.com`)
-- Models: `google/gemini-2.5-flash`, `google/gemini-2.5-pro`, `google/gemini-2.0-flash`
+- `spec.apiTranslation` does not apply. The `payload-processing-plugins` ConfigMap in the gateway namespace controls translation.
+- If the tenant's migration is blocked, its payload processor also acts on other tenants' ExternalModels; see the [known issue](../migration/upgrade-to-3.6.md#known-issue-a-blocked-tenants-payload-processor-is-not-tenant-scoped).
 
-See the [Vertex AI provider guide](https://github.com/opendatahub-io/ai-gateway-payload-processing/blob/main/docs/providers/vertex-openai.md).
+### IPP response translation (opt-in)
 
-For detailed per-provider configuration, examples, and troubleshooting, see the [IPP provider guides](https://github.com/opendatahub-io/ai-gateway-payload-processing/tree/main/docs/providers).
+The RHOAI 3.5 product-default profile runs `api-translation` on the request path only. To translate responses too:
+
+```bash
+GATEWAY_NAMESPACE="${GATEWAY_NAMESPACE:-openshift-ingress}"
+
+# 1. Edit the live ConfigMap — under profiles[0].plugins.response add:
+#      - pluginRef: api-translation
+kubectl edit configmap payload-processing-plugins -n "${GATEWAY_NAMESPACE}"
+
+# 2. Reload IPP
+kubectl rollout restart deployment/payload-processing -n "${GATEWAY_NAMESPACE}"
+```
+
+maas-controller stamps the ConfigMap with `opendatahub.io/managed=false` so it keeps your edits. To reset it to product defaults once, or to have the controller own it continuously:
+
+```bash
+# One-shot reset to defaults (controller re-applies, then stamps managed=false again)
+kubectl annotate configmap payload-processing-plugins -n "${GATEWAY_NAMESPACE}" opendatahub.io/managed-
+
+# Or keep the reconciler owning the ConfigMap continuously:
+kubectl annotate configmap payload-processing-plugins -n "${GATEWAY_NAMESPACE}" opendatahub.io/managed=true --overwrite
+```
 
 ## Cleanup
 
 To remove an external model and all its managed resources:
 
 ```bash
-# Delete the ExternalModel — OwnerReferences clean up Service, ServiceEntry, DR, HTTPRoute
-kubectl delete externalmodel gpt-4o -n llm
-
 # Delete the MaaSModelRef
 kubectl delete maasmodelref gpt-4o -n llm
+
+# Delete the ExternalModel; ai-gateway-controller removes its route and Praxis configuration
+kubectl delete externalmodels.inference.opendatahub.io gpt-4o -n llm
 
 # Delete auth and subscription
 kubectl delete maasauthpolicy gpt-4o-access -n models-as-a-service
 kubectl delete maassubscription gpt-4o-subscription -n models-as-a-service
+```
 
-# Delete the provider secret
+Delete the provider and its Secret only when no other ExternalModel, in this or another namespace, references them, and no other provider uses the Secret:
+
+```bash
+kubectl delete externalproviders.inference.opendatahub.io openai -n llm
 kubectl delete secret openai-api-key -n llm
 ```
 
 ## Related
 
-- [ExternalModel CRD Reference](../reference/crds/external-model.md)
 - [MaaSModelRef CRD](../reference/crds/maas-model-ref.md)
+- [MaasTenantConfig CRD](../reference/crds/tenant.md)
 - [Quota and Access Configuration](../configuration-and-management/quota-and-access-configuration.md)
-- [IPP Provider Guides](https://github.com/opendatahub-io/ai-gateway-payload-processing/tree/main/docs/providers)
+- [Upgrade to 3.6](../migration/upgrade-to-3.6.md)
 - [Validation Guide](validation.md)

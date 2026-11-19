@@ -141,6 +141,7 @@ func (h *Handler) SelectSubscription(c *gin.Context) {
 		var accessDeniedErr *AccessDeniedError
 		var multipleSubsErr *MultipleSubscriptionsError
 		var modelNotInSubErr *ModelNotInSubscriptionError
+		var modelDeniedErr *ModelAccessDeniedError
 		var modelUnhealthyErr *ModelUnhealthyError
 		var guardrailErr *GuardrailResolutionError
 
@@ -203,6 +204,20 @@ func (h *Handler) SelectSubscription(c *gin.Context) {
 			c.JSON(http.StatusOK, SelectResponse{
 				Error:   "model_not_in_subscription",
 				Message: err.Error(),
+			})
+			return
+		}
+
+		if errors.As(err, &modelDeniedErr) {
+			h.recordRejection(constant.RejectionUnauthorized)
+			h.logger.Debug("Requested model is not available in subscription",
+				"subscription", modelDeniedErr.Subscription,
+				"model", modelDeniedErr.Model,
+			)
+			// The gateway returns Message as the 403 body.
+			c.JSON(http.StatusOK, SelectResponse{
+				Error:   "access_denied",
+				Message: "Access denied: " + err.Error(),
 			})
 			return
 		}
