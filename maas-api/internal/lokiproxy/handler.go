@@ -1,6 +1,7 @@
 package lokiproxy
 
 import (
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
@@ -8,7 +9,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -27,11 +27,6 @@ const (
 
 	// userLabel is the Loki label carrying the user that produced a log line.
 	userLabel = "user_id"
-
-	// adminRole is the only organization role that grants administrative
-	// authority in the AI Grid identity contract (ODH-ADR shared-OIDC
-	// identity). Unknown roles never grant authority.
-	adminRole = "admins"
 
 	// onlyUserParam narrows the query to the calling user's own logs (see
 	// authorize). It is consumed by the proxy and never forwarded upstream.
@@ -56,6 +51,16 @@ type Handler struct {
 	upstream *url.URL
 	token    string
 	client   *http.Client
+	// adminChecker resolves tenant admins via SubjectAccessReview
+	// (the cached checker wired in cmd/main.go); a nil checker fails closed.
+	adminChecker AdminChecker
+}
+
+// AdminChecker is an interface for checking if a user is a tenant admin.
+// The SARAdminChecker implementation uses Kubernetes SubjectAccessReview
+// to check if the user can create maasauthpolicies (RBAC-based admin detection).
+type AdminChecker interface {
+	IsAdmin(ctx context.Context, user *token.UserContext) (bool, error)
 }
 
 // NewHandler creates a Loki proxy handler for the given upstream read endpoint
@@ -66,8 +71,9 @@ type Handler struct {
 // the system trust pool used for upstream requests; when empty the system
 // pool alone is used. A non-empty caPEM from which no certificate can be
 // parsed is rejected so a corrupt bundle fails loudly at startup instead of
-// half-verifying some chains.
-func NewHandler(log *logger.Logger, endpoint, token, caPEM string) (*Handler, error) {
+// half-verifying some chains. adminChecker backs the tenant-admin check for
+// callers without an organization; a nil checker fails closed.
+func NewHandler(log *logger.Logger, endpoint, token, caPEM string, adminChecker AdminChecker) (*Handler, error) {
 	if log == nil {
 		log = logger.Production()
 	}
@@ -104,10 +110,11 @@ func NewHandler(log *logger.Logger, endpoint, token, caPEM string) (*Handler, er
 	}
 
 	return &Handler{
-		logger:   log,
-		upstream: upstream,
-		token:    strings.TrimSpace(token),
-		client:   client,
+		logger:       log,
+		upstream:     upstream,
+		token:        strings.TrimSpace(token),
+		client:       client,
+		adminChecker: adminChecker,
 	}, nil
 }
 
@@ -168,14 +175,27 @@ func isDigit(r rune) bool {
 	return r >= '0' && r <= '9'
 }
 
-// authorize resolves the caller's organization from the auth context and
-// verifies the organization admin role according to the requested view.
-// Without the only_user flag the caller must carry the admins role for the
-// organization in the gateway-verified identity and gets organization-wide
-// visibility. With the flag any organization member is authorized and the
-// returned username restricts results to the caller's own logs. It writes the
-// error response and returns false when the request must not be proxied.
-func (h *Handler) authorize(c *gin.Context, onlyUser bool) (string, string, bool) {
+// authorize resolves the caller's identity from the auth context and returns
+// the label matchers that restrict the query, or false after writing an error
+// response when the request must not be proxied.
+//
+// Authorization applies the same stacking rules regardless of which mechanism
+// authenticated the caller (OIDC envelope, gateway-injected headers, or the
+// Kubernetes TokenReview fallback):
+//
+//  1. only_user=true applies the user_id filter.
+//  2. an organization on the identity applies the organization filter (the
+//     verified organization claim for OIDC callers, the gateway-injected
+//     organization header otherwise; Kubernetes-authenticated callers never
+//     carry one).
+//  3. only_user!=true with no organization requires the tenant-admin check
+//     (SubjectAccessReview keyed on the username — the OIDC
+//     preferred_username for envelope callers); admins get unfiltered,
+//     cluster-wide visibility, everyone else is rejected.
+//
+// Tech debt: any gateway- or TokenReview-authenticated caller is assumed to
+// have tenant access; this should become a real SubjectAccessReview check.
+func (h *Handler) authorize(c *gin.Context, onlyUser bool) ([]*labels.Matcher, bool) {
 	requestLogger := h.requestLogger(c)
 
 	value, ok := c.Get("user")
@@ -186,45 +206,85 @@ func (h *Handler) authorize(c *gin.Context, onlyUser bool) (string, string, bool
 			"exceptionCode":     "AUTH_FAILURE",
 			"error_description": "authentication is required",
 		})
-		return "", "", false
+		return nil, false
 	}
 
 	user, ok := value.(*token.UserContext)
-	if !ok || user == nil || user.OrganizationID == "" {
-		requestLogger.Warn("Rejected Loki proxy request without organization ID")
+	if !ok || user == nil {
+		requestLogger.Warn("Rejected Loki proxy request with invalid user context")
 		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
 			"error":             "unauthorized",
 			"exceptionCode":     "AUTH_FAILURE",
-			"error_description": "organization ID is required",
+			"error_description": "authentication is required",
 		})
-		return "", "", false
+		return nil, false
 	}
 
-	isAdmin := hasOrganizationAdminRole(verifiedIdentity(c), user.OrganizationID)
+	organizationMatcher := &labels.Matcher{Type: labels.MatchEqual, Name: organizationLabel, Value: user.OrganizationID}
+	userMatcher := &labels.Matcher{Type: labels.MatchEqual, Name: userLabel, Value: user.Username}
 
+	// The three rules stack: only_user=true applies the user_id filter (the
+	// label carries the username the usage-logs pipeline records for inference
+	// traffic); an organization applies the organization filter. With either
+	// filter in place the query is scoped and authorized.
+	matchers := make([]*labels.Matcher, 0, 2)
 	if onlyUser {
-		// The user view is available to every organization member, but always
-		// restricts results to the caller's own user_id (injected below). The
-		// user_id label on usage logs carries the value of X-MaaS-Username
-		// (injected by the usage-logs EnvoyFilter), so the matcher must use the
-		// username from the trusted auth-gateway header. ExtractUserInfo
-		// guarantees it is present.
-		return user.OrganizationID, user.Username, true
+		matchers = append(matchers, userMatcher)
+	}
+	if user.OrganizationID != "" {
+		matchers = append(matchers, organizationMatcher)
+	}
+	if len(matchers) > 0 {
+		return matchers, true
 	}
 
+	// No organization and no only_user: only tenant admins are authorized and
+	// see unfiltered, cluster-wide logs — no tenant→organization mapping
+	// exists in the system (organization_id is subscription-scoped).
+	isAdmin, ok := h.authorizeTenantAdmin(c, user, requestLogger)
+	if !ok {
+		return nil, false
+	}
 	if !isAdmin {
-		requestLogger.Warn("Rejected Loki proxy request from user without the organization admin role",
+		requestLogger.Warn("Rejected Loki proxy request from non-admin without only_user",
 			"username", logger.RedactValue(user.Username),
 		)
 		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
 			"error":             "forbidden",
 			"exceptionCode":     "AUTHZ_FAILURE",
-			"error_description": "organization admin role is required",
+			"error_description": "tenant admin access is required, or request only_user=true for your own logs",
 		})
-		return "", "", false
+		return nil, false
 	}
 
-	return user.OrganizationID, "", true
+	return nil, true
+}
+
+// authorizeTenantAdmin resolves and enforces the tenant-admin requirement,
+// writing the error response and returning false when the admin check itself
+// fails. A false isAdmin with ok=true is a plain authorization denial the
+// caller still has to translate into a 403. Tenant-admin resolution runs the
+// injected SubjectAccessReview checker for every caller (keyed on the
+// username — the OIDC preferred_username for envelope-authenticated
+// callers). A nil checker fails closed.
+func (h *Handler) authorizeTenantAdmin(c *gin.Context, user *token.UserContext, requestLogger *logger.Logger) (bool, bool) {
+	if h.adminChecker == nil {
+		return false, true
+	}
+	isAdmin, err := h.adminChecker.IsAdmin(
+		c.Request.Context(),
+		user,
+	)
+	if err != nil {
+		requestLogger.Error("Tenant admin check failed", "error", err)
+		c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{
+			"error":             "authorization unavailable",
+			"exceptionCode":     "AUTHZ_FAILURE",
+			"error_description": "the tenant admin check failed",
+		})
+		return false, false
+	}
+	return isAdmin, true
 }
 
 // proxyHandler returns a gin handler that enforces the organization matcher and
@@ -252,7 +312,7 @@ func (h *Handler) proxyHandler(upstreamPath string, queryEndpoint bool) gin.Hand
 			onlyUser = parsed
 		}
 
-		organizationID, scopedUsername, ok := h.authorize(c, onlyUser)
+		required, ok := h.authorize(c, onlyUser)
 		if !ok {
 			return
 		}
@@ -262,14 +322,6 @@ func (h *Handler) proxyHandler(upstreamPath string, queryEndpoint bool) gin.Hand
 		// flag is consumed here and never forwarded upstream.
 		values := c.Request.URL.Query()
 		values.Del(onlyUserParam)
-		required := []*labels.Matcher{
-			{Type: labels.MatchEqual, Name: organizationLabel, Value: organizationID},
-		}
-		if onlyUser {
-			required = append(required, &labels.Matcher{
-				Type: labels.MatchEqual, Name: userLabel, Value: scopedUsername,
-			})
-		}
 
 		if err := enforceQueryMatchers(values, required, queryEndpoint); err != nil {
 			requestLogger.Warn("Rejected Loki proxy request with invalid query", "error", err)
@@ -334,30 +386,4 @@ func (h *Handler) requestLogger(c *gin.Context) *logger.Logger {
 		return requestLogger
 	}
 	return h.logger.WithContext(c.Request.Context())
-}
-
-// verifiedIdentity returns the gateway-verified OIDC identity from the request
-// context, or nil when the gateway did not inject one. A value of an unexpected
-// type is treated as absent so authorization fails closed.
-func verifiedIdentity(c *gin.Context) *token.VerifiedIdentity {
-	value, ok := c.Get("verified_identity")
-	if !ok {
-		return nil
-	}
-	identity, ok := value.(*token.VerifiedIdentity)
-	if !ok {
-		return nil
-	}
-	return identity
-}
-
-// hasOrganizationAdminRole reports whether the verified identity is an OIDC
-// identity scoped to the given organization that carries the admins role.
-// Groups never grant administrative authority, and unknown roles do not count
-// as admins.
-func hasOrganizationAdminRole(identity *token.VerifiedIdentity, organizationID string) bool {
-	return identity != nil &&
-		identity.Source == "oidc" &&
-		identity.Claims.OrgID == organizationID &&
-		slices.Contains(identity.Claims.Roles, adminRole)
 }

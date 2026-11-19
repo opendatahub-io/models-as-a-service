@@ -305,7 +305,7 @@ func registerHandlers(
 		log.Fatal("Failed to create model manager", "error", err)
 	}
 
-	tokenHandler := token.NewHandler(log, cfg.TenantName)
+	tokenHandler := token.NewHandler(log, cfg.TenantName).WithKubeClient(cluster.ClientSet)
 	modelsHandler := handlers.NewModelsHandler(log, modelManager, subscriptionSelector, cluster.MaaSModelRefLister, metricsRecorder)
 	subscriptionHandler := subscription.NewHandler(log, subscriptionSelector, metricsRecorder)
 
@@ -329,7 +329,7 @@ func registerHandlers(
 	modelAuthMiddleware := make([]gin.HandlerFunc, 0, 3)
 	modelAuthMiddleware = append(modelAuthMiddleware,
 		tokenHandler.ExtractVerifiedIdentityOptional(),
-		tokenHandler.ExtractUserInfoOptional(),
+		tokenHandler.ExtractUserInfoOptional(token.AuthModeGateway),
 		middleware.TenantLogger(log, tenantLogCfg),
 	)
 	v1Routes.GET("/models", append(modelAuthMiddleware, modelsHandler.ListLLMs)...)
@@ -339,7 +339,7 @@ func registerHandlers(
 	// LLMInferenceService; malformed or duplicate envelopes still fail closed.
 	optionalAuthMiddleware := []gin.HandlerFunc{
 		tokenHandler.ExtractVerifiedIdentityOptional(),
-		tokenHandler.ExtractUserInfoOptional(),
+		tokenHandler.ExtractUserInfoOptional(token.AuthModeGateway),
 		middleware.TenantLogger(log, tenantLogCfg),
 	}
 
@@ -359,7 +359,7 @@ func registerHandlers(
 	// as /v1/models and /v1/subscriptions).
 	strictAuthMiddleware := []gin.HandlerFunc{
 		tokenHandler.ExtractVerifiedIdentityOptional(),
-		tokenHandler.ExtractUserInfo(),
+		tokenHandler.ExtractUserInfo(token.AuthModeGateway),
 		middleware.TenantLogger(log, tenantLogCfg),
 	}
 	apiKeyRoutes := v1Routes.Group("/api-keys", strictAuthMiddleware...)
@@ -391,14 +391,22 @@ func registerHandlers(
 	internalRoutes.POST("/subscriptions/select", tokenHandler.RejectTrustedIdentityHeaders(), subscriptionHandler.SelectSubscription)
 
 	// Read-only Loki proxy (GET /v1/logs*). Only registered when
-	// LOKI_READ_ENDPOINT is configured; every query is restricted to the
-	// caller's organization and requires organization admin membership.
+	// LOKI_READ_ENDPOINT is configured. Dual-auth: gateway/OIDC identity as on
+	// every other route, plus a Kubernetes TokenReview fallback so
+	// OpenShift-authenticated users without gateway-injected identity headers
+	// can reach their usage logs. Inference API keys never authenticate these
+	// routes.
 	if cfg.LokiReadEndpoint != "" {
-		lokiHandler, err := lokiproxy.NewHandler(log, cfg.LokiReadEndpoint, cfg.LokiReadToken, cfg.LokiReadCA)
+		lokiHandler, err := lokiproxy.NewHandler(log, cfg.LokiReadEndpoint, cfg.LokiReadToken, cfg.LokiReadCA, cluster.AdminChecker)
 		if err != nil {
 			return fmt.Errorf("failed to create Loki proxy handler: %w", err)
 		}
-		lokiRoutes := v1Routes.Group("", strictAuthMiddleware...)
+		lokiAuthMiddleware := []gin.HandlerFunc{
+			tokenHandler.ExtractVerifiedIdentityOptional(),
+			tokenHandler.ExtractUserInfo(token.AuthModeGatewayOrKubernetes),
+			middleware.TenantLogger(log, tenantLogCfg),
+		}
+		lokiRoutes := v1Routes.Group("", lokiAuthMiddleware...)
 		lokiHandler.RegisterRoutes(lokiRoutes)
 		log.Info("Loki read proxy enabled", "upstream", cfg.LokiReadEndpoint)
 	} else {
