@@ -105,6 +105,7 @@ type LifecycleReconciler struct {
 	GatewayName                 string
 	GatewayNamespace            string
 	ObservabilityManifestsPath  string
+	AuthDecisionDashboardPath   string
 	MonitoringNamespace         string
 	UsageLogsManifestPath       string
 	// InfraNamespace is where maas-api runs; the usage-logs-loki Secret is
@@ -475,6 +476,9 @@ func (r *LifecycleReconciler) ensureObservability(ctx context.Context, log logr.
 	if err := r.ensureLimitadorServiceMonitor(ctx); err != nil {
 		return err
 	}
+	if err := r.ensureAuthDecisionsDashboard(ctx, log); err != nil {
+		return err
+	}
 	if err := r.ensureUsageDashboard(ctx, log); err != nil {
 		return err
 	}
@@ -579,19 +583,54 @@ func (r *LifecycleReconciler) ensureUsageDashboard(ctx context.Context, log logr
 		return r.deleteOwnedRenderedResources(ctx, log, cfg, resources, "usageMetricsDashboard")
 	}
 
-	// Apply each resource with Config as controller owner
+	return r.applyRenderedResources(ctx, &cfg, resources)
+}
+
+// ensureAuthDecisionsDashboard deploys the admin-scoped auth decisions dashboard.
+//
+// This is unconditional by design. The dashboard surfaces a delivered platform feature, so it
+// must not inherit Config.spec.usageMetricsDashboard: that gate defaults to false, its CRD
+// description marks it legacy in favour of the logs-based dashboards, and the false branch of
+// ensureUsageDashboard deletes every controller-owned object rendered from its own manifests
+// path. Bundling this dashboard into that path meant a default install never received it.
+//
+// If the manifests path is not configured or the Perses CRDs are not installed, it skips
+// gracefully (same treatment as the usage dashboard).
+func (r *LifecycleReconciler) ensureAuthDecisionsDashboard(ctx context.Context, log logr.Logger) error {
+	if r.AuthDecisionDashboardPath == "" {
+		log.V(1).Info("auth decision dashboard path not configured; skipping")
+		return nil
+	}
+
+	var cfg maasv1alpha1.Config
+	if err := r.Get(ctx, client.ObjectKey{Name: maasv1alpha1.ConfigInstanceName}, &cfg); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return err
+	}
+
+	resources, err := tenantreconcile.RenderKustomize(r.AuthDecisionDashboardPath, r.MonitoringNamespace)
+	if err != nil {
+		return fmt.Errorf("render auth decision dashboard: %w", err)
+	}
+
+	return r.applyRenderedResources(ctx, &cfg, resources)
+}
+
+// applyRenderedResources sets Config as the controller owner of each rendered object and
+// server-side applies it. Resources whose API group is an optional dependency that is not yet
+// registered (for example the Perses CRDs installed by COO) are skipped rather than failing the
+// reconcile; the CRD watch re-triggers once they appear.
+func (r *LifecycleReconciler) applyRenderedResources(ctx context.Context, cfg *maasv1alpha1.Config, resources []unstructured.Unstructured) error {
 	for _, resource := range resources {
 		res := resource // avoid loop variable aliasing
-		if err := controllerutil.SetControllerReference(&cfg, &res, r.Scheme); err != nil {
+		if err := controllerutil.SetControllerReference(cfg, &res, r.Scheme); err != nil {
 			return fmt.Errorf("set controller reference on %s %s: %w", res.GetKind(), res.GetName(), err)
 		}
 
 		if err := r.Apply(ctx, client.ApplyConfigurationFromUnstructured(&res), client.ForceOwnership, client.FieldOwner("maas-controller")); err != nil {
 			if isOptionalAPIGroup(res.GroupVersionKind().Group) && (apimeta.IsNoMatchError(err) || apierrors.IsNotFound(err)) {
-				// CRD not yet registered for a known optional dependency (e.g. Perses CRDs
-				// installed by COO which may not be present yet). Skip so the rest of the
-				// platform manifests are applied and Tenant reconcile does not fail.
-				// The CRD watch will re-trigger reconcile once the CRDs appear.
 				oteljson.FromContext(ctx).Info("skipping resource: optional CRD not yet registered, will apply once installed",
 					"group", res.GroupVersionKind().Group, "kind", res.GetKind(),
 					"name", res.GetName(), "namespace", res.GetNamespace())

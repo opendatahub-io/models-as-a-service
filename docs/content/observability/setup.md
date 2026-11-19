@@ -84,6 +84,8 @@ To enable the legacy metrics-based usage dashboard:
 kubectl patch configs.maas.opendatahub.io default --type=merge -p '{"spec":{"usageMetricsDashboard":true}}'
 ```
 
+The admin auth decisions dashboard (`dashboard-4-maas-auth-decisions-admin`) is separate and needs no opt-in. `LifecycleReconciler.ensureAuthDecisionsDashboard` applies it from `deployment/components/observability/observability/dashboards/auth-decisions/` whenever a `Config` instance and the monitoring namespace exist. It is deliberately not gated by `usageMetricsDashboard`, which defaults to `false` and removes controller-owned dashboards when off, and it is not listed in the usage dashboards kustomization. Like the usage dashboards it is **not** created by `install-observability.sh`. Its panels read the `maas:auth_*` recording rules through `cluster-prometheus-datasource`, so they render only where user-workload monitoring is enabled and the Kuadrant observability resources are installed; see [Metrics and dashboards](metrics-and-dashboards.md).
+
 `MaasTenantConfig` phase is `Degraded` when `MonitoringReady` or `MonitoringStackAvailable` is not `True` on `DSCInitialization` only when `usageMetricsDashboard` is `true` and tenant telemetry is enabled. That same check also warns when `PersesAvailable` is not `True`. Separately, a non-`True` `PersesAvailable` produces a usage-logging warning and degrades `MaasTenantConfig` when telemetry is enabled, regardless of the `usageMetricsDashboard` setting.
 
 !!! note "Operator prerequisite"

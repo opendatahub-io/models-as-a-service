@@ -1122,6 +1122,7 @@ func main() {
 	var enableTenantNamespaceDiscovery bool
 	var maxConcurrentReconciles int
 	var observabilityManifestsPath string
+	var authDecisionDashboardPath string
 	var monitoringNamespace string
 	var usageLogsManifestPath string
 	var discoveryManifestPath string
@@ -1140,6 +1141,9 @@ func main() {
 		"Infrastructure namespace for maas-api, postgres, and maas-db-config. "+
 			"Defaults to 'AUTO' (namespace separation enabled). Set to empty string to disable for ROSA.")
 	flag.StringVar(&observabilityManifestsPath, "observability-manifests-path", "/deployment/components/observability/observability/dashboards", "Path to observability dashboard kustomize manifests.")
+	flag.StringVar(&authDecisionDashboardPath, "auth-decision-dashboard-path",
+		"/deployment/components/observability/observability/dashboards/auth-decisions",
+		"Path to auth decision dashboard kustomize manifests (applied unconditionally).")
 	flag.StringVar(&usageLogsManifestPath, "usage-logs-manifest-path", "/deployment/components/observability/usage-logs", "Path to usage logs kustomize manifests.")
 	flag.StringVar(&discoveryManifestPath, "discovery-manifest-path", "/deployment/base/maas-discovery", "Path to discovery service kustomize manifests.")
 	flag.StringVar(&monitoringNamespace, "monitoring-namespace", "opendatahub", "The namespace where the monitoring stack is deployed.")
@@ -1431,6 +1435,7 @@ func main() {
 		TenantSubscriptionNamespace: maasSubscriptionNamespace,
 		AITenantNamespace:           aitenantNamespace,
 		ObservabilityManifestsPath:  observabilityManifestsPath,
+		AuthDecisionDashboardPath:   authDecisionDashboardPath,
 		UsageLogsManifestPath:       usageLogsManifestPath,
 		MonitoringNamespace:         monitoringNamespace,
 		InfraNamespace:              infraNamespace,
