@@ -2117,6 +2117,26 @@ func (r *MaaSAuthPolicyReconciler) ensureGatewayAuthPolicy(
 	existing.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
 	err := r.Get(ctx, client.ObjectKey{Name: authPolicyName, Namespace: gatewayNamespace}, existing)
 	if err == nil {
+		// Mirror the MaaSAuthPolicy reconcile's upgrade cutover gate: while a
+		// legacy route-level policy is still the working auth path, defer
+		// rewriting the gateway-wide callbacks until the replacement maas-api
+		// Service has a ready endpoint. Returning an error requeues the caller.
+		legacyPolicyExists, legacyErr := r.hasLegacyModelAuthPolicy(ctx, tenantNamespace)
+		if legacyErr != nil {
+			return fmt.Errorf("failed to check for legacy model AuthPolicy: %w", legacyErr)
+		}
+		if legacyPolicyExists {
+			targetReady, readyErr := r.targetMaaSAPIReady(ctx, tenantID)
+			if readyErr != nil {
+				return fmt.Errorf("failed to check target maas-api readiness: %w", readyErr)
+			}
+			if !targetReady {
+				return fmt.Errorf(
+					"deferring gateway AuthPolicy update: legacy model AuthPolicy present and target maas-api Service %s/%s has no ready endpoint",
+					r.InfraNamespace, tenantreconcile.MaaSAPIServiceName(tenantID),
+				)
+			}
+		}
 		_, err := r.reconcileGatewayAuthPolicy(ctx, log, oidc, xAPIKeyEnabled, tenantNamespace, tenantID, gatewayNamespace, gatewayName)
 		return err
 	}

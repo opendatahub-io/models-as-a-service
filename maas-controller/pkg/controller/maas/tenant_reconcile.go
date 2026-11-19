@@ -934,7 +934,7 @@ func (r *TenantReconciler) ensureGatewayManagementAuth(ctx context.Context, log 
 		GatewayNamespace:                r.GatewayNamespace,
 		ClusterAudience:                 r.ClusterAudience,
 		MetadataCacheTTL:                r.MetadataCacheTTL,
-		AuthzCacheTTL:                   r.MetadataCacheTTL,
+		AuthzCacheTTL:                   r.AuthzCacheTTL,
 		TenantNamespaceDiscoveryEnabled: r.TenantNamespaceDiscoveryEnabled,
 	}
 

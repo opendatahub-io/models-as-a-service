@@ -19,6 +19,7 @@ package maas
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -1153,6 +1154,166 @@ func TestMaaSAuthPolicyReconciler_EnsureGatewayAuthPolicyFailsClosedOnUnresolvab
 	authenticationRules := nestedMapRequired(t, policy, "spec", "defaults", "rules", "authentication")
 	if _, exists := authenticationRules["oidc-identities"]; exists {
 		t.Fatal("failed ensure must not write OIDC identities with partial inputs")
+	}
+}
+
+// TestMaaSAuthPolicyReconciler_EnsureGatewayAuthPolicyDefersLegacyCutover pins the
+// upgrade gate mirrored from the MaaSAuthPolicy reconcile path: while a legacy
+// route-level model AuthPolicy is the working auth path and the replacement
+// maas-api Service has no ready endpoint, the tenant-driven ensure must defer the
+// gateway AuthPolicy update instead of rewriting gateway-wide callbacks.
+func TestMaaSAuthPolicyReconciler_EnsureGatewayAuthPolicyDefersLegacyCutover(t *testing.T) {
+	const (
+		gatewayNamespace = "openshift-ingress"
+		gatewayName      = "maas-default-gateway"
+		tenantNamespace  = "legacy-tenant"
+		modelNamespace   = "legacy-models"
+		modelName        = "legacy-model"
+		infraNamespace   = "opendatahub"
+	)
+
+	tenantConfig := &maasv1alpha1.MaasTenantConfig{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      maasv1alpha1.MaasTenantConfigInstanceName,
+			Namespace: tenantNamespace,
+		},
+	}
+	maasPolicy := &maasv1alpha1.MaaSAuthPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "legacy-policy", Namespace: tenantNamespace},
+		Spec: maasv1alpha1.MaaSAuthPolicySpec{
+			ModelRefs: []maasv1alpha1.ModelRef{{Name: modelName, Namespace: modelNamespace}},
+			Subjects:  maasv1alpha1.SubjectSpec{Groups: []maasv1alpha1.GroupReference{{Name: "system:authenticated"}}},
+		},
+	}
+	legacyModelPolicy := &unstructured.Unstructured{}
+	legacyModelPolicy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
+	legacyModelPolicy.SetName(fmt.Sprintf("maas-auth-%s", modelName))
+	legacyModelPolicy.SetNamespace(modelNamespace)
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(testRESTMapper()).
+		WithObjects(tenantConfig, maasPolicy, legacyModelPolicy).
+		Build()
+	r := &MaaSAuthPolicyReconciler{
+		Client:           c,
+		Scheme:           scheme,
+		InfraNamespace:   infraNamespace,
+		GatewayNamespace: gatewayNamespace,
+		GatewayName:      gatewayName,
+	}
+
+	issuerA := &oidcConfig{IssuerURL: "https://issuer-a.example.com/realms/e2e", TTL: 300}
+	issuerB := &oidcConfig{IssuerURL: "https://issuer-b.example.com/realms/e2e", TTL: 300}
+
+	if err := r.ensureGatewayAuthPolicy(
+		context.Background(), logr.Discard(), issuerA, false, tenantNamespace, "", gatewayNamespace, gatewayName,
+	); err != nil {
+		t.Fatalf("ensureGatewayAuthPolicy() bootstrap error = %v", err)
+	}
+
+	getIssuer := func() string {
+		t.Helper()
+		policy := &unstructured.Unstructured{}
+		policy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
+		if err := c.Get(context.Background(), types.NamespacedName{Name: maasGatewayAuthPolicyName, Namespace: gatewayNamespace}, policy); err != nil {
+			t.Fatalf("Get gateway AuthPolicy: %v", err)
+		}
+		jwt := nestedMapRequired(t, policy, "spec", "defaults", "rules", "authentication", "oidc-identities", "jwt")
+		issuer, _ := jwt["issuerUrl"].(string)
+		return issuer
+	}
+
+	// The legacy model AuthPolicy exists and maas-api has no ready endpoint: the
+	// OIDC update must be deferred with an error so the caller requeues.
+	err := r.ensureGatewayAuthPolicy(
+		context.Background(), logr.Discard(), issuerB, false, tenantNamespace, "", gatewayNamespace, gatewayName,
+	)
+	if err == nil || !strings.Contains(err.Error(), "deferring gateway AuthPolicy update") {
+		t.Fatalf("ensureGatewayAuthPolicy() error = %v, want legacy cutover deferral", err)
+	}
+	if got := getIssuer(); got != issuerA.IssuerURL {
+		t.Fatalf("deferred update changed issuerUrl to %q, want %q", got, issuerA.IssuerURL)
+	}
+
+	// Once the target maas-api Service has a ready endpoint the update proceeds.
+	ready := true
+	tlsPort := int32(8443)
+	endpointSlice := &discv1.EndpointSlice{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "maas-api-ready",
+			Namespace: infraNamespace,
+			Labels:    map[string]string{discv1.LabelServiceName: "maas-api"},
+		},
+		AddressType: discv1.AddressTypeIPv4,
+		Ports:       []discv1.EndpointPort{{Port: &tlsPort}},
+		Endpoints:   []discv1.Endpoint{{Conditions: discv1.EndpointConditions{Ready: &ready}}},
+	}
+	if err := c.Create(context.Background(), endpointSlice); err != nil {
+		t.Fatalf("Create ready EndpointSlice: %v", err)
+	}
+	if err := r.ensureGatewayAuthPolicy(
+		context.Background(), logr.Discard(), issuerB, false, tenantNamespace, "", gatewayNamespace, gatewayName,
+	); err != nil {
+		t.Fatalf("ensureGatewayAuthPolicy() post-cutover error = %v", err)
+	}
+	if got := getIssuer(); got != issuerB.IssuerURL {
+		t.Fatalf("after cutover issuerUrl = %q, want %q", got, issuerB.IssuerURL)
+	}
+}
+
+// TestMaaSAuthPolicyReconciler_EnsureGatewayAuthPolicyUsesConfiguredAuthzTTL pins
+// the AuthzCacheTTL wiring: the tenant-driven ensure must write the same Authorino
+// authorization cache TTL as the MaaSAuthPolicy reconcile path. With
+// --metadata-cache-ttl=60 --authz-cache-ttl=0, deriving AuthzCacheTTL from
+// MetadataCacheTTL made the two reconcilers flap the cache TTL between 60 and 0.
+func TestMaaSAuthPolicyReconciler_EnsureGatewayAuthPolicyUsesConfiguredAuthzTTL(t *testing.T) {
+	const (
+		gatewayNamespace = "openshift-ingress"
+		gatewayName      = "maas-default-gateway"
+		tenantNamespace  = "legacy-tenant"
+	)
+
+	tenantConfig := &maasv1alpha1.MaasTenantConfig{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      maasv1alpha1.MaasTenantConfigInstanceName,
+			Namespace: tenantNamespace,
+		},
+	}
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(testRESTMapper()).
+		WithObjects(tenantConfig).
+		Build()
+	r := &MaaSAuthPolicyReconciler{
+		Client:           c,
+		Scheme:           scheme,
+		GatewayNamespace: gatewayNamespace,
+		GatewayName:      gatewayName,
+		MetadataCacheTTL: 60,
+		AuthzCacheTTL:    0,
+	}
+
+	if err := r.ensureGatewayAuthPolicy(
+		context.Background(), logr.Discard(), nil, false, tenantNamespace, "", gatewayNamespace, gatewayName,
+	); err != nil {
+		t.Fatalf("ensureGatewayAuthPolicy() error = %v", err)
+	}
+
+	policy := &unstructured.Unstructured{}
+	policy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
+	if err := c.Get(context.Background(), types.NamespacedName{Name: maasGatewayAuthPolicyName, Namespace: gatewayNamespace}, policy); err != nil {
+		t.Fatalf("Get gateway AuthPolicy: %v", err)
+	}
+	for _, rule := range []string{"auth-valid", "subscription-valid", "require-group-membership"} {
+		cache := nestedMapRequired(t, policy, "spec", "defaults", "rules", "authorization", rule, "cache")
+		ttl, ok := cache["ttl"].(int64)
+		if !ok {
+			t.Fatalf("%s cache ttl has unexpected type %T, want int64", rule, cache["ttl"])
+		}
+		if ttl != 0 {
+			t.Fatalf("%s cache ttl = %d, want 0 (configured --authz-cache-ttl)", rule, ttl)
+		}
 	}
 }
 
