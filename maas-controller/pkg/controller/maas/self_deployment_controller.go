@@ -512,6 +512,7 @@ func (r *LifecycleReconciler) ensureLimitadorServiceMonitor(ctx context.Context)
 				"labels": map[string]any{
 					"app":                              "limitador",
 					"monitoring.opendatahub.io/scrape": "true",
+					"openshift.io/user-monitoring":     "false",
 				},
 			},
 			"spec": map[string]any{
