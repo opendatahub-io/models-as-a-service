@@ -366,7 +366,8 @@ Now install the Gateway API controller for your platform:
 === "Red Hat OpenShift AI"
 
     Install Red Hat Connectivity Link (RHCL) Operator from OpenShift's built-in OperatorHub.
-    MaaS requires RHCL v1.3 or later:
+    MaaS requires RHCL v1.3 or later. RHCL 1.5 publishes on the `stable-1.5` channel
+    (`stable-1.4` for 1.4.x; older releases used `stable`):
 
     ```yaml
     kubectl apply -f - <<EOF
@@ -387,7 +388,7 @@ Now install the Gateway API controller for your platform:
       name: kuadrant-operator
       namespace: kuadrant-system
     spec:
-      channel: stable
+      channel: stable-1.5
       installPlanApproval: Automatic
       name: rhcl-operator
       source: redhat-operators
