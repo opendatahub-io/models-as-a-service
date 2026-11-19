@@ -184,6 +184,12 @@ func (r *TenantReconciler) reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return *result, err
 	}
 
+	// Install the response filter before updating the AuthPolicy. All gateway
+	// modes need it, including tenants that skip the legacy IPP stack.
+	if err := r.ensureAuthDenialEnvoyFilter(ctx, log, &tenant, platformContext, mcfg); err != nil {
+		return ctrl.Result{}, err
+	}
+
 	// Run platform reconciliation
 	runRes, result, err := r.reconcilePlatform(ctx, log, &tenant, platformContext, mcfg)
 	if result != nil {
@@ -818,6 +824,11 @@ func (r *TenantReconciler) cleanupTenantResources(ctx context.Context, log logr.
 		{
 			gvk:       tenantreconcile.GVKEnvoyFilter,
 			name:      tenantreconcile.UsageLogsEnvoyFilterName(tenantID),
+			namespace: gatewayNs,
+		},
+		{
+			gvk:       tenantreconcile.GVKEnvoyFilter,
+			name:      tenantreconcile.AuthDenialEnvoyFilterName(tenantID),
 			namespace: gatewayNs,
 		},
 		{

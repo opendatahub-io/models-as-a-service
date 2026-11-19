@@ -178,6 +178,7 @@ const (
 	baseMaaSAPIEgressRestrictNetworkPolicyName     = "maas-api-egress-restrict"
 	baseMaaSAPIServingCertName                     = "maas-api-serving-cert"
 	baseUsageLogsEnvoyFilterName                   = "maas-model-access-logs"
+	baseAuthDenialEnvoyFilterName                  = "maas-auth-denial"
 
 	// Base IPP resource names in kustomize manifests. Per-tenant deployments suffix
 	// these with "-{tenantID}" (default tenant keeps unsuffixed names).
@@ -379,6 +380,10 @@ func PayloadProcessingReaderClusterRoleBindingNameForTenant(tenantID string) str
 
 func UsageLogsEnvoyFilterName(tenantID string) string {
 	return resourceNameForTenant(baseUsageLogsEnvoyFilterName, tenantID)
+}
+
+func AuthDenialEnvoyFilterName(tenantID string) string {
+	return resourceNameForTenant(baseAuthDenialEnvoyFilterName, tenantID)
 }
 
 // isIPPResource reports whether a kustomize base resource belongs to the IPP stack.
