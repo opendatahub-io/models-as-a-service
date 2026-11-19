@@ -718,6 +718,7 @@ class TestSubscriptionEnforcement:
             log.info("Cleaned up rate limit test resources")
 
     @pytest.mark.serial
+    @pytest.mark.full_suite
     def test_models_endpoint_exempt_from_rate_limiting(self):
         """
         Test that /v1/models endpoint remains accessible when token quota is exhausted.

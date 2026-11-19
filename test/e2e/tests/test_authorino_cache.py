@@ -15,6 +15,8 @@ from test_helper import (
     GATEWAY_AUTH_POLICY_NAME,
     GATEWAY_NAMESPACE,
     MAAS_API_DEPLOYMENT_NAMESPACE,
+    MODEL_NAMESPACE,
+    MODEL_REF,
     SIMULATOR_SUBSCRIPTION,
     _apply_cr,
     _create_api_key_raw,
@@ -22,9 +24,13 @@ from test_helper import (
     _get_cluster_token,
     _get_cr,
     _inference,
+    _ns,
     _poll_status,
     _revoke_api_key,
     _run_oc,
+    _wait_for_cr_absent,
+    _wait_for_maas_subscription_phase,
+    _wait_for_subscription_inference_ready,
     log,
 )
 
@@ -93,9 +99,7 @@ def metrics_token():
                 ],
             }
         )
-        result = _run_oc(
-            ["oc", "create", "token", service_account, "-n", namespace, "--duration=30m"]
-        )
+        result = _run_oc(["oc", "create", "token", service_account, "-n", namespace, "--duration=30m"])
         assert result.returncode == 0, result.stderr
         token = result.stdout.strip()
         assert token, "oc created an empty service-account token"
@@ -116,8 +120,14 @@ def metrics_token():
 @pytest.fixture
 def api_key():
     oc_token = _get_cluster_token()
+    with _api_key(oc_token, SIMULATOR_SUBSCRIPTION) as key:
+        yield key
+
+
+@contextlib.contextmanager
+def _api_key(oc_token, subscription):
     name = f"e2e-authorino-cache-{uuid.uuid4().hex[:8]}"
-    response = _create_api_key_raw(oc_token, name=name, subscription=SIMULATOR_SUBSCRIPTION)
+    response = _create_api_key_raw(oc_token, name=name, subscription=subscription)
     assert response.status_code in (200, 201), f"{response.status_code}: {response.text[:300]}"
     created = response.json()
     try:
@@ -222,7 +232,7 @@ def _scrape_route_counts(token):
     return pods, counts
 
 
-def test_repeated_requests_reuse_cached_maas_api_lookups(cache_ttl, metrics_token, api_key):
+def _assert_lookups_cached(cache_ttl, metrics_token, api_key):
     if cache_ttl < REQUEST_COUNT:
         pytest.skip(f"cache TTL {cache_ttl}s is too short for {REQUEST_COUNT} requests")
 
@@ -241,3 +251,58 @@ def test_repeated_requests_reuse_cached_maas_api_lookups(cache_ttl, metrics_toke
             f"{REQUEST_COUNT} identical requests made {calls:.0f} calls to {route}; "
             f"Authorino should reuse cached lookups for {cache_ttl}s"
         )
+
+
+def test_repeated_requests_reuse_cached_maas_api_lookups(
+    cache_ttl, metrics_token, api_key
+):
+    _assert_lookups_cached(cache_ttl, metrics_token, api_key)
+
+
+def test_large_subscription_lookup_is_cached(cache_ttl, metrics_token):
+    oc_token = _get_cluster_token()
+    name = f"e2e-authorino-cache-large-{uuid.uuid4().hex[:8]}"
+    namespace = _ns()
+    _apply_cr(
+        {
+            "apiVersion": "maas.opendatahub.io/v1alpha1",
+            "kind": "MaaSSubscription",
+            "metadata": {
+                "name": name,
+                "namespace": namespace,
+                "annotations": {
+                    "openshift.io/display-name": "Authorino cache entry size check",
+                    "openshift.io/description": "x" * 600,
+                },
+            },
+            "spec": {
+                "owner": {"groups": [{"name": "system:authenticated"}]},
+                "modelRefs": [
+                    {
+                        "name": MODEL_REF,
+                        "namespace": MODEL_NAMESPACE,
+                        "tokenRateLimits": [
+                            {"limit": 1_000_000, "window": window}
+                            for window in ("1m", "5m", "15m", "1h", "24h")
+                        ],
+                    }
+                ],
+                "tokenMetadata": {
+                    "labels": {f"label-{index}": f"value-{index}" for index in range(8)}
+                },
+            },
+        }
+    )
+    try:
+        _wait_for_maas_subscription_phase(name, "Active", namespace=namespace)
+        _wait_for_subscription_inference_ready(
+            name,
+            MODEL_REF,
+            namespace=namespace,
+            model_namespace=MODEL_NAMESPACE,
+        )
+        with _api_key(oc_token, name) as api_key:
+            _assert_lookups_cached(cache_ttl, metrics_token, api_key)
+    finally:
+        _delete_cr("maassubscription", name, namespace=namespace)
+        _wait_for_cr_absent("maassubscription", name, namespace=namespace)

@@ -17,6 +17,12 @@ metadata contains a denial.
 
 Caching reduces load on maas-api by reusing results when the cache key repeats within the TTL window. Cache keys are scoped to the individual API key (using the full unique key string, equivalent to keying on the token JTI), plus groups, subscription, and model, to prevent cross-principal or cross-subscription cache sharing.
 
+### Cache Entry Size
+
+Authorino's evaluator cache silently drops entries larger than roughly 1 KB, including both the cache key and serialized value. When that happens, requests still succeed but every request calls maas-api again.
+
+MaaS keeps the subscription callback response small by omitting fields the gateway does not read, such as display metadata, labels, and the full model list. As a result, the number of models in a subscription does not determine whether its lookup can be cached.
+
 ---
 
 ## Configuration
@@ -101,6 +107,8 @@ For **immediate enforcement** after a sensitive revocation (e.g., a compromised 
 - maas-api load: Reduced `/internal/v1/api-keys/validate` and `/internal/v1/subscriptions/select` call rates
 - Authorino CPU: Reduced HTTP evaluator work
 - Request latency: Cache hits should show lower P99 latency
+
+If `/internal/v1/subscriptions/select` calls remain high after enabling caching, inspect the callback response size: an entry that exceeds Authorino's per-entry limit is not stored.
 
 ---
 
