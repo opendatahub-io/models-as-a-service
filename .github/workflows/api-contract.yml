@@ -6,11 +6,10 @@ on:
   pull_request:
     branches: [main]
 
-permissions:
-  contents: read
-
 jobs:
   api-contract:
+    permissions:
+      contents: read
     uses: red-hat-data-services/api-contract-tests/.github/workflows/provider-openapi-check.yml@latest
     with:
       contract-set: .rhoai/contracts.yaml
@@ -22,6 +21,8 @@ jobs:
       mode: enforce
 
   crd-contract:
+    permissions:
+      contents: read
     uses: red-hat-data-services/api-contract-tests/.github/workflows/provider-crd-check.yml@latest
     with:
       crd-glob: deployment/base/maas-controller/crd/bases/maas.opendatahub.io_*.yaml
@@ -30,6 +31,8 @@ jobs:
       mode: enforce
 
   api-contract-coverage:
+    permissions:
+      contents: read
     uses: red-hat-data-services/api-contract-tests/.github/workflows/provider-coverage-check.yml@latest
     with:
       contract-set: .rhoai/contracts.yaml
