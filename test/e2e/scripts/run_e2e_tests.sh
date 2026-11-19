@@ -12,7 +12,9 @@
 #   Pass 2b: serial cluster mutators and per-tenant legacy IPP (-m "(serial and not legacy_ipp)
 #           or legacy_ipp_pass2b) and not serial_exclusive …",
 #            E2E_SERIAL_WORKERS lanes, default 1)
-#   Pass 3 (optional): -m nightly when MAAS_PYTEST_INCLUDE_NIGHTLY=true (e.g. EXTERNAL_OIDC deploys)
+#   Pass 3 (optional): -m nightly when MAAS_PYTEST_INCLUDE_NIGHTLY=true (e.g. EXTERNAL_OIDC deploys).
+#                       It splits into a parallel grouped sub-pass (nightly and not serial)
+#                       and a single-worker serial sub-pass (E2E_NIGHTLY_WORKERS, default 5).
 #
 # Passes 1–2 always exclude @pytest.mark.nightly; the flag below only gates pass 3.
 # When E2E_SMOKE_ONLY=true (/group-test sets this), passes 1–2 additionally require
@@ -52,6 +54,10 @@
 #                                 sets this so merge-base does not use a stale fork origin/main.
 #   E2E_DIFF_TARGET_BRANCH        Upstream base branch name (Pac {{target_branch}}, default main)
 #   MAAS_PYTEST_INCLUDE_NIGHTLY   When true, run pass 3 (-m nightly) after serial pass
+#   E2E_NIGHTLY_WORKERS           pytest-xdist worker count for the nightly pass (default: same as
+#                                 E2E_PARALLEL_WORKERS, i.e. 5). The nightly pass splits into a
+#                                 parallel grouped sub-pass plus a single-worker serial sub-pass;
+#                                 set to 1 for the historical single-worker nightly pass
 #   E2E_RUN_ONLY_OIDC_TESTS       When true, skip passes 1–2 and run only pass 3 (external
 #                                 OIDC tests); requires EXTERNAL_OIDC=true
 #   E2E_RUN_ONLY_GRID_TESTS       When true, restrict the OIDC-only pass to grid_oidc tests;
@@ -519,14 +525,52 @@ run_nightly_pass() {
     if [[ "$_include_nightly_pass" != true ]]; then
         return 0
     fi
-    echo "Running E2E pass 3/${_pass_total}: nightly (-m ${_nightly_marker}, EXTERNAL_OIDC=${EXTERNAL_OIDC:-false})"
-    if ! run_pytest_pass "pass 3 (nightly)" \
-        env E2E_PYTEST_PASS=nightly PYTHONPATH="$TEST_DIR:${PYTHONPATH:-}" pytest \
+    # The nightly pass parallelizes like passes 1/2: non-serial nightly tests
+    # run in their xdist groups, and serial/serial_exclusive nightly tests run
+    # on one worker afterwards so shared-cluster mutators (e.g. the
+    # default-AITenant OIDCReady condition tests) never race the grouped
+    # modules. Set E2E_NIGHTLY_WORKERS=1 to restore the historical
+    # single-worker nightly pass.
+    local workers="${E2E_NIGHTLY_WORKERS:-${E2E_PARALLEL_WORKERS:-5}}"
+    if ! [[ "$workers" =~ ^[1-9][0-9]*$ ]]; then
+        echo "ERROR: E2E_NIGHTLY_WORKERS must be a positive integer (>= 1), got '$workers'" >&2
+        exit 1
+    fi
+
+    if [[ "$workers" -eq 1 ]]; then
+        echo "Running E2E pass 3/${_pass_total}: nightly (-m ${_nightly_marker}, EXTERNAL_OIDC=${EXTERNAL_OIDC:-false})"
+        if ! run_pytest_pass "pass 3 (nightly)" \
+            env E2E_PYTEST_PASS=nightly PYTHONPATH="$TEST_DIR:${PYTHONPATH:-}" pytest \
+            --maxfail="${E2E_MAXFAIL:-5}" \
+            --junitxml="$xml_nightly" \
+            --html="${html%.html}-nightly.html" --self-contained-html \
+            "${pytest_common_args[@]}" \
+            -m "${_nightly_marker}"; then
+            nightly_rc=1
+        fi
+        return 0
+    fi
+
+    echo "Running E2E pass 3/${_pass_total}: nightly parallel (-m '${_nightly_marker} and not serial and not serial_exclusive', ${workers} worker(s), EXTERNAL_OIDC=${EXTERNAL_OIDC:-false})"
+    if ! run_pytest_pass "pass 3 (nightly parallel)" \
+        env E2E_PYTEST_PASS=parallel PYTHONPATH="$TEST_DIR:${PYTHONPATH:-}" pytest \
         --maxfail="${E2E_MAXFAIL:-5}" \
-        --junitxml="$xml_nightly" \
-        --html="${html%.html}-nightly.html" --self-contained-html \
+        -n "$workers" --dist=loadgroup \
+        --junitxml="${xml_nightly%.xml}-parallel.xml" \
+        --html="${html%.html}-nightly-parallel.html" --self-contained-html \
         "${pytest_common_args[@]}" \
-        -m "${_nightly_marker}"; then
+        -m "${_nightly_marker} and not serial and not serial_exclusive"; then
+        nightly_rc=1
+    fi
+
+    echo "Running E2E pass 3/${_pass_total}: nightly serial (-m '${_nightly_marker} and (serial or serial_exclusive)', single worker)"
+    if ! run_pytest_pass "pass 3 (nightly serial)" \
+        env E2E_PYTEST_PASS=serial PYTHONPATH="$TEST_DIR:${PYTHONPATH:-}" pytest \
+        --maxfail="${E2E_MAXFAIL:-5}" \
+        --junitxml="${xml_nightly%.xml}-serial.xml" \
+        --html="${html%.html}-nightly-serial.html" --self-contained-html \
+        "${pytest_common_args[@]}" \
+        -m "${_nightly_marker} and (serial or serial_exclusive)"; then
         nightly_rc=1
     fi
 }

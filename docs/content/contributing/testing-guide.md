@@ -78,6 +78,9 @@ Tests are organized into **xdist groups** for parallel execution. All tests in a
 | `inference_priority` | `test_inference_priority.py` | Subscription `inferencePriority` / InferenceObjective (`serial`) |
 | `echo_io` | `test_echo_large_io.py` | Large payload echo (`serial`) |
 | `external` | `test_external_oidc.py`, `test_external_model_routing.py`, Grid governance modules | Externally gated OIDC/routing/admin tests |
+| `oidc_condition` | `test_oidc_ready_condition.py` | AITenant `OIDCReady` condition: happy path, failure reasons, recovery, removal (`serial`, `nightly`; skipped unless `EXTERNAL_OIDC=true`) |
+| `oidc_tenant_inference` | `test_oidc_tenant_inference.py` | Both-tenant happy path: realm-token API key mint and inference through each tenant's own gateway (`nightly`; skipped unless `EXTERNAL_OIDC=true`) |
+| `oidc_portal_stack` | `test_portal_stack_convergence.py` | Consumer portal stack convergence: routes Accepted, auth proxy available (`nightly`; skipped unless `EXTERNAL_OIDC=true` and `MAAS_PORTAL=true`) |
 
 Each test file declares exactly one `xdist_group` (see module-level `pytestmark`). Pass 1 runs parallel groups; `@serial_exclusive` runs alone in pass 2a; `@serial` and `@legacy_ipp_pass2b` run in pass 2b. Opt-in `@legacy_ipp` suites are excluded from default CI passes.
 
@@ -194,6 +197,7 @@ The E2E framework auto-discovers most values from the cluster. These are the mos
 | `E2E_MODEL_PATH` | Override the model route path used by inference tests (for example, `/llm/facebook-opt-125m-simulated`; omit `/v1`) |
 | `EXTERNAL_OIDC` | Set `true` to enable external OIDC tests |
 | `E2E_PARALLEL_WORKERS` | pytest-xdist worker count for pass 1 (default `5`). Set to `1` for single-worker pass 1 without xdist; the serial passes are unaffected. |
+| `E2E_NIGHTLY_WORKERS` | pytest-xdist worker count for the nightly pass (defaults to `E2E_PARALLEL_WORKERS`, i.e. `5`). The nightly pass splits like passes 1–2: non-serial nightly tests run in their `xdist_group`s, and `@serial`/`@serial_exclusive` nightly tests run afterwards on one worker. Set `1` for the historical single-worker nightly pass. |
 | `E2E_SERIAL_WORKERS` | pytest-xdist lane count for serial pass 2b (default `1` everywhere, including CI). Lanes above 1 are implemented and were measured at 2 and 3 lanes, but they are **not enabled by default**: pass-2b files share the stored auth state of common models even across different `xdist_group`s, so concurrent lanes race (measured failure: `test_models_endpoint::test_empty_model_list`). Pass 2a is always one worker. |
 | `LLMISVC_CONTROLLER_CPU_REQUEST` / `LLMISVC_CONTROLLER_CPU_LIMIT` | CPU that `deploy-platform.sh` gives `llmisvc-controller-manager` on the test cluster (defaults `1` / `2`; shipped is 100m). Set the limit empty to keep the shipped resources. |
 
@@ -215,7 +219,7 @@ does not identify the model route. SSE parsing is centralized in
 
 ### Parallel E2E (pytest-xdist)
 
-`run_e2e_tests.sh` and `run-tests-quick.sh` run **three marker-filtered passes** by default (default `E2E_PARALLEL_WORKERS=5`). Use `--serial-only` to run passes **2a and 2b** only; that mode skips pass 1. Direct `pytest` invocations must use the same selectors when a module mixes `@serial` and worker-tenant tests.
+`run_e2e_tests.sh` and `run-tests-quick.sh` run **three marker-filtered passes** by default (default `E2E_PARALLEL_WORKERS=5`). Use `--serial-only` to run passes **2a and 2b** only; that mode skips pass 1. The nightly pass (pass 3) splits the same way by default (`E2E_NIGHTLY_WORKERS`, default `E2E_PARALLEL_WORKERS`): non-serial nightly tests run in their `xdist_group`s, and `@serial`/`@serial_exclusive` nightly tests run afterwards on one worker. Direct `pytest` invocations must use the same selectors when a module mixes `@serial` and worker-tenant tests.
 
 1. **Pass 1**: `-m "not serial and not serial_exclusive and not legacy_ipp and not legacy_ipp_pass2b"`
 2. **Pass 2a (`serial_exclusive`)**: `-m "serial_exclusive and not legacy_ipp"`

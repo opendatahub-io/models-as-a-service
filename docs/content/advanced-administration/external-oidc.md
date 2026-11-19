@@ -203,6 +203,30 @@ Two PrometheusRule alerts monitor gateway authentication health. They cover all 
 
 See [Metrics & Dashboards](../observability/metrics-and-dashboards.md) for all Authorino metrics.
 
+## Troubleshooting: OIDCReady condition
+
+When external OIDC is configured on an `AITenant`, the MaaS controller probes the issuer's discovery document and JWKS endpoint and reports the outcome in the `OIDCReady` status condition. While the tenant is healthy the controller re-probes every 5 minutes (the periodic requeue); watch-triggered reconciles within one minute of a probe for the same AITenant, issuer and generation reuse the cached result instead of re-probing. `OIDCReady` is independent of the `Ready` condition and the phase: API-key access keeps working during an OIDC outage, so an OIDC failure never marks the tenant degraded.
+
+Inspect it with:
+
+```sh
+oc get aitenant <name> -n <ns> -o jsonpath='{.status.conditions[?(@.type=="OIDCReady")]}'
+```
+
+| Status | Reason | Meaning | Fix |
+|--------|--------|---------|-----|
+| True | `Available` | Discovery and JWKS are reachable and the discovery `issuer` matches `spec.oidc.issuerUrl` | Nothing. |
+| False | `ClientConfigIncomplete` | `spec.oidc.clientId` is empty, or the Secret referenced by `spec.oidc.clientSecretRef` is missing or has no such key | Set the client ID / create the Secret with the expected key. |
+| False | `IssuerUnreachable` | DNS failure, connection refused or timeout contacting the issuer | Check DNS, network egress and that the IdP is running. |
+| False | `TLSUntrusted` | The issuer's TLS certificate is not trusted by the controller | Add the issuer CA to the DSCInitialization `spec.trustedCABundle.customCABundle`. The controller picks up the new bundle within ~5 minutes without editing the AITenant. |
+| False | `DiscoveryFailed` | `<issuerUrl>/.well-known/openid-configuration` returned a non-200 response or invalid JSON | Check the issuer URL and the IdP's discovery endpoint. |
+| False | `IssuerMismatch` | The discovery document's `issuer` does not match `spec.oidc.issuerUrl` (a trailing `/` is ignored) | Correct `spec.oidc.issuerUrl`. |
+| False | `JWKSUnavailable` | `jwks_uri` is missing, returned a non-200 response, or contains no keys | Check the IdP's JWKS endpoint. |
+
+The probe trusts the same CA bundle as the consumer portal auth proxy: the system roots plus the `odh-trusted-ca-bundle` ConfigMap in the tenant infrastructure namespace.
+
+**Known limitation:** a wrong client **secret value** cannot be detected by probing (it only fails at token exchange). The condition reports issuer and configuration health, not the auth proxy's own health (for example, the proxy Deployment not rolling out).
+
 ## Security controls and responsibilities
 
 This table covers the non-functional security requirements (NFRs) raised during GA refinement. Each row states who enforces the control and what an operator needs to know.
