@@ -1403,7 +1403,6 @@ func TestMaaSAuthPolicyReconciler_NegativeTTLRejection(t *testing.T) {
 				if err != nil {
 					t.Errorf("Expected validation to succeed, but got error: %v", err)
 				}
-
 			}
 		})
 	}
@@ -1469,8 +1468,10 @@ func TestMaaSAuthPolicyReconciler_CacheKeyIsolation(t *testing.T) {
 		)
 	})
 
-	// Test 2: subscription-info cache key must include userId, username, groups, and dynamic model identity (gateway policy)
-	t.Run("subscription-info includes username, groups, model", func(t *testing.T) {
+	// Test 2: the full subscription-info cache key, used for token identities, must include
+	// userId, username, groups, and dynamic model identity (gateway policy). API keys use the
+	// key ID instead; TestSubscriptionInfoCacheKeyCoversRequestBody covers both branches.
+	t.Run("subscription-info full key includes username, groups, model", func(t *testing.T) {
 		key := assertCacheKeyContains(t, gwPolicy,
 			[]string{"userId", "username", "groups", "join"},
 			"spec", "defaults", "rules", "metadata", "subscription-info", "cache", "key", "expression",
@@ -1480,7 +1481,6 @@ func TestMaaSAuthPolicyReconciler_CacheKeyIsolation(t *testing.T) {
 			t.Errorf("subscription-info cache key must include dynamic model identity (header or path), got: %s", key)
 		}
 	})
-
 }
 
 // TestMaaSAuthPolicyReconciler_CacheKeyModelIsolation verifies per-model cache key isolation.
@@ -1555,23 +1555,26 @@ func TestMaaSAuthPolicyReconciler_CacheKeyOrganizationIsolation(t *testing.T) {
 }
 
 func TestSubscriptionCacheKeySeparatesOpaqueGroupsAndMatchingModes(t *testing.T) {
+	// Groups are part of the key only for token identities; API keys key on the key ID.
 	makeAuth := func(groups []any) map[string]any {
 		return map[string]any{
-			"metadata": map[string]any{"apiKeyValidation": map[string]any{
-				"userId":       "same-key-id",
-				"keyId":        "same-key-id",
-				"username":     "same-user",
-				"subscription": "bound-subscription",
-				"groups":       groups,
+			"identity": map[string]any{"user": map[string]any{
+				"username": "same-user",
+				"groups":   groups,
 			}},
-			"identity": map[string]any{},
 		}
 	}
 	expression := subscriptionGatewayCacheKeyExpression()
-	commaGroup := evaluateGatewayCELString(t, expression, makeAuth([]any{"a,b"}))
-	twoGroups := evaluateGatewayCELString(t, expression, makeAuth([]any{"a", "b"}))
-	if commaGroup == twoGroups {
-		t.Fatalf("cache key collides for one comma group and two groups: %q", commaGroup)
+	// Same group count on both sides, so only the per-group length prefix keeps them apart.
+	for _, pair := range [][2][]any{
+		{{"a", "bc"}, {"ab", "c"}},
+		{{"a:b", "c"}, {"a", "b:c"}},
+	} {
+		first := evaluateGatewayCELString(t, expression, makeAuth(pair[0]))
+		second := evaluateGatewayCELString(t, expression, makeAuth(pair[1]))
+		if first == second {
+			t.Fatalf("cache key collides for groups %v and %v: %q", pair[0], pair[1], first)
+		}
 	}
 }
 

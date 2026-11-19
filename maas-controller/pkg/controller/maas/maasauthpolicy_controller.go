@@ -484,11 +484,17 @@ const legacyGatewayDefaultAuthPolicyName = "gateway-default-auth"
 
 // subscriptionGatewayCacheKeyExpression builds a collision-safe key for gateway-level selection.
 // It length-prefixes every value so opaque group names cannot collide with separators.
+//
+// The key must cover every input of the subscription-info request body. For an API key,
+// maas-api returns groups, username and subscription from the stored key row, which never
+// changes. The API-key key still carries the username and subscription, which are cheap,
+// and leaves out only the group list, which is what grows. Other identities, and API keys
+// without a key ID, use the full key.
 func subscriptionGatewayCacheKeyExpression() string {
 	//nolint:gosec // CEL expression, not a credential
 	apiKey := `(has(auth.metadata) && has(auth.metadata.apiKeyValidation))`
+	hasAPIKeyID := `(` + apiKey + ` && "keyId" in auth.metadata.apiKeyValidation && auth.metadata.apiKeyValidation.keyId != "")`
 	identitySource := `(` + apiKey + ` ? "api-key" : (has(auth.identity.iss) ? "oidc" : "token-review"))`
-	apiKeyID := `(` + apiKey + ` && "keyId" in auth.metadata.apiKeyValidation ? auth.metadata.apiKeyValidation.keyId : "")`
 	issuer := `(!` + apiKey + ` && has(auth.identity.iss) ? auth.identity.iss : "")`
 	subject := `(!` + apiKey + ` && has(auth.identity.sub) ? auth.identity.sub : "")`
 	requestedSubscription := `("x-maas-subscription" in request.headers ? request.headers["x-maas-subscription"] : "")`
@@ -496,10 +502,16 @@ func subscriptionGatewayCacheKeyExpression() string {
 	groups := `string(size(` + groupList + `)) + ":" + ` +
 		groupList + `.map(g, string(size(g)) + ":" + g).join("")`
 	model := `(` + celModelIdentity + `)`
-	values := []string{
+	apiKeyCacheKey := lengthPrefixedCacheKey(
+		`"api-key-id"`,
+		`auth.metadata.apiKeyValidation.keyId`,
+		`auth.metadata.apiKeyValidation.username`,
+		`auth.metadata.apiKeyValidation.subscription`,
+		model,
+	)
+	fullCacheKey := lengthPrefixedCacheKey(
 		identitySource,
 		celUserID,
-		apiKeyID,
 		celUsername,
 		issuer,
 		subject,
@@ -508,11 +520,19 @@ func subscriptionGatewayCacheKeyExpression() string {
 		celSubscription,
 		requestedSubscription,
 		model,
-	}
+	)
+	return `(` + hasAPIKeyID + ` ? ` + apiKeyCacheKey + ` : ` + fullCacheKey + `)`
+}
+
+// lengthPrefixedCacheKey joins CEL string expressions as "<length>:<value>". Each value must
+// evaluate to a string; the length prefixes then make the encoding unambiguous, so keys built
+// from different values stay distinct.
+func lengthPrefixedCacheKey(values ...string) string {
+	parts := make([]string, len(values))
 	for i, value := range values {
-		values[i] = `string(size(` + value + `)) + ":" + (` + value + `)`
+		parts[i] = `string(size(` + value + `)) + ":" + (` + value + `)`
 	}
-	return strings.Join(values, ` + `)
+	return strings.Join(parts, ` + `)
 }
 
 // withMetadataCache adds a cache block when caching is enabled. Authorino

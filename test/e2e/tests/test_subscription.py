@@ -1306,7 +1306,6 @@ class TestCascadeDeletion:
         assert r.status_code == 200, (
             f"dedicated API key must work before subscription deletion, got {r.status_code}"
         )
-        validated_at = time.time()
 
         replacement_key_id = None
         try:
@@ -1314,6 +1313,7 @@ class TestCascadeDeletion:
             _wait_for_cr_absent("maassubscription", SIMULATOR_SUBSCRIPTION)
             # With no subscription, expect 403 after the cached lookups expire.
             r = _poll_status(api_key, 403, timeout=AUTH_CACHE_TIMEOUT)
+            denied_at = time.time()
             log.info(f"No subscriptions -> {r.status_code} (access denied as expected)")
 
             # The subscription name may be reused, but the key that was bound to
@@ -1337,9 +1337,9 @@ class TestCascadeDeletion:
             replacement_key_id = new_key_data["id"]
             new_api_key = new_key_data["key"]
             _poll_status(new_api_key, 200, timeout=90)
-            # The old key remains cached until the original validation expires. After
-            # that, maas-api must continue rejecting it for the recreated subscription.
-            time.sleep(max(0.0, validated_at + AUTH_CACHE_TIMEOUT - time.time()))
+            # The last 403 above can come from a lookup that was cached for one TTL. Wait
+            # for it to expire, so the hold checks maas-api against the recreated subscription.
+            time.sleep(max(0.0, denied_at + AUTH_CACHE_TIMEOUT - time.time()))
             r = _assert_status_holds(api_key, 403, 15)
             assert r.status_code == 403, (
                 "API key bound to a deleted subscription became usable after the "
