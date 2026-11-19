@@ -1496,10 +1496,22 @@ func tenantAPIKeyRevocationJob(aitenant *maasv1alpha1.AITenant, namespace string
 		aitenantAPIKeyRevocationJobName(aitenant.Name),
 		aitenant.Name, aitenant.Namespace, string(aitenant.UID),
 		aitenant.Name, "", tenantID, namespace,
+		nil,
 	)
 }
 
-func apiKeyRevocationJob(jobName, ownerName, ownerNamespace, ownerUID, tenantName, subscription, tenantID, namespace string) *batcv1.Job {
+type subscriptionAbsenceRequest struct {
+	Namespace              string `json:"namespace"`
+	Name                   string `json:"name"`
+	ObjectUID              string `json:"objectUID"`
+	SubscriptionIdentityID string `json:"subscriptionIdentityId"`
+	RetainAPIKeys          bool   `json:"retainAPIKeys"`
+}
+
+func apiKeyRevocationJob(
+	jobName, ownerName, ownerNamespace, ownerUID, tenantName, subscription, tenantID, namespace string,
+	absenceRequest *subscriptionAbsenceRequest,
+) *batcv1.Job {
 	serviceName := tenantreconcile.MaaSAPIServiceName(tenantID)
 	image := tenantreconcile.DefaultMaaSAPIKeyCleanupImage
 	if related := os.Getenv("RELATED_IMAGE_UBI_MINIMAL_IMAGE"); related != "" {
@@ -1510,17 +1522,34 @@ func apiKeyRevocationJob(jobName, ownerName, ownerNamespace, ownerUID, tenantNam
 	ttlSecondsAfterFinished := aitenantAPIKeyCleanupTTLSeconds
 	serviceHost := fmt.Sprintf("%s.%s.svc", serviceName, namespace)
 	endpoint := fmt.Sprintf("https://%s/internal/v1/tenants/%s/api-keys", net.JoinHostPort(serviceHost, "8443"), tenantName)
+	method := "DELETE"
+	requestArguments := ""
+	payload := ""
 	if subscription != "" {
 		endpoint = fmt.Sprintf("https://%s/internal/v1/tenants/%s/subscriptions/%s/api-keys",
 			net.JoinHostPort(serviceHost, "8443"), tenantName, url.PathEscape(subscription))
 	}
+	if absenceRequest != nil {
+		endpoint = fmt.Sprintf("https://%s/internal/v1/subscriptions/%s/%s/absence",
+			net.JoinHostPort(serviceHost, "8443"),
+			url.PathEscape(absenceRequest.Namespace),
+			url.PathEscape(absenceRequest.Name))
+		method = "POST"
+		requestArguments = "-H \"Content-Type: application/json\" --data \"${PAYLOAD}\" "
+		encodedPayload, err := json.Marshal(absenceRequest)
+		if err != nil {
+			return nil
+		}
+		payload = string(encodedPayload)
+	}
 	cleanupCommand := fmt.Sprintf(
 		"if [ -s %s ]; then CA_BUNDLE=%s; elif [ -s %s ]; then CA_BUNDLE=%s; else echo 'no MaaS API CA bundle found' >&2; exit 1; fi "+
 			"&& TOKEN=\"$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)\" "+
-			"&& exec curl --fail --silent --show-error --max-time 30 "+
-			"--cacert \"${CA_BUNDLE}\" -H \"Authorization: Bearer ${TOKEN}\" -X DELETE %s",
+			"&& PAYLOAD=%q && exec curl --fail --silent --show-error --max-time 30 "+
+			"--cacert \"${CA_BUNDLE}\" -H \"Authorization: Bearer ${TOKEN}\" -X %s %s%s",
 		aitenantAPIKeyCleanupOpenShiftCAPath, aitenantAPIKeyCleanupOpenShiftCAPath,
-		aitenantAPIKeyCleanupXKSCAPath, aitenantAPIKeyCleanupXKSCAPath, endpoint)
+		aitenantAPIKeyCleanupXKSCAPath, aitenantAPIKeyCleanupXKSCAPath,
+		payload, method, requestArguments, endpoint)
 
 	return &batcv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
@@ -1539,6 +1568,9 @@ func apiKeyRevocationJob(jobName, ownerName, ownerNamespace, ownerUID, tenantNam
 				aitenantNamespaceAnnotation: ownerNamespace,
 				aitenantUIDAnnotation:       ownerUID,
 				"maas.opendatahub.io/cleanup-scope": func() string {
+					if absenceRequest != nil {
+						return "subscription-identity"
+					}
 					if subscription == "" {
 						return "tenant"
 					}

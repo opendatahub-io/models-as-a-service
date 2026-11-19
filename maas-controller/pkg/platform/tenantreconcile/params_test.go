@@ -3,6 +3,7 @@ package tenantreconcile
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -10,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/go-logr/logr"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
@@ -98,6 +100,80 @@ func TestBuildPlatformParams(t *testing.T) {
 		assert.Equal(t, "45", got.APIKeyMaxExpirationDays)
 		assert.Equal(t, "30", got.APIKeyDeletionRetentionDays)
 	})
+}
+
+func TestBuildPlatformParamsSubscriptionIdentityPhaseAndObserverID(t *testing.T) {
+	platformContext := PlatformContext{
+		GatewayRef: maasv1alpha1.TenantGatewayRef{
+			Namespace: "gateway-ns",
+			Name:      "gateway-name",
+		},
+		SubscriptionIdentityMode: "migrate",
+		ClusterID:                "cluster-one",
+	}
+	tenant := &maasv1alpha1.MaasTenantConfig{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "model-ns"},
+	}
+
+	got, err := BuildPlatformParams(tenant, platformContext, "tenant-ns", "controller-ns", "cluster-audience", "opendatahub", logr.Discard())
+	require.NoError(t, err)
+	assert.Equal(t, "migrate", got.SubscriptionIdentityMode)
+	_, err = uuid.Parse(got.SubscriptionObserverID)
+	require.NoError(t, err)
+
+	sameObserverID := got.SubscriptionObserverID
+	got, err = BuildPlatformParams(tenant, platformContext, "tenant-ns", "controller-ns", "cluster-audience", "opendatahub", logr.Discard())
+	require.NoError(t, err)
+	assert.Equal(t, sameObserverID, got.SubscriptionObserverID)
+
+	got, err = BuildPlatformParams(tenant, platformContext, "tenant-ns", "controller-ns", "other-cluster-audience", "opendatahub", logr.Discard())
+	require.NoError(t, err)
+	assert.Equal(t, sameObserverID, got.SubscriptionObserverID)
+
+	otherClusterContext := platformContext
+	otherClusterContext.ClusterID = "cluster-two"
+	got, err = BuildPlatformParams(tenant, otherClusterContext, "tenant-ns", "controller-ns", "cluster-audience", "opendatahub", logr.Discard())
+	require.NoError(t, err)
+	assert.NotEqual(t, sameObserverID, got.SubscriptionObserverID)
+
+	platformContext.ClusterID = ""
+	_, err = BuildPlatformParams(tenant, platformContext, "tenant-ns", "controller-ns", "cluster-audience", "opendatahub", logr.Discard())
+	require.ErrorContains(t, err, "cluster ID is required")
+}
+
+func TestValidateSubscriptionIdentityMode(t *testing.T) {
+	for _, mode := range []string{"", "off", "migrate", "strict"} {
+		require.NoError(t, ValidateSubscriptionIdentityMode(mode), "mode %q", mode)
+	}
+	err := ValidateSubscriptionIdentityMode("unexpected")
+	require.ErrorContains(t, err, "invalid subscription identity phase")
+}
+
+func TestDefaultSubscriptionIdentityMode(t *testing.T) {
+	require.Equal(t, "migrate", DefaultSubscriptionIdentityMode)
+
+	_, file, _, ok := runtime.Caller(0)
+	require.True(t, ok)
+	projectRoot := filepath.Join(filepath.Dir(file), "..", "..", "..", "..")
+
+	for _, relativePath := range []string{
+		"deployment/base/maas-controller/default/params.env",
+		"deployment/base/maas-controller/overlays/xks/params.env",
+	} {
+		data, err := os.ReadFile(filepath.Join(projectRoot, relativePath))
+		require.NoError(t, err)
+		var value string
+		found := false
+		for line := range strings.SplitSeq(string(data), "\n") {
+			key, candidate, isPair := strings.Cut(strings.TrimSpace(line), "=")
+			if isPair && key == "subscription-identity-mode" {
+				require.False(t, found, "duplicate subscription-identity-mode parameter")
+				value, found = candidate, true
+			}
+		}
+		require.True(t, found, "subscription-identity-mode parameter is missing")
+		require.Equal(t, DefaultSubscriptionIdentityMode, value)
+	}
 }
 
 func TestResolveGatewayBodyBufferLimitMB(t *testing.T) {

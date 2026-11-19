@@ -1285,6 +1285,8 @@ func (h *Handler) RevokeSubscriptionAPIKeys(c *gin.Context) {
 		switch {
 		case errors.Is(err, ErrTenantRequired), errors.Is(err, ErrTenantMismatch):
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		case errors.Is(err, ErrSubscriptionIdentityRequired):
+			c.JSON(http.StatusConflict, gin.H{"error": "Name-based subscription API-key cleanup is disabled in strict identity mode"})
 		default:
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to revoke subscription API keys"})
 		}

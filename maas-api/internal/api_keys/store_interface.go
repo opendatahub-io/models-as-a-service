@@ -16,6 +16,12 @@ var (
 	// Expiration validation errors.
 	ErrExpirationNotPositive = errors.New("expiration must be positive")
 	ErrExpirationExceedsMax  = errors.New("expiration exceeds maximum allowed")
+
+	ErrSubscriptionIdentityRequired    = errors.New("subscription identity is required")
+	ErrSubscriptionIdentityMismatch    = errors.New("subscription identity mismatch")
+	ErrSubscriptionIdentityNotObserved = errors.New("subscription identity is not actively observed")
+	ErrObserverRetired                 = errors.New("subscription observer is retired")
+	ErrObserverRejoinBlocked           = errors.New("subscription observer rejoin is blocked")
 )
 
 // Legacy constants for backward compatibility with database operations.
@@ -52,6 +58,20 @@ type MetadataStore interface {
 		expiresAt *time.Time,
 		ephemeral bool,
 		labels map[string]string) error
+
+	// AddKeyWithSubscriptionIdentity atomically validates an active identity and
+	// inserts a key bound to that incarnation and namespace.
+	AddKeyWithSubscriptionIdentity(
+		ctx context.Context,
+		username, keyID, keyHash, name, description string,
+		userGroups []string,
+		subscription string,
+		subscriptionIdentityID, subscriptionNamespace, tenant string,
+		expiresAt *time.Time,
+		ephemeral bool,
+		labels map[string]string,
+		maxObservationAge time.Duration,
+	) error
 
 	// Search returns API keys matching the search criteria.
 	// Supports filtering, sorting, and pagination.
@@ -100,6 +120,11 @@ type MetadataStore interface {
 	// InvalidateSubscription soft-deletes all keys for one subscription within a
 	// tenant. It must not affect keys belonging to other subscriptions or tenants.
 	InvalidateSubscription(ctx context.Context, tenant, subscription string) (int, error)
+
+	// InvalidateSubscriptionWithoutIdentity soft-deletes only legacy keys that
+	// have no subscription identity binding. Identity-bound keys must be cleaned
+	// up through identity-aware absence handling.
+	InvalidateSubscriptionWithoutIdentity(ctx context.Context, tenant, subscription string) (int, error)
 
 	// Revoke marks a specific API key as revoked (status transition: active → revoked).
 	Revoke(ctx context.Context, keyID string) error

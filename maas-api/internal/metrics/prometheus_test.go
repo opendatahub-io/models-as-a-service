@@ -295,6 +295,32 @@ func TestRejectionLabelsPreInitialized(t *testing.T) {
 	assert.True(t, reasons["guardrail-unavailable"], "guardrail-unavailable label not pre-initialized")
 }
 
+func TestRecordSubscriptionObserverLifecycle(t *testing.T) {
+	r, reg := newTestRecorder(t)
+
+	r.RecordSubscriptionObserverRetirement("tenant-a", "cleaned", 3)
+	r.RecordSubscriptionObserverRetirement("tenant-a", "retained", 0)
+	r.RecordSubscriptionObserverRetirement("tenant-b", "failure", 0)
+	r.RecordSubscriptionObserverRejoin("tenant-a", "success")
+	r.RecordSubscriptionObserverRejoin("tenant-b", "blocked")
+
+	assert.InDelta(t, float64(1), gatherMetricValue(t, reg,
+		"maas_api_subscription_observer_retirement_attempts_total",
+		map[string]string{"tenant_name": "tenant-a", "result": "cleaned"}), 0)
+	assert.InDelta(t, float64(1), gatherMetricValue(t, reg,
+		"maas_api_subscription_observer_retirement_attempts_total",
+		map[string]string{"tenant_name": "tenant-a", "result": "retained"}), 0)
+	assert.InDelta(t, float64(3), gatherMetricValue(t, reg,
+		"maas_api_subscription_observer_retirement_revoked_api_keys_total",
+		map[string]string{"tenant_name": "tenant-a"}), 0)
+	assert.InDelta(t, float64(1), gatherMetricValue(t, reg,
+		"maas_api_subscription_observer_rejoin_attempts_total",
+		map[string]string{"tenant_name": "tenant-a", "result": "success"}), 0)
+	assert.InDelta(t, float64(1), gatherMetricValue(t, reg,
+		"maas_api_subscription_observer_rejoin_attempts_total",
+		map[string]string{"tenant_name": "tenant-b", "result": "blocked"}), 0)
+}
+
 func TestNewMetricsStayUnderCardinalityCeiling(t *testing.T) {
 	r, reg := newTestRecorder(t)
 	r.RecordRequest(10 * time.Millisecond)

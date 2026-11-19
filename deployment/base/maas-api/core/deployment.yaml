@@ -31,6 +31,8 @@ spec:
           value: "otel-json"
         - name: MAAS_SUBSCRIPTION_NAMESPACE
           value: "models-as-a-service"
+        - name: SUBSCRIPTION_IDENTITY_MODE
+          value: "off"
         - name: METRICS_PORT
           value: "9090"
         - name: METRICS_SECURE

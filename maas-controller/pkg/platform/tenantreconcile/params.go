@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/go-logr/logr"
+	"github.com/google/uuid"
 	corev1 "k8s.io/api/core/v1"
 	netwv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -42,6 +43,10 @@ type PlatformParams struct {
 
 	APIKeyMaxExpirationDays     string
 	APIKeyDeletionRetentionDays string
+	// SubscriptionIdentityMode and SubscriptionObserverID configure the
+	// controller-owned subscription identity lifecycle for each tenant.
+	SubscriptionIdentityMode string
+	SubscriptionObserverID   string
 
 	// MaaSAPIReplicas overrides the maas-api Deployment replica count when non-nil.
 	MaaSAPIReplicas *int32
@@ -142,6 +147,21 @@ func BuildPlatformParams(tenant client.Object, platformContext PlatformContext, 
 	if err != nil {
 		return PlatformParams{}, fmt.Errorf("resolve tenant identifier: %w", err)
 	}
+	tenantName, err := TenantNameFor(tenant)
+	if err != nil {
+		return PlatformParams{}, fmt.Errorf("resolve tenant name: %w", err)
+	}
+	subscriptionIdentityMode := normalizeSubscriptionIdentityMode(platformContext.SubscriptionIdentityMode)
+	clusterID := platformContext.ClusterID
+	if clusterID == "" {
+		if subscriptionIdentityMode != "off" {
+			return PlatformParams{}, errors.New("cluster ID is required for subscription identity modes other than off")
+		}
+		clusterID = clusterAudience
+	}
+	observerID := uuid.NewSHA1(uuid.NameSpaceURL, []byte(
+		"maas-subscription-observer:"+clusterID+":"+tenant.GetNamespace()+":"+tenantName,
+	)).String()
 
 	params := PlatformParams{
 		AppNamespace:                appNamespace,
@@ -160,6 +180,8 @@ func BuildPlatformParams(tenant client.Object, platformContext PlatformContext, 
 		MaaSAPIKeyCleanupImage:      firstNonEmpty(os.Getenv("RELATED_IMAGE_UBI_MINIMAL_IMAGE"), DefaultMaaSAPIKeyCleanupImage),
 		APIKeyMaxExpirationDays:     resolveAPIKeyMaxExpirationDays(tenant),
 		APIKeyDeletionRetentionDays: resolveAPIKeyDeletionRetentionDays(tenant),
+		SubscriptionIdentityMode:    subscriptionIdentityMode,
+		SubscriptionObserverID:      observerID,
 		SkipIPP:                     platformContext.SkipIPP,
 	}
 
@@ -514,6 +536,22 @@ func resolveAPIKeyDeletionRetentionDays(tenant client.Object) string {
 		return strconv.FormatInt(int64(*cfg.DeletionRetentionDays), 10)
 	}
 	return DefaultAPIKeyDeletionRetentionDays
+}
+
+func normalizeSubscriptionIdentityMode(mode string) string {
+	if mode == "" {
+		return "off"
+	}
+	return mode
+}
+
+func ValidateSubscriptionIdentityMode(mode string) error {
+	switch normalizeSubscriptionIdentityMode(mode) {
+	case "off", "migrate", "strict":
+		return nil
+	default:
+		return fmt.Errorf("invalid subscription identity phase %q", mode)
+	}
 }
 
 func apiKeysConfigFor(tenant client.Object) *maasv1alpha1.TenantAPIKeysConfig {
@@ -1076,6 +1114,14 @@ func patchMaaSAPIDeployment(log logr.Logger, r *unstructured.Unstructured, param
 	if err := setOrAddEnvVar(r, "maas-api", "API_KEY_MAX_EXPIRATION_DAYS", params.APIKeyMaxExpirationDays); err != nil {
 		return fmt.Errorf("patch API_KEY_MAX_EXPIRATION_DAYS: %w", err)
 	}
+	if err := setOrAddEnvVar(r, "maas-api", "SUBSCRIPTION_IDENTITY_MODE", params.SubscriptionIdentityMode); err != nil {
+		return fmt.Errorf("patch SUBSCRIPTION_IDENTITY_MODE: %w", err)
+	}
+	if params.SubscriptionObserverID != "" {
+		if err := setOrAddEnvVar(r, "maas-api", "SUBSCRIPTION_OBSERVER_ID", params.SubscriptionObserverID); err != nil {
+			return fmt.Errorf("patch SUBSCRIPTION_OBSERVER_ID: %w", err)
+		}
+	}
 	deletionRetentionDays := firstNonEmpty(params.APIKeyDeletionRetentionDays, DefaultAPIKeyDeletionRetentionDays)
 	if err := setOrAddEnvVar(r, "maas-api", "API_KEY_DELETION_RETENTION_DAYS", deletionRetentionDays); err != nil {
 		return fmt.Errorf("patch API_KEY_DELETION_RETENTION_DAYS: %w", err)
@@ -1135,6 +1181,13 @@ func patchMaaSAPIDeployment(log logr.Logger, r *unstructured.Unstructured, param
 	deploymentName := MaaSAPIDeploymentName(params.TenantIdentifier)
 	if err := addPodTemplateLabel(r, "maas.opendatahub.io/tenant-instance", deploymentName); err != nil {
 		return fmt.Errorf("patch tenant-instance label: %w", err)
+	}
+	if err := addPodTemplateAnnotation(
+		r,
+		AnnotationMaaSAPISubscriptionIdentityContract,
+		MaaSAPISubscriptionIdentityContractV1,
+	); err != nil {
+		return fmt.Errorf("patch subscription identity contract annotation: %w", err)
 	}
 
 	return nil
@@ -1966,6 +2019,19 @@ func addPodTemplateLabel(r *unstructured.Unstructured, key, value string) error 
 	}
 	labels[key] = value
 	return unstructured.SetNestedStringMap(r.Object, labels, "spec", "template", "metadata", "labels")
+}
+
+// addPodTemplateAnnotation adds an annotation to the Deployment's pod template.
+func addPodTemplateAnnotation(r *unstructured.Unstructured, key, value string) error {
+	annotations, found, err := unstructured.NestedStringMap(r.Object, "spec", "template", "metadata", "annotations")
+	if err != nil {
+		return fmt.Errorf("read pod template annotations: %w", err)
+	}
+	if !found || annotations == nil {
+		annotations = make(map[string]string)
+	}
+	annotations[key] = value
+	return unstructured.SetNestedStringMap(r.Object, annotations, "spec", "template", "metadata", "annotations")
 }
 
 func setDeploymentSelectorMatchLabels(r *unstructured.Unstructured, labels map[string]string) error {

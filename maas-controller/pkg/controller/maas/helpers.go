@@ -188,6 +188,19 @@ type tenantForNamespaceResult struct {
 	legacy *maasv1alpha1.Tenant
 }
 
+const (
+	subscriptionIdentityModeOff     = "off"
+	subscriptionIdentityModeMigrate = "migrate"
+	subscriptionIdentityModeStrict  = "strict"
+)
+
+func subscriptionIdentityMode(defaultMode string) string {
+	if defaultMode == "" {
+		defaultMode = subscriptionIdentityModeOff
+	}
+	return defaultMode
+}
+
 func (t *tenantForNamespaceResult) identifier() (string, error) {
 	switch {
 	case t.config != nil:

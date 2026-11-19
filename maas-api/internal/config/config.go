@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/google/uuid"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/client-go/kubernetes"
@@ -26,6 +27,18 @@ const (
 	// maxAPIKeyDeletionRetentionDays is the largest day count that can be
 	// safely converted to time.Duration without overflowing int64 nanoseconds.
 	maxAPIKeyDeletionRetentionDays = 106751
+)
+
+const (
+	// SubscriptionIdentityModeOff keeps the existing name-based behavior.
+	SubscriptionIdentityModeOff = "off"
+	// SubscriptionIdentityModeMigrate binds newly minted keys, validates keys
+	// that already have an identity, and preserves unbound legacy keys while
+	// the observer backfills them.
+	SubscriptionIdentityModeMigrate = "migrate"
+	// SubscriptionIdentityModeStrict requires an identity for new keys and
+	// validates the locally cached incarnation ID during authorization.
+	SubscriptionIdentityModeStrict = "strict"
 )
 
 type Config struct {
@@ -98,6 +111,34 @@ type Config struct {
 	// remain soft-deleted for audit purposes before physical deletion.
 	APIKeyDeletionRetentionDays int
 
+	// SubscriptionIdentityMode controls the controller-owned identity lifecycle
+	// phase. The default is off.
+	SubscriptionIdentityMode string
+
+	// SubscriptionObserverID identifies one logical maas-api observer. All
+	// replicas of the deployment share this UUID.
+	SubscriptionObserverID string
+
+	// SubscriptionObservationIntervalSeconds controls the observer's periodic
+	// authoritative Kubernetes list interval.
+	SubscriptionObservationIntervalSeconds int
+
+	// SubscriptionObservationMaxAgeSeconds defines how long an observer
+	// heartbeat remains fresh for mint and cleanup decisions.
+	SubscriptionObservationMaxAgeSeconds int
+
+	// SubscriptionObservationSettleSeconds is the minimum projection-
+	// convergence window before the final observer can clean up an identity.
+	SubscriptionObservationSettleSeconds int
+
+	// SubscriptionObserverRetirementEnabled automatically retires observers
+	// that stopped heartbeating after a cluster lost MaaS or database access.
+	SubscriptionObserverRetirementEnabled bool
+
+	// SubscriptionObserverStaleRetirementSeconds is the safety barrier before
+	// an inactive observer can be retired and removed from cleanup consensus.
+	SubscriptionObserverStaleRetirementSeconds int
+
 	MetricsPort int
 
 	// MetricsSecure serves /metrics over HTTPS with authn/authz when true.
@@ -154,6 +195,15 @@ func Load() *Config {
 	sarCacheMaxSize, _ := env.GetInt("SAR_CACHE_MAX_SIZE", constant.DefaultSARCacheMaxSize)
 	lastUsedDebounceSecs, _ := env.GetInt("LAST_USED_DEBOUNCE_SECS", 60)
 	apiKeyDeletionRetentionDays, _ := env.GetInt("API_KEY_DELETION_RETENTION_DAYS", defaultAPIKeyDeletionRetentionDays)
+	subscriptionIdentityMode := strings.ToLower(env.GetString("SUBSCRIPTION_IDENTITY_MODE", SubscriptionIdentityModeOff))
+	subscriptionObservationIntervalSeconds, _ := env.GetInt("SUBSCRIPTION_OBSERVATION_INTERVAL_SECONDS", 60)
+	subscriptionObservationMaxAgeSeconds, _ := env.GetInt("SUBSCRIPTION_OBSERVATION_MAX_AGE_SECONDS", 180)
+	subscriptionObservationSettleSeconds, _ := env.GetInt("SUBSCRIPTION_OBSERVATION_SETTLE_SECONDS", 30)
+	subscriptionObserverRetirementEnabled, _ := env.GetBool("SUBSCRIPTION_OBSERVER_RETIREMENT_ENABLED", true)
+	subscriptionObserverStaleRetirementSeconds, _ := env.GetInt(
+		"SUBSCRIPTION_OBSERVER_STALE_RETIREMENT_SECONDS",
+		constant.DefaultSubscriptionObserverStaleRetirementSeconds,
+	)
 	metricsPort, _ := env.GetInt("METRICS_PORT", constant.DefaultMetricsPort)
 	metricsSecure, _ := env.GetBool("METRICS_SECURE", true)
 	metricsCertDir := env.GetString("METRICS_CERT_DIR", constant.DefaultMetricsCertDir)
@@ -176,36 +226,43 @@ func Load() *Config {
 	aitenantNamespace := env.GetString("AITENANT_NAMESPACE", "ai-tenants")
 
 	c := &Config{
-		Name:                        env.GetString("INSTANCE_NAME", gatewayName),
-		Namespace:                   env.GetString("NAMESPACE", constant.DefaultNamespace),
-		GatewayName:                 gatewayName,
-		GatewayNamespace:            env.GetString("GATEWAY_NAMESPACE", constant.DefaultGatewayNamespace),
-		MaaSSubscriptionNamespace:   env.GetString("MAAS_SUBSCRIPTION_NAMESPACE", constant.DefaultMaaSSubscriptionNamespace),
-		TenantName:                  tenantName,
-		AITenantName:                aitenantName,
-		AITenantNamespace:           aitenantNamespace,
-		Address:                     env.GetString("ADDRESS", ""),
-		Secure:                      secure,
-		TLS:                         loadTLSConfig(),
-		DebugMode:                   debugMode,
-		LogFormat:                   logFormat,
-		DBConnectionURL:             "", // Loaded from K8s secret via LoadDatabaseURLs()
-		DBReadConnectionURL:         "", // Loaded from K8s secret via LoadDatabaseURLs()
-		APIKeyMaxExpirationDays:     maxExpirationDays,
-		AccessCheckTimeoutSeconds:   accessCheckTimeoutSeconds,
-		SARCacheMaxSize:             sarCacheMaxSize,
-		LastUsedDebounceSecs:        lastUsedDebounceSecs,
-		APIKeyDeletionRetentionDays: apiKeyDeletionRetentionDays,
-		MetricsPort:                 metricsPort,
-		MetricsSecure:               metricsSecure,
-		MetricsCertDir:              metricsCertDir,
-		DiscoveryEnableHTTP2:        discoveryEnableHTTP2,
-		LokiReadEndpoint:            env.GetString("LOKI_READ_ENDPOINT", ""),
-		LokiReadToken:               env.GetString("LOKI_READ_TOKEN", ""),
-		LokiReadCA:                  env.GetString("LOKI_READ_CA", ""),
-		OTELEndpoint:                env.GetString("OTEL_EXPORTER_OTLP_ENDPOINT", ""),
-		OTELInsecure:                otelInsecure,
-		OTELSampleRate:              otelSampleRate,
+		Name:                                   env.GetString("INSTANCE_NAME", gatewayName),
+		Namespace:                              env.GetString("NAMESPACE", constant.DefaultNamespace),
+		GatewayName:                            gatewayName,
+		GatewayNamespace:                       env.GetString("GATEWAY_NAMESPACE", constant.DefaultGatewayNamespace),
+		MaaSSubscriptionNamespace:              env.GetString("MAAS_SUBSCRIPTION_NAMESPACE", constant.DefaultMaaSSubscriptionNamespace),
+		TenantName:                             tenantName,
+		AITenantName:                           aitenantName,
+		AITenantNamespace:                      aitenantNamespace,
+		Address:                                env.GetString("ADDRESS", ""),
+		Secure:                                 secure,
+		TLS:                                    loadTLSConfig(),
+		DebugMode:                              debugMode,
+		LogFormat:                              logFormat,
+		DBConnectionURL:                        "", // Loaded from K8s secret via LoadDatabaseURLs()
+		DBReadConnectionURL:                    "", // Loaded from K8s secret via LoadDatabaseURLs()
+		APIKeyMaxExpirationDays:                maxExpirationDays,
+		AccessCheckTimeoutSeconds:              accessCheckTimeoutSeconds,
+		SARCacheMaxSize:                        sarCacheMaxSize,
+		LastUsedDebounceSecs:                   lastUsedDebounceSecs,
+		APIKeyDeletionRetentionDays:            apiKeyDeletionRetentionDays,
+		SubscriptionIdentityMode:               subscriptionIdentityMode,
+		SubscriptionObserverID:                 strings.TrimSpace(env.GetString("SUBSCRIPTION_OBSERVER_ID", "")),
+		SubscriptionObservationIntervalSeconds: subscriptionObservationIntervalSeconds,
+		SubscriptionObservationMaxAgeSeconds:   subscriptionObservationMaxAgeSeconds,
+		SubscriptionObservationSettleSeconds:   subscriptionObservationSettleSeconds,
+		SubscriptionObserverRetirementEnabled:  subscriptionObserverRetirementEnabled,
+		SubscriptionObserverStaleRetirementSeconds: subscriptionObserverStaleRetirementSeconds,
+		MetricsPort:          metricsPort,
+		MetricsSecure:        metricsSecure,
+		MetricsCertDir:       metricsCertDir,
+		DiscoveryEnableHTTP2: discoveryEnableHTTP2,
+		LokiReadEndpoint:     env.GetString("LOKI_READ_ENDPOINT", ""),
+		LokiReadToken:        env.GetString("LOKI_READ_TOKEN", ""),
+		LokiReadCA:           env.GetString("LOKI_READ_CA", ""),
+		OTELEndpoint:         env.GetString("OTEL_EXPORTER_OTLP_ENDPOINT", ""),
+		OTELInsecure:         otelInsecure,
+		OTELSampleRate:       otelSampleRate,
 		// Deprecated env var (backward compatibility with pre-TLS version)
 		deprecatedHTTPPort: env.GetString("PORT", ""),
 	}
@@ -303,27 +360,15 @@ func (c *Config) Validate() error {
 		return errors.New("TENANT_NAME must be non-empty and non-whitespace to ensure tenant isolation")
 	}
 
-	// Validate API key max expiration days
-	if c.APIKeyMaxExpirationDays < 1 {
-		return errors.New("API_KEY_MAX_EXPIRATION_DAYS must be at least 1")
+	if err := c.validateAPIKeySettings(); err != nil {
+		return err
 	}
 
-	if c.AccessCheckTimeoutSeconds < 1 {
-		return errors.New("ACCESS_CHECK_TIMEOUT_SECONDS must be at least 1")
+	if c.SubscriptionIdentityMode == "" {
+		c.SubscriptionIdentityMode = SubscriptionIdentityModeOff
 	}
-
-	if c.LastUsedDebounceSecs < 0 {
-		return errors.New("LAST_USED_DEBOUNCE_SECS must be greater than or equal to 0")
-	}
-
-	if c.APIKeyDeletionRetentionDays == 0 {
-		c.APIKeyDeletionRetentionDays = defaultAPIKeyDeletionRetentionDays
-	}
-	if c.APIKeyDeletionRetentionDays < 1 {
-		return errors.New("API_KEY_DELETION_RETENTION_DAYS must be at least 1")
-	}
-	if c.APIKeyDeletionRetentionDays > maxAPIKeyDeletionRetentionDays {
-		return fmt.Errorf("API_KEY_DELETION_RETENTION_DAYS must be at most %d", maxAPIKeyDeletionRetentionDays)
+	if err := c.validateSubscriptionIdentity(); err != nil {
+		return err
 	}
 
 	if c.MetricsPort < 1 || c.MetricsPort > 65535 {
@@ -341,6 +386,58 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	return nil
+}
+
+func (c *Config) validateAPIKeySettings() error {
+	if c.APIKeyMaxExpirationDays < 1 {
+		return errors.New("API_KEY_MAX_EXPIRATION_DAYS must be at least 1")
+	}
+	if c.AccessCheckTimeoutSeconds < 1 {
+		return errors.New("ACCESS_CHECK_TIMEOUT_SECONDS must be at least 1")
+	}
+	if c.LastUsedDebounceSecs < 0 {
+		return errors.New("LAST_USED_DEBOUNCE_SECS must be greater than or equal to 0")
+	}
+	if c.APIKeyDeletionRetentionDays == 0 {
+		c.APIKeyDeletionRetentionDays = defaultAPIKeyDeletionRetentionDays
+	}
+	if c.APIKeyDeletionRetentionDays < 1 {
+		return errors.New("API_KEY_DELETION_RETENTION_DAYS must be at least 1")
+	}
+	if c.APIKeyDeletionRetentionDays > maxAPIKeyDeletionRetentionDays {
+		return fmt.Errorf("API_KEY_DELETION_RETENTION_DAYS must be at most %d", maxAPIKeyDeletionRetentionDays)
+	}
+	return nil
+}
+
+func (c *Config) validateSubscriptionIdentity() error {
+	switch c.SubscriptionIdentityMode {
+	case SubscriptionIdentityModeOff, SubscriptionIdentityModeMigrate, SubscriptionIdentityModeStrict:
+	default:
+		return errors.New("SUBSCRIPTION_IDENTITY_MODE must be one of off, migrate, or strict")
+	}
+	if c.SubscriptionIdentityMode == SubscriptionIdentityModeOff {
+		return nil
+	}
+	if _, err := uuid.Parse(strings.TrimSpace(c.SubscriptionObserverID)); err != nil {
+		return fmt.Errorf("SUBSCRIPTION_OBSERVER_ID must be a UUID when subscription identity is enabled: %w", err)
+	}
+	if c.SubscriptionObservationIntervalSeconds < 1 {
+		return errors.New("SUBSCRIPTION_OBSERVATION_INTERVAL_SECONDS must be at least 1")
+	}
+	if c.SubscriptionObservationMaxAgeSeconds < c.SubscriptionObservationIntervalSeconds {
+		return errors.New("SUBSCRIPTION_OBSERVATION_MAX_AGE_SECONDS must be at least SUBSCRIPTION_OBSERVATION_INTERVAL_SECONDS")
+	}
+	if c.SubscriptionObservationSettleSeconds < 1 {
+		return errors.New("SUBSCRIPTION_OBSERVATION_SETTLE_SECONDS must be at least 1")
+	}
+	if !c.SubscriptionObserverRetirementEnabled {
+		return nil
+	}
+	if c.SubscriptionObserverStaleRetirementSeconds <= c.SubscriptionObservationMaxAgeSeconds {
+		return errors.New("SUBSCRIPTION_OBSERVER_STALE_RETIREMENT_SECONDS must be greater than SUBSCRIPTION_OBSERVATION_MAX_AGE_SECONDS")
+	}
 	return nil
 }
 
