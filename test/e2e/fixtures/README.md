@@ -16,6 +16,35 @@ This directory contains kustomizations for end-to-end testing that combine publi
 - **trlp-test**: Model used to validate TRLP validation behavior
 - **embedding**: Embedding model (validates `/v1/embeddings`, TRLP, default-deny)
 - **echo-sim**: Simulator running `--mode echo` serving `test/e2e-echo-model` (validates large mirrored I/O and credential leaks)
+- **slow-stream**: Random simulator paced at 2s to first token then 100ms per token, serving `test/e2e-slow-stream-model` (validates that SSE tokens are delivered as they are generated, not buffered)
+
+#### About slow-stream
+
+A streaming test can only tell streaming from buffering if the model is slower
+than the network for long enough to observe. The shared simulators generate as
+fast as they are asked, so through a buffering proxy every token still arrives
+in one burst at the end, and an assertion on delivery timing is meaningless
+against them.
+
+`slow-stream` is that paced backend: `--time-to-first-token 2000ms` plus
+`--inter-token-latency 100ms`, so tokens arrive roughly 100ms apart.
+`test_streaming_delivery.py` asserts the largest gap between consecutive SSE
+`data:` chunks is at least 50ms; a buffered response arrives in one burst, so
+every gap measures ~0s.
+
+It runs `--mode echo`, not the `random` mode every other simulator uses: random
+mode stops at a random token count, so some runs produce too few chunks to
+measure and look buffered. Echo mirrors the fixed prompt, which makes the chunk
+count deterministic.
+
+The flags are the whole point of the fixture. Without them the test's gap
+assertion fails and attributes the failure to the gateway, which is why the test
+also asserts the first chunk is at least 1s late — that guard fails first and
+says the backend is not paced.
+
+It ships a MaaSModelRef but no MaaSAuthPolicy or MaaSSubscription; the test
+creates those itself, so the model is invisible to every other test's
+`/v1/models` listing.
 
 #### About echo-sim
 
