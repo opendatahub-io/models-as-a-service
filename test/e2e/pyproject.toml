@@ -24,6 +24,7 @@ markers = [
     "legacy_ipp: legacy maas-controller IPP dataplane; opt-in only (`pytest -m legacy_ipp`), not part of default CI passes",
     "legacy_ipp_pass2b: per-tenant legacy IPP isolation; runs in serial pass 2b after parallel (not in pass 1)",
     "external: external OIDC and ExternalModel integrations",
+    "guardrails: AIGuardrail provider binding and attachment; needs the NeMo Guardrails install (E2E_RUN_GUARDRAILS)",
     "nightly: extended E2E (external OIDC, slow paths); excluded from PR /group-test; run on scheduled nightly only",
     "grid_oidc: Grid organization OIDC governance tests; collected before legacy external OIDC tests",
 ]
