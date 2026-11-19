@@ -1412,6 +1412,7 @@ func main() {
 		ClusterAudience:                 clusterAudience,
 		TenantNamespaceDiscoveryEnabled: enableTenantNamespaceDiscovery,
 		MetadataCacheTTL:                metadataCacheTTL,
+		AuthzCacheTTL:                   authzCacheTTL,
 		MonitoringNamespace:             monitoringNamespace,
 		UsageLogsManifestPath:           usageLogsManifestPath,
 	}

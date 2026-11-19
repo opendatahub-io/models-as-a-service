@@ -2091,10 +2091,20 @@ func (r *MaaSAuthPolicyReconciler) handleDeletion(ctx context.Context, log logr.
 	return ctrl.Result{}, nil
 }
 
-// ensureBaseGatewayAuthPolicy bootstraps maas-gateway-auth with empty model access when
-// missing. On the shared default gateway it also removes legacy gateway-default-auth left
-// over from pre-#912 clusters. Existing policies are left unchanged.
-func (r *MaaSAuthPolicyReconciler) ensureBaseGatewayAuthPolicy(
+// ensureGatewayAuthPolicy creates the gateway-level AuthPolicy when missing
+// (bootstrap) and reconciles it when present, so platform context learned after
+// bootstrap — notably AITenant spec.oidc changes — propagates without requiring
+// a MaaSAuthPolicy CR to exist (RHAI-27142). On the shared default gateway it
+// also removes legacy gateway-default-auth left over from pre-#912 clusters.
+//
+// Bootstrap does not depend on guardrail resolution: a cluster whose guardrail
+// catalog cannot be resolved yet must still receive the empty default-deny
+// policy. Updates go through the full reconcile path (guardrail and
+// subscription headers included) so this ensure computes the same desired state
+// as MaaSAuthPolicy-driven reconciliations and cannot strip fields they wrote.
+// When the policy exists and guardrail resolution fails closed, the error is
+// returned so the caller requeues instead of updating with partial inputs.
+func (r *MaaSAuthPolicyReconciler) ensureGatewayAuthPolicy(
 	ctx context.Context, log logr.Logger,
 	oidc *oidcConfig, xAPIKeyEnabled bool, tenantNamespace, tenantID, gatewayNamespace, gatewayName string,
 ) error {
@@ -2105,13 +2115,36 @@ func (r *MaaSAuthPolicyReconciler) ensureBaseGatewayAuthPolicy(
 
 	existing := &unstructured.Unstructured{}
 	existing.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
-	if err := r.Get(ctx, client.ObjectKey{Name: authPolicyName, Namespace: gatewayNamespace}, existing); err == nil {
-		return nil
-	} else if !apierrors.IsNotFound(err) {
+	err := r.Get(ctx, client.ObjectKey{Name: authPolicyName, Namespace: gatewayNamespace}, existing)
+	if err == nil {
+		// Mirror the MaaSAuthPolicy reconcile's upgrade cutover gate: while a
+		// legacy route-level policy is still the working auth path, defer
+		// rewriting the gateway-wide callbacks until the replacement maas-api
+		// Service has a ready endpoint. Returning an error requeues the caller.
+		legacyPolicyExists, legacyErr := r.hasLegacyModelAuthPolicy(ctx, tenantNamespace)
+		if legacyErr != nil {
+			return fmt.Errorf("failed to check for legacy model AuthPolicy: %w", legacyErr)
+		}
+		if legacyPolicyExists {
+			targetReady, readyErr := r.targetMaaSAPIReady(ctx, tenantID)
+			if readyErr != nil {
+				return fmt.Errorf("failed to check target maas-api readiness: %w", readyErr)
+			}
+			if !targetReady {
+				return fmt.Errorf(
+					"deferring gateway AuthPolicy update: legacy model AuthPolicy present and target maas-api Service %s/%s has no ready endpoint",
+					r.InfraNamespace, tenantreconcile.MaaSAPIServiceName(tenantID),
+				)
+			}
+		}
+		_, err := r.reconcileGatewayAuthPolicy(ctx, log, oidc, xAPIKeyEnabled, tenantNamespace, tenantID, gatewayNamespace, gatewayName)
+		return err
+	}
+	if !apierrors.IsNotFound(err) {
 		return fmt.Errorf("failed to check gateway AuthPolicy %s/%s: %w", gatewayNamespace, authPolicyName, err)
 	}
 
-	_, err := r.reconcileGatewayAuthPolicyWithHeaders(
+	_, err = r.reconcileGatewayAuthPolicyWithHeaders(
 		ctx, log, oidc, xAPIKeyEnabled, tenantNamespace, tenantID, gatewayNamespace, gatewayName, nil,
 	)
 	return err
