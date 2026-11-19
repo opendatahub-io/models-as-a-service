@@ -816,6 +816,9 @@ func TestLifecycleReconciler_LimitadorServiceMonitorDefaultInterval(t *testing.T
 		Namespace: monitoringNS,
 	}, sm)).To(Succeed())
 
+	g.Expect(sm.GetLabels()["openshift.io/user-monitoring"]).To(Equal("false"))
+	g.Expect(sm.GetLabels()["monitoring.opendatahub.io/scrape"]).To(Equal("true"))
+
 	spec, found, err := unstructured.NestedMap(sm.Object, "spec")
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(found).To(BeTrue())
