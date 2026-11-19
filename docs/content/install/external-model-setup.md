@@ -160,7 +160,7 @@ spec:
 EOF
 ```
 
-Clients send the model's name, `metadata.name`, in the `model` field of their requests. Set `spec.modelName` when the client-facing name is not a valid resource name, for example `meta-llama/Llama-3.1-8B-Instruct`.
+Clients send the model's client-facing name in the `model` field of their requests: `spec.modelName` when it is set, otherwise `metadata.name`. Set `spec.modelName` when that name is not a valid resource name, for example `meta-llama/Llama-3.1-8B-Instruct`.
 
 Each entry in `spec.externalProviderRefs` binds the model to one provider:
 
@@ -394,7 +394,7 @@ kubectl delete maasauthpolicy gpt-4o-access -n models-as-a-service
 kubectl delete maassubscription gpt-4o-subscription -n models-as-a-service
 ```
 
-Delete the provider and its Secret only when no other ExternalModel, in this or another namespace, references them:
+Delete the provider and its Secret only when no other ExternalModel, in this or another namespace, references them, and no other provider uses the Secret:
 
 ```bash
 kubectl delete externalproviders.inference.opendatahub.io openai -n llm

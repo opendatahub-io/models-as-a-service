@@ -995,7 +995,7 @@ class TestExternalModelBodyRouting:
         ],
         ids=["wrong-model", "missing-model"],
     )
-    def test_body_model_must_match_path_model(self, external_models_setup, body, case_name):
+    def test_unresolvable_model_body_does_not_error(self, external_models_setup, body, case_name):
         """
         A body model that differs from the path model gets 403; a body without
         one reaches the upstream, which answers a non-auth 4xx (httpbingo never
