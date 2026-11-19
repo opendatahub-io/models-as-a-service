@@ -1,6 +1,6 @@
 module github.com/opendatahub-io/models-as-a-service/maas-discovery
 
-go 1.26.6
+go 1.26.7
 
 require (
 	github.com/gin-gonic/gin v1.10.0
