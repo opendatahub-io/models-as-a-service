@@ -1,15 +1,8 @@
-# PrometheusRule: alert when Authorino gateway authentication fails often or becomes slow.
-#
-# Scraped metrics come from Authorino /server-metrics (see authorino-server-metrics-servicemonitor.yaml).
-# These alerts cover all gateway-level authentication methods (OIDC/JWT, API key, TokenReview)
-# because auth_server_authconfig_response_status does not carry evaluator-level labels.
-#
-# Deployed by: scripts/observability/install-observability.sh (NOT kustomize base)
-apiVersion: monitoring.coreos.com/v1
+# Managed by Config.spec.authorinoMonitoring. Metrics are normalized by OTEL.
+apiVersion: monitoring.rhobs/v1
 kind: PrometheusRule
 metadata:
   name: authorino-maas-authentication-alerts
-  namespace: kuadrant-system
   labels:
     app.kubernetes.io/part-of: maas-observability
     app.kubernetes.io/component: alerting
@@ -27,12 +20,12 @@ spec:
           reachability, API key validity, and token expiration.
       expr: |
         (
-          sum(rate(auth_server_authconfig_response_status{namespace=~"rh-connectivity-link|kuadrant-system",status="UNAUTHENTICATED"}[5m]))
+          sum(rate(auth_server_authconfig_response_status_total{namespace=~"rh-connectivity-link|kuadrant-system",status="UNAUTHENTICATED"}[5m]))
           /
-          sum(rate(auth_server_authconfig_response_status{namespace=~"rh-connectivity-link|kuadrant-system"}[5m]))
+          sum(rate(auth_server_authconfig_response_status_total{namespace=~"rh-connectivity-link|kuadrant-system"}[5m]))
         ) > 0.10
         and
-        sum(rate(auth_server_authconfig_response_status{namespace=~"rh-connectivity-link|kuadrant-system"}[5m])) > 0.001
+        sum(rate(auth_server_authconfig_response_status_total{namespace=~"rh-connectivity-link|kuadrant-system"}[5m])) > 0.001
       for: 5m
       labels:
         severity: warning

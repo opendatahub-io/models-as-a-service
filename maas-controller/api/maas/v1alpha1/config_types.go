@@ -73,6 +73,13 @@ type Config struct {
 // +kubebuilder:validation:XValidation:rule="!has(self.networkPolicyAdditionalEgressRules) || self.networkPolicyAdditionalEgressRules.all(r, (has(r.ports) && size(r.ports) > 0) || (has(r.to) && size(r.to) > 0))",message="each networkPolicyAdditionalEgressRules entry must specify at least one port or one destination"
 // +kubebuilder:validation:XValidation:rule="!has(self.maasApiEgressNetworkPolicy) || self.maasApiEgressNetworkPolicy != 'Disabled' || ((!has(self.networkPolicyEgressRules) || size(self.networkPolicyEgressRules) == 0) && (!has(self.networkPolicyAdditionalEgressRules) || size(self.networkPolicyAdditionalEgressRules) == 0))",message="networkPolicyEgressRules and networkPolicyAdditionalEgressRules must be unset when maasApiEgressNetworkPolicy is Disabled"
 type ConfigSpec struct {
+	// AuthorinoMonitoring deploys the Authorino ServiceMonitor and alert rules to
+	// the DSCI monitoring namespace. Defaults to true. Disabling it removes only
+	// the controller-managed monitoring resources, not Authorino itself.
+	// +optional
+	// +kubebuilder:default=true
+	AuthorinoMonitoring *bool `json:"authorinoMonitoring,omitempty"`
+
 	// LimitadorScrapeInterval defines the scrape interval for Limitador metrics in the ServiceMonitor.
 	// Defaults to "30s" if not specified.
 	// +optional

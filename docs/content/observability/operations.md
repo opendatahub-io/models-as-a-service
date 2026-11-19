@@ -101,9 +101,9 @@ How you remove resources depends on how they were applied. `./scripts/observabil
 | Resource | When |
 |----------|------|
 | Limitador `ServiceMonitor` (`limitador-metrics`) | Kuadrant is not already scraping Limitador `/metrics` |
-| Authorino `ServiceMonitor` (`authorino-server-metrics`) | Authorino Service exists and nothing else scrapes `/server-metrics` |
 | Gateway `Service` + `ServiceMonitor` (`istio-gateway-metrics`) | Gateway Deployment exists in `openshift-ingress` |
-| PrometheusRules (`authorino-maas-metadata-evaluator-high-failure-rate`, `authorino-maas-authentication-alerts`) | Authorino Deployment exists (`kuadrant-system` or `rh-connectivity-link`) |
+
+The Authorino `ServiceMonitor` and PrometheusRules are not applied by the script. They are owned by maas-controller and gated on `Config.spec.authorinoMonitoring` — see [Authorino monitoring](#authorino-monitoring) below.
 
 #### PersesDashboard ownership
 
@@ -111,7 +111,7 @@ How you remove resources depends on how they were applied. `./scripts/observabil
 |-----------------|-------------|-----------|---------|
 | **Operator** (recommended) | Metrics Usage dashboard via `usageMetricsDashboard` on `Config`. Usage-log dashboards are always reconciled while `Config/default` exists (`usageLogging` does not gate them). | Controller `ownerReference` on `Config` (`configs.maas.opendatahub.io/default`); field manager `maas-controller`. | Metrics Usage: set `usageMetricsDashboard=false`. Usage-log dashboards are recreated while the controller runs. See [Operator-managed dashboards](#operator-managed-dashboards) below. |
 | **Kustomize** (development) | `kustomize build` of `deployment/components/observability/observability/dashboards/` (and optionally `usage-logs/dsci-managed/`). | Label `app.kubernetes.io/managed-by: maas-observability` on the metrics Usage dashboard. No `Config` controller reference. | Delete `dashboard-3-maas-usage-admin` by name. For usage-logs, `kubectl delete -k` only sticks when the operator is not also reconciling those objects. |
-| **`install-observability.sh`** | TelemetryPolicy, Istio Telemetry, and the conditional monitors/rules in the table above. | `app.kubernetes.io/managed-by: maas-observability` on the kustomize base and gateway Service/ServiceMonitor. Limitador monitor and PrometheusRules do not all carry that label. | Delete the applied objects by name (see [Telemetry and ServiceMonitors](#telemetry-and-servicemonitors)). Dashboards are unaffected. |
+| **`install-observability.sh`** | TelemetryPolicy, Istio Telemetry, and the conditional monitors in the table above. Authorino monitoring is controller-managed. | `app.kubernetes.io/managed-by: maas-observability` on the kustomize base and gateway Service/ServiceMonitor. The Limitador monitor does not carry that label. | Delete the applied objects by name (see [Telemetry and ServiceMonitors](#telemetry-and-servicemonitors)). Dashboards are unaffected. |
 
 Identify operator-owned dashboards:
 
@@ -174,19 +174,50 @@ kubectl delete telemetry -n openshift-ingress latency-per-subscription
 # Conditional: Limitador ServiceMonitor (only if the script deployed it)
 kubectl delete servicemonitor -n kuadrant-system limitador-metrics --ignore-not-found
 
-# Conditional: Authorino /server-metrics ServiceMonitor
-kubectl delete servicemonitor -n kuadrant-system authorino-server-metrics --ignore-not-found
-
 # Conditional: Istio Gateway metrics
 kubectl delete servicemonitor,service -n openshift-ingress istio-gateway-metrics --ignore-not-found
+```
 
-# Conditional: PrometheusRules (namespace is kuadrant-system or rh-connectivity-link)
-kubectl delete prometheusrule -n kuadrant-system \
-  authorino-maas-metadata-evaluator-high-failure-rate \
-  authorino-maas-authentication-alerts --ignore-not-found
-kubectl delete prometheusrule -n rh-connectivity-link \
-  authorino-maas-metadata-evaluator-high-failure-rate \
-  authorino-maas-authentication-alerts --ignore-not-found
+#### Authorino monitoring
+
+The Authorino ServiceMonitor and PrometheusRules are managed by maas-controller
+through `Config/default`. See [Authorino monitoring](setup.md#authorino-monitoring)
+for configuration and feature-gate behavior.
+
+#### Legacy script-installed Authorino resources
+
+Older versions of `install-observability.sh` installed an Authorino ServiceMonitor
+in `kuadrant-system` and `monitoring.coreos.com` rules in `rh-connectivity-link`
+(if Authorino was deployed there), otherwise in `kuadrant-system`. The controller
+does not remove these independently managed objects. A legacy ServiceMonitor
+may cause duplicate scraping after controller-managed monitoring is enabled.
+
+Inspect the legacy objects before removing them:
+
+```bash
+kubectl get servicemonitors.monitoring.coreos.com authorino-server-metrics \
+  -n kuadrant-system -o yaml
+
+# Use the namespace where the old script installed its rules.
+LEGACY_RULE_NAMESPACE=kuadrant-system
+kubectl get prometheusrules.monitoring.coreos.com \
+  authorino-maas-authentication-alerts authorino-maas-metadata-evaluator-high-failure-rate \
+  -n "$LEGACY_RULE_NAMESPACE" -o yaml
+```
+
+Set `LEGACY_RULE_NAMESPACE=rh-connectivity-link` when applicable. Confirm that
+these are the old script-installed definitions, have no `metadata.ownerReferences`,
+and are not labeled `app.kubernetes.io/managed-by: maas-controller`. Preserve
+controller-owned objects and any objects whose ownership or origin is uncertain.
+After verifying the replacement monitor and rules in the DSCI monitoring namespace,
+remove only the confirmed legacy objects:
+
+```bash
+kubectl delete servicemonitors.monitoring.coreos.com authorino-server-metrics \
+  -n kuadrant-system
+kubectl delete prometheusrules.monitoring.coreos.com \
+  authorino-maas-authentication-alerts authorino-maas-metadata-evaluator-high-failure-rate \
+  -n "$LEGACY_RULE_NAMESPACE"
 ```
 
 ### Troubleshooting Missing Metrics

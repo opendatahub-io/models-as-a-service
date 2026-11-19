@@ -57,6 +57,13 @@ spec:
               (both to and ports, except the Kubernetes API port-only rule) runs at reconcile
               time in tenantreconcile.validateRestrictedEgressRules.
             properties:
+              authorinoMonitoring:
+                default: true
+                description: |-
+                  AuthorinoMonitoring deploys the Authorino ServiceMonitor and alert rules to
+                  the DSCI monitoring namespace. Defaults to true. Disabling it removes only
+                  the controller-managed monitoring resources, not Authorino itself.
+                type: boolean
               limitadorScrapeInterval:
                 default: 30s
                 description: |-
