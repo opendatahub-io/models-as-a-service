@@ -113,6 +113,8 @@ spec:
                 key: monitoring-namespace
                 name: maas-parameters
                 optional: true
+          - name: GOMEMLIMIT
+            value: "450MiB"
         image: maas-controller
         name: manager
         imagePullPolicy: Always
