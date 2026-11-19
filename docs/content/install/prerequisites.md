@@ -123,9 +123,11 @@ spec:
     mode: openshift-logging
 ```
 
-!!! note "AI Grid deployments"
-    For AI Grid deployments using the MaaS API Loki read proxy, add
-    `organization_id` and `user_id` to the existing
+!!! note "Logs-based usage dashboards"
+    The usage dashboards query Loki through the maas-api read-only Loki proxy,
+    which is always enabled and defaults to the LokiStack gateway in the
+    monitoring namespace. For its organization and user filters to match logs,
+    add `organization_id` and `user_id` to the existing
     `spec.limits.global.otlp.streamLabels.resourceAttributes` list in the
     `LokiStack` spec:
 
@@ -139,9 +141,8 @@ spec:
 
     The collector must also export both fields as OTLP resource attributes.
     If it uses the `groupbyattrs` processor, include both fields in
-    `groupbyattrs.keys`. The proxy requires indexed stream labels for its
-    organization and user filters to match logs. These changes affect newly
-    ingested logs; existing logs retain their original label configuration.
+    `groupbyattrs.keys`. These changes affect newly ingested logs; existing
+    logs retain their original label configuration.
     See [Logs-based usage dashboards](../observability/setup.md#logs-based-usage-dashboards)
     for identity capture settings.
 

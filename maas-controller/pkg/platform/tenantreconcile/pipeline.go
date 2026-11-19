@@ -223,63 +223,73 @@ func RunPlatformWithReader(
 	return &RunResult{Warnings: params.Warnings, KuadrantDetectionWarning: params.KuadrantDetectionWarning}, nil
 }
 
-// resolveLokiReadEndpoint sets params.LokiReadEndpoint (and the token
-// secretKeyRef flag) from the usage-logs-loki Secret in the app namespace. When
-// the Secret is absent the endpoint stays empty, which disables the maas-api
-// Loki proxy: the rendered Deployment omits LOKI_READ_ENDPOINT and the SSA
-// apply removes any previously applied value. A Secret that exists with a
-// missing key or an invalid URL only disables the proxy and records a warning
-// rather than failing the whole tenant reconcile.
+// resolveLokiReadEndpoint sets params.LokiReadEndpoint (and the token/CA
+// secretKeyRef flags) for the maas-api Loki proxy. The proxy is always on: when
+// the usage-logs-loki Secret is absent (or does not override the endpoint),
+// the endpoint defaults to the LokiStack gateway that ships with a standard
+// RHOAI deployment in the monitoring namespace (DefaultLokiReadEndpoint). Only
+// an empty monitoring namespace with no Secret leaves the proxy disabled.
+// Clusters without that LokiStack keep a proxy whose queries fail at runtime —
+// an accepted trade-off, surfaced at query time.
 //
-// When the LOKI_READ_TOKEN key is present, the maas-api Deployment gets a
-// LOKI_READ_TOKEN env var referencing the Secret via secretKeyRef (so the
-// token value never lands in the Deployment spec, and rotations are picked up
-// on pod restart without a reconcile). A missing token key keeps the proxy
-// enabled without upstream authentication and records a warning, since the
-// upstream may not require it. A missing LOKI_READ_CA key is not a warning:
-// maas-api then trusts only the system pool, which is correct when the
-// upstream certificate is publicly trusted.
+// When the Secret's LOKI_READ_TOKEN key is present, the maas-api Deployment
+// mounts that key as a file and repoints LOKI_READ_TOKEN_FILE at it (so the
+// token value never lands in the Deployment spec, and rotations propagate
+// via kubelet's secret-volume refresh without even a pod restart). Without it
+// the proxy authenticates with its own projected ServiceAccount token (the
+// default baked into the Deployment). A missing LOKI_READ_CA key likewise
+// keeps the service-ca bundle file baked into the Deployment
+// (LOKI_READ_CA_FILE), which verifies the internal LokiStack gateway
+// certificate; a present key is mounted the same way.
 func resolveLokiReadEndpoint(ctx context.Context, c client.Client, appNs string, params *PlatformParams, log logr.Logger) error {
+	endpoint := DefaultLokiReadEndpoint(params.MonitoringNamespace)
+
 	secret := &corev1.Secret{}
 	err := c.Get(ctx, types.NamespacedName{Namespace: appNs, Name: LokiReadSecretName}, secret)
 	if err != nil {
-		if apierrors.IsNotFound(err) {
-			log.V(1).Info("usage-logs-loki Secret not found; maas-api Loki proxy disabled",
+		if !apierrors.IsNotFound(err) {
+			return fmt.Errorf("get Secret %s/%s: %w", appNs, LokiReadSecretName, err)
+		}
+		if endpoint == "" {
+			log.V(1).Info("usage-logs-loki Secret not found and no monitoring namespace configured; maas-api Loki proxy disabled",
 				"name", LokiReadSecretName, "namespace", appNs)
+			params.LokiReadEndpoint = ""
 			return nil
 		}
-		return fmt.Errorf("get Secret %s/%s: %w", appNs, LokiReadSecretName, err)
-	}
-
-	endpoint := strings.TrimSpace(string(secret.Data[LokiReadSecretKey]))
-	if endpoint == "" {
-		params.Warnings = append(params.Warnings, fmt.Sprintf(
-			"Secret '%s' in namespace '%s' is missing key '%s'; the maas-api Loki proxy stays disabled",
-			LokiReadSecretName, appNs, LokiReadSecretKey))
+		log.V(1).Info("usage-logs-loki Secret not found; maas-api Loki proxy uses the default LokiStack endpoint",
+			"name", LokiReadSecretName, "namespace", appNs, "endpoint", endpoint)
+		params.LokiReadEndpoint = endpoint
 		return nil
 	}
-	if u, parseErr := url.Parse(endpoint); parseErr != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+
+	if override := strings.TrimSpace(string(secret.Data[LokiReadSecretKey])); override != "" {
+		if u, parseErr := url.Parse(override); parseErr != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+			params.Warnings = append(params.Warnings, fmt.Sprintf(
+				"Secret '%s' in namespace '%s' has an invalid '%s' value (must be a valid http(s) URL); the maas-api Loki proxy keeps the default endpoint",
+				LokiReadSecretName, appNs, LokiReadSecretKey))
+		} else {
+			endpoint = override
+		}
+	} else {
 		params.Warnings = append(params.Warnings, fmt.Sprintf(
-			"Secret '%s' in namespace '%s' has an invalid '%s' value (must be a valid http(s) URL); the maas-api Loki proxy stays disabled",
+			"Secret '%s' in namespace '%s' is missing key '%s'; the maas-api Loki proxy keeps the default endpoint",
 			LokiReadSecretName, appNs, LokiReadSecretKey))
-		return nil //nolint:nilerr // Invalid optional configuration disables the proxy without failing tenant reconciliation.
 	}
 
 	params.LokiReadEndpoint = endpoint
 	if strings.TrimSpace(string(secret.Data[LokiReadTokenSecretKey])) != "" {
 		params.LokiReadTokenFromSecret = true
 	} else {
-		params.Warnings = append(params.Warnings, fmt.Sprintf(
-			"Secret '%s' in namespace '%s' is missing key '%s'; the maas-api Loki proxy sends no Authorization header upstream",
-			LokiReadSecretName, appNs, LokiReadTokenSecretKey))
+		log.V(1).Info("usage-logs-loki Secret has no token key; maas-api Loki proxy authenticates with its projected ServiceAccount token",
+			"name", LokiReadSecretName, "namespace", appNs, "key", LokiReadTokenSecretKey)
 	}
-	// A missing CA key is not a warning: maas-api then trusts only the system
-	// pool, which is correct for fleets whose upstream certificate is publicly
-	// trusted.
+	// A missing CA key is not a warning: the proxy then verifies the upstream
+	// with the service-ca bundle baked into the Deployment, which is correct for
+	// in-cluster LokiStack gateways.
 	if strings.TrimSpace(string(secret.Data[LokiReadCASecretKey])) != "" {
 		params.LokiReadCAFromSecret = true
 	} else {
-		log.V(1).Info("usage-logs-loki Secret has no CA key; maas-api Loki proxy uses the system trust pool only",
+		log.V(1).Info("usage-logs-loki Secret has no CA key; maas-api Loki proxy uses the service-ca bundle file",
 			"name", LokiReadSecretName, "namespace", appNs, "key", LokiReadCASecretKey)
 	}
 	log.Info("maas-api Loki read proxy enabled", "endpoint", endpoint,

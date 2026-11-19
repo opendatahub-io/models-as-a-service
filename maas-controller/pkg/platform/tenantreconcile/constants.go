@@ -196,23 +196,49 @@ const (
 	MaaSDBSecretName             = "maas-db-config" //nolint:gosec // secret name reference, not a credential
 	MaaSDBSecretKey              = "DB_CONNECTION_URL"
 
-	// LokiReadSecretName is the Secret in the app namespace whose presence
-	// enables the maas-api read-only Loki proxy (GET /v1/logs*). Its absence
-	// leaves LOKI_READ_ENDPOINT unset, which disables the proxy.
+	// LokiReadSecretName is the Secret in the app namespace that overrides the
+	// default maas-api read-only Loki proxy (GET /v1/logs*) settings. When it is
+	// absent the proxy still runs, pointed at the default LokiStack gateway
+	// (see DefaultLokiReadEndpoint).
 	LokiReadSecretName = "usage-logs-loki" //nolint:gosec // secret name reference, not a credential
 	// LokiReadSecretKey holds the Loki read API base URL injected as the
 	// LOKI_READ_ENDPOINT env var on the maas-api container.
 	LokiReadSecretKey = "LOKI_READ_ENDPOINT" //nolint:gosec // secret key reference, not a credential
-	// LokiReadTokenSecretKey holds the service account token injected as the
-	// LOKI_READ_TOKEN env var on the maas-api container (via secretKeyRef, so
-	// the token value never lands in the Deployment spec).
+	// LokiReadTokenSecretKey holds the service account token mounted as a file
+	// on the maas-api container when present (LOKI_READ_TOKEN_FILE is repointed
+	// at the mount, so the token value never lands in the Deployment spec).
 	LokiReadTokenSecretKey = "LOKI_READ_TOKEN" //nolint:gosec // secret key reference, not a credential
 
-	// LokiReadCASecretKey holds the PEM CA bundle injected as the LOKI_READ_CA
-	// env var on the maas-api container (via secretKeyRef). The bundle is
-	// appended to the system trust pool for proxied upstream Loki requests; a
-	// missing key keeps the system pool only.
+	// LokiReadCASecretKey holds the PEM CA bundle mounted as a file for the
+	// maas-api container when present; the baked LOKI_READ_CA_FILE env var is
+	// repointed at the mount. A missing key falls back to the service-ca
+	// bundle file baked into the maas-api Deployment.
 	LokiReadCASecretKey = "LOKI_READ_CA" //nolint:gosec // secret key reference, not a credential
+
+	// lokiReadSecretTokenVolumeName mounts the Secret-supplied Loki token,
+	// replacing the projected ServiceAccount token as the proxy credential.
+	lokiReadSecretTokenVolumeName = "loki-read-secret-token"
+	// lokiReadSecretTokenMountPath is the mount point of the Secret-supplied
+	// Loki token volume.
+	lokiReadSecretTokenMountPath = "/var/run/maas-api-loki-secret" //nolint:gosec // mount path, not a credential
+	// lokiReadSecretCAVolumeName mounts the Secret-supplied Loki CA bundle,
+	// replacing the service-ca bundle as the proxy trust anchor.
+	lokiReadSecretCAVolumeName = "loki-read-secret-ca"
+	// lokiReadSecretCAMountPath is the mount point of the Secret-supplied Loki
+	// CA volume.
+	lokiReadSecretCAMountPath = "/var/run/maas-api-loki-secret-ca" //nolint:gosec // mount path, not a credential
+
+	// DefaultLokiStackGatewayService is the gateway Service of the usage-logs
+	// LokiStack shipped with a standard RHOAI (DSCI/odh-observability managed)
+	// deployment. The maas-api Loki proxy defaults to it when the
+	// usage-logs-loki Secret does not supply an endpoint.
+	DefaultLokiStackGatewayService = "data-science-usage-logs-lokistack-gateway-http"
+	// DefaultLokiStackGatewayPort is the HTTPS port of the default LokiStack
+	// gateway Service.
+	DefaultLokiStackGatewayPort = 8080
+	// DefaultLokiReadPath is the LokiStack gateway tenancy path for application
+	// logs used by the default proxy endpoint.
+	DefaultLokiReadPath = "/api/logs/v1/application"
 
 	// Condition types aligned with ODH internal/controller/status for DSC aggregation parity.
 	ConditionDependenciesAvailable      = "DependenciesAvailable"
@@ -221,6 +247,18 @@ const (
 	ConditionTypeDegraded               = "Degraded"
 	ReadyConditionType                  = "Ready"
 )
+
+// DefaultLokiReadEndpoint returns the maas-api Loki proxy endpoint for the
+// LokiStack that ships with a standard RHOAI deployment in the given
+// monitoring namespace. An empty monitoring namespace yields an empty
+// endpoint, which leaves the proxy disabled.
+func DefaultLokiReadEndpoint(monitoringNamespace string) string {
+	if monitoringNamespace == "" {
+		return ""
+	}
+	return fmt.Sprintf("https://%s.%s.svc:%d%s",
+		DefaultLokiStackGatewayService, monitoringNamespace, DefaultLokiStackGatewayPort, DefaultLokiReadPath)
+}
 
 // maasAPIDashboardDeploymentLabelValues lists deployment labels for pods that call maas-api
 // from the controller namespace (ODH/RHOAI dashboard + maas-ui BFF).

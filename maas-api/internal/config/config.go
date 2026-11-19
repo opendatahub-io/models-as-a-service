@@ -117,17 +117,24 @@ type Config struct {
 	// The Loki proxy routes are only registered when it is set.
 	LokiReadEndpoint string
 
-	// LokiReadToken is the service account token sent as the Bearer credential
-	// on proxied upstream Loki requests (LOKI_READ_TOKEN, sourced from the
-	// usage-logs-loki Secret). When empty the proxy sends no Authorization
-	// header upstream.
-	LokiReadToken string
+	// LokiReadTokenFile is a file path read per request for the Bearer
+	// credential on proxied upstream Loki requests (LOKI_READ_TOKEN_FILE).
+	// It points at the projected ServiceAccount token by default; when the
+	// usage-logs-loki Secret supplies a token, maas-controller mounts that key
+	// as a file and repoints this path at it. Reading per request makes token
+	// rotation transparent. Read failures are logged and the request proceeds
+	// without an Authorization header.
+	LokiReadTokenFile string
 
-	// LokiReadCA is a PEM bundle appended to the system trust pool for proxied
-	// upstream Loki requests (LOKI_READ_CA, sourced from the usage-logs-loki
-	// Secret). When empty only the system pool is used; a non-empty value that
-	// is not parseable PEM is a startup-fatal configuration error.
-	LokiReadCA string
+	// LokiReadCAFile is a file whose PEM content is appended to the system
+	// trust pool for proxied upstream Loki requests (LOKI_READ_CA_FILE). It
+	// points at the service-ca bundle OpenShift projects into every pod by
+	// default; when the usage-logs-loki Secret supplies a CA bundle,
+	// maas-controller mounts that key as a file and repoints this path at it.
+	// The file is read once at startup. A missing file is logged and skipped so
+	// the proxy stays enabled with the system pool alone; a file whose content
+	// is not parseable PEM is a startup-fatal error.
+	LokiReadCAFile string
 
 	// OTELEndpoint is the OTLP gRPC endpoint for trace export (e.g., "localhost:4317").
 	// Tracing is disabled when empty.
@@ -201,8 +208,8 @@ func Load() *Config {
 		MetricsCertDir:              metricsCertDir,
 		DiscoveryEnableHTTP2:        discoveryEnableHTTP2,
 		LokiReadEndpoint:            env.GetString("LOKI_READ_ENDPOINT", ""),
-		LokiReadToken:               env.GetString("LOKI_READ_TOKEN", ""),
-		LokiReadCA:                  env.GetString("LOKI_READ_CA", ""),
+		LokiReadTokenFile:           env.GetString("LOKI_READ_TOKEN_FILE", ""),
+		LokiReadCAFile:              env.GetString("LOKI_READ_CA_FILE", ""),
 		OTELEndpoint:                env.GetString("OTEL_EXPORTER_OTLP_ENDPOINT", ""),
 		OTELInsecure:                otelInsecure,
 		OTELSampleRate:              otelSampleRate,

@@ -4,11 +4,11 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -47,10 +47,10 @@ const (
 // Handler proxies a restricted subset of the Loki read API to an upstream Loki,
 // injecting the caller's organization as a label matcher into every query.
 type Handler struct {
-	logger   *logger.Logger
-	upstream *url.URL
-	token    string
-	client   *http.Client
+	logger    *logger.Logger
+	upstream  *url.URL
+	tokenFile string
+	client    *http.Client
 	// adminChecker resolves tenant admins via SubjectAccessReview
 	// (the cached checker wired in cmd/main.go); a nil checker fails closed.
 	adminChecker AdminChecker
@@ -65,15 +65,17 @@ type AdminChecker interface {
 
 // NewHandler creates a Loki proxy handler for the given upstream read endpoint
 // (LOKI_READ_ENDPOINT, e.g. https://loki-gateway.example.svc:8080/api/logs/v1/application).
-// token (LOKI_READ_TOKEN) is sent as the Authorization: Bearer credential on
-// every proxied upstream request; when empty no Authorization header is sent.
-// caPEM (LOKI_READ_CA) is a certificate bundle appended to (never replacing)
-// the system trust pool used for upstream requests; when empty the system
-// pool alone is used. A non-empty caPEM from which no certificate can be
-// parsed is rejected so a corrupt bundle fails loudly at startup instead of
+// tokenFile (LOKI_READ_TOKEN_FILE) is read per request for the Authorization:
+// Bearer credential, so projected ServiceAccount token rotation needs no
+// restart; when it resolves to empty no Authorization header is sent.
+// caFile (LOKI_READ_CA_FILE) holds a PEM bundle appended to (never replacing)
+// the system trust pool used for upstream requests; it is read once at
+// startup. A missing file is logged and skipped: the proxy stays enabled and
+// relies on the system pool alone. A file whose content is not parseable PEM
+// is rejected so a corrupt bundle fails loudly at startup instead of
 // half-verifying some chains. adminChecker backs the tenant-admin check for
 // callers without an organization; a nil checker fails closed.
-func NewHandler(log *logger.Logger, endpoint, token, caPEM string, adminChecker AdminChecker) (*Handler, error) {
+func NewHandler(log *logger.Logger, endpoint, tokenFile, caFile string, adminChecker AdminChecker) (*Handler, error) {
 	if log == nil {
 		log = logger.Production()
 	}
@@ -92,30 +94,66 @@ func NewHandler(log *logger.Logger, endpoint, token, caPEM string, adminChecker 
 	}
 
 	client := &http.Client{Timeout: proxyTimeout}
-	if ca := strings.TrimSpace(caPEM); ca != "" {
-		pool, err := x509.SystemCertPool()
+	if path := strings.TrimSpace(caFile); path != "" {
+		content, err := os.ReadFile(path)
 		if err != nil {
-			return nil, fmt.Errorf("load system CA pool for Loki read proxy: %w", err)
+			if os.IsNotExist(err) {
+				log.Warn("Loki read CA file not found; using the system trust pool only", "path", path)
+			} else {
+				return nil, fmt.Errorf("read Loki read CA file %q: %w", path, err)
+			}
+		} else if ca := strings.TrimSpace(string(content)); ca != "" {
+			if err := appendCACert(client, ca, fmt.Sprintf("CA file %q", path)); err != nil {
+				return nil, err
+			}
 		}
-		if !pool.AppendCertsFromPEM([]byte(ca)) {
-			return nil, errors.New("invalid Loki read CA bundle (LOKI_READ_CA): no PEM certificate could be parsed")
-		}
-		base, ok := http.DefaultTransport.(*http.Transport)
-		if !ok {
-			base = &http.Transport{}
-		}
-		transport := base.Clone()
-		transport.TLSClientConfig = &tls.Config{RootCAs: pool}
-		client.Transport = transport
 	}
 
 	return &Handler{
 		logger:       log,
 		upstream:     upstream,
-		token:        strings.TrimSpace(token),
+		tokenFile:    strings.TrimSpace(tokenFile),
 		client:       client,
 		adminChecker: adminChecker,
 	}, nil
+}
+
+// appendCACert appends a PEM bundle to a clone of the system trust pool on the
+// given client. source names the configuration the bundle came from for error
+// messages.
+func appendCACert(client *http.Client, ca, source string) error {
+	pool, err := x509.SystemCertPool()
+	if err != nil {
+		return fmt.Errorf("load system CA pool for Loki read proxy: %w", err)
+	}
+	if !pool.AppendCertsFromPEM([]byte(ca)) {
+		return fmt.Errorf("invalid Loki read CA bundle (%s): no PEM certificate could be parsed", source)
+	}
+	base, ok := http.DefaultTransport.(*http.Transport)
+	if !ok {
+		base = &http.Transport{}
+	}
+	transport := base.Clone()
+	transport.TLSClientConfig = &tls.Config{RootCAs: pool}
+	client.Transport = transport
+	return nil
+}
+
+// bearerToken reads the token file (LOKI_READ_TOKEN_FILE) on every call so
+// rotated projected ServiceAccount tokens and Secret-mounted tokens take
+// effect without a restart. Read failures are logged and yield an empty
+// token, which sends no Authorization header — the failure then surfaces as
+// an upstream 401 at query time.
+func (h *Handler) bearerToken(requestLogger *logger.Logger) string {
+	if h.tokenFile == "" {
+		return ""
+	}
+	content, err := os.ReadFile(h.tokenFile)
+	if err != nil {
+		requestLogger.Warn("Failed to read Loki read token file; sending no Authorization header", "path", h.tokenFile, "error", err)
+		return ""
+	}
+	return strings.TrimSpace(string(content))
 }
 
 // RegisterRoutes registers the read-only Loki proxy routes on the given group.
@@ -343,11 +381,13 @@ func (h *Handler) proxyHandler(upstreamPath string, queryEndpoint bool) gin.Hand
 			return
 		}
 
-		// Authenticate against the upstream Loki with the service account token
-		// from the usage-logs-loki Secret (LOKI_READ_TOKEN). The caller's own
+		// Authenticate against the upstream Loki with the resolved service
+		// account credential: the usage-logs-loki Secret token
+		// (LOKI_READ_TOKEN) when present, otherwise the projected
+		// ServiceAccount token file (LOKI_READ_TOKEN_FILE). The caller's own
 		// credentials are never forwarded upstream.
-		if h.token != "" {
-			req.Header.Set("Authorization", "Bearer "+h.token)
+		if token := h.bearerToken(requestLogger); token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
 		}
 
 		resp, err := h.client.Do(req)

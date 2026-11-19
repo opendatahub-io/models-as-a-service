@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"sort"
 	"testing"
 
@@ -31,9 +33,9 @@ type upstreamRecord struct {
 	authorization string
 }
 
-// newUpstream starts a fake Loki that records the last request and replies with
-// the given status and body.
-func newUpstream(t *testing.T, status int, body string) (*httptest.Server, *upstreamRecord) {
+// newUpstream starts a fake Loki that records the last request and replies
+// with 200 and a success body.
+func newUpstream(t *testing.T) (*httptest.Server, *upstreamRecord) {
 	t.Helper()
 
 	record := &upstreamRecord{}
@@ -43,8 +45,8 @@ func newUpstream(t *testing.T, status int, body string) (*httptest.Server, *upst
 		record.query = r.URL.Query()
 		record.authorization = r.Header.Get("Authorization")
 		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(status)
-		_, _ = io.WriteString(w, body)
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, `{"status":"success"}`)
 	}))
 	t.Cleanup(server.Close)
 	return server, record
@@ -86,7 +88,7 @@ func newRouterWithAdminChecker(t *testing.T, pathPrefix string, checker lokiprox
 
 	gin.SetMode(gin.TestMode)
 
-	upstream, record := newUpstream(t, http.StatusOK, `{"status":"success"}`)
+	upstream, record := newUpstream(t)
 
 	tokenHandler := token.NewHandler(logger.Production(), "test-tenant")
 	lokiHandler, err := lokiproxy.NewHandler(logger.Production(), upstream.URL+pathPrefix, "", "", checker)
@@ -501,28 +503,10 @@ func TestNewHandlerValidatesEndpoint(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestProxyInjectsUpstreamBearerToken(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-
-	upstream, record := newUpstream(t, http.StatusOK, `{"status":"success"}`)
-
-	tokenHandler := token.NewHandler(logger.Production(), "test-tenant")
-	lokiHandler, err := lokiproxy.NewHandler(logger.Production(), upstream.URL, "sa-token-123", "", stubAdminChecker{admin: true})
-	require.NoError(t, err)
-
-	router := gin.New()
-	lokiHandler.RegisterRoutes(router.Group("/v1", tokenHandler.ExtractVerifiedIdentityOptional(), tokenHandler.ExtractUserInfo(token.AuthModeGateway)))
-
-	w := lokiRequest(t, router, http.MethodGet, "/v1/logs/loki/api/v1/query_range?query=%7B%7D", adminIdentity())
-
-	require.Equal(t, http.StatusOK, w.Code)
-	require.Equal(t, "Bearer sa-token-123", record.authorization)
-}
-
 func TestProxyWithoutTokenSendsNoAuthorizationHeader(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	upstream, record := newUpstream(t, http.StatusOK, `{"status":"success"}`)
+	upstream, record := newUpstream(t)
 
 	tokenHandler := token.NewHandler(logger.Production(), "test-tenant")
 	lokiHandler, err := lokiproxy.NewHandler(logger.Production(), upstream.URL, "", "", stubAdminChecker{admin: true})
@@ -537,21 +521,80 @@ func TestProxyWithoutTokenSendsNoAuthorizationHeader(t *testing.T) {
 	require.Empty(t, record.authorization)
 }
 
-func TestNewHandlerRejectsMalformedCA(t *testing.T) {
-	_, err := lokiproxy.NewHandler(logger.Production(), "https://loki.example", "", "not a pem bundle", nil)
+// TestProxyReadsTokenFilePerRequest verifies the token file (LOKI_READ_TOKEN_FILE)
+// is read on every request, so a rotated projected ServiceAccount token or
+// Secret-mounted token takes effect without a restart.
+func TestProxyReadsTokenFilePerRequest(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	upstream, record := newUpstream(t)
+
+	tokenFile := filepath.Join(t.TempDir(), "token")
+	require.NoError(t, os.WriteFile(tokenFile, []byte("token-one"), 0o600))
+
+	tokenHandler := token.NewHandler(logger.Production(), "test-tenant")
+	lokiHandler, err := lokiproxy.NewHandler(logger.Production(), upstream.URL, tokenFile, "", stubAdminChecker{admin: true})
+	require.NoError(t, err)
+
+	router := gin.New()
+	lokiHandler.RegisterRoutes(router.Group("/v1", tokenHandler.ExtractVerifiedIdentityOptional(), tokenHandler.ExtractUserInfo(token.AuthModeGateway)))
+
+	w := lokiRequest(t, router, http.MethodGet, "/v1/logs/loki/api/v1/query_range?query=%7B%7D", adminIdentity())
+	require.Equal(t, http.StatusOK, w.Code)
+	require.Equal(t, "Bearer token-one", record.authorization)
+
+	// Rotate the token; the next request must pick it up.
+	require.NoError(t, os.WriteFile(tokenFile, []byte("  token-two \n"), 0o600))
+	w = lokiRequest(t, router, http.MethodGet, "/v1/logs/loki/api/v1/query_range?query=%7B%7D", adminIdentity())
+	require.Equal(t, http.StatusOK, w.Code)
+	require.Equal(t, "Bearer token-two", record.authorization)
+}
+
+// TestNewHandlerRejectsMalformedCAFile verifies a CA file whose content is not
+// parseable PEM fails loudly at startup, and that whitespace-only content is
+// treated as absent.
+func TestNewHandlerRejectsMalformedCAFile(t *testing.T) {
+	caFile := filepath.Join(t.TempDir(), "bad-ca.crt")
+	require.NoError(t, os.WriteFile(caFile, []byte("not a pem bundle"), 0o600))
+
+	_, err := lokiproxy.NewHandler(logger.Production(), "https://loki.example", "", caFile, nil)
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "LOKI_READ_CA")
+	require.Contains(t, err.Error(), "no PEM certificate")
 
 	// Whitespace-only is treated as absent: system pool only, no error.
-	_, err = lokiproxy.NewHandler(logger.Production(), "https://loki.example", "", "  \n\t", nil)
+	emptyFile := filepath.Join(t.TempDir(), "blank-ca.crt")
+	require.NoError(t, os.WriteFile(emptyFile, []byte("  \n\t"), 0o600))
+	_, err = lokiproxy.NewHandler(logger.Production(), "https://loki.example", "", emptyFile, nil)
 	require.NoError(t, err)
 }
 
-// TestProxyCAAppendedToSystemPool verifies that a PEM bundle passed as
-// LOKI_READ_CA is appended to (not replacing) the system trust pool: the
-// proxy reaches a TLS upstream whose certificate is trusted only through the
-// supplied bundle.
-func TestProxyCAAppendedToSystemPool(t *testing.T) {
+// TestProxyMissingTokenFileSendsNoAuthorizationHeader verifies a missing token
+// file is not startup-fatal: the request proceeds without an Authorization
+// header and the failure surfaces as an upstream 401 at query time.
+func TestProxyMissingTokenFileSendsNoAuthorizationHeader(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	upstream, record := newUpstream(t)
+
+	tokenFile := filepath.Join(t.TempDir(), "does-not-exist")
+
+	tokenHandler := token.NewHandler(logger.Production(), "test-tenant")
+	lokiHandler, err := lokiproxy.NewHandler(logger.Production(), upstream.URL, tokenFile, "", stubAdminChecker{admin: true})
+	require.NoError(t, err)
+
+	router := gin.New()
+	lokiHandler.RegisterRoutes(router.Group("/v1", tokenHandler.ExtractVerifiedIdentityOptional(), tokenHandler.ExtractUserInfo(token.AuthModeGateway)))
+
+	w := lokiRequest(t, router, http.MethodGet, "/v1/logs/loki/api/v1/query_range?query=%7B%7D", adminIdentity())
+	require.Equal(t, http.StatusOK, w.Code)
+	require.Empty(t, record.authorization)
+}
+
+// TestProxyCAFileAppendedToSystemPool verifies that the CA file
+// (LOKI_READ_CA_FILE) is appended to (not replacing) the system trust pool —
+// the proxy reaches a TLS upstream whose certificate is trusted only through
+// the supplied bundle — and that a missing CA file is not startup-fatal.
+func TestProxyCAFileAppendedToSystemPool(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	record := &upstreamRecord{}
@@ -569,9 +612,12 @@ func TestProxyCAAppendedToSystemPool(t *testing.T) {
 	// The self-signed test certificate is not in the system trust store.
 	cert := tlsServer.TLS.Certificates[0]
 	caPEM := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Certificate[0]}))
+	caFile := filepath.Join(t.TempDir(), "service-ca.crt")
+	require.NoError(t, os.WriteFile(caFile, []byte(caPEM), 0o600))
+
+	tokenHandler := token.NewHandler(logger.Production(), "test-tenant")
 
 	// Without the CA the TLS handshake fails and the proxy answers 502.
-	tokenHandler := token.NewHandler(logger.Production(), "test-tenant")
 	withoutCA, err := lokiproxy.NewHandler(logger.Production(), tlsServer.URL, "", "", stubAdminChecker{admin: true})
 	require.NoError(t, err)
 	router := gin.New()
@@ -579,11 +625,15 @@ func TestProxyCAAppendedToSystemPool(t *testing.T) {
 	w := lokiRequest(t, router, http.MethodGet, "/v1/logs/loki/api/v1/query_range?query=%7B%7D", adminIdentity())
 	require.Equal(t, http.StatusBadGateway, w.Code)
 
-	// With the CA appended to the system pool the upstream is reachable.
-	withCA, err := lokiproxy.NewHandler(logger.Production(), tlsServer.URL, "", caPEM, stubAdminChecker{admin: true})
+	// A missing CA file is skipped: the handler stays enabled.
+	_, err = lokiproxy.NewHandler(logger.Production(), tlsServer.URL, "", filepath.Join(t.TempDir(), "absent.crt"), stubAdminChecker{admin: true})
+	require.NoError(t, err)
+
+	// With the CA file appended to the system pool the upstream is reachable.
+	withCAFile, err := lokiproxy.NewHandler(logger.Production(), tlsServer.URL, "", caFile, stubAdminChecker{admin: true})
 	require.NoError(t, err)
 	router = gin.New()
-	withCA.RegisterRoutes(router.Group("/v1", tokenHandler.ExtractVerifiedIdentityOptional(), tokenHandler.ExtractUserInfo(token.AuthModeGateway)))
+	withCAFile.RegisterRoutes(router.Group("/v1", tokenHandler.ExtractVerifiedIdentityOptional(), tokenHandler.ExtractUserInfo(token.AuthModeGateway)))
 	w = lokiRequest(t, router, http.MethodGet, "/v1/logs/loki/api/v1/query_range?query=%7B%7D", adminIdentity())
 	require.Equal(t, http.StatusOK, w.Code)
 	require.Equal(t, "/loki/api/v1/query_range", record.path)
@@ -595,7 +645,7 @@ func TestProxyCAAppendedToSystemPool(t *testing.T) {
 func headerRequest(router *gin.Engine, target, organizationID string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(http.MethodGet, target, nil)
 	req.Header.Set(constant.HeaderUsername, "kube-admin@example.com")
-	req.Header.Set(constant.HeaderGroup, `["cluster-admins"]`)
+	req.Header.Set(constant.HeaderGroup, `[["cluster-admins"]]`)
 	if organizationID != "" {
 		req.Header.Set(constant.HeaderOrganizationID, organizationID)
 	}
