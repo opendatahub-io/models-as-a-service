@@ -3517,7 +3517,7 @@
 </tbody>
 </table>
 <h2 id="how-promotion-works">How Promotion Works</h2>
-<p>Promotions between branches are automated via GitHub Actions workflows that create PRs. Both workflows perform a strict merge conflict pre-check and will <strong>not</strong> create a PR if conflicts exist — conflicts must be resolved manually before re-running.</p>
+<p>Promotions between branches are automated via GitHub Actions workflows. The <code>main</code> → <code>stable</code> promotion creates a PR; the <code>stable</code> → <code>rhoai</code> promotion merges and pushes directly. Both fail on merge conflicts — conflicts must be resolved manually before re-running.</p>
 <h3 id="stream-to-lake-main-stable">Stream to Lake (<code>main</code> → <code>stable</code>)</h3>
 <ul>
 <li><strong>Schedule:</strong> Every Sunday at midnight UTC (also available on-demand)</li>
@@ -3529,13 +3529,12 @@
 </ul>
 <h3 id="lake-to-rhoai-stable-rhoai">Lake to RHOAI (<code>stable</code> → <code>rhoai</code>)</h3>
 <ul>
-<li><strong>Trigger:</strong> On-demand only (via <code>workflow_dispatch</code>)</li>
+<li><strong>Schedule:</strong> Nightly at 12am ET (also available on-demand)</li>
 <li><strong>Workflow:</strong> <code>promote-stable-to-rhoai.yml</code></li>
-<li>Performs a dry-run merge to verify no conflicts exist</li>
-<li>Creates a PR from <code>stable</code> to <code>rhoai</code> listing all new commits</li>
-<li>If an open promotion PR already exists, it is updated in place</li>
-<li><strong>Must be merged with a merge commit</strong> (no squash or rebase)</li>
-<li>A cron schedule can be enabled in the workflow once the release strategy matures</li>
+<li>Merges <code>stable</code> into <code>rhoai</code> with a merge commit (<code>--no-ff</code>) and pushes directly as <code>odh-release-bot[bot]</code> — no PR, no re-validation</li>
+<li>Commit history is preserved: every <code>stable</code> commit keeps its original SHA; no force-push</li>
+<li>Does nothing when <code>rhoai</code> is already up to date</li>
+<li>Fails and leaves <code>rhoai</code> untouched on merge conflicts, or if <code>rhoai</code> has workflow changes that are not in <code>stable</code> — resolve manually and re-run</li>
 </ul>
 <h3 id="rhoai-to-ocean-rhoai-downstream">RHOAI to Ocean (<code>rhoai</code> → downstream)</h3>
 <p>The sync from the <code>rhoai</code> branch to the downstream <code>red-hat-data-services/models-as-a-service</code> repository is managed by the DevOps team and is outside the scope of these workflows.</p>
@@ -3634,7 +3633,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="August 14, 2026 16:35:36 UTC">August 14, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="November 19, 2026 00:01:45 UTC">November 19, 2026</span>
   </span>
 
     
