@@ -537,10 +537,17 @@ func lengthPrefixedCacheKey(values ...string) string {
 
 // withMetadataCache adds a cache block when caching is enabled. Authorino
 // replaces a TTL of zero with its default TTL, so zero must omit the block.
+//
+// The key is wrapped in a one-element list. Authorino's cache stores a string
+// key as it is but any other key as its MD5 (gocache v1.2.0 getCacheKey), so a
+// key that grows with the user's groups no longer counts against Authorino's
+// per-entry size limit, and raw API keys are never stored. Once Authorino hashes
+// keys itself (Kuadrant/authorino#706) the list is still hashed exactly once, so
+// drop the wrap when every supported RHCL ships that.
 func (r *MaaSAuthPolicyReconciler) withMetadataCache(rule map[string]any, expression string) map[string]any {
 	if r.MetadataCacheTTL > 0 {
 		rule["cache"] = map[string]any{
-			"key": map[string]any{"expression": expression},
+			"key": map[string]any{"expression": "[" + expression + "]"},
 			"ttl": r.MetadataCacheTTL,
 		}
 	}

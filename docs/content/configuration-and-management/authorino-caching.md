@@ -97,21 +97,22 @@ For **immediate enforcement** after a sensitive revocation (e.g., a compromised 
 
 Authorino gives every cached evaluator its own cache of `evaluatorCacheSize` megabytes (default `1`), split into 256 segments. It does not store an entry (cache key plus cached response) larger than a quarter of a segment minus 24 bytes. An entry that does not fit is skipped without an error: the request still succeeds, but maas-api is called on every request.
 
+MaaS wraps each cache key in a one-element list, which makes Authorino store a 32-byte hash of the key instead of the key itself. What counts against the limit is therefore the cached response.
+
 | `evaluatorCacheSize` | Largest cached entry (key + response) |
 |---|---|
 | 1 (default) | 1000 bytes |
 | 2 | 2024 bytes |
 | 4 | 4072 bytes |
 
-maas-api leaves display metadata, labels and the model list out of the select response, so a long description or many models do not grow an entry. What grows it is the user's groups, in the cache key or in the cached response depending on the lookup, and the headers (`experimental.maas.opendatahub.io/headers`) and guardrail checks the subscription returns, for every identity.
+maas-api leaves display metadata, labels and the model list out of the select response, so a long description or many models do not grow an entry. What grows it is the groups `apiKeyValidation` returns, and the headers (`experimental.maas.opendatahub.io/headers`) and guardrail checks the subscription returns.
 
 | Lookup | Where groups count | Cost per group | Fits at size 1 (default) | At size 2 | At size 4 |
 |---|---|---|---|---|---|
-| `subscription-info`, API keys | nowhere: the key is the key ID, and the response carries no groups | none | any number | any number | any number |
-| `apiKeyValidation`, API keys | the response: the key is the API key itself, but the response lists the groups twice | about twice the name length plus 8 bytes | about 6 groups | about 20 groups | about 48 groups |
-| `subscription-info`, OpenShift and OIDC tokens | the key, which must include the groups the select request sends | about the name length plus 3 bytes | about 15 groups | about 44 groups | about 100 groups |
+| `subscription-info`, any identity | nowhere: the key is stored as a hash, and the response carries no groups | none | any number | any number | any number |
+| `apiKeyValidation`, API keys | the response, which lists the key's groups twice | about twice the name length plus 8 bytes | about 6 groups | about 20 groups | about 48 groups |
 
-The group counts assume 33-character group names and were measured on OpenShift with RHCL 1.4.3. Usernames, subscription names, model names, subscription headers and guardrail checks also count, so treat them as rough. For API keys, the groups that count are the ones the user had when the key was created.
+The group counts assume 33-character group names and were measured on OpenShift with RHCL 1.4.3. Usernames, subscription names, subscription headers and guardrail checks also count, so treat them as rough. The groups that count are the ones the user had when the key was created.
 
 To see how many groups an OpenShift user has and how long their names are:
 
@@ -140,7 +141,7 @@ The operator restarts the Authorino pods, so caches start empty. Each cached eva
 - Note: this increases load on maas-api's `/internal/v1/api-keys/validate` endpoint proportionally; monitor request rates before and after
 
 **Increase `evaluatorCacheSize`** if:
-- Users in many groups make one maas-api call per request even with caching enabled (see [Cache Entry Size](#cache-entry-size))
+- API keys of users in many groups call `/internal/v1/api-keys/validate` on every request even with caching enabled (see [Cache Entry Size](#cache-entry-size))
 
 **Monitor after changes:**
 - maas-api load: Reduced `/internal/v1/api-keys/validate` and `/internal/v1/subscriptions/select` call rates. Compare `maas_api_http_requests_total` for those routes with the gateway request rate; a ratio near 1 means lookups are not being cached

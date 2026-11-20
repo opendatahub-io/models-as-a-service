@@ -62,7 +62,7 @@ func TestGatewayCacheKeysUseAuthorinoExpressionResolver(t *testing.T) {
 			if err != nil {
 				t.Fatalf("resolve changed expression as Authorino selector: %v", err)
 			}
-			if selectorBaseline != selectorChanged {
+			if !reflect.DeepEqual(selectorBaseline, selectorChanged) {
 				t.Fatalf("expression must not be emitted as a field-path selector; resolved to %#v and %#v", selectorBaseline, selectorChanged)
 			}
 
@@ -74,10 +74,7 @@ func TestGatewayCacheKeysUseAuthorinoExpressionResolver(t *testing.T) {
 			if err != nil {
 				t.Fatalf("resolve Authorino CEL expression: %v", err)
 			}
-			resolvedString, ok := resolvedKey.(string)
-			if !ok || resolvedString == "" {
-				t.Fatalf("Authorino CEL cache key must be a non-empty string, got %#v", resolvedKey)
-			}
+			cacheKeyString(t, resolvedKey, cacheKey.name)
 		})
 	}
 }
@@ -169,26 +166,27 @@ func TestGatewayCacheKeysIsolateAuthorinoInputs(t *testing.T) {
 			if err != nil {
 				t.Fatalf("compile Authorino CEL expression: %v", err)
 			}
-			baselineKey, err := resolver.ResolveFor(baselineJSON)
+			resolvedBaseline, err := resolver.ResolveFor(baselineJSON)
 			if err != nil {
 				t.Fatalf("resolve baseline cache key: %v", err)
 			}
+			baselineKey := cacheKeyString(t, resolvedBaseline, "baseline")
 
 			for name, input := range testCase.variants {
-				variantKey, err := resolver.ResolveFor(gatewayCacheKeyAuthorizationJSON(t, input))
+				resolvedVariant, err := resolver.ResolveFor(gatewayCacheKeyAuthorizationJSON(t, input))
 				if err != nil {
 					t.Fatalf("resolve %s cache key: %v", name, err)
 				}
-				if variantKey == baselineKey {
+				if variantKey := cacheKeyString(t, resolvedVariant, name); variantKey == baselineKey {
 					t.Fatalf("cache key does not isolate %s; both resolved to %#v", name, baselineKey)
 				}
 			}
 			for name, input := range testCase.sameKey {
-				variantKey, err := resolver.ResolveFor(gatewayCacheKeyAuthorizationJSON(t, input))
+				resolvedVariant, err := resolver.ResolveFor(gatewayCacheKeyAuthorizationJSON(t, input))
 				if err != nil {
 					t.Fatalf("resolve %s cache key: %v", name, err)
 				}
-				if variantKey != baselineKey {
+				if variantKey := cacheKeyString(t, resolvedVariant, name); variantKey != baselineKey {
 					t.Fatalf("cache key changes with %s for the same key ID: %#v and %#v", name, baselineKey, variantKey)
 				}
 			}
@@ -291,10 +289,7 @@ func TestSubscriptionInfoCacheKeyCoversRequestBody(t *testing.T) {
 				if err != nil {
 					t.Fatalf("resolve cache key for %s: %v", request, err)
 				}
-				keyString, ok := key.(string)
-				if !ok || keyString == "" {
-					t.Fatalf("cache key for %s must be a non-empty string, got %#v", request, key)
-				}
+				keyString := cacheKeyString(t, key, request)
 				body, err := bodyResolver.ResolveFor(authorizationJSON)
 				if err != nil {
 					t.Fatalf("resolve request body for %s: %v", request, err)
@@ -343,10 +338,7 @@ func TestSubscriptionInfoCacheKeyIgnoresSubscriptionHeaderForAPIKeys(t *testing.
 		if err != nil {
 			t.Fatalf("resolve cache key with x-maas-subscription=%q: %v", header, err)
 		}
-		keyString, ok := key.(string)
-		if !ok || keyString == "" {
-			t.Fatalf("cache key with x-maas-subscription=%q must be a non-empty string, got %#v", header, key)
-		}
+		keyString := cacheKeyString(t, key, fmt.Sprintf("x-maas-subscription=%q", header))
 		keys[keyString] = header
 	}
 	if len(keys) != 1 {
@@ -456,10 +448,7 @@ func TestGatewaySubscriptionCacheKeysIsolateAuthorizationIdentities(t *testing.T
 				if err != nil {
 					t.Fatalf("resolve %s cache key: %v", fixture.name, err)
 				}
-				key, ok := resolvedKey.(string)
-				if !ok || key == "" {
-					t.Fatalf("%s cache key must be a non-empty string, got %#v", fixture.name, resolvedKey)
-				}
+				key := cacheKeyString(t, resolvedKey, fixture.name)
 				if existingFixture, found := keys[key]; found {
 					t.Fatalf("%s and %s share cache key %q", existingFixture, fixture.name, key)
 				}
@@ -528,6 +517,21 @@ func gatewayAuthorizationJSON(t *testing.T, authorizationJSON map[string]any) st
 		t.Fatalf("marshal authorization JSON: %v", err)
 	}
 	return string(encoded)
+}
+
+// cacheKeyString returns the key inside the one-element list a cache key expression
+// resolves to. The list is what makes Authorino store a hash of the key instead of the key.
+func cacheKeyString(t *testing.T, resolved any, context string) string {
+	t.Helper()
+	list, ok := resolved.([]any)
+	if !ok || len(list) != 1 {
+		t.Fatalf("%s: cache key must resolve to a one-element list, got %#v", context, resolved)
+	}
+	key, ok := list[0].(string)
+	if !ok || key == "" {
+		t.Fatalf("%s: cache key must wrap a non-empty string, got %#v", context, list[0])
+	}
+	return key
 }
 
 func compileAuthorinoCEL(t *testing.T, expression string) *authorinocel.Expression {
