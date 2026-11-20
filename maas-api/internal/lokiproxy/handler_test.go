@@ -315,11 +315,11 @@ func TestProxyOnlyUserAuthzMatrix(t *testing.T) {
 			expected: http.StatusForbidden,
 		},
 		{
-			desc:     "no organization without flag is authorized for SAR admin",
+			desc:     "no organization without flag is rejected for non-k8s SAR admin",
 			identity: noOrganizationIdentity(),
 			admin:    true,
 			onlyUser: "",
-			expected: http.StatusOK,
+			expected: http.StatusForbidden,
 		},
 	}
 
@@ -607,7 +607,8 @@ func headerRequest(router *gin.Engine, target, organizationID string) *httptest.
 }
 
 // TestProxyKubernetesAuthzMatrix covers callers without an OIDC envelope and
-// without an organization (the AI Grid OpenShift-token path).
+// without an organization (the AI Grid gateway-header path). Gateway-authenticated
+// callers are never tenant admins; only the only_user self-scoped view is allowed.
 func TestProxyKubernetesAuthzMatrix(t *testing.T) {
 	query := "/v1/logs/loki/api/v1/query_range?only_user=true&query=" + url.QueryEscape(`{app="api", user_id="victim"}`)
 
@@ -622,15 +623,14 @@ func TestProxyKubernetesAuthzMatrix(t *testing.T) {
 		require.NotContains(t, matchers, `organization_id=`)
 	})
 
-	t.Run("admin without only_user is scoped to the tenant", func(t *testing.T) {
+	t.Run("gateway admin without only_user is rejected (non-k8s auth source)", func(t *testing.T) {
 		router, record := newRouterWithAdminChecker(t, "", stubAdminChecker{admin: true})
 		w := headerRequest(router, "/v1/logs/loki/api/v1/query_range?query="+url.QueryEscape(`{app="api"}`), "")
-		require.Equal(t, http.StatusOK, w.Code)
-		matchers := selectorMatchers(t, record.query.Get("query"))
-		require.Equal(t, []string{`app="api"`, `tenant_name="test-tenant"`}, matchers, "admin view injects only the tenant matcher")
+		require.Equal(t, http.StatusForbidden, w.Code)
+		require.Empty(t, record.path, "upstream must not be called")
 	})
 
-	t.Run("admin with only_user is still scoped to own user_id", func(t *testing.T) {
+	t.Run("gateway admin with only_user is still scoped to own user_id", func(t *testing.T) {
 		router, record := newRouterWithAdminChecker(t, "", stubAdminChecker{admin: true})
 		w := headerRequest(router, query, "")
 		require.Equal(t, http.StatusOK, w.Code)
@@ -639,10 +639,10 @@ func TestProxyKubernetesAuthzMatrix(t *testing.T) {
 		require.NotContains(t, matchers, `organization_id=`)
 	})
 
-	t.Run("admin check failure is a 503", func(t *testing.T) {
+	t.Run("gateway admin check failure is never reached (non-k8s auth source)", func(t *testing.T) {
 		router, record := newRouterWithAdminChecker(t, "", stubAdminChecker{err: errors.New("sar unavailable")})
 		w := headerRequest(router, "/v1/logs/loki/api/v1/query_range?query=%7B%7D", "")
-		require.Equal(t, http.StatusServiceUnavailable, w.Code)
+		require.Equal(t, http.StatusForbidden, w.Code)
 		require.Empty(t, record.path, "upstream must not be called")
 	})
 }

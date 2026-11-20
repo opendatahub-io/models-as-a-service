@@ -390,8 +390,12 @@ func (h *Handler) authorizeOrganizationUserMode(c *gin.Context, user *token.User
 // caller still has to translate into a 403. Tenant-admin resolution runs the
 // injected SubjectAccessReview checker for every caller (keyed on the
 // username — the OIDC preferred_username for envelope-authenticated
-// callers). A nil checker fails closed.
+// callers). A nil checker fails closed. Callers not authenticated via
+// Kubernetes TokenReview (AuthSource k8s) are never tenant admins.
 func (h *Handler) authorizeTenantAdmin(c *gin.Context, user *token.UserContext, requestLogger *logger.Logger) (bool, bool) {
+	if user.AuthSource != token.AuthSourceK8s {
+		return false, true
+	}
 	if h.adminChecker == nil {
 		return false, true
 	}
