@@ -16,7 +16,7 @@ The release flow moves code through four stages, each mapped to a branch and env
 
 ## How Promotion Works
 
-Promotions between branches are automated via GitHub Actions workflows that create PRs. Both workflows perform a strict merge conflict pre-check and will **not** create a PR if conflicts exist — conflicts must be resolved manually before re-running.
+Promotions between branches are automated via GitHub Actions workflows. The `main` → `stable` promotion creates a PR; the `stable` → `rhoai` promotion merges and pushes directly. Both fail on merge conflicts — conflicts must be resolved manually before re-running.
 
 ### Stream to Lake (`main` → `stable`)
 
@@ -29,13 +29,12 @@ Promotions between branches are automated via GitHub Actions workflows that crea
 
 ### Lake to RHOAI (`stable` → `rhoai`)
 
-- **Trigger:** On-demand only (via `workflow_dispatch`)
+- **Schedule:** Nightly at 12am ET (also available on-demand)
 - **Workflow:** `promote-stable-to-rhoai.yml`
-- Performs a dry-run merge to verify no conflicts exist
-- Creates a PR from `stable` to `rhoai` listing all new commits
-- If an open promotion PR already exists, it is updated in place
-- **Must be merged with a merge commit** (no squash or rebase)
-- A cron schedule can be enabled in the workflow once the release strategy matures
+- Merges `stable` into `rhoai` with a merge commit (`--no-ff`) and pushes directly as `odh-release-bot[bot]` — no PR, no re-validation
+- Commit history is preserved: every `stable` commit keeps its original SHA; no force-push
+- Does nothing when `rhoai` is already up to date
+- Fails and leaves `rhoai` untouched on merge conflicts, or if `rhoai` has workflow changes that are not in `stable` — resolve manually and re-run
 
 ### RHOAI to Ocean (`rhoai` → downstream)
 
