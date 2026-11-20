@@ -233,6 +233,7 @@ func (h *Handler) setUserContextFromVerifiedIdentity(c *gin.Context, value any) 
 		Groups:         groups,
 		Tenant:         h.tenantName,
 		OrganizationID: identity.Claims.OrgID,
+		Roles:          append([]string(nil), identity.Claims.Roles...),
 		AuthSource:     AuthSourceOIDC,
 	})
 	return true

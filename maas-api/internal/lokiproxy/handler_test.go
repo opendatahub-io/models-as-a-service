@@ -216,7 +216,7 @@ func TestProxyLabelsInjectsSelectorWhenQueryAbsent(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code)
 	require.Equal(t, "/loki/api/v1/labels", record.path)
 	require.Equal(t, "1", record.query.Get("start"))
-	require.Equal(t, []string{`organization_id="` + testOrganizationID + `"`}, selectorMatchers(t, record.query.Get("query")))
+	require.Equal(t, []string{`organization_id="` + testOrganizationID + `"`, `tenant_name="test-tenant"`}, selectorMatchers(t, record.query.Get("query")))
 }
 
 func TestProxyLabelValues(t *testing.T) {
@@ -227,7 +227,7 @@ func TestProxyLabelValues(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, w.Code)
 	require.Equal(t, "/loki/api/v1/label/organization_id/values", record.path)
-	require.Equal(t, []string{`organization_id="` + testOrganizationID + `"`}, selectorMatchers(t, record.query.Get("query")))
+	require.Equal(t, []string{`organization_id="` + testOrganizationID + `"`, `tenant_name="test-tenant"`}, selectorMatchers(t, record.query.Get("query")))
 }
 
 func TestProxyRejectsInvalidLabelName(t *testing.T) {
@@ -283,14 +283,14 @@ func TestProxyOnlyUserAuthzMatrix(t *testing.T) {
 			expected: http.StatusOK,
 		},
 		{
-			desc:     "organization user without flag is organization-scoped",
+			// Without only_user an organization member needs the admins role
+			// for the organization-wide view.
+			desc:     "organization user without flag is rejected without the admins role",
 			identity: userIdentity(),
 			onlyUser: "",
-			expected: http.StatusOK,
+			expected: http.StatusForbidden,
 		},
 		{
-			// The organization claim scopes the view on its own; the tenant-admin
-			// check is only reached without an organization and without only_user.
 			desc:     "admins organization role without SAR admin is organization-scoped",
 			identity: adminIdentity(),
 			onlyUser: "",
@@ -366,7 +366,11 @@ func TestProxyOnlyUserInjectsSelectorWhenQueryAbsent(t *testing.T) {
 	w := lokiRequest(t, router, http.MethodGet, "/v1/logs/loki/api/v1/labels?only_user=true&start=1", userIdentity())
 
 	require.Equal(t, http.StatusOK, w.Code)
-	require.Equal(t, []string{`organization_id="` + testOrganizationID + `"`, `user_id="admin@example.com"`}, selectorMatchers(t, record.query.Get("query")))
+	require.Equal(t, []string{
+		`organization_id="` + testOrganizationID + `"`,
+		`tenant_name="test-tenant"`,
+		`user_id="admin@example.com"`,
+	}, selectorMatchers(t, record.query.Get("query")))
 }
 
 func TestProxyOnlyUserAdminKeepsOrganizationWideViewWithoutFlag(t *testing.T) {
@@ -394,18 +398,16 @@ func TestProxyOnlyUserInvalidFlagValue(t *testing.T) {
 	require.Empty(t, record.path, "upstream must not be called")
 }
 
+// TestProxyRejectsNonAdmin verifies that an organization member without the
+// admins role cannot get the organization-wide view without only_user.
 func TestProxyRejectsNonAdmin(t *testing.T) {
 	router, record := newRouter(t)
 
-	// A non-admin organization member without only_user no longer needs the
-	// tenant-admin check: the organization claim alone scopes the view.
 	w := lokiRequest(t, router, http.MethodGet, "/v1/logs/loki/api/v1/query_range?query="+url.QueryEscape(`{app="api"}`),
 		userIdentity())
 
-	require.Equal(t, http.StatusOK, w.Code)
-	matchers := selectorMatchers(t, record.query.Get("query"))
-	require.Contains(t, matchers, `organization_id="`+testOrganizationID+`"`)
-	require.NotContains(t, matchers, `user_id=`)
+	require.Equal(t, http.StatusForbidden, w.Code)
+	require.Empty(t, record.path, "upstream must not be called")
 }
 
 func TestProxyRejectsNonAdminWithoutOrganization(t *testing.T) {
@@ -614,17 +616,18 @@ func TestProxyKubernetesAuthzMatrix(t *testing.T) {
 		w := headerRequest(router, query, "")
 		require.Equal(t, http.StatusOK, w.Code)
 		matchers := selectorMatchers(t, record.query.Get("query"))
+		require.Contains(t, matchers, `tenant_name="test-tenant"`)
 		require.Contains(t, matchers, `user_id="kube-admin@example.com"`)
 		require.NotContains(t, matchers, `user_id="victim"`)
 		require.NotContains(t, matchers, `organization_id=`)
 	})
 
-	t.Run("admin without only_user is unfiltered", func(t *testing.T) {
+	t.Run("admin without only_user is scoped to the tenant", func(t *testing.T) {
 		router, record := newRouterWithAdminChecker(t, "", stubAdminChecker{admin: true})
 		w := headerRequest(router, "/v1/logs/loki/api/v1/query_range?query="+url.QueryEscape(`{app="api"}`), "")
 		require.Equal(t, http.StatusOK, w.Code)
 		matchers := selectorMatchers(t, record.query.Get("query"))
-		require.Equal(t, []string{`app="api"`}, matchers, "admin view injects no additional matchers")
+		require.Equal(t, []string{`app="api"`, `tenant_name="test-tenant"`}, matchers, "admin view injects only the tenant matcher")
 	})
 
 	t.Run("admin with only_user is still scoped to own user_id", func(t *testing.T) {
@@ -645,31 +648,32 @@ func TestProxyKubernetesAuthzMatrix(t *testing.T) {
 }
 
 // TestProxyGatewayIdentityWithOrganizationIsOrgScoped covers gateway-injected
-// identities that do carry an organization: the organization matcher is
-// always injected and scopes the view for admins and non-admins alike; the
-// tenant-admin check is not reached.
+// identities that do carry an organization: the organization-wide view needs
+// the admins role (which gateway-authenticated callers cannot hold), while
+// only_user scopes the query to the caller's own organization logs.
 func TestProxyGatewayIdentityWithOrganizationIsOrgScoped(t *testing.T) {
-	t.Run("sar admin gets organization-wide view", func(t *testing.T) {
+	t.Run("sar admin without only_user is rejected without the admins role", func(t *testing.T) {
 		router, record := newRouterWithAdminChecker(t, "", stubAdminChecker{admin: true})
 		w := headerRequest(router, "/v1/logs/loki/api/v1/query_range?query="+url.QueryEscape(`{app="api"}`), testOrganizationID)
-		require.Equal(t, http.StatusOK, w.Code)
-		matchers := selectorMatchers(t, record.query.Get("query"))
-		require.Contains(t, matchers, `organization_id="`+testOrganizationID+`"`)
-		require.NotContains(t, matchers, `user_id=`)
+		require.Equal(t, http.StatusForbidden, w.Code)
+		require.Empty(t, record.path, "upstream must not be called")
 	})
 
-	t.Run("sar non-admin without only_user is organization-scoped", func(t *testing.T) {
+	t.Run("sar non-admin without only_user is rejected without the admins role", func(t *testing.T) {
 		router, record := newRouterWithAdminChecker(t, "", stubAdminChecker{admin: false})
 		w := headerRequest(router, "/v1/logs/loki/api/v1/query_range?query=%7B%7D", testOrganizationID)
-		require.Equal(t, http.StatusOK, w.Code)
-		matchers := selectorMatchers(t, record.query.Get("query"))
-		require.Equal(t, []string{`organization_id="` + testOrganizationID + `"`}, matchers)
+		require.Equal(t, http.StatusForbidden, w.Code)
+		require.Empty(t, record.path, "upstream must not be called")
 	})
 
-	t.Run("sar non-admin with only_user is scoped to organization and own user_id", func(t *testing.T) {
+	t.Run("non-admin with only_user is scoped to organization and own user_id", func(t *testing.T) {
 		router, record := newRouterWithAdminChecker(t, "", stubAdminChecker{admin: false})
 		w := headerRequest(router, "/v1/logs/loki/api/v1/query_range?only_user=true&query=%7B%7D", testOrganizationID)
 		require.Equal(t, http.StatusOK, w.Code)
-		require.Equal(t, []string{`organization_id="` + testOrganizationID + `"`, `user_id="kube-admin@example.com"`}, selectorMatchers(t, record.query.Get("query")))
+		require.Equal(t, []string{
+			`organization_id="` + testOrganizationID + `"`,
+			`tenant_name="test-tenant"`,
+			`user_id="kube-admin@example.com"`,
+		}, selectorMatchers(t, record.query.Get("query")))
 	})
 }

@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -25,8 +26,14 @@ const (
 	// organizationLabel is the Loki label carrying the caller's organization.
 	organizationLabel = "organization_id"
 
+	// tenantLabel is the Loki label carrying the tenant that produced a log line.
+	tenantLabel = "tenant_name"
+
 	// userLabel is the Loki label carrying the user that produced a log line.
 	userLabel = "user_id"
+
+	// adminsRole is the group that grants organization-admin access.
+	adminsRole = "admins"
 
 	// onlyUserParam narrows the query to the calling user's own logs (see
 	// authorize). It is consumed by the proxy and never forwarded upstream.
@@ -175,26 +182,65 @@ func isDigit(r rune) bool {
 	return r >= '0' && r <= '9'
 }
 
-// authorize resolves the caller's identity from the auth context and returns
-// the label matchers that restrict the query, or false after writing an error
-// response when the request must not be proxied.
+// accessMode classifies a request by the scope of logs it may read. It is
+// derived from the request shape (the only_user flag and the caller's
+// organization) and selects both the authorization requirement and the label
+// filters applied to the query.
+type accessMode int
+
+const (
+	// accessModeTenantAdmin: only_user!=true with no organization. Requires
+	// the tenant-admin SubjectAccessReview check; sees all tenant logs.
+	accessModeTenantAdmin accessMode = iota
+
+	// accessModeTenantUser: only_user=true with no organization. Requires an
+	// identified user; sees only the caller's own logs within the tenant.
+	accessModeTenantUser
+
+	// accessModeOrganizationAdmin: only_user!=true with an organization.
+	// Requires the admins role; sees all logs of the caller's organization.
+	accessModeOrganizationAdmin
+
+	// accessModeOrganizationUser: only_user=true with an organization.
+	// Requires an identified user and organization; sees only the caller's
+	// own logs within the organization.
+	accessModeOrganizationUser
+)
+
+// resolveAccessMode maps the request shape to the access mode: only_user
+// selects the user variants, a non-empty organization ID selects the
+// organization variants.
+func resolveAccessMode(onlyUser bool, organizationID string) accessMode {
+	switch {
+	case !onlyUser && organizationID == "":
+		return accessModeTenantAdmin
+	case onlyUser && organizationID == "":
+		return accessModeTenantUser
+	case !onlyUser && organizationID != "":
+		return accessModeOrganizationAdmin
+	default:
+		return accessModeOrganizationUser
+	}
+}
+
+// authorize resolves the caller's identity from the auth context, classifies
+// the request into an access mode, and delegates to the per-mode authorizer,
+// which returns the label matchers that restrict the query. It returns false
+// after writing an error response when the request must not be proxied.
 //
-// Authorization applies the same stacking rules regardless of which mechanism
-// authenticated the caller (OIDC envelope, gateway-injected headers, or the
-// Kubernetes TokenReview fallback):
+// Access modes are derived from the request shape regardless of which
+// mechanism authenticated the caller (OIDC envelope, gateway-injected
+// headers, or the Kubernetes TokenReview fallback):
 //
-//  1. only_user=true applies the user_id filter.
-//  2. an organization on the identity applies the organization filter (the
-//     verified organization claim for OIDC callers, the gateway-injected
-//     organization header otherwise; Kubernetes-authenticated callers never
-//     carry one).
-//  3. only_user!=true with no organization requires the tenant-admin check
-//     (SubjectAccessReview keyed on the username — the OIDC
-//     preferred_username for envelope callers); admins get unfiltered,
-//     cluster-wide visibility, everyone else is rejected.
-//
-// Tech debt: any gateway- or TokenReview-authenticated caller is assumed to
-// have tenant access; this should become a real SubjectAccessReview check.
+//   - tenant admin: only_user!=true and no organization — requires the
+//     tenant-admin check (SubjectAccessReview keyed on the username — the
+//     OIDC preferred_username for envelope callers); sees tenant-wide logs.
+//   - tenant user: only_user=true and no organization — requires an
+//     identified user; sees only the caller's own tenant logs.
+//   - organization admin: only_user!=true with an organization — requires
+//     the admins role; sees the whole organization's logs.
+//   - organization user: only_user=true with an organization — requires an
+//     identified user and organization; sees only the caller's own logs.
 func (h *Handler) authorize(c *gin.Context, onlyUser bool) ([]*labels.Matcher, bool) {
 	requestLogger := h.requestLogger(c)
 
@@ -220,27 +266,51 @@ func (h *Handler) authorize(c *gin.Context, onlyUser bool) ([]*labels.Matcher, b
 		return nil, false
 	}
 
-	organizationMatcher := &labels.Matcher{Type: labels.MatchEqual, Name: organizationLabel, Value: user.OrganizationID}
-	userMatcher := &labels.Matcher{Type: labels.MatchEqual, Name: userLabel, Value: user.Username}
+	switch resolveAccessMode(onlyUser, user.OrganizationID) {
+	case accessModeTenantAdmin:
+		return h.authorizeTenantAdminMode(c, user, requestLogger)
+	case accessModeTenantUser:
+		return h.authorizeTenantUserMode(c, user, requestLogger)
+	case accessModeOrganizationAdmin:
+		return h.authorizeOrganizationAdminMode(c, user, requestLogger)
+	case accessModeOrganizationUser:
+		return h.authorizeOrganizationUserMode(c, user, requestLogger)
+	default:
+		// Unreachable: resolveAccessMode covers every combination.
+		requestLogger.Error("Rejected Loki proxy request with unknown access mode")
+		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
+			"error":             "forbidden",
+			"exceptionCode":     "AUTHZ_FAILURE",
+			"error_description": "the access mode could not be resolved",
+		})
+		return nil, false
+	}
+}
 
-	// The three rules stack: only_user=true applies the user_id filter (the
-	// label carries the username the usage-logs pipeline records for inference
-	// traffic); an organization applies the organization filter. With either
-	// filter in place the query is scoped and authorized.
-	matchers := make([]*labels.Matcher, 0, 2)
-	if onlyUser {
-		matchers = append(matchers, userMatcher)
-	}
-	if user.OrganizationID != "" {
-		matchers = append(matchers, organizationMatcher)
-	}
-	if len(matchers) > 0 {
-		return matchers, true
-	}
+// tenantMatcher builds the tenant_name matcher scoping a query to the
+// caller's tenant.
+func tenantMatcher(user *token.UserContext) *labels.Matcher {
+	return &labels.Matcher{Type: labels.MatchEqual, Name: tenantLabel, Value: user.Tenant}
+}
 
-	// No organization and no only_user: only tenant admins are authorized and
-	// see unfiltered, cluster-wide logs — no tenant→organization mapping
-	// exists in the system (organization_id is subscription-scoped).
+// organizationMatcher builds the organization_id matcher scoping a query to
+// the caller's organization.
+func organizationMatcher(user *token.UserContext) *labels.Matcher {
+	return &labels.Matcher{Type: labels.MatchEqual, Name: organizationLabel, Value: user.OrganizationID}
+}
+
+// userMatcher builds the user_id matcher scoping a query to the caller's own
+// log lines (the label carries the username the usage-logs pipeline records
+// for inference traffic).
+func userMatcher(user *token.UserContext) *labels.Matcher {
+	return &labels.Matcher{Type: labels.MatchEqual, Name: userLabel, Value: user.Username}
+}
+
+// authorizeTenantAdminMode enforces the tenant-admin requirement and scopes
+// the query to the tenant via the tenant_name label. Only tenant admins are
+// authorized; no tenant→organization mapping exists in the system
+// (organization_id is subscription-scoped).
+func (h *Handler) authorizeTenantAdminMode(c *gin.Context, user *token.UserContext, requestLogger *logger.Logger) ([]*labels.Matcher, bool) {
 	isAdmin, ok := h.authorizeTenantAdmin(c, user, requestLogger)
 	if !ok {
 		return nil, false
@@ -256,8 +326,62 @@ func (h *Handler) authorize(c *gin.Context, onlyUser bool) ([]*labels.Matcher, b
 		})
 		return nil, false
 	}
+	return []*labels.Matcher{tenantMatcher(user)}, true
+}
 
-	return nil, true
+// authorizeTenantUserMode requires an identified user and scopes the query
+// to the caller's own log lines within the tenant via the tenant_name and
+// user_id labels.
+func (h *Handler) authorizeTenantUserMode(c *gin.Context, user *token.UserContext, requestLogger *logger.Logger) ([]*labels.Matcher, bool) {
+	if user.Username == "" {
+		requestLogger.Warn("Rejected Loki proxy request without a user identity")
+		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
+			"error":             "forbidden",
+			"exceptionCode":     "AUTHZ_FAILURE",
+			"error_description": "a user identity is required",
+		})
+		return nil, false
+	}
+	return []*labels.Matcher{tenantMatcher(user), userMatcher(user)}, true
+}
+
+// authorizeOrganizationAdminMode requires the admins role and scopes the
+// query to the caller's organization via the tenant_name and organization_id
+// labels.
+func (h *Handler) authorizeOrganizationAdminMode(c *gin.Context, user *token.UserContext, requestLogger *logger.Logger) ([]*labels.Matcher, bool) {
+	// Roles are parsed by the auth layer from the verified identity envelope's
+	// roles claim, so only OIDC-authenticated callers with an organization can
+	// hold the admins role.
+	if !slices.Contains(user.Roles, adminsRole) {
+		requestLogger.Warn("Rejected Loki proxy request without the admins role",
+			"username", logger.RedactValue(user.Username),
+		)
+		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
+			"error":             "forbidden",
+			"exceptionCode":     "AUTHZ_FAILURE",
+			"error_description": "organization admin access is required, or request only_user=true for your own logs",
+		})
+		return nil, false
+	}
+	return []*labels.Matcher{tenantMatcher(user), organizationMatcher(user)}, true
+}
+
+// authorizeOrganizationUserMode requires an identified user and organization
+// and scopes the query to the caller's own log lines within the organization
+// via the tenant_name, organization_id, and user_id labels.
+func (h *Handler) authorizeOrganizationUserMode(c *gin.Context, user *token.UserContext, requestLogger *logger.Logger) ([]*labels.Matcher, bool) {
+	if user.Username == "" || user.OrganizationID == "" {
+		requestLogger.Warn("Rejected Loki proxy request without a user identity or organization",
+			"username", logger.RedactValue(user.Username),
+		)
+		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
+			"error":             "forbidden",
+			"exceptionCode":     "AUTHZ_FAILURE",
+			"error_description": "a user identity and organization are required",
+		})
+		return nil, false
+	}
+	return []*labels.Matcher{tenantMatcher(user), organizationMatcher(user), userMatcher(user)}, true
 }
 
 // authorizeTenantAdmin resolves and enforces the tenant-admin requirement,
