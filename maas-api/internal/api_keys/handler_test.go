@@ -2853,7 +2853,7 @@ func TestSearchAPIKeys_NoAuthContext(t *testing.T) {
 
 	// Wire up with ExtractUserInfoOptional — same as production wiring.
 	router := gin.New()
-	router.POST("/v1/api-keys/search", tokenHandler.ExtractUserInfoOptional(), handler.SearchAPIKeys)
+	router.POST("/v1/api-keys/search", tokenHandler.ExtractUserInfoOptional(token.AuthModeGateway), handler.SearchAPIKeys)
 
 	// Seed data so we can verify no keys leak when there is no auth context.
 	ctx := context.Background()
