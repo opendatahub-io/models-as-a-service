@@ -38,8 +38,29 @@ patches:
         path: /spec/config/plugin/spec/proxy/spec/url
         value: https://usage-gateway-http:8080/api/logs/v1/application
       - op: replace
-        path: /spec/client/tls/caCert/name
-        value: usage-gateway-ca-bundle
+        path: /spec/client/tls/caCert
+        value:
+          type: configmap
+          name: usage-gateway-ca-bundle
+          certPath: service-ca.crt
+  # The shared dsci-managed datasource now bakes the maas-api Loki proxy URL;
+  # the deprecated usageLogging bundle has no such proxy guarantee, so restore
+  # the tenancy proxy and its configmap CA for the user-scoped view.
+  - target:
+      group: perses.dev
+      version: v1alpha1
+      kind: PersesDatasource
+      name: usage-logs-multi-tenancy
+    patch: |-
+      - op: replace
+        path: /spec/config/plugin/spec/proxy/spec/url
+        value: https://usage-logs-tenancy-proxy:8443
+      - op: replace
+        path: /spec/client/tls/caCert
+        value:
+          type: configmap
+          name: usage-logs-tenancy-proxy-ca-bundle
+          certPath: service-ca.crt
   - target:
       group: networking.k8s.io
       version: v1

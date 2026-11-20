@@ -390,14 +390,13 @@ func registerHandlers(
 	internalRoutes.DELETE("/tenants/:tenant/subscriptions/:subscription/api-keys", cleanupAuth, apiKeyHandler.RevokeSubscriptionAPIKeys)
 	internalRoutes.POST("/subscriptions/select", tokenHandler.RejectTrustedIdentityHeaders(), subscriptionHandler.SelectSubscription)
 
-	// Read-only Loki proxy (GET /v1/logs*). Only registered when
-	// LOKI_READ_ENDPOINT is configured. Dual-auth: gateway/OIDC identity as on
-	// every other route, plus a Kubernetes TokenReview fallback so
-	// OpenShift-authenticated users without gateway-injected identity headers
-	// can reach their usage logs. Inference API keys never authenticate these
-	// routes.
+	// Read-only Loki proxy (GET /v1/logs*). Registered whenever
+	// LOKI_READ_ENDPOINT is configured; maas-controller always injects the
+	// default LokiStack endpoint, so the proxy is on for standard deployments.
+	// Every query is restricted to the caller's organization and requires
+	// organization admin membership (or the only_user self-scoped view).
 	if cfg.LokiReadEndpoint != "" {
-		lokiHandler, err := lokiproxy.NewHandler(log, cfg.LokiReadEndpoint, cfg.LokiReadToken, cfg.LokiReadCA, cluster.AdminChecker)
+		lokiHandler, err := lokiproxy.NewHandler(log, cfg.LokiReadEndpoint, cfg.LokiReadTokenFile, cfg.LokiReadCAFile, cluster.AdminChecker)
 		if err != nil {
 			return fmt.Errorf("failed to create Loki proxy handler: %w", err)
 		}

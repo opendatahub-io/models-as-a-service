@@ -572,7 +572,10 @@ spec:
         proxy:
           kind: HTTPProxy
           spec:
-            url: 'https://data-science-usage-logs-lokistack-gateway-http:8080/api/logs/v1/application'
+            # maas-api read-only Loki proxy (GET /v1/logs*); always deployed.
+            # maas-api routes to the usage-logs-loki Secret endpoint when
+            # present, otherwise to the default LokiStack gateway.
+            url: 'https://maas-api.redhat-ai-gateway-infra.svc.cluster.local:8443/v1/logs'
             allowedEndpoints:
               - endpointPattern: "/loki/api/v1/query"
                 method: GET
@@ -588,8 +591,8 @@ spec:
       enable: true
     tls:
       enable: true
-      insecureSkipVerify: false
+      # The service-ca file mounted in every pod verifies maas-api's
+      # service-ca-signed serving certificate.
       caCert:
-        type: configmap
-        name: data-science-usage-logs-lokistack-gateway-ca-bundle
-        certPath: service-ca.crt
+        type: file
+        certPath: /var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt

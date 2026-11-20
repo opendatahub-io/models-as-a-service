@@ -78,23 +78,28 @@ type PlatformParams struct {
 	MonitoringNamespace string
 
 	// LokiReadEndpoint is injected as LOKI_READ_ENDPOINT on the maas-api
-	// container, enabling the read-only Loki proxy (GET /v1/logs*). Empty
-	// disables the proxy. Resolved from the usage-logs-loki Secret in the app
-	// namespace; see resolveLokiReadEndpoint.
+	// container, enabling the read-only Loki proxy (GET /v1/logs*). It defaults
+	// to the LokiStack gateway of a standard RHOAI deployment in the monitoring
+	// namespace (DefaultLokiReadEndpoint); the usage-logs-loki Secret in the
+	// app namespace overrides it. Empty (no monitoring namespace and no
+	// Secret) disables the proxy. See resolveLokiReadEndpoint.
 	LokiReadEndpoint string
 
-	// LokiReadTokenFromSecret injects LOKI_READ_TOKEN on the maas-api container
-	// as a secretKeyRef to the usage-logs-loki Secret, authenticating proxied
-	// upstream requests with its service account token. False leaves the env
-	// var out of the render (and the SSA apply removes any previously applied
-	// value). See resolveLokiReadEndpoint.
+	// LokiReadTokenFromSecret mounts the usage-logs-loki Secret's token key as
+	// a file on the maas-api container and repoints LOKI_READ_TOKEN_FILE at it,
+	// authenticating proxied upstream requests with that token. False leaves
+	// the volume and env override out of the render (and the SSA apply removes
+	// any previously applied ones), so the proxy authenticates with the pod's
+	// automounted ServiceAccount token instead. See resolveLokiReadEndpoint.
 	LokiReadTokenFromSecret bool
 
-	// LokiReadCAFromSecret injects LOKI_READ_CA on the maas-api container as a
-	// secretKeyRef to the usage-logs-loki Secret, appending the PEM bundle to
-	// the system trust pool for proxied upstream requests. False leaves the env
-	// var out of the render (and the SSA apply removes any previously applied
-	// value). See resolveLokiReadEndpoint.
+	// LokiReadCAFromSecret mounts the usage-logs-loki Secret's CA bundle key
+	// as a file on the maas-api container and repoints LOKI_READ_CA_FILE at
+	// it, verifying proxied upstream requests with that bundle. False leaves
+	// the volume and env override out of the render (and the SSA apply removes
+	// any previously applied ones), so the proxy verifies the upstream with
+	// the service-ca bundle baked into the Deployment instead. See
+	// resolveLokiReadEndpoint.
 	LokiReadCAFromSecret bool
 
 	// PayloadProcessingRouterExtProcFallback enables router-anchored ext_proc patches when
@@ -1087,21 +1092,33 @@ func patchMaaSAPIDeployment(log logr.Logger, r *unstructured.Unstructured, param
 		if err := setOrAddEnvVar(r, "maas-api", "LOKI_READ_ENDPOINT", params.LokiReadEndpoint); err != nil {
 			return fmt.Errorf("patch LOKI_READ_ENDPOINT: %w", err)
 		}
-		// The token is referenced via secretKeyRef rather than copied into the
-		// Deployment spec, so the value stays out of the manifest and rotations
-		// only need a pod restart. Omitted when the Secret has no token key;
-		// the SSA apply then removes any previously applied reference.
+		// Secret-supplied token and CA are mounted as files (never copied into
+		// the Deployment spec) and the baked *_FILE env vars are repointed at
+		// them. Omitted keys keep the baked defaults: the projected
+		// ServiceAccount token and the service-ca bundle. Because maas-api
+		// reads the files per request, Secret rotations propagate via kubelet's
+		// secret-volume refresh without a pod restart; the SSA apply removes
+		// the volumes, mounts and env overrides when the keys disappear.
 		if params.LokiReadTokenFromSecret {
-			if err := setOrAddEnvVarFromSecret(r, "maas-api", "LOKI_READ_TOKEN", LokiReadSecretName, LokiReadTokenSecretKey); err != nil {
-				return fmt.Errorf("patch LOKI_READ_TOKEN: %w", err)
+			if err := addSecretVolume(r, lokiReadSecretTokenVolumeName, LokiReadSecretName, LokiReadTokenSecretKey, "token"); err != nil {
+				return fmt.Errorf("patch %s volume: %w", lokiReadSecretTokenVolumeName, err)
+			}
+			if err := addVolumeMount(r, "maas-api", lokiReadSecretTokenVolumeName, lokiReadSecretTokenMountPath); err != nil {
+				return fmt.Errorf("patch %s mount: %w", lokiReadSecretTokenVolumeName, err)
+			}
+			if err := setOrAddEnvVar(r, "maas-api", "LOKI_READ_TOKEN_FILE", lokiReadSecretTokenMountPath+"/token"); err != nil {
+				return fmt.Errorf("patch LOKI_READ_TOKEN_FILE: %w", err)
 			}
 		}
-		// The CA bundle follows the same secretKeyRef pattern. Omitted when the
-		// Secret has no CA key; the SSA apply then removes any previously applied
-		// reference and maas-api uses the system trust pool alone.
 		if params.LokiReadCAFromSecret {
-			if err := setOrAddEnvVarFromSecret(r, "maas-api", "LOKI_READ_CA", LokiReadSecretName, LokiReadCASecretKey); err != nil {
-				return fmt.Errorf("patch LOKI_READ_CA: %w", err)
+			if err := addSecretVolume(r, lokiReadSecretCAVolumeName, LokiReadSecretName, LokiReadCASecretKey, "ca.pem"); err != nil {
+				return fmt.Errorf("patch %s volume: %w", lokiReadSecretCAVolumeName, err)
+			}
+			if err := addVolumeMount(r, "maas-api", lokiReadSecretCAVolumeName, lokiReadSecretCAMountPath); err != nil {
+				return fmt.Errorf("patch %s mount: %w", lokiReadSecretCAVolumeName, err)
+			}
+			if err := setOrAddEnvVar(r, "maas-api", "LOKI_READ_CA_FILE", lokiReadSecretCAMountPath+"/ca.pem"); err != nil {
+				return fmt.Errorf("patch LOKI_READ_CA_FILE: %w", err)
 			}
 		}
 		log.V(4).Info("Patched maas-api LOKI_READ_ENDPOINT")
@@ -1903,42 +1920,6 @@ func setOrAddEnvVar(r *unstructured.Unstructured, containerName, envName, envVal
 	return fmt.Errorf("container %q not found", containerName)
 }
 
-// setOrAddEnvVarFromSecret sets or adds an env var on the named container that
-// references secretName/secretKey via valueFrom.secretKeyRef. It replaces a
-// plain value (and setOrAddEnvVar replaces a valueFrom), so the two helpers
-// never leave both fields set on the same env var.
-func setOrAddEnvVarFromSecret(r *unstructured.Unstructured, containerName, envName, secretName, secretKey string) error {
-	containers, found, err := unstructured.NestedSlice(r.Object, "spec", "template", "spec", "containers")
-	if err != nil || !found {
-		return errors.New("containers not found")
-	}
-	valueFrom := map[string]any{
-		"secretKeyRef": map[string]any{"name": secretName, "key": secretKey},
-	}
-	for i, c := range containers {
-		cm, ok := c.(map[string]any)
-		if !ok || cm["name"] != containerName {
-			continue
-		}
-		envSlice, _ := cm["env"].([]any)
-		for j, e := range envSlice {
-			if em, ok := e.(map[string]any); ok && em["name"] == envName {
-				delete(em, "value")
-				em["valueFrom"] = valueFrom
-				envSlice[j] = em
-				cm["env"] = envSlice
-				containers[i] = cm
-				return unstructured.SetNestedSlice(r.Object, containers, "spec", "template", "spec", "containers")
-			}
-		}
-		envSlice = append(envSlice, map[string]any{"name": envName, "valueFrom": valueFrom})
-		cm["env"] = envSlice
-		containers[i] = cm
-		return unstructured.SetNestedSlice(r.Object, containers, "spec", "template", "spec", "containers")
-	}
-	return fmt.Errorf("container %q not found", containerName)
-}
-
 func setCronJobContainerImage(r *unstructured.Unstructured, containerName, image string) error {
 	containers, found, err := unstructured.NestedSlice(r.Object, "spec", "jobTemplate", "spec", "template", "spec", "containers")
 	if err != nil || !found {
@@ -1950,6 +1931,67 @@ func setCronJobContainerImage(r *unstructured.Unstructured, containerName, image
 			containers[i] = cm
 			return unstructured.SetNestedSlice(r.Object, containers, "spec", "jobTemplate", "spec", "template", "spec", "containers")
 		}
+	}
+	return fmt.Errorf("container %q not found", containerName)
+}
+
+// addSecretVolume adds (or replaces) a pod template volume that mounts a
+// single key of a Secret as fileName. Secret volumes refresh in place, so
+// per-request file reads pick up rotations without a pod restart.
+func addSecretVolume(r *unstructured.Unstructured, volumeName, secretName, secretKey, fileName string) error {
+	volumes, _, err := unstructured.NestedSlice(r.Object, "spec", "template", "spec", "volumes")
+	if err != nil {
+		return fmt.Errorf("read volumes: %w", err)
+	}
+	volume := map[string]any{
+		"name": volumeName,
+		"secret": map[string]any{
+			"secretName": secretName,
+			"items":      []any{map[string]any{"key": secretKey, "path": fileName}},
+		},
+	}
+	replaced := false
+	for i, v := range volumes {
+		if vm, ok := v.(map[string]any); ok && vm["name"] == volumeName {
+			volumes[i] = volume
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		volumes = append(volumes, volume)
+	}
+	return unstructured.SetNestedSlice(r.Object, volumes, "spec", "template", "spec", "volumes")
+}
+
+// addVolumeMount adds (or replaces) a readOnly mount of volumeName at
+// mountPath on the named container.
+func addVolumeMount(r *unstructured.Unstructured, containerName, volumeName, mountPath string) error {
+	containers, found, err := unstructured.NestedSlice(r.Object, "spec", "template", "spec", "containers")
+	if err != nil || !found {
+		return errors.New("containers not found")
+	}
+	mount := map[string]any{"name": volumeName, "mountPath": mountPath, "readOnly": true}
+	for i, c := range containers {
+		cm, ok := c.(map[string]any)
+		if !ok || cm["name"] != containerName {
+			continue
+		}
+		mounts, _ := cm["volumeMounts"].([]any)
+		replaced := false
+		for j, m := range mounts {
+			if mm, ok := m.(map[string]any); ok && mm["name"] == volumeName {
+				mounts[j] = mount
+				replaced = true
+				break
+			}
+		}
+		if !replaced {
+			mounts = append(mounts, mount)
+		}
+		cm["volumeMounts"] = mounts
+		containers[i] = cm
+		return unstructured.SetNestedSlice(r.Object, containers, "spec", "template", "spec", "containers")
 	}
 	return fmt.Errorf("container %q not found", containerName)
 }

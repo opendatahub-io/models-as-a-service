@@ -481,7 +481,12 @@ spec:
           kind: HTTPProxy
           spec:
             secret: usage-logs-multi-tenancy-secret
-            url: https://usage-logs-tenancy-proxy:8443
+            # maas-api read-only Loki proxy (GET /v1/logs*) with the
+            # caller-scoped view: only_user=true restricts queries to the
+            # calling user's own logs. maas-api routes to the usage-logs-loki
+            # Secret endpoint when present, otherwise to the default
+            # LokiStack gateway.
+            url: https://maas-api.redhat-ai-gateway-infra.svc.cluster.local:8443/v1/logs?only_user=true
             allowedEndpoints:
               - endpointPattern: "/loki/api/v1/query"
                 method: GET
@@ -492,7 +497,8 @@ spec:
       enable: true
     tls:
       enable: true
+      # The service-ca file mounted in every pod verifies maas-api's
+      # service-ca-signed serving certificate.
       caCert:
-        type: configmap
-        name: usage-logs-tenancy-proxy-ca-bundle
-        certPath: service-ca.crt
+        type: file
+        certPath: /var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt
