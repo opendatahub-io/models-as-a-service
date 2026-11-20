@@ -42,7 +42,7 @@ log = logging.getLogger(__name__)
 
 pytestmark = [
     pytest.mark.serial,
-    pytest.mark.xdist_group("tenant_ipp"),
+    pytest.mark.xdist_group("tenant_ipp_extproc_restart"),
 ]
 
 # Default-tenant praxis ExtProc Deployments (unsuffixed) in the gateway namespace.

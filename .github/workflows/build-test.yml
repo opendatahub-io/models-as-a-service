@@ -10,10 +10,6 @@ on:
       - 'deployment/base/maas-controller/crd/**'
       - 'deployment/**'
       - '.github/workflows/build-test.yml'
-  push:
-    branches:
-      - main
-
 permissions:
   actions: read
   contents: read
