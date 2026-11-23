@@ -52,8 +52,10 @@ from test_helper import (
     _get_cluster_token,
     _get_cr,
     _inference,
+    _is_generic_gateway_denial,
     _maas_api_url,
     _poll_status,
+    _request_with_gateway_retry,
     _revoke_api_key,
     _wait_for_gateway_auth_enforced,
     _wait_for_maas_auth_policy_phase,
@@ -63,6 +65,13 @@ from test_helper import (
 log = logging.getLogger(__name__)
 
 pytestmark = pytest.mark.xdist_group("security")
+
+
+@pytest.fixture(scope="class")
+def accepted_api_key(api_key):
+    """The module API key, once a plain inference request with it returns 200."""
+    _poll_status(api_key, 200)
+    return api_key
 
 
 # ============================================================================
@@ -281,6 +290,60 @@ class TestHeaderSpoofing:
         )
         assert "sk-oai-" not in r.text, (
             "Denied inference response must not contain API key material"
+        )
+
+    @pytest.mark.parametrize(
+        "header",
+        [
+            # clientIdentityHeaders in maas-controller/pkg/controller/maas/maasauthpolicy_controller.go,
+            # then one header for each denied prefix.
+            "X-MaaS-Username",
+            "X-MaaS-Group",
+            "X-MaaS-Exact-Groups",
+            "X-MaaS-KeyName",
+            "X-MaaS-Subscription-Rate-Limit-Id",
+            "X-MaaS-Organization-Id",
+            "X-MaaS-Cost-Center",
+            "X-MaaS-Identity",
+            "X-MaaS-Admin-Scope",
+            "X-AIGateway-Guardrail-PII",
+            "X-Grid-E2E-Unconfigured",
+        ],
+    )
+    def test_single_gateway_owned_header_rejected_on_inference(self, accepted_api_key, header):
+        """One client copy of a header the gateway sets is enough for a 403.
+
+        The generic denial body rules out a subscription failure, which renders maas-api's
+        message. The control right after, same key and model route without the header,
+        rules out the other authorization rules. /v1/models goes through the same rules
+        and spends no tokens.
+        """
+        auth = {"Authorization": f"Bearer {accepted_api_key}"}
+        forged = _request_with_gateway_retry(
+            requests.post,
+            f"{_gateway_url()}{MODEL_PATH}/v1/completions",
+            headers={**auth, "Content-Type": "application/json", header: "forged"},
+            json={"model": MODEL_NAME, "prompt": "Hello", "max_tokens": 3},
+            # The denial is the expected answer, not a propagation flake to retry.
+            auth_denial_is_transient=False,
+        )
+        control = _request_with_gateway_retry(
+            requests.get, f"{_gateway_url()}{MODEL_PATH}/v1/models", headers=auth
+        )
+
+        log.info(
+            "Forged %s on inference -> %s; without it on /v1/models -> %s",
+            header,
+            forged.status_code,
+            control.status_code,
+        )
+        assert _is_generic_gateway_denial(forged), (
+            f"Expected the gateway's Access denied 403 for client-supplied {header}, "
+            f"got {forged.status_code}: {forged.text[:300]}"
+        )
+        assert control.status_code == 200, (
+            f"The key is denied without {header} too, so the 403 says nothing about the header: "
+            f"got {control.status_code}: {control.text[:300]}"
         )
 
     def test_duplicate_subscription_headers_ignored(self):

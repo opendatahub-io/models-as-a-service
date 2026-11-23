@@ -36,7 +36,9 @@ from test_helper import (
     _delete_cr,
     _gateway_url,
     _inference,
+    _is_generic_gateway_denial,
     _poll_status,
+    _request_with_gateway_retry,
     _wait_for_gateway_auth_enforced,
 )
 
@@ -246,3 +248,23 @@ class TestXAPIKeyAuthentication:
             f"Expected 200 with both auth headers, got {r.status_code}: {r.text[:500]}"
         )
         assert_inference_response(r)
+
+    @pytest.mark.full_suite
+    def test_forged_identity_header_rejected_with_x_api_key(self, x_api_key_setup):
+        """x-api-key requests go through deny-client-identity-headers too."""
+        api_key = x_api_key_setup
+        _poll_status(api_key, 200, inference_fn=_inference_x_api_key)
+
+        # The generic denial body rules out a subscription failure, which renders maas-api's message.
+        r = _request_with_gateway_retry(
+            requests.post,
+            f"{_gateway_url()}{MODEL_PATH}/v1/completions",
+            headers={"x-api-key": api_key, "Content-Type": "application/json", "X-MaaS-Username": "cluster-admin"},
+            json={"model": MODEL_NAME, "prompt": "Hello", "max_tokens": 3},
+            # The denial is the expected answer, not a propagation flake to retry.
+            auth_denial_is_transient=False,
+        )
+        assert _is_generic_gateway_denial(r), (
+            f"Expected the gateway's Access denied 403 for client-supplied X-MaaS-Username with x-api-key, "
+            f"got {r.status_code}: {r.text[:500]}"
+        )
