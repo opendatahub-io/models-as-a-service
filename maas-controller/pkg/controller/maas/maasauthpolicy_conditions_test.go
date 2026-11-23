@@ -9,6 +9,7 @@ package maas
 import (
 	"maps"
 	"slices"
+	"strings"
 	"testing"
 
 	envoytype "github.com/envoyproxy/go-control-plane/envoy/type/v3"
@@ -34,11 +35,12 @@ const (
 type conditionsCredential struct {
 	name string
 	// authMethod is the authentication method that authenticates the credential.
-	authMethod string
-	apiKey     bool
-	xAPIKey    bool // sent as x-api-key, only authenticates when x-api-key is enabled
-	oidc       bool // needs oidc-identities
-	headers    map[string]string
+	authMethod       string
+	apiKey           bool
+	xAPIKey          bool // sent as x-api-key, only authenticates when x-api-key is enabled
+	tokenWithXAPIKey bool // the token wins only while x-api-key authentication is disabled
+	oidc             bool // needs oidc-identities
+	headers          map[string]string
 	// identity is what the replaced token method returns, nil for API keys.
 	identity map[string]any
 	// username and group are the X-MaaS-Username and X-MaaS-Group values upstream. An
@@ -87,6 +89,37 @@ func conditionsCredentials() []conditionsCredential {
 			group:    `["system:authenticated","system:serviceaccounts","team-a"]`,
 		},
 		{
+			// "sk-oai-" inside the token, the account name and a non-key x-api-key must not
+			// count as an API key: the guards anchor the prefix. Token alphabets (base64url)
+			// include "-", so a token can contain it.
+			name: "openshift token with sk-oai- in the token, account and x-api-key", authMethod: "openshift-identities",
+			headers: map[string]string{"authorization": "Bearer sha256~sk-oai-FAKEFAKEF", "x-api-key": "xsk-oai-1"},
+			identity: map[string]any{
+				"authenticated": true,
+				"user": map[string]any{
+					"username": "system:serviceaccount:team-a:sk-oai-runner",
+					"groups":   []any{"system:serviceaccounts", "team-a"},
+				},
+			},
+			username: "system:serviceaccount:team-a:sk-oai-runner",
+			group:    `["system:authenticated","system:serviceaccounts","team-a"]`,
+		},
+		{
+			// With x-api-key authentication disabled the token is the credential, so the
+			// API-key headers must ignore the x-api-key header.
+			name: "openshift token with an API key in x-api-key", authMethod: "openshift-identities", tokenWithXAPIKey: true,
+			headers: map[string]string{"authorization": "Bearer sha256~FAKEFAKEFAKG", "x-api-key": conditionsFixtureAPIKey},
+			identity: map[string]any{
+				"authenticated": true,
+				"user": map[string]any{
+					"username": "system:serviceaccount:team-a:runner",
+					"groups":   []any{"system:serviceaccounts", "team-a"},
+				},
+			},
+			username: "system:serviceaccount:team-a:runner",
+			group:    `["system:authenticated","system:serviceaccounts","team-a"]`,
+		},
+		{
 			name: "oidc token", authMethod: "oidc-identities", oidc: true,
 			headers: map[string]string{"authorization": "Bearer aaaa.bbbb.cccc"},
 			identity: map[string]any{
@@ -113,7 +146,7 @@ func conditionsCredentials() []conditionsCredential {
 // conditionsCredentialsFor are the credentials a gateway with these methods authenticates.
 func conditionsCredentialsFor(oidcOn, xAPIKeyOn bool) []conditionsCredential {
 	return slices.DeleteFunc(conditionsCredentials(), func(credential conditionsCredential) bool {
-		return (credential.xAPIKey && !xAPIKeyOn) || (credential.oidc && !oidcOn)
+		return (credential.xAPIKey && !xAPIKeyOn) || (credential.oidc && !oidcOn) || (credential.tokenWithXAPIKey && xAPIKeyOn)
 	})
 }
 
@@ -547,6 +580,50 @@ func TestGatewayAuthPolicyAllowedRequests(t *testing.T) {
 	}
 }
 
+// maas-api omits empty optional strings, so it never sends JSON null for them. If it did,
+// the selector guards read null as "" and leave the header out, where the CEL guards they
+// replace sent "<nil>". A null apiKeyValidation.subscription goes to the model listing:
+// on a model route it fails the subscription-info cache key, on main too.
+func TestGatewayAuthPolicyNullOptionalFieldsSetNoHeader(t *testing.T) {
+	t.Parallel()
+	spec := conditionsSpec(t, conditionsSpecVariants()[0], []string{conditionsFixtureSubHeader})
+	selection := conditionsSelections()[0]
+	selection.fields = maps.Clone(selection.fields)
+	selection.fields["rateLimitId"] = nil
+	selection.fields["costCenter"] = nil
+	modelRequest := newConditionsRequest(conditionsCredentials()[0], conditionsRoutes()[0], &selection)
+	listingRequest := newConditionsRequest(conditionsCredentials()[0], conditionsRoutes()[2], nil)
+	validation := conditionsAPIKeyValidation()
+	validation["subscription"] = nil
+	listingRequest.replies[validateEndpoint] = validation
+	cases := []struct {
+		name    string
+		request conditionsRequest
+		headers []string
+	}{
+		{name: "subscription-info fields", request: modelRequest, headers: []string{"x-maas-subscription-rate-limit-id", "x-maas-cost-center"}},
+		{name: "API-key subscription", request: listingRequest, headers: []string{"x-maas-subscription"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			// when
+			outcome := conditionsEvaluate(t, spec, tc.request, nil)
+
+			// then
+			if !outcome.allowed {
+				t.Fatalf("denied (status %v, body %q), want allowed", outcome.status, outcome.body)
+			}
+			for _, name := range tc.headers {
+				if value, set := outcome.headers[name]; set {
+					t.Errorf("upstream header %s = %q, want it not set", name, value)
+				}
+			}
+		})
+	}
+}
+
 // A key in x-api-key authenticates nothing while x-api-key authentication is disabled, so
 // maas-api never validates it.
 func TestGatewayAuthPolicyIgnoresXAPIKeyWhenDisabled(t *testing.T) {
@@ -570,6 +647,66 @@ func TestGatewayAuthPolicyIgnoresXAPIKeyWhenDisabled(t *testing.T) {
 			}
 			if calls := outcome.calledEndpoints(); len(calls) != 0 {
 				t.Errorf("maas-api calls = %v, want none", calls)
+			}
+		})
+	}
+}
+
+// selectedGuardrailHeader tests for subscription-info instead of the model-route predicate.
+// That is only equivalent while allowed requests carry subscription-info exactly when they
+// target a model: subscription-info runs on model routes, and guardrail-checks-known, under
+// the same guard and never cached, denies a model request without a selection.
+func TestGatewayAuthPolicyGuardrailGuardInvariant(t *testing.T) {
+	t.Parallel()
+	spec := conditionsSpec(t, conditionsSpecVariants()[0], nil)
+	checksKnown := requiredMap(spec, "defaults", "rules", "authorization", "guardrail-checks-known")
+	if _, cached := checksKnown["cache"]; cached {
+		t.Error("guardrail-checks-known must not be cached: a cached allow could outlive a failed selection")
+	}
+	opa, _ := checksKnown["opa"].(map[string]any)
+	rego, _ := opa["rego"].(string)
+	if !strings.Contains(rego, `"selectedGuardrailChecks", null)`) || !strings.Contains(rego, "selected != null") {
+		t.Errorf("guardrail-checks-known must deny a request without a selection, rego:\n%s", rego)
+	}
+
+	t.Run("model request without a guardrail selection is denied", func(t *testing.T) {
+		// given
+		selection := conditionsSelections()[0]
+		selection.fields = maps.Clone(selection.fields)
+		delete(selection.fields, "selectedGuardrailChecks")
+		request := newConditionsRequest(conditionsCredentials()[0], conditionsRoutes()[0], &selection)
+
+		// when
+		outcome := conditionsEvaluate(t, spec, request, nil)
+
+		// then
+		if outcome.allowed {
+			t.Fatal("allowed, want guardrail-checks-known to deny it")
+		}
+		assertDenyResponse(t, outcome, conditionsAccessDenied, "unauthorized")
+		if outcome.deniedBy != "guardrail-checks-known" {
+			t.Errorf("denied by %q, want guardrail-checks-known", outcome.deniedBy)
+		}
+	})
+
+	for _, request := range conditionsRequests(false, false) {
+		t.Run(request.name, func(t *testing.T) {
+			t.Parallel()
+
+			// when
+			outcome := conditionsEvaluate(t, spec, request, nil)
+
+			// then
+			if !outcome.allowed {
+				t.Fatalf("denied (status %v, body %q), want allowed", outcome.status, outcome.body)
+			}
+			if got := slices.Contains(outcome.calledEndpoints(), selectEndpoint); got != request.route.model {
+				t.Errorf("subscription-info called = %v, want %v", got, request.route.model)
+			}
+			for _, name := range []string{conditionsFixtureGuardrailA, conditionsFixtureGuardrailB} {
+				if _, got := outcome.headers[name]; got != request.route.model {
+					t.Errorf("upstream header %s set = %v, want %v", name, got, request.route.model)
+				}
 			}
 		})
 	}

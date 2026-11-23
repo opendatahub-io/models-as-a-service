@@ -856,18 +856,51 @@ type authPolicyRef struct {
 	ModelNamespace string
 }
 
+// clientIdentityHeaders are set by Authorino after authentication, so a client copy is
+// never legitimate. Names are lowercase: Envoy normalizes header names before Authorino
+// evaluates CEL.
+var clientIdentityHeaders = []string{
+	"x-maas-username",
+	"x-maas-group",
+	"x-maas-exact-groups",
+	"x-maas-keyname",
+	"x-maas-subscription-rate-limit-id",
+	"x-maas-organization-id",
+	"x-maas-cost-center",
+	"x-maas-identity",
+	"x-maas-admin-scope",
+}
+
+// clientIdentityHeadersDenyPredicate is true when the request carries none of
+// clientIdentityHeaders, no x-aigateway-guardrail-* header and no x-grid-* header other than
+// the configured subscriptionHeaders. It is a single predicate because Authorino re-parses
+// the authorization JSON for every CEL pattern it evaluates.
+func clientIdentityHeadersDenyPredicate(subscriptionHeaders []string) string {
+	gridHeader := `!name.startsWith("` + subscriptionHeaderPrefix + `")`
+	if len(subscriptionHeaders) > 0 {
+		gridHeader = `(` + gridHeader + ` || name in ` + celStringList(subscriptionHeaders) + `)`
+	}
+	return `request.headers.all(name, !(name in ` + celStringList(clientIdentityHeaders) + `) && ` +
+		`!name.startsWith("x-aigateway-guardrail-") && ` + gridHeader + `)`
+}
+
+// celStringList renders names as a CEL list literal. The names are HTTP header tokens, which
+// JSON quotes the same way CEL does.
+func celStringList(names []string) string {
+	encoded, err := json.Marshal(names)
+	if err != nil {
+		panic(fmt.Sprintf("marshal header names: %v", err))
+	}
+	return string(encoded)
+}
+
 // subscriptionInfoStringHeader injects a non-empty field from the resolved
 // MaaSSubscription (Authorino subscription-info metadata) as an X-MaaS-* header.
 func subscriptionInfoStringHeader(jsonField string) map[string]any {
-	path := fmt.Sprintf(`auth.metadata["subscription-info"].%s`, jsonField)
 	return map[string]any{
-		"when": []any{
-			map[string]any{
-				"predicate": fmt.Sprintf(`%s && %s != ""`, subscriptionInfoHas(jsonField), path),
-			},
-		},
+		"when": nonEmptyWhen("auth.metadata.subscription-info." + jsonField),
 		"plain": map[string]any{
-			"expression": path,
+			"expression": fmt.Sprintf(`auth.metadata["subscription-info"].%s`, jsonField),
 		},
 		"metrics":  false,
 		"priority": int64(0),
@@ -996,43 +1029,13 @@ func (r *MaaSAuthPolicyReconciler) buildGatewayAuthPolicySpec(oidc *oidcConfig, 
 			},
 		},
 		// Reject client-supplied identity headers; Authorino injects these after auth.
+		// applySubscriptionHeaders replaces the pattern once the allowed x-grid-* names are known.
 		"deny-client-identity-headers": map[string]any{
 			"metrics":  false,
 			"priority": int64(0),
 			"patternMatching": map[string]any{
 				"patterns": []any{
-					map[string]any{
-						// CEL has() only works on message fields; use `in` for map keys.
-						"predicate": `!("x-maas-username" in request.headers)`,
-					},
-					map[string]any{
-						"predicate": `!("x-maas-group" in request.headers)`,
-					},
-					map[string]any{
-						"predicate": `!("x-maas-exact-groups" in request.headers)`,
-					},
-					map[string]any{
-						"predicate": `!("x-maas-keyname" in request.headers)`,
-					},
-					map[string]any{
-						"predicate": `!("x-maas-subscription-rate-limit-id" in request.headers)`,
-					},
-					map[string]any{
-						"predicate": `!("x-maas-organization-id" in request.headers)`,
-					},
-					map[string]any{
-						"predicate": `!("x-maas-cost-center" in request.headers)`,
-					},
-					map[string]any{
-						"predicate": `!("x-maas-identity" in request.headers)`,
-					},
-					map[string]any{
-						"predicate": `!("x-maas-admin-scope" in request.headers)`,
-					},
-					map[string]any{
-						// Envoy normalizes HTTP header names to lowercase before Authorino evaluates CEL.
-						"predicate": `request.headers.all(name, !name.startsWith("x-aigateway-guardrail-"))`,
-					},
+					map[string]any{"predicate": clientIdentityHeadersDenyPredicate(nil)},
 				},
 			},
 		},
@@ -1257,11 +1260,13 @@ allow {
 				// silently suppresses the metadata call.
 				// api-keys sets identity = "Bearer sk-oai-…", api-keys-x-api-key sets
 				// identity = "sk-oai-…" — both start with "sk-oai-" after stripping.
-				// Token identities are maps, and matches() on a map fails rather than
-				// returning false, so the type check comes first.
+				// Token identities are objects, which the selector reads as JSON text
+				// starting with "{", so they never match.
 				"when": []any{
 					map[string]any{
-						"predicate": celAPIKeyIdentity + ` && auth.identity.matches("^(Bearer )?sk-oai-.*")`,
+						"selector": "auth.identity",
+						"operator": "matches",
+						"value":    "^(Bearer )?sk-oai-.*",
 					},
 				},
 				"http": map[string]any{
@@ -1301,11 +1306,7 @@ allow {
 			"success": map[string]any{
 				"headers": map[string]any{
 					"X-MaaS-Username": map[string]any{
-						"when": []any{
-							map[string]any{
-								"predicate": celIsAPIKey,
-							},
-						},
+						"when": apiKeyWhen(xAPIKeyEnabled),
 						"plain": map[string]any{
 							"selector": "auth.metadata.apiKeyValidation.username",
 						},
@@ -1326,11 +1327,7 @@ allow {
 						"priority": int64(1),
 					},
 					"X-MaaS-Group": map[string]any{
-						"when": []any{
-							map[string]any{
-								"predicate": celIsAPIKey,
-							},
-						},
+						"when": apiKeyWhen(xAPIKeyEnabled),
 						"plain": map[string]any{
 							"expression": celAPIKeyGroupsHeaderJSON,
 						},
@@ -1354,11 +1351,7 @@ allow {
 					// client header, which subscription-info uses to select a subscription.
 					// Re-injecting that header produces duplicate values in usage logs.
 					"X-MaaS-Subscription": map[string]any{
-						"when": []any{
-							map[string]any{
-								"predicate": `has(auth.metadata) && has(auth.metadata.apiKeyValidation) && auth.metadata.apiKeyValidation.subscription != ""`,
-							},
-						},
+						"when": nonEmptyWhen("auth.metadata.apiKeyValidation.subscription"),
 						"plain": map[string]any{
 							"expression": celSubscription,
 						},
@@ -1368,11 +1361,7 @@ allow {
 					// Short rate-limit identity for TokenRateLimitPolicy (does not replace
 					// X-MaaS-Subscription). Populated from maas-api subscription select.
 					"X-MaaS-Subscription-Rate-Limit-Id": map[string]any{
-						"when": []any{
-							map[string]any{
-								"predicate": subscriptionInfoHas("rateLimitId") + ` && auth.metadata["subscription-info"].rateLimitId != ""`,
-							},
-						},
+						"when": nonEmptyWhen("auth.metadata.subscription-info.rateLimitId"),
 						"plain": map[string]any{
 							"expression": `auth.metadata["subscription-info"].rateLimitId`,
 						},
@@ -1380,11 +1369,7 @@ allow {
 						"priority": int64(0),
 					},
 					"X-MaaS-KeyName": map[string]any{
-						"when": []any{
-							map[string]any{
-								"predicate": celIsAPIKey,
-							},
-						},
+						"when": apiKeyWhen(xAPIKeyEnabled),
 						"plain": map[string]any{
 							"expression": `auth.metadata.apiKeyValidation.keyName`,
 						},
@@ -1558,12 +1543,14 @@ func subscriptionInfoHeader(field string) map[string]any {
 	}
 }
 
+// selectedGuardrailHeader is set on model requests only. An allowed request that targets a
+// model has subscription-info: it runs under celModelIdentityAvailable, and
+// guardrail-checks-known, under the same guard and never cached, denies a request without a
+// selection. Testing for subscription-info avoids a CEL evaluation per guardrail header.
 func selectedGuardrailHeader(checkID string) map[string]any {
 	selected := `auth.metadata["subscription-info"].selectedGuardrailChecks`
 	return map[string]any{
-		"when": []any{
-			map[string]any{"predicate": celModelIdentityAvailable},
-		},
+		"when": nonEmptyWhen("auth.metadata.subscription-info"),
 		"plain": map[string]any{
 			"expression": fmt.Sprintf(`(%s && %q in %s && %s[%q] == true) ? "true" : "false"`, subscriptionInfoHas("selectedGuardrailChecks"), checkID, selected, selected, checkID),
 		},
@@ -2316,6 +2303,34 @@ func apiKeyCELPredicates(xAPIKeyEnabled bool) (isAPIKey, isNotAPIKey, extractRaw
 		authorizationAPIKey + ` ? request.headers["authorization"].replace("Bearer ", "") : ` +
 		xAPIKey + ` ? request.headers["x-api-key"] : "")`
 	return isAPIKey, isNotAPIKey, extractRawKey
+}
+
+// apiKeyWhen is the `when` of rules that apply to API-key requests only. It matches the
+// same requests as isAPIKey from apiKeyCELPredicates, but as selector conditions: Authorino
+// reads them with gjson instead of re-parsing the authorization JSON for CEL. An absent
+// header reads as "" and doesn't match, which skips the rule like the CEL error did.
+func apiKeyWhen(xAPIKeyEnabled bool) []any {
+	authorization := map[string]any{
+		"selector": "request.headers.authorization",
+		"operator": "matches",
+		"value":    "^Bearer sk-oai-.*",
+	}
+	if !xAPIKeyEnabled {
+		return []any{authorization}
+	}
+	xAPIKey := map[string]any{
+		"selector": "request.headers.x-api-key",
+		"operator": "matches",
+		"value":    "^sk-oai-.*",
+	}
+	return []any{map[string]any{"any": []any{authorization, xAPIKey}}}
+}
+
+// nonEmptyWhen is the `when` of a rule that needs a non-empty value at selector, a gjson
+// path into the authorization JSON. A missing field and JSON null read as "", so no CEL
+// evaluation is needed to guard against them.
+func nonEmptyWhen(selector string) []any {
+	return []any{map[string]any{"selector": selector, "operator": "neq", "value": ""}}
 }
 
 func (r *MaaSAuthPolicyReconciler) updateAuthPolicyRefStatus(ctx context.Context, log logr.Logger, policy *maasv1alpha1.MaaSAuthPolicy, refs []authPolicyRef) {

@@ -587,9 +587,6 @@ func TestGatewayAuthPolicyTellsAPIKeysFromJWTs(t *testing.T) {
 // reads them with gjson, while a CEL predicate would parse the whole
 // authorization JSON first.
 var allowedCELRegex = []string{
-	// apiKeyValidation.when. It is to become a structured selector condition,
-	// not a string check.
-	`auth.identity.matches("^(Bearer )?sk-oai-.*")`,
 	`(size(g) > 36 && g.charAt(36) == "/" && g.matches('` + celOrganizationQualifiedGroup + `'))`,
 	// One cheap compile per group. A regex-free allowlist costs one CEL step per
 	// character and is slower for group names over about 16 characters.

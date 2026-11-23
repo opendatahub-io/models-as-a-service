@@ -485,24 +485,6 @@ func TestBuildGatewayAuthPolicySpec_OIDCClientBound(t *testing.T) {
 		"when predicate should match only JWT-shaped Bearer tokens")
 }
 
-func TestBuildGatewayAuthPolicySpec_DeniesNewClientIdentityHeaders(t *testing.T) {
-	obj := gatewayAuthPolicySpecTestObject(t, nil)
-	rule := nestedMapRequired(t, obj, "spec", "defaults", "rules", "authorization", "deny-client-identity-headers")
-	patterns, found, err := unstructured.NestedSlice(rule, "patternMatching", "patterns")
-	assert.NoError(t, err)
-	assert.True(t, found)
-
-	predicates := make(map[string]bool)
-	for _, pattern := range patterns {
-		patternMap, ok := pattern.(map[string]any)
-		assert.True(t, ok)
-		predicate, _ := patternMap["predicate"].(string)
-		predicates[predicate] = true
-	}
-	assert.True(t, predicates[`!("x-maas-identity" in request.headers)`])
-	assert.True(t, predicates[`!("x-maas-admin-scope" in request.headers)`])
-}
-
 func expectPattern(t *testing.T, pattern any, selector, operator, value string) {
 	t.Helper()
 	patternMap, ok := pattern.(map[string]any)
