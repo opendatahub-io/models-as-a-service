@@ -2,6 +2,7 @@ package api_keys_test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
 	"testing"
@@ -202,6 +203,50 @@ func TestValidateAPIKey_EmptyGroups(t *testing.T) {
 	assert.Equal(t, keyID, result.UserID) // UserID is the database-assigned key ID (UUID)
 	assert.NotNil(t, result.Groups, "Groups should be empty array, not nil")
 	assert.Empty(t, result.Groups, "Groups should be empty")
+}
+
+// TestValidateAPIKey_EmptyGroupsJSON verifies that the JSON wire format of
+// ValidationResult always includes "groups":[] when the stored groups are nil
+// or an empty slice. With omitempty on Groups the field is dropped entirely,
+// causing the gateway's CEL expression to fail with "no such key" → 403.
+func TestValidateAPIKey_EmptyGroupsJSON(t *testing.T) {
+	t.Run("NilStoredGroups", func(t *testing.T) {
+		ctx := t.Context()
+		svc, store := createTestService(t)
+
+		keyID := "550e8400-e29b-41d4-a716-446655440030"
+		plainKey, hash := createTestAPIKey(t)
+
+		err := store.AddKey(ctx, "dave", keyID, hash, "Nil Groups Key", "", nil, "default-sub", "", nil, false, nil)
+		require.NoError(t, err)
+
+		result, err := svc.ValidateAPIKey(ctx, plainKey)
+		require.NoError(t, err)
+		require.True(t, result.Valid)
+
+		data, err := json.Marshal(result)
+		require.NoError(t, err)
+		assert.Contains(t, string(data), `"groups":[]`, "JSON must include groups key even when stored groups are nil")
+	})
+
+	t.Run("EmptySliceStoredGroups", func(t *testing.T) {
+		ctx := t.Context()
+		svc, store := createTestService(t)
+
+		keyID := "550e8400-e29b-41d4-a716-446655440031"
+		plainKey, hash := createTestAPIKey(t)
+
+		err := store.AddKey(ctx, "dave", keyID, hash, "Empty Slice Groups Key", "", []string{}, "default-sub", "", nil, false, nil)
+		require.NoError(t, err)
+
+		result, err := svc.ValidateAPIKey(ctx, plainKey)
+		require.NoError(t, err)
+		require.True(t, result.Valid)
+
+		data, err := json.Marshal(result)
+		require.NoError(t, err)
+		assert.Contains(t, string(data), `"groups":[]`, "JSON must include groups key even when stored groups are empty slice")
+	})
 }
 
 func TestValidateAPIKey_UpdatesLastUsed(t *testing.T) {
