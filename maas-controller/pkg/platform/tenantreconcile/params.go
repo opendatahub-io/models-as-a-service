@@ -138,6 +138,10 @@ type PlatformParams struct {
 	// MaaSAPIPreservedEgressRules is the live egress slice (allow-all stripped) used
 	// when MaaSAPIPreserveEgressOnUpgrade is true.
 	MaaSAPIPreservedEgressRules []any
+	// MaaSAPILokiEgressRules is appended to a preserved restrictive maas-api
+	// egress policy when the Loki proxy uses one of MaaS's default in-cluster
+	// LokiStack gateways.
+	MaaSAPILokiEgressRules []netwv1.NetworkPolicyEgressRule
 }
 
 // BuildPlatformParams resolves all runtime parameters from the tenant config object,
@@ -667,6 +671,8 @@ func patchNetworkPolicyResource(
 	params PlatformParams,
 ) error {
 	switch name {
+	case baseMaaSAPIAllowMonitoringNetworkPolicyName:
+		return patchMaaSAPIAllowMonitoringNetworkPolicy(r, params)
 	case baseMaaSAPIGatewayNetworkPolicyName:
 		r.SetName(MaaSAPIGatewayNetworkPolicyName(params.TenantIdentifier))
 		return patchMaaSAPIGatewayNetworkPolicy(r, params)
@@ -680,6 +686,60 @@ func patchNetworkPolicyResource(
 	default:
 		return nil
 	}
+}
+
+// patchMaaSAPIAllowMonitoringNetworkPolicy rewrites monitoring namespace
+// selectors for the cluster's resolved monitoring namespace.
+func patchMaaSAPIAllowMonitoringNetworkPolicy(r *unstructured.Unstructured, params PlatformParams) error {
+	if params.MonitoringNamespace == "" {
+		return nil
+	}
+
+	ingress, found, err := unstructured.NestedSlice(r.Object, "spec", "ingress")
+	if err != nil {
+		return fmt.Errorf("read maas-api monitoring NetworkPolicy ingress: %w", err)
+	}
+	if !found {
+		return errors.New("maas-api monitoring NetworkPolicy ingress is missing")
+	}
+
+	for ruleIndex, ruleValue := range ingress {
+		rule, ok := ruleValue.(map[string]any)
+		if !ok {
+			return fmt.Errorf("maas-api monitoring NetworkPolicy ingress[%d] is not an object", ruleIndex)
+		}
+		peers, found, err := unstructured.NestedSlice(rule, "from")
+		if err != nil {
+			return fmt.Errorf("read maas-api monitoring NetworkPolicy ingress[%d] from: %w", ruleIndex, err)
+		}
+		if !found {
+			continue
+		}
+		for peerIndex, peerValue := range peers {
+			peer, ok := peerValue.(map[string]any)
+			if !ok {
+				return fmt.Errorf("maas-api monitoring NetworkPolicy ingress[%d].from[%d] is not an object", ruleIndex, peerIndex)
+			}
+			if _, found, err := unstructured.NestedString(peer, "namespaceSelector", "matchLabels", "kubernetes.io/metadata.name"); err != nil {
+				return fmt.Errorf("read maas-api monitoring NetworkPolicy namespace selector: %w", err)
+			} else if found {
+				if err := unstructured.SetNestedField(peer, params.MonitoringNamespace,
+					"namespaceSelector", "matchLabels", "kubernetes.io/metadata.name"); err != nil {
+					return fmt.Errorf("set maas-api monitoring NetworkPolicy namespace selector: %w", err)
+				}
+				peers[peerIndex] = peer
+			}
+		}
+		if err := unstructured.SetNestedSlice(rule, peers, "from"); err != nil {
+			return fmt.Errorf("set maas-api monitoring NetworkPolicy ingress[%d] from: %w", ruleIndex, err)
+		}
+		ingress[ruleIndex] = rule
+	}
+
+	if err := unstructured.SetNestedSlice(r.Object, ingress, "spec", "ingress"); err != nil {
+		return fmt.Errorf("set maas-api monitoring NetworkPolicy ingress: %w", err)
+	}
+	return nil
 }
 
 // patchMaaSAPIGatewayNetworkPolicy restricts maas-api ingress to the exact
@@ -833,6 +893,10 @@ func patchMaaSAPIEgressRestrictNetworkPolicy(r *unstructured.Unstructured, param
 		}
 	case params.MaaSAPIPreserveEgressOnUpgrade:
 		egress = params.MaaSAPIPreservedEgressRules
+		egress, err = appendNetworkPolicyEgressRulesIfMissing(egress, params.MaaSAPILokiEgressRules)
+		if err != nil {
+			return fmt.Errorf("append maas-api Loki egress rule: %w", err)
+		}
 	default:
 		egress = removeAllowAllEgressRules(egress)
 		egress = append(egress, map[string]any{})
@@ -852,6 +916,22 @@ func patchMaaSAPIEgressRestrictNetworkPolicy(r *unstructured.Unstructured, param
 	}
 
 	return unstructured.SetNestedSlice(r.Object, egress, "spec", "egress")
+}
+
+func appendNetworkPolicyEgressRulesIfMissing(egress []any, rules []netwv1.NetworkPolicyEgressRule) ([]any, error) {
+	if len(rules) == 0 {
+		return egress, nil
+	}
+	converted, err := networkPolicyEgressRulesToUnstructured(rules)
+	if err != nil {
+		return nil, err
+	}
+	for _, rule := range converted {
+		if !egressRuleInList(rule, egress) {
+			egress = append(egress, rule)
+		}
+	}
+	return egress, nil
 }
 
 func networkPolicyDeclaresEgress(np *unstructured.Unstructured) bool {
@@ -1650,7 +1730,7 @@ func patchPayloadProcessingEnvoyFilter(log logr.Logger, r *unstructured.Unstruct
 	const (
 		wasmFilterPatchCount     = 4 // WasmPlugin pair + RHCL 1.4 wasm pair
 		routerFallbackPatchCount = 2 // router anchor when Kuadrant WASM is absent
-		routeDisablePatchCount   = 6
+		routeDisablePatchCount   = 11
 		// Trailing REMOVE + INSERT_BEFORE that move Istio's InferencePool filter in front of
 		// the router. Their anchors (Istio's fixed filter name and the router) are the same on
 		// every gateway, so no mode rewrites them.
@@ -1735,8 +1815,9 @@ func patchPayloadProcessingEnvoyFilter(log logr.Logger, r *unstructured.Unstruct
 	// Route patches disable ext_proc on all non-inference maas-api routes; the EPP reorder
 	// patches after them need no rewrite.
 	// Route name uses Istio's Gateway API convention: <namespace>.<httproute-name>.<rule-index>.
-	// Rule indices: 0=/v1/models, 1=/v1/subscriptions, 2=/v1/api-keys, 3=/maas-api/v1/*,
-	// 4=/maas-api/health, 5=/v1/me
+	// Rule indices: 0=/v1/models, 1=/v1/subscriptions, 2=/v1/api-keys,
+	// 3=/maas-api/v1/model, 4-7=/maas-api/v1/{models,subscriptions,api-keys,tenants},
+	// 8=/maas-api/v1/me, 9=/maas-api/health, 10=/v1/me
 	for i := routeDisablePatchBase; i < routeDisablePatchEnd; i++ {
 		patch, ok := configPatches[i].(map[string]any)
 		if !ok {

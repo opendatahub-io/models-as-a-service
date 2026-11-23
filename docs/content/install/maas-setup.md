@@ -433,8 +433,6 @@ MaaS operand NetworkPolicies follow [ODH-ADR-Operator-0016](https://github.com/o
 | `maas-api-allow-monitoring` | `maas-api` | Ingress | `redhat-ods-monitoring` → `:9090` |
 | `maas-api-egress-restrict` | `maas-api` | Egress | OpenShift CoreDNS; Kubernetes API; allow-all by default (overridable or opt-out via `maasconfig/default`; see [PostgreSQL egress](#postgresql-egress)) |
 | `usage-logs-collector-egress-restrict` | usage-logs collector | Egress | CoreDNS; LokiStack gateway pods (`app.kubernetes.io/name=lokistack`, `app.kubernetes.io/instance=usage`, `app.kubernetes.io/component=lokistack-gateway`) → `:8080` |
-| `usage-tenancy-proxy-allow-perses` | tenancy proxy | Ingress | Perses pods and kubelet probes (`host-network`) → `:8443` |
-| `usage-tenancy-proxy-egress-restrict` | tenancy proxy | Egress | CoreDNS; Kubernetes API; LokiStack gateway pods (`app.kubernetes.io/name=lokistack`, `app.kubernetes.io/component=lokistack-gateway`, `app.kubernetes.io/instance=data-science-lokistack`; `usage` when `usageLogging` is true) → `:8080` |
 
 ### PostgreSQL egress
 
@@ -454,6 +452,12 @@ from `maas-db-config`.
 
 This works for any database topology without extra configuration. A separate companion `NetworkPolicy` **cannot**
 narrow egress while allow-all is present (NetworkPolicies are unioned).
+
+When an upgrade preserves an older restrictive policy, maas-controller also appends an egress rule for the selected
+usage-logs LokiStack gateway (TCP `8080` in the monitoring namespace). This covers both the DSCI-managed
+`data-science-usage-logs-lokistack` and deprecated `usageLogging: true` `usage` instances. If you replace the default
+egress block with `spec.networkPolicyEgressRules`, or use the `usage-logs-loki` Secret to select an external Loki
+endpoint, you remain responsible for adding the required Loki peer rule.
 
 #### Restricting egress (recommended for production)
 
@@ -538,7 +542,7 @@ usage logging, and so on) continue to be reconciled by `maas-controller`.
 
 ### Kubernetes API egress (port-only rule)
 
-`maas-api-egress-restrict` and `usage-tenancy-proxy-egress-restrict` allow egress to TCP ports `443` and `6443` without a `to` peer. This is a documented platform exception: in-cluster clients reach the API through the `kubernetes.default` Service ClusterIP, and on OVN-Kubernetes the policy may be evaluated against that VIP before apiserver endpoint DNAT. A `namespaceSelector` for `openshift-kube-apiserver` does not match that path and can block required API access (token projection, TokenReview). [ODH-ADR-Operator-0016](https://github.com/opendatahub-io/architecture-decision-records/blob/main/architecture-decision-records/operator/ODH-ADR-Operator-0016-networkpolicy-platform-contract.md) does not define a shared API-server peer mapping; components document this limitation instead of adding a broad ingress or egress allow-all.
+`maas-api-egress-restrict` allows egress to TCP ports `443` and `6443` without a `to` peer. This is a documented platform exception: in-cluster clients reach the API through the `kubernetes.default` Service ClusterIP, and on OVN-Kubernetes the policy may be evaluated against that VIP before apiserver endpoint DNAT. A `namespaceSelector` for `openshift-kube-apiserver` does not match that path and can block required API access (token projection, TokenReview). [ODH-ADR-Operator-0016](https://github.com/opendatahub-io/architecture-decision-records/blob/main/architecture-decision-records/operator/ODH-ADR-Operator-0016-networkpolicy-platform-contract.md) does not define a shared API-server peer mapping; components document this limitation instead of adding a broad ingress or egress allow-all.
 
 ## Next steps
 

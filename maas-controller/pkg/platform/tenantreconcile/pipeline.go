@@ -12,12 +12,14 @@ import (
 	"github.com/go-logr/logr"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	netwv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/client-go/util/retry"
 	"k8s.io/utils/ptr"
@@ -122,7 +124,8 @@ func RunPlatformWithReader(
 		log.Info(bufferWarning)
 	}
 	applyMaaSAPIEgressConfig(&params, mcfg)
-	if err := resolveLokiReadEndpoint(ctx, c, appNs, &params, log); err != nil {
+	usageLogging := mcfg != nil && ptr.Deref(mcfg.Spec.UsageLogging, false)
+	if err := resolveLokiReadEndpoint(ctx, c, appNs, &params, usageLogging, log); err != nil {
 		return nil, fmt.Errorf("resolve loki read endpoint: %w", err)
 	}
 
@@ -241,8 +244,9 @@ func RunPlatformWithReader(
 // keeps the service-ca bundle file baked into the Deployment
 // (LOKI_READ_CA_FILE), which verifies the internal LokiStack gateway
 // certificate; a present key is mounted the same way.
-func resolveLokiReadEndpoint(ctx context.Context, c client.Client, appNs string, params *PlatformParams, log logr.Logger) error {
-	endpoint := DefaultLokiReadEndpoint(params.MonitoringNamespace)
+func resolveLokiReadEndpoint(ctx context.Context, c client.Client, appNs string, params *PlatformParams, usageLogging bool, log logr.Logger) error {
+	endpoint := DefaultLokiReadEndpoint(params.MonitoringNamespace, usageLogging)
+	defaultEndpoint := endpoint
 
 	secret := &corev1.Secret{}
 	err := c.Get(ctx, types.NamespacedName{Namespace: appNs, Name: LokiReadSecretName}, secret)
@@ -254,11 +258,13 @@ func resolveLokiReadEndpoint(ctx context.Context, c client.Client, appNs string,
 			log.V(1).Info("usage-logs-loki Secret not found and no monitoring namespace configured; maas-api Loki proxy disabled",
 				"name", LokiReadSecretName, "namespace", appNs)
 			params.LokiReadEndpoint = ""
+			setMaaSAPILokiEgressRules(params, endpoint, defaultEndpoint, usageLogging)
 			return nil
 		}
 		log.V(1).Info("usage-logs-loki Secret not found; maas-api Loki proxy uses the default LokiStack endpoint",
 			"name", LokiReadSecretName, "namespace", appNs, "endpoint", endpoint)
 		params.LokiReadEndpoint = endpoint
+		setMaaSAPILokiEgressRules(params, endpoint, defaultEndpoint, usageLogging)
 		return nil
 	}
 
@@ -277,6 +283,7 @@ func resolveLokiReadEndpoint(ctx context.Context, c client.Client, appNs string,
 	}
 
 	params.LokiReadEndpoint = endpoint
+	setMaaSAPILokiEgressRules(params, endpoint, defaultEndpoint, usageLogging)
 	if strings.TrimSpace(string(secret.Data[LokiReadTokenSecretKey])) != "" {
 		params.LokiReadTokenFromSecret = true
 	} else {
@@ -295,6 +302,43 @@ func resolveLokiReadEndpoint(ctx context.Context, c client.Client, appNs string,
 	log.Info("maas-api Loki read proxy enabled", "endpoint", endpoint,
 		"tokenInjected", params.LokiReadTokenFromSecret, "caInjected", params.LokiReadCAFromSecret)
 	return nil
+}
+
+func setMaaSAPILokiEgressRules(params *PlatformParams, endpoint, defaultEndpoint string, usageLogging bool) {
+	params.MaaSAPILokiEgressRules = nil
+	if endpoint == "" || endpoint != defaultEndpoint {
+		return
+	}
+	gatewayInstance := DefaultLokiStackGatewayInstance
+	if usageLogging {
+		gatewayInstance = LegacyUsageLogsLokiStackGatewayInstance
+	}
+	params.MaaSAPILokiEgressRules = []netwv1.NetworkPolicyEgressRule{
+		lokiStackGatewayEgressRule(params.MonitoringNamespace, gatewayInstance),
+	}
+}
+
+func lokiStackGatewayEgressRule(monitoringNamespace, gatewayInstance string) netwv1.NetworkPolicyEgressRule {
+	tcpProtocol := corev1.ProtocolTCP
+	gatewayPort := intstr.FromInt32(DefaultLokiStackGatewayPort)
+	return netwv1.NetworkPolicyEgressRule{
+		To: []netwv1.NetworkPolicyPeer{{
+			NamespaceSelector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{"kubernetes.io/metadata.name": monitoringNamespace},
+			},
+			PodSelector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{
+					"app.kubernetes.io/name":      "lokistack",
+					"app.kubernetes.io/component": "lokistack-gateway",
+					"app.kubernetes.io/instance":  gatewayInstance,
+				},
+			},
+		}},
+		Ports: []netwv1.NetworkPolicyPort{{
+			Protocol: &tcpProtocol,
+			Port:     &gatewayPort,
+		}},
+	}
 }
 
 type payloadProcessingSwitchOutcome struct {

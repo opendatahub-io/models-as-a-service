@@ -23,21 +23,33 @@ func lokiSecret(appNs string, data map[string][]byte) *corev1.Secret {
 func TestResolveLokiReadEndpoint(t *testing.T) {
 	const appNs = "opendatahub"
 	const defaultEndpoint = "https://data-science-usage-logs-lokistack-gateway-http.opendatahub.svc:8080/api/logs/v1/application"
+	const legacyEndpoint = "https://usage-gateway-http.opendatahub.svc:8080/api/logs/v1/application"
 
 	tests := []struct {
 		name                 string
 		monitoringNamespace  string
+		usageLogging         bool
 		secret               *corev1.Secret
 		expectedEndpoint     string
 		expectedTokenFromRef bool
 		expectedCAFromRef    bool
 		expectWarning        bool
+		expectLokiEgressRule bool
 	}{
 		{
-			name:                "secret absent uses the default LokiStack endpoint",
-			monitoringNamespace: appNs,
-			secret:              nil,
-			expectedEndpoint:    defaultEndpoint,
+			name:                 "secret absent uses the default LokiStack endpoint",
+			monitoringNamespace:  appNs,
+			secret:               nil,
+			expectedEndpoint:     defaultEndpoint,
+			expectLokiEgressRule: true,
+		},
+		{
+			name:                 "usageLogging uses the legacy LokiStack endpoint",
+			monitoringNamespace:  appNs,
+			usageLogging:         true,
+			secret:               nil,
+			expectedEndpoint:     legacyEndpoint,
+			expectLokiEgressRule: true,
 		},
 		{
 			name:                "secret absent without a monitoring namespace disables the proxy",
@@ -107,39 +119,44 @@ func TestResolveLokiReadEndpoint(t *testing.T) {
 			expectedTokenFromRef: true,
 		},
 		{
-			name:                "missing key keeps the default endpoint with a warning",
-			monitoringNamespace: appNs,
-			secret:              lokiSecret(appNs, map[string][]byte{"OTHER_KEY": []byte("https://loki.example.svc")}),
-			expectedEndpoint:    defaultEndpoint,
-			expectWarning:       true,
+			name:                 "missing key keeps the default endpoint with a warning",
+			monitoringNamespace:  appNs,
+			secret:               lokiSecret(appNs, map[string][]byte{"OTHER_KEY": []byte("https://loki.example.svc")}),
+			expectedEndpoint:     defaultEndpoint,
+			expectWarning:        true,
+			expectLokiEgressRule: true,
 		},
 		{
-			name:                "empty key value keeps the default endpoint with a warning",
-			monitoringNamespace: appNs,
-			secret:              lokiSecret(appNs, map[string][]byte{LokiReadSecretKey: []byte("   ")}),
-			expectedEndpoint:    defaultEndpoint,
-			expectWarning:       true,
+			name:                 "empty key value keeps the default endpoint with a warning",
+			monitoringNamespace:  appNs,
+			secret:               lokiSecret(appNs, map[string][]byte{LokiReadSecretKey: []byte("   ")}),
+			expectedEndpoint:     defaultEndpoint,
+			expectWarning:        true,
+			expectLokiEgressRule: true,
 		},
 		{
-			name:                "non-URL value keeps the default endpoint with a warning",
-			monitoringNamespace: appNs,
-			secret:              lokiSecret(appNs, map[string][]byte{LokiReadSecretKey: []byte("not-a-url")}),
-			expectedEndpoint:    defaultEndpoint,
-			expectWarning:       true,
+			name:                 "non-URL value keeps the default endpoint with a warning",
+			monitoringNamespace:  appNs,
+			secret:               lokiSecret(appNs, map[string][]byte{LokiReadSecretKey: []byte("not-a-url")}),
+			expectedEndpoint:     defaultEndpoint,
+			expectWarning:        true,
+			expectLokiEgressRule: true,
 		},
 		{
-			name:                "unsupported scheme keeps the default endpoint with a warning",
-			monitoringNamespace: appNs,
-			secret:              lokiSecret(appNs, map[string][]byte{LokiReadSecretKey: []byte("ftp://loki.example.svc")}),
-			expectedEndpoint:    defaultEndpoint,
-			expectWarning:       true,
+			name:                 "unsupported scheme keeps the default endpoint with a warning",
+			monitoringNamespace:  appNs,
+			secret:               lokiSecret(appNs, map[string][]byte{LokiReadSecretKey: []byte("ftp://loki.example.svc")}),
+			expectedEndpoint:     defaultEndpoint,
+			expectWarning:        true,
+			expectLokiEgressRule: true,
 		},
 		{
-			name:                "missing host keeps the default endpoint with a warning",
-			monitoringNamespace: appNs,
-			secret:              lokiSecret(appNs, map[string][]byte{LokiReadSecretKey: []byte("https://")}),
-			expectedEndpoint:    defaultEndpoint,
-			expectWarning:       true,
+			name:                 "missing host keeps the default endpoint with a warning",
+			monitoringNamespace:  appNs,
+			secret:               lokiSecret(appNs, map[string][]byte{LokiReadSecretKey: []byte("https://")}),
+			expectedEndpoint:     defaultEndpoint,
+			expectWarning:        true,
+			expectLokiEgressRule: true,
 		},
 	}
 
@@ -152,11 +169,12 @@ func TestResolveLokiReadEndpoint(t *testing.T) {
 			c := builder.Build()
 
 			params := PlatformParams{MonitoringNamespace: tt.monitoringNamespace}
-			require.NoError(t, resolveLokiReadEndpoint(context.Background(), c, appNs, &params, logr.Discard()))
+			require.NoError(t, resolveLokiReadEndpoint(context.Background(), c, appNs, &params, tt.usageLogging, logr.Discard()))
 
 			require.Equal(t, tt.expectedEndpoint, params.LokiReadEndpoint)
 			require.Equal(t, tt.expectedTokenFromRef, params.LokiReadTokenFromSecret)
 			require.Equal(t, tt.expectedCAFromRef, params.LokiReadCAFromSecret)
+			require.Equal(t, tt.expectLokiEgressRule, len(params.MaaSAPILokiEgressRules) == 1)
 			if tt.expectWarning {
 				require.NotEmpty(t, params.Warnings, "expected a warning to be recorded")
 			} else {
@@ -169,7 +187,7 @@ func TestResolveLokiReadEndpoint(t *testing.T) {
 func TestResolveLokiReadEndpoint_APIClientError(t *testing.T) {
 	c := failingGetClient{err: errors.New("cluster unavailable")}
 	params := PlatformParams{}
-	err := resolveLokiReadEndpoint(context.Background(), c, "opendatahub", &params, logr.Discard())
+	err := resolveLokiReadEndpoint(context.Background(), c, "opendatahub", &params, false, logr.Discard())
 	require.ErrorContains(t, err, "cluster unavailable")
 	require.ErrorContains(t, err, LokiReadSecretName)
 	require.Empty(t, params.LokiReadEndpoint)

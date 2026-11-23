@@ -1,11 +1,12 @@
-# User-scoped usage dashboard — queries go through loki-query-proxy which
-# injects user_id filtering based on the logged-in user's Kubernetes token.
+# User-scoped usage dashboard — queries go through the maas-api Loki proxy,
+# which injects user_id filtering based on the caller's Kubernetes identity.
 # Subscription/model dropdowns use LokiLogQLVariable (not /label/values):
-# the tenancy proxy cannot user-scope label-values requests.
+# label-values requests require indexed stream labels, while query requests can
+# filter structured metadata.
 # customAllValue: ".*" on ListVariables ensures "All" matches entries with
 # absent labels (e.g. user_id when capturing is disabled). Do not remove.
 # API key uses LokiLogQLVariable: key_name is structured metadata (not a stream
-# label), and the tenancy proxy can user-scope /query and /query_range.
+# label), and the proxy can user-scope /query and /query_range.
 # API-key filter copies ${api_key:regexliteral} into a LogQL double-quoted
 # label (__ak_sel), then the Go template reads .__ak_sel. Do not interpolate
 # the name into a backtick string: a backtick in an existing key name would
@@ -458,8 +459,8 @@ spec:
             content:
               "$ref": "#/spec/panels/tokenConsumptionTable"
 ---
-# User-scoped Loki datasource — routes through usage-logs-tenancy-proxy which
-# injects user_id filtering. Named "usage-logs-multi-tenancy" to avoid
+# User-scoped Loki datasource — routes through maas-api, which injects
+# user_id filtering. Named "usage-logs-multi-tenancy" to avoid
 # collision with the admin "usage-logs" datasource.
 apiVersion: perses.dev/v1alpha1
 kind: PersesDatasource
@@ -486,7 +487,7 @@ spec:
             # calling user's own logs. maas-api routes to the usage-logs-loki
             # Secret endpoint when present, otherwise to the default
             # LokiStack gateway.
-            url: https://maas-api.redhat-ai-gateway-infra.svc.cluster.local:8443/v1/logs?only_user=true
+            url: https://maas-api:8443/v1/logs?only_user=true
             allowedEndpoints:
               - endpointPattern: "/loki/api/v1/query"
                 method: GET

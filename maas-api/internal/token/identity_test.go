@@ -267,6 +267,32 @@ func TestExtractVerifiedIdentityOptional(t *testing.T) {
 	})
 }
 
+func TestRejectKubernetesOnlyIdentityHeaders(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	handler := token.NewHandler(logger.New(false), "tenant")
+
+	tests := []string{
+		constant.HeaderIdentity,
+		constant.HeaderUsername,
+		constant.HeaderGroup,
+		constant.HeaderOrganizationID,
+	}
+	for _, header := range tests {
+		t.Run(header, func(t *testing.T) {
+			router := gin.New()
+			router.Use(handler.RejectKubernetesOnlyIdentityHeaders())
+			router.GET("/", func(c *gin.Context) { c.Status(http.StatusOK) })
+
+			request := httptest.NewRequest(http.MethodGet, "/", nil)
+			request.Header.Set(header, "spoofed")
+			recorder := httptest.NewRecorder()
+			router.ServeHTTP(recorder, request)
+
+			assert.Equal(t, http.StatusUnauthorized, recorder.Code)
+		})
+	}
+}
+
 func TestGetMe(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	handler := token.NewHandler(logger.New(false), "tenant")

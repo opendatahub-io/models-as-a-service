@@ -5,6 +5,7 @@ import (
 	"context"
 	"testing"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -61,6 +62,7 @@ func TestLifecycleReconciler_BakedMaaSAPILokiDatasources(t *testing.T) {
 			Scheme:                s,
 			UsageLogsManifestPath: lifecycleUsageLogsPath(t),
 			MonitoringNamespace:   monNS,
+			AppNamespace:          "redhat-ai-gateway-infra",
 		}, cl
 	}
 
@@ -107,15 +109,19 @@ func TestLifecycleReconciler_BakedMaaSAPILokiDatasources(t *testing.T) {
 }
 
 // TestUsageLogsDeprecatedOverlayRendersPatchedURLs verifies the deprecated
-// usageLogging: true kustomization still repoints the datasources away from the
-// baked maas-api proxy URLs: usage-logs-all to the bundle's LokiStack gateway,
-// usage-logs-multi-tenancy back to the tenancy proxy. The short service
-// references are expanded to FQDNs by patchPersesDatasourceURL at apply time.
+// usageLogging: true kustomization repoints only the admin datasource to the
+// bundle's LokiStack gateway. The user-scoped datasource keeps using maas-api,
+// which resolves the legacy usage LokiStack endpoint at runtime.
 func TestUsageLogsDeprecatedOverlayRendersPatchedURLs(t *testing.T) {
 	g := NewWithT(t)
 
 	resources, err := tenantreconcile.RenderKustomize(lifecycleUsageLogsPath(t), "opendatahub")
 	g.Expect(err).NotTo(HaveOccurred())
+	for i := range resources {
+		if resources[i].GetKind() == "PersesDatasource" {
+			g.Expect(patchPersesDatasourceURL(&resources[i], "redhat-ai-gateway-infra")).To(Succeed())
+		}
+	}
 
 	findDatasource := func(name string) *unstructured.Unstructured {
 		for i := range resources {
@@ -128,8 +134,43 @@ func TestUsageLogsDeprecatedOverlayRendersPatchedURLs(t *testing.T) {
 	}
 
 	admin := findDatasource("usage-logs-all")
-	g.Expect(datasourceURL(g, admin)).To(Equal("https://usage-gateway-http:8080/api/logs/v1/application"))
+	g.Expect(datasourceURL(g, admin)).To(Equal("https://usage-gateway-http.opendatahub.svc.cluster.local:8080/api/logs/v1/application"))
 
 	multi := findDatasource("usage-logs-multi-tenancy")
-	g.Expect(datasourceURL(g, multi)).To(Equal("https://usage-logs-tenancy-proxy:8443"))
+	g.Expect(datasourceURL(g, multi)).To(Equal(maasAPILokiDatasourceOnlyUserURL))
+}
+
+// TestLifecycleReconciler_RemovesRetiredTenancyProxy verifies that upgrading
+// from the retired Python proxy deletes its controller-managed resources.
+func TestLifecycleReconciler_RemovesRetiredTenancyProxy(t *testing.T) {
+	const monitoringNS = "opendatahub"
+
+	g := NewWithT(t)
+	s := lifecycleTestScheme(t)
+
+	cfg := &maasv1alpha1.Config{
+		ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName, UID: types.UID("cfg-uid")},
+	}
+
+	builder := newSSAFakeClientBuilder(s).WithStatusSubresource(&maasv1alpha1.Config{}).WithObjects(cfg)
+	for _, resource := range removedUsageLogsTenancyProxyResources(monitoringNS) {
+		stale := resource.DeepCopy()
+		stale.SetLabels(map[string]string{"app.kubernetes.io/managed-by": "maas-controller"})
+		builder = builder.WithObjects(stale)
+	}
+	cl := builder.Build()
+
+	r := &LifecycleReconciler{
+		Client:                cl,
+		Scheme:                s,
+		AppNamespace:          "redhat-ai-gateway-infra",
+		UsageLogsManifestPath: lifecycleUsageLogsPath(t),
+		MonitoringNamespace:   monitoringNS,
+	}
+	g.Expect(r.ensureUsageLogs(context.Background(), ctrl.Log)).To(Succeed())
+
+	for _, resource := range removedUsageLogsTenancyProxyResources(monitoringNS) {
+		err := cl.Get(context.Background(), client.ObjectKeyFromObject(&resource), resource.DeepCopy())
+		g.Expect(apierrors.IsNotFound(err)).To(BeTrue(), "expected %s %s to be removed", resource.GetKind(), resource.GetName())
+	}
 }

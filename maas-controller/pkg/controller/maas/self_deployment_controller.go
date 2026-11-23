@@ -18,11 +18,9 @@ package maas
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"os"
+	neturl "net/url"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -69,12 +67,6 @@ const usageLogsCollectorClusterRoleBindingName = "usage-collector-application-lo
 // usageLogsDsciManagedKustomizeDir is the kustomization rendered when usageLogging is false or omitted.
 const usageLogsDsciManagedKustomizeDir = "dsci-managed"
 
-// usageLogsTenancyProxyDeploymentName is the Deployment for the Loki query tenancy proxy.
-const usageLogsTenancyProxyDeploymentName = "usage-logs-tenancy-proxy"
-
-// usageLogsTenancyProxyContainerName is the proxy container in the tenancy proxy Deployment.
-const usageLogsTenancyProxyContainerName = "proxy"
-
 // LifecycleReconciler watches the maas-controller Deployment. It is the sole creator of the
 // cluster-scoped Config/default anchor when the Deployment exists and is not terminating (so
 // standalone installs do not race applying a Config manifest before the Config CRD is ready).
@@ -96,6 +88,7 @@ type LifecycleReconciler struct {
 	GatewayNamespace            string
 	ObservabilityManifestsPath  string
 	MonitoringNamespace         string
+	AppNamespace                string
 	UsageLogsManifestPath       string
 	DiscoveryEnabled            bool
 	DiscoveryManifestPath       string
@@ -590,7 +583,7 @@ func (r *LifecycleReconciler) ensureUsageDashboard(ctx context.Context, log logr
 	return nil
 }
 
-// ensureUsageLogs deploys usage-log dashboards, the tenancy proxy, and related RBAC.
+// ensureUsageLogs deploys usage-log dashboards and related RBAC.
 // usageLogging true renders usage-logs. false and omitted render dsci-managed.
 // Objects rendered by both bundles are applied in place. Controller-owned objects
 // rendered only by the other bundle are deleted.
@@ -635,10 +628,7 @@ func (r *LifecycleReconciler) ensureUsageLogs(ctx context.Context, log logr.Logg
 			continue
 		}
 		res := resource // avoid loop variable aliasing
-		if err := patchTenancyProxyImage(&res); err != nil {
-			return fmt.Errorf("patch %s %s: %w", res.GetKind(), res.GetName(), err)
-		}
-		if err := patchPersesDatasourceURL(&res); err != nil {
+		if err := patchPersesDatasourceURL(&res, r.AppNamespace); err != nil {
 			return fmt.Errorf("patch %s %s: %w", res.GetKind(), res.GetName(), err)
 		}
 		if err := controllerutil.SetControllerReference(&cfg, &res, r.Scheme); err != nil {
@@ -688,6 +678,16 @@ func (r *LifecycleReconciler) ensureUsageLogs(ctx context.Context, log logr.Logg
 		return err
 	}
 
+	if err := r.deleteOwnedRenderedResources(
+		ctx,
+		log,
+		cfg,
+		removedUsageLogsTenancyProxyResources(r.MonitoringNamespace),
+		"removed Python usage-logs tenancy proxy",
+	); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -720,6 +720,50 @@ func usageLogsKustomizeDir(base string, usageLogging bool) string {
 		return base
 	}
 	return filepath.Join(base, usageLogsDsciManagedKustomizeDir)
+}
+
+// removedUsageLogsTenancyProxyResources describes resources rendered by the
+// retired Python tenancy proxy. They are deleted on upgrade only when they are
+// owned by Config or carry the controller managed-by label.
+func removedUsageLogsTenancyProxyResources(namespace string) []unstructured.Unstructured {
+	if namespace == "" {
+		return nil
+	}
+
+	definitions := []struct {
+		group      string
+		version    string
+		kind       string
+		name       string
+		namespaced bool
+	}{
+		{version: "v1", kind: "ServiceAccount", name: "usage-tenancy-proxy", namespaced: true},
+		{group: "rbac.authorization.k8s.io", version: "v1", kind: "ClusterRole", name: "usage-tenancy-proxy"},
+		{group: "rbac.authorization.k8s.io", version: "v1", kind: "ClusterRoleBinding", name: "usage-tenancy-proxy"},
+		{group: "rbac.authorization.k8s.io", version: "v1", kind: "RoleBinding", name: "usage-tenancy-proxy-scc-nonroot-v2", namespaced: true},
+		{group: "apps", version: "v1", kind: "Deployment", name: "usage-logs-tenancy-proxy", namespaced: true},
+		{version: "v1", kind: "ConfigMap", name: "usage-tenancy-proxy-source", namespaced: true},
+		{version: "v1", kind: "ConfigMap", name: "usage-logs-tenancy-proxy-ca-bundle", namespaced: true},
+		{version: "v1", kind: "Service", name: "usage-logs-tenancy-proxy", namespaced: true},
+		{group: "networking.k8s.io", version: "v1", kind: "NetworkPolicy", name: "usage-tenancy-proxy-allow-perses", namespaced: true},
+		{group: "networking.k8s.io", version: "v1", kind: "NetworkPolicy", name: "usage-tenancy-proxy-egress-restrict", namespaced: true},
+	}
+
+	resources := make([]unstructured.Unstructured, 0, len(definitions))
+	for _, definition := range definitions {
+		resource := unstructured.Unstructured{}
+		resource.SetGroupVersionKind(schema.GroupVersionKind{
+			Group:   definition.group,
+			Version: definition.version,
+			Kind:    definition.kind,
+		})
+		resource.SetName(definition.name)
+		if definition.namespaced {
+			resource.SetNamespace(namespace)
+		}
+		resources = append(resources, resource)
+	}
+	return resources
 }
 
 // deleteOwnedRenderedResources deletes resources from a rendered kustomize bundle
@@ -789,19 +833,13 @@ func isOwnedByConfigOrController(obj client.Object, configUID types.UID) bool {
 // Rewrites URLs like "https://service-name:port" to "https://service-name.{namespace}.svc:port"
 // using the datasource's deployed namespace. This allows YAML to use simple service references
 // while ensuring they work correctly in any namespace.
-func patchPersesDatasourceURL(res *unstructured.Unstructured) error {
+func patchPersesDatasourceURL(res *unstructured.Unstructured, maasAPINamespace string) error {
 	if res.GetKind() != "PersesDatasource" {
 		return nil
 	}
 
-	namespace := res.GetNamespace()
-	if namespace == "" {
-		// No namespace set, skip patching
-		return nil
-	}
-
 	urlPath := []string{"spec", "config", "plugin", "spec", "proxy", "spec", "url"}
-	url, found, err := unstructured.NestedString(res.Object, urlPath...)
+	rawURL, found, err := unstructured.NestedString(res.Object, urlPath...)
 	if err != nil {
 		return fmt.Errorf("read datasource URL: %w", err)
 	}
@@ -810,53 +848,32 @@ func patchPersesDatasourceURL(res *unstructured.Unstructured) error {
 		return nil
 	}
 
-	// Only patch if URL doesn't already have .svc (i.e., it's a short service reference)
-	if !strings.Contains(url, ".svc") {
-		// Pattern: https://service-name:port/path -> https://service-name.{namespace}.svc:port/path
-		// Use regex to insert .{namespace}.svc before the port
-		re := regexp.MustCompile(`(https?://[^:]+)(:\d+)`)
-		patchedURL := re.ReplaceAllString(url, fmt.Sprintf("$1.%s.svc$2", namespace))
+	parsedURL, err := neturl.Parse(rawURL)
+	if err != nil || parsedURL.Scheme == "" || parsedURL.Host == "" {
+		return fmt.Errorf("invalid datasource URL %q", rawURL)
+	}
 
-		if err := unstructured.SetNestedField(res.Object, patchedURL, urlPath...); err != nil {
+	namespace := res.GetNamespace()
+	if parsedURL.Hostname() == "maas-api" {
+		namespace = maasAPINamespace
+	}
+	if namespace == "" {
+		return fmt.Errorf("cannot expand datasource URL %q without a namespace", rawURL)
+	}
+
+	if !strings.Contains(parsedURL.Hostname(), ".svc") {
+		host := parsedURL.Hostname() + "." + namespace + ".svc.cluster.local"
+		if port := parsedURL.Port(); port != "" {
+			host = host + ":" + port
+		}
+		parsedURL.Host = host
+
+		if err := unstructured.SetNestedField(res.Object, parsedURL.String(), urlPath...); err != nil {
 			return fmt.Errorf("set datasource URL: %w", err)
 		}
 	}
 
 	return nil
-}
-
-// patchTenancyProxyImage sets the tenancy-proxy container image to RELATED_IMAGE_ODH_PYTHON_312_IMAGE
-// if configured, otherwise uses DefaultUsageLogsTenancyProxyImage. This enables disconnected deployments
-// to mirror the image while maintaining a code-defined default.
-func patchTenancyProxyImage(res *unstructured.Unstructured) error {
-	if res.GetKind() != "Deployment" || res.GetName() != usageLogsTenancyProxyDeploymentName {
-		return nil
-	}
-
-	image := os.Getenv("RELATED_IMAGE_ODH_PYTHON_312_IMAGE")
-	if image == "" {
-		image = DefaultUsageLogsTenancyProxyImage
-	}
-
-	containers, found, err := unstructured.NestedSlice(res.Object, "spec", "template", "spec", "containers")
-	if err != nil {
-		return fmt.Errorf("read containers in deployment: %w", err)
-	}
-	if !found {
-		return errors.New("containers not found in usage-logs-tenancy-proxy deployment")
-	}
-
-	for i, c := range containers {
-		cm, ok := c.(map[string]any)
-		if !ok || cm["name"] != usageLogsTenancyProxyContainerName {
-			continue
-		}
-		cm["image"] = image
-		containers[i] = cm
-		return unstructured.SetNestedSlice(res.Object, containers, "spec", "template", "spec", "containers")
-	}
-
-	return errors.New("proxy container not found in usage-logs-tenancy-proxy deployment")
 }
 
 // tenantsHealthReason enumerates reasons used for ConfigConditionTenantsHealthy.

@@ -175,6 +175,7 @@ const (
 	baseMaaSAPIKeyCleanupScriptConfigMapName       = "maas-api-key-cleanup-script" //nolint:gosec // Kubernetes resource name, not a credential
 	baseMaaSAPIDeploymentNSNetworkPolicyName       = "maas-api-allow-deployment-ns"
 	baseMaaSAPIGatewayNetworkPolicyName            = "maas-api-allow-gateway"
+	baseMaaSAPIAllowMonitoringNetworkPolicyName    = "maas-api-allow-monitoring"
 	baseMaaSAPIEgressRestrictNetworkPolicyName     = "maas-api-egress-restrict"
 	baseMaaSAPIServingCertName                     = "maas-api-serving-cert"
 	baseUsageLogsEnvoyFilterName                   = "maas-model-access-logs"
@@ -233,6 +234,15 @@ const (
 	// deployment. The maas-api Loki proxy defaults to it when the
 	// usage-logs-loki Secret does not supply an endpoint.
 	DefaultLokiStackGatewayService = "data-science-usage-logs-lokistack-gateway-http"
+	// DefaultLokiStackGatewayInstance is the LokiStack instance label for the
+	// standard RHOAI-managed usage-logs LokiStack.
+	DefaultLokiStackGatewayInstance = "data-science-usage-logs-lokistack"
+	// LegacyUsageLogsLokiStackGatewayService is the gateway Service used by the
+	// deprecated usageLogging-managed LokiStack.
+	LegacyUsageLogsLokiStackGatewayService = "usage-gateway-http"
+	// LegacyUsageLogsLokiStackGatewayInstance is the LokiStack instance label
+	// used by the deprecated usageLogging-managed LokiStack.
+	LegacyUsageLogsLokiStackGatewayInstance = "usage"
 	// DefaultLokiStackGatewayPort is the HTTPS port of the default LokiStack
 	// gateway Service.
 	DefaultLokiStackGatewayPort = 8080
@@ -252,12 +262,16 @@ const (
 // LokiStack that ships with a standard RHOAI deployment in the given
 // monitoring namespace. An empty monitoring namespace yields an empty
 // endpoint, which leaves the proxy disabled.
-func DefaultLokiReadEndpoint(monitoringNamespace string) string {
+func DefaultLokiReadEndpoint(monitoringNamespace string, usageLogging bool) string {
 	if monitoringNamespace == "" {
 		return ""
 	}
+	gatewayService := DefaultLokiStackGatewayService
+	if usageLogging {
+		gatewayService = LegacyUsageLogsLokiStackGatewayService
+	}
 	return fmt.Sprintf("https://%s.%s.svc:%d%s",
-		DefaultLokiStackGatewayService, monitoringNamespace, DefaultLokiStackGatewayPort, DefaultLokiReadPath)
+		gatewayService, monitoringNamespace, DefaultLokiStackGatewayPort, DefaultLokiReadPath)
 }
 
 // maasAPIDashboardDeploymentLabelValues lists deployment labels for pods that call maas-api

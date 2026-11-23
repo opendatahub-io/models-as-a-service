@@ -34,6 +34,15 @@ const (
 
 	// proxyTimeout bounds a single upstream Loki request.
 	proxyTimeout = 60 * time.Second
+
+	// maxUpstreamResponseSize preserves the retired Python proxy's response
+	// body limit and prevents an oversized Loki response from exhausting memory.
+	maxUpstreamResponseSize = 10 * 1024 * 1024
+
+	// lokiTenantHeader and lokiTenantID preserve the tenant header sent by the
+	// retired Python proxy to the LokiStack gateway.
+	lokiTenantHeader = "X-Scope-Orgid"
+	lokiTenantID     = "application"
 )
 
 // upstreamPaths maps the maas-api route to the proxied Loki read API path.
@@ -217,24 +226,21 @@ func isDigit(r rune) bool {
 // the label matchers that restrict the query, or false after writing an error
 // response when the request must not be proxied.
 //
-// Authorization applies the same stacking rules regardless of which mechanism
-// authenticated the caller (OIDC envelope, gateway-injected headers, or the
-// Kubernetes TokenReview fallback):
+// Authorization applies the same stacking rules to the TokenReview-authenticated
+// caller:
 //
 //  1. only_user=true applies the user_id filter.
-//  2. an organization on the identity applies the organization filter (the
-//     verified organization claim for OIDC callers, the gateway-injected
-//     organization header otherwise; Kubernetes-authenticated callers never
-//     carry one).
+//  2. an organization on the identity applies the organization filter
+//     (Kubernetes-authenticated callers normally carry none).
 //  3. only_user!=true with no organization requires the tenant-admin check
 //     (SubjectAccessReview keyed on the username — the OIDC
 //     preferred_username for envelope callers); admins get unfiltered,
 //     cluster-wide visibility, everyone else is rejected.
 //
-// Tech debt: any gateway- or TokenReview-authenticated caller is assumed to
+// Tech debt: any TokenReview-authenticated caller is assumed to
 // have tenant access; this should become a real SubjectAccessReview check.
 func (h *Handler) authorize(c *gin.Context, onlyUser bool) ([]*labels.Matcher, bool) {
-	requestLogger := h.requestLogger(c)
+	requestLogger := h.requestLogger(c.Request.Context(), c)
 
 	value, ok := c.Get("user")
 	if !ok {
@@ -330,7 +336,7 @@ func (h *Handler) authorizeTenantAdmin(c *gin.Context, user *token.UserContext, 
 // true an empty query parameter is passed through untouched (Loki rejects it).
 func (h *Handler) proxyHandler(upstreamPath string, queryEndpoint bool) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		requestLogger := h.requestLogger(c)
+		requestLogger := h.requestLogger(c.Request.Context(), c)
 
 		// only_user=true narrows the query to the caller's own logs and lowers
 		// the authorization bar to the organization user group. Any other value
@@ -389,6 +395,7 @@ func (h *Handler) proxyHandler(upstreamPath string, queryEndpoint bool) gin.Hand
 		if token := h.bearerToken(requestLogger); token != "" {
 			req.Header.Set("Authorization", "Bearer "+token)
 		}
+		req.Header.Set(lokiTenantHeader, lokiTenantID)
 
 		resp, err := h.client.Do(req)
 		if err != nil {
@@ -401,19 +408,33 @@ func (h *Handler) proxyHandler(upstreamPath string, queryEndpoint bool) gin.Hand
 			}
 		}()
 
+		body, readErr := io.ReadAll(io.LimitReader(resp.Body, maxUpstreamResponseSize+1))
+		if readErr != nil {
+			h.proxyError(c, readErr)
+			return
+		}
+		if len(body) > maxUpstreamResponseSize {
+			requestLogger.Error("Loki proxy response exceeded size limit",
+				"size", len(body), "limit", maxUpstreamResponseSize)
+			c.AbortWithStatusJSON(http.StatusBadGateway, gin.H{
+				"error":             "loki proxy response too large",
+				"exceptionCode":     "UPSTREAM_FAILURE",
+				"error_description": "the upstream Loki response exceeded the size limit",
+			})
+			return
+		}
+
 		// Pass the upstream status, content type and body through verbatim.
 		if contentType := resp.Header.Get("Content-Type"); contentType != "" {
 			c.Header("Content-Type", contentType)
 		}
 		c.Status(resp.StatusCode)
-		if _, err := io.Copy(c.Writer, resp.Body); err != nil {
-			requestLogger.Error("Failed to stream upstream Loki response", "error", err)
-		}
+		_, _ = c.Writer.Write(body)
 	}
 }
 
 func (h *Handler) proxyError(c *gin.Context, err error) {
-	h.requestLogger(c).Error("Loki proxy request failed", "error", err)
+	h.requestLogger(c.Request.Context(), c).Error("Loki proxy request failed", "error", err)
 	c.AbortWithStatusJSON(http.StatusBadGateway, gin.H{
 		"error":             "loki proxy failure",
 		"exceptionCode":     "UPSTREAM_FAILURE",
@@ -421,9 +442,9 @@ func (h *Handler) proxyError(c *gin.Context, err error) {
 	})
 }
 
-func (h *Handler) requestLogger(c *gin.Context) *logger.Logger {
+func (h *Handler) requestLogger(ctx context.Context, c *gin.Context) *logger.Logger {
 	if requestLogger := middleware.GetLogger(c); requestLogger != nil {
 		return requestLogger
 	}
-	return h.logger.WithContext(c.Request.Context())
+	return h.logger.WithContext(ctx)
 }

@@ -2,8 +2,10 @@ package token
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -375,7 +377,7 @@ func validateJSONValue(decoder *json.Decoder, depth int) error {
 func (h *Handler) ExtractVerifiedIdentityOptional() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if err := validateOptionalIdentityHeaders(c.Request.Header); err != nil {
-			h.rejectIdentity(c, err)
+			h.rejectIdentity(c.Request.Context(), c, err)
 			return
 		}
 
@@ -389,7 +391,7 @@ func (h *Handler) ExtractVerifiedIdentityOptional() gin.HandlerFunc {
 
 		identity, err := ParseIdentityEnvelope(value)
 		if err != nil {
-			h.rejectIdentity(c, err)
+			h.rejectIdentity(c.Request.Context(), c, err)
 			return
 		}
 		c.Set("verified_identity", identity)
@@ -403,19 +405,19 @@ func (h *Handler) ExtractVerifiedIdentityOptional() gin.HandlerFunc {
 func (h *Handler) ExtractVerifiedIdentity() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if err := validateOptionalIdentityHeaders(c.Request.Header); err != nil {
-			h.rejectIdentity(c, err)
+			h.rejectIdentity(c.Request.Context(), c, err)
 			return
 		}
 
 		value := c.Request.Header.Get(constant.HeaderIdentity)
 		if value == "" {
-			h.rejectIdentity(c, errors.New("trusted identity is required"))
+			h.rejectIdentity(c.Request.Context(), c, errors.New("trusted identity is required"))
 			return
 		}
 
 		identity, err := ParseIdentityEnvelope(value)
 		if err != nil {
-			h.rejectIdentity(c, err)
+			h.rejectIdentity(c.Request.Context(), c, err)
 			return
 		}
 		c.Set("verified_identity", identity)
@@ -428,14 +430,14 @@ func (h *Handler) ExtractVerifiedIdentity() gin.HandlerFunc {
 // trusted username/group identity headers.
 func (h *Handler) GetMe(c *gin.Context) {
 	if hasInferenceAPIKeyCredential(c.Request.Header) {
-		h.rejectIdentity(c, errors.New("inference API keys are not accepted"))
+		h.rejectIdentity(c.Request.Context(), c, errors.New("inference API keys are not accepted"))
 		return
 	}
 
 	if value, exists := c.Get("verified_identity"); exists {
 		identity, ok := value.(*VerifiedIdentity)
 		if !ok || identity == nil {
-			h.rejectIdentity(c, errors.New("trusted identity is invalid"))
+			h.rejectIdentity(c.Request.Context(), c, errors.New("trusted identity is invalid"))
 			return
 		}
 
@@ -459,7 +461,7 @@ func (h *Handler) GetMe(c *gin.Context) {
 	userValue, userExists := c.Get("user")
 	user, userOK := userValue.(*UserContext)
 	if !userExists || !userOK || user == nil || user.Username == "" {
-		h.rejectIdentity(c, errors.New("trusted identity is required"))
+		h.rejectIdentity(c.Request.Context(), c, errors.New("trusted identity is required"))
 		return
 	}
 
@@ -494,8 +496,27 @@ func hasInferenceAPIKeyCredential(header http.Header) bool {
 func (h *Handler) RejectTrustedIdentityHeaders() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if err := validateTrustedIdentityHeaders(c.Request.Header); err != nil {
-			h.rejectIdentity(c, err)
+			h.rejectIdentity(c.Request.Context(), c, err)
 			return
+		}
+		c.Next()
+	}
+}
+
+// RejectKubernetesOnlyIdentityHeaders prevents gateway identity transports from
+// being used on routes that authenticate exclusively with TokenReview.
+func (h *Handler) RejectKubernetesOnlyIdentityHeaders() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		for _, header := range []string{
+			constant.HeaderIdentity,
+			constant.HeaderUsername,
+			constant.HeaderGroup,
+			constant.HeaderOrganizationID,
+		} {
+			if len(c.Request.Header.Values(header)) > 0 {
+				h.rejectIdentity(c.Request.Context(), c, fmt.Errorf("%s header is not accepted", header))
+				return
+			}
 		}
 		c.Next()
 	}
@@ -524,8 +545,8 @@ func validateTrustedIdentityHeaders(header http.Header) error {
 	return nil
 }
 
-func (h *Handler) rejectIdentity(c *gin.Context, err error) {
-	requestLogger := h.logger.WithContext(c.Request.Context())
+func (h *Handler) rejectIdentity(ctx context.Context, c *gin.Context, err error) {
+	requestLogger := h.logger.WithContext(ctx)
 	requestLogger.Warn("Rejected trusted identity transport",
 		"error", err.Error(),
 		"identity_header_bytes", len(c.Request.Header.Get(constant.HeaderIdentity)),

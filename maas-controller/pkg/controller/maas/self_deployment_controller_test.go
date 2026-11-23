@@ -887,21 +887,17 @@ func TestEnsureUsageLogs(t *testing.T) {
 	gvkClusterRoleBinding := schema.GroupVersionKind{
 		Group: "rbac.authorization.k8s.io", Version: "v1", Kind: "ClusterRoleBinding",
 	}
-	gvkNetworkPolicy := schema.GroupVersionKind{
-		Group: "networking.k8s.io", Version: "v1", Kind: "NetworkPolicy",
-	}
 
 	usageLogsPath := lifecycleUsageLogsPath(t)
 
 	cases := []struct {
-		name             string
-		spec             maasv1alpha1.ConfigSpec
-		wantCollector    bool
-		wantLokiInstance string
+		name          string
+		spec          maasv1alpha1.ConfigSpec
+		wantCollector bool
 	}{
-		{name: "usageLogging unset uses dsci-managed", spec: maasv1alpha1.ConfigSpec{}, wantCollector: false, wantLokiInstance: "data-science-usage-logs-lokistack"},
-		{name: "usageLogging false uses dsci-managed", spec: maasv1alpha1.ConfigSpec{UsageLogging: ptr.To(false)}, wantCollector: false, wantLokiInstance: "data-science-usage-logs-lokistack"},
-		{name: "usageLogging true uses usage-logs", spec: maasv1alpha1.ConfigSpec{UsageLogging: ptr.To(true)}, wantCollector: true, wantLokiInstance: "usage"},
+		{name: "usageLogging unset uses dsci-managed", spec: maasv1alpha1.ConfigSpec{}, wantCollector: false},
+		{name: "usageLogging false uses dsci-managed", spec: maasv1alpha1.ConfigSpec{UsageLogging: ptr.To(false)}, wantCollector: false},
+		{name: "usageLogging true uses usage-logs", spec: maasv1alpha1.ConfigSpec{UsageLogging: ptr.To(true)}, wantCollector: true},
 	}
 
 	for _, tc := range cases {
@@ -918,6 +914,7 @@ func TestEnsureUsageLogs(t *testing.T) {
 			r := &LifecycleReconciler{
 				Client:                cl,
 				Scheme:                s,
+				AppNamespace:          "redhat-ai-gateway-infra",
 				MonitoringNamespace:   monitoringNS,
 				UsageLogsManifestPath: usageLogsPath,
 			}
@@ -949,17 +946,11 @@ func TestEnsureUsageLogs(t *testing.T) {
 				g.Expect(apierrors.IsNotFound(crbErr)).To(BeTrue(), "collector ClusterRoleBinding should not be deployed")
 			}
 
-			dep := &appsv1.Deployment{}
-			g.Expect(cl.Get(context.Background(), client.ObjectKey{
-				Name: usageLogsTenancyProxyDeploymentName, Namespace: monitoringNS,
-			}, dep)).To(Succeed(), "tenancy proxy Deployment should exist")
-
-			np := &unstructured.Unstructured{}
-			np.SetGroupVersionKind(gvkNetworkPolicy)
-			g.Expect(cl.Get(context.Background(), client.ObjectKey{
-				Name: "usage-tenancy-proxy-egress-restrict", Namespace: monitoringNS,
-			}, np)).To(Succeed())
-			g.Expect(lokiStackInstanceLabel(np)).To(Equal(tc.wantLokiInstance))
+			proxy := &appsv1.Deployment{}
+			proxyErr := cl.Get(context.Background(), client.ObjectKey{
+				Name: "usage-logs-tenancy-proxy", Namespace: monitoringNS,
+			}, proxy)
+			g.Expect(apierrors.IsNotFound(proxyErr)).To(BeTrue(), "tenancy proxy Deployment should not exist")
 		})
 	}
 
@@ -975,6 +966,7 @@ func TestEnsureUsageLogs(t *testing.T) {
 		r := &LifecycleReconciler{
 			Client:                cl,
 			Scheme:                s,
+			AppNamespace:          "redhat-ai-gateway-infra",
 			MonitoringNamespace:   monitoringNS,
 			UsageLogsManifestPath: usageLogsPath,
 		}
@@ -999,18 +991,6 @@ func TestEnsureUsageLogs(t *testing.T) {
 		g.Expect(r.ensureUsageLogs(context.Background(), ctrl.Log)).To(Succeed())
 
 		expectUsageLogsOnlyResources(t, g, cl, monitoringNS, false)
-
-		dep := &appsv1.Deployment{}
-		g.Expect(cl.Get(context.Background(), client.ObjectKey{
-			Name: usageLogsTenancyProxyDeploymentName, Namespace: monitoringNS,
-		}, dep)).To(Succeed(), "tenancy proxy Deployment should remain")
-
-		np := &unstructured.Unstructured{}
-		np.SetGroupVersionKind(gvkNetworkPolicy)
-		g.Expect(cl.Get(context.Background(), client.ObjectKey{
-			Name: "usage-tenancy-proxy-egress-restrict", Namespace: monitoringNS,
-		}, np)).To(Succeed())
-		g.Expect(lokiStackInstanceLabel(np)).To(Equal("data-science-usage-logs-lokistack"))
 	})
 
 	t.Run("enabling usageLogging creates usage-logs resources and keeps shared ones", func(t *testing.T) {
@@ -1025,6 +1005,7 @@ func TestEnsureUsageLogs(t *testing.T) {
 		r := &LifecycleReconciler{
 			Client:                cl,
 			Scheme:                s,
+			AppNamespace:          "redhat-ai-gateway-infra",
 			MonitoringNamespace:   monitoringNS,
 			UsageLogsManifestPath: usageLogsPath,
 		}
@@ -1040,22 +1021,7 @@ func TestEnsureUsageLogs(t *testing.T) {
 		g.Expect(r.ensureUsageLogs(context.Background(), ctrl.Log)).To(Succeed())
 		expectUsageLogsOnlyResources(t, g, cl, monitoringNS, true)
 
-		dep := &appsv1.Deployment{}
-		g.Expect(cl.Get(context.Background(), client.ObjectKey{
-			Name: usageLogsTenancyProxyDeploymentName, Namespace: monitoringNS,
-		}, dep)).To(Succeed(), "tenancy proxy Deployment should remain")
-
-		np := &unstructured.Unstructured{}
-		np.SetGroupVersionKind(gvkNetworkPolicy)
-		g.Expect(cl.Get(context.Background(), client.ObjectKey{
-			Name: "usage-tenancy-proxy-egress-restrict", Namespace: monitoringNS,
-		}, np)).To(Succeed())
-		g.Expect(lokiStackInstanceLabel(np)).To(Equal("usage"))
-
 		g.Expect(r.ensureUsageLogs(context.Background(), ctrl.Log)).To(Succeed())
-		g.Expect(cl.Get(context.Background(), client.ObjectKey{
-			Name: usageLogsTenancyProxyDeploymentName, Namespace: monitoringNS,
-		}, dep)).To(Succeed(), "shared resources should survive another reconcile")
 		expectUsageLogsOnlyResources(t, g, cl, monitoringNS, true)
 	})
 
@@ -1083,6 +1049,7 @@ func TestEnsureUsageLogs(t *testing.T) {
 		r := &LifecycleReconciler{
 			Client:                cl,
 			Scheme:                s,
+			AppNamespace:          "redhat-ai-gateway-infra",
 			MonitoringNamespace:   monitoringNS,
 			UsageLogsManifestPath: usageLogsPath,
 		}
@@ -1098,54 +1065,6 @@ func TestEnsureUsageLogs(t *testing.T) {
 		gotCRB.SetGroupVersionKind(gvkClusterRoleBinding)
 		g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: "usage-collector-application-logs-write"}, gotCRB)).To(Succeed())
 		g.Expect(gotCRB.GetOwnerReferences()).To(BeEmpty())
-	})
-
-	t.Run("tenancy proxy serves TLS 1.3 with hybrid post-quantum key exchange", func(t *testing.T) {
-		g := NewWithT(t)
-		s := lifecycleTestScheme(t)
-
-		cfg := &maasv1alpha1.Config{
-			ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName, UID: types.UID("cfg-uid")},
-			Spec:       maasv1alpha1.ConfigSpec{UsageLogging: ptr.To(false)},
-		}
-		cl := newSSAFakeClientBuilder(s).WithStatusSubresource(&maasv1alpha1.Config{}).WithObjects(cfg).Build()
-		r := &LifecycleReconciler{
-			Client:                cl,
-			Scheme:                s,
-			MonitoringNamespace:   monitoringNS,
-			UsageLogsManifestPath: usageLogsPath,
-		}
-
-		g.Expect(r.ensureUsageLogs(context.Background(), ctrl.Log)).To(Succeed())
-
-		dep := &appsv1.Deployment{}
-		g.Expect(cl.Get(context.Background(), client.ObjectKey{
-			Name: usageLogsTenancyProxyDeploymentName, Namespace: monitoringNS,
-		}, dep)).To(Succeed())
-
-		var proxy *corev1.Container
-		for i := range dep.Spec.Template.Spec.Containers {
-			if dep.Spec.Template.Spec.Containers[i].Name == usageLogsTenancyProxyContainerName {
-				proxy = &dep.Spec.Template.Spec.Containers[i]
-			}
-		}
-		g.Expect(proxy).NotTo(BeNil(), "proxy container should exist")
-
-		openSSLConf := ""
-		for _, env := range proxy.Env {
-			if env.Name == "OPENSSL_CONF" {
-				openSSLConf = env.Value
-			}
-		}
-		g.Expect(openSSLConf).To(Equal("/opt/app-root/src/proxy/openssl.conf"))
-
-		cm := &corev1.ConfigMap{}
-		g.Expect(cl.Get(context.Background(), client.ObjectKey{
-			Name: "usage-tenancy-proxy-source", Namespace: monitoringNS,
-		}, cm)).To(Succeed())
-		g.Expect(cm.Data).To(HaveKey("openssl.conf"))
-		g.Expect(cm.Data["openssl.conf"]).To(ContainSubstring("X25519MLKEM768"))
-		g.Expect(cm.Data["main.py"]).To(ContainSubstring("TLSVersion.TLSv1_3"))
 	})
 }
 
@@ -1419,121 +1338,6 @@ func TestEnsureObservability_EmptyMonitoringNamespace(t *testing.T) {
 	})
 }
 
-func TestPatchTenancyProxyImage(t *testing.T) {
-	t.Run("patches proxy container image when RELATED_IMAGE set", func(t *testing.T) {
-		g := NewWithT(t)
-		t.Setenv("RELATED_IMAGE_ODH_PYTHON_312_IMAGE", "quay.io/example/tenancy-proxy:test")
-
-		deployment := &unstructured.Unstructured{
-			Object: map[string]any{
-				"apiVersion": "apps/v1",
-				"kind":       "Deployment",
-				"metadata": map[string]any{
-					"name": "usage-logs-tenancy-proxy",
-				},
-				"spec": map[string]any{
-					"template": map[string]any{
-						"spec": map[string]any{
-							"containers": []any{
-								map[string]any{
-									"name":  "proxy",
-									"image": "registry.redhat.io/ubi9/python-312@sha256:f6713d327d37e654a443752e6654b5aab88f31690e1161eed9c34dd837870172",
-								},
-							},
-						},
-					},
-				},
-			},
-		}
-
-		err := patchTenancyProxyImage(deployment)
-		g.Expect(err).NotTo(HaveOccurred())
-
-		containers, found, err := unstructured.NestedSlice(deployment.Object, "spec", "template", "spec", "containers")
-		g.Expect(err).NotTo(HaveOccurred())
-		g.Expect(found).To(BeTrue())
-		g.Expect(containers).To(HaveLen(1))
-
-		container, ok := containers[0].(map[string]any)
-		g.Expect(ok).To(BeTrue())
-		g.Expect(container["image"]).To(Equal("quay.io/example/tenancy-proxy:test"))
-	})
-
-	t.Run("uses default image when RELATED_IMAGE not set", func(t *testing.T) {
-		g := NewWithT(t)
-
-		deployment := &unstructured.Unstructured{
-			Object: map[string]any{
-				"apiVersion": "apps/v1",
-				"kind":       "Deployment",
-				"metadata": map[string]any{
-					"name": "usage-logs-tenancy-proxy",
-				},
-				"spec": map[string]any{
-					"template": map[string]any{
-						"spec": map[string]any{
-							"containers": []any{
-								map[string]any{
-									"name": "proxy",
-								},
-							},
-						},
-					},
-				},
-			},
-		}
-
-		err := patchTenancyProxyImage(deployment)
-		g.Expect(err).NotTo(HaveOccurred())
-
-		containers, found, err := unstructured.NestedSlice(deployment.Object, "spec", "template", "spec", "containers")
-		g.Expect(err).NotTo(HaveOccurred())
-		g.Expect(found).To(BeTrue())
-
-		container, ok := containers[0].(map[string]any)
-		g.Expect(ok).To(BeTrue())
-		g.Expect(container["image"]).To(Equal(DefaultUsageLogsTenancyProxyImage))
-	})
-
-	t.Run("ignores non-matching deployment", func(t *testing.T) {
-		g := NewWithT(t)
-		t.Setenv("RELATED_IMAGE_ODH_PYTHON_312_IMAGE", "quay.io/example/tenancy-proxy:test")
-
-		deployment := &unstructured.Unstructured{
-			Object: map[string]any{
-				"apiVersion": "apps/v1",
-				"kind":       "Deployment",
-				"metadata": map[string]any{
-					"name": "some-other-deployment",
-				},
-				"spec": map[string]any{
-					"template": map[string]any{
-						"spec": map[string]any{
-							"containers": []any{
-								map[string]any{
-									"name":  "proxy",
-									"image": "registry.redhat.io/ubi9/python-312@sha256:f6713d327d37e654a443752e6654b5aab88f31690e1161eed9c34dd837870172",
-								},
-							},
-						},
-					},
-				},
-			},
-		}
-
-		err := patchTenancyProxyImage(deployment)
-		g.Expect(err).NotTo(HaveOccurred())
-
-		containers, found, err := unstructured.NestedSlice(deployment.Object, "spec", "template", "spec", "containers")
-		g.Expect(err).NotTo(HaveOccurred())
-		g.Expect(found).To(BeTrue())
-
-		container, ok := containers[0].(map[string]any)
-		g.Expect(ok).To(BeTrue())
-		g.Expect(container["image"]).To(Equal("registry.redhat.io/ubi9/python-312@sha256:f6713d327d37e654a443752e6654b5aab88f31690e1161eed9c34dd837870172"))
-	})
-}
-
 func TestPatchPersesDatasourceURL(t *testing.T) {
 	t.Run("expands short service reference to FQDN", func(t *testing.T) {
 		g := NewWithT(t)
@@ -1552,7 +1356,7 @@ func TestPatchPersesDatasourceURL(t *testing.T) {
 							"spec": map[string]any{
 								"proxy": map[string]any{
 									"spec": map[string]any{
-										"url": "https://usage-logs-tenancy-proxy:8443",
+										"url": "https://maas-api:8443/v1/logs",
 									},
 								},
 							},
@@ -1562,14 +1366,14 @@ func TestPatchPersesDatasourceURL(t *testing.T) {
 			},
 		}
 
-		err := patchPersesDatasourceURL(datasource)
+		err := patchPersesDatasourceURL(datasource, "odh-ai-gateway-infra")
 		g.Expect(err).NotTo(HaveOccurred())
 
 		url, found, err := unstructured.NestedString(datasource.Object,
 			"spec", "config", "plugin", "spec", "proxy", "spec", "url")
 		g.Expect(err).NotTo(HaveOccurred())
 		g.Expect(found).To(BeTrue())
-		g.Expect(url).To(Equal("https://usage-logs-tenancy-proxy.redhat-ods-monitoring.svc:8443"))
+		g.Expect(url).To(Equal("https://maas-api.odh-ai-gateway-infra.svc.cluster.local:8443/v1/logs"))
 	})
 
 	t.Run("expands service reference with path", func(t *testing.T) {
@@ -1599,14 +1403,14 @@ func TestPatchPersesDatasourceURL(t *testing.T) {
 			},
 		}
 
-		err := patchPersesDatasourceURL(datasource)
+		err := patchPersesDatasourceURL(datasource, "redhat-ai-gateway-infra")
 		g.Expect(err).NotTo(HaveOccurred())
 
 		url, found, err := unstructured.NestedString(datasource.Object,
 			"spec", "config", "plugin", "spec", "proxy", "spec", "url")
 		g.Expect(err).NotTo(HaveOccurred())
 		g.Expect(found).To(BeTrue())
-		g.Expect(url).To(Equal("https://usage-gateway-http.opendatahub.svc:8080/api/logs/v1/application"))
+		g.Expect(url).To(Equal("https://usage-gateway-http.opendatahub.svc.cluster.local:8080/api/logs/v1/application"))
 	})
 
 	t.Run("skips already-qualified URLs", func(t *testing.T) {
@@ -1626,7 +1430,7 @@ func TestPatchPersesDatasourceURL(t *testing.T) {
 							"spec": map[string]any{
 								"proxy": map[string]any{
 									"spec": map[string]any{
-										"url": "https://usage-logs-tenancy-proxy.opendatahub.svc:8443",
+										"url": "https://maas-api.opendatahub.svc:8443/v1/logs",
 									},
 								},
 							},
@@ -1636,14 +1440,14 @@ func TestPatchPersesDatasourceURL(t *testing.T) {
 			},
 		}
 
-		err := patchPersesDatasourceURL(datasource)
+		err := patchPersesDatasourceURL(datasource, "redhat-ai-gateway-infra")
 		g.Expect(err).NotTo(HaveOccurred())
 
 		url, found, err := unstructured.NestedString(datasource.Object,
 			"spec", "config", "plugin", "spec", "proxy", "spec", "url")
 		g.Expect(err).NotTo(HaveOccurred())
 		g.Expect(found).To(BeTrue())
-		g.Expect(url).To(Equal("https://usage-logs-tenancy-proxy.opendatahub.svc:8443"),
+		g.Expect(url).To(Equal("https://maas-api.opendatahub.svc:8443/v1/logs"),
 			"should not modify already-qualified URL")
 	})
 
@@ -1661,7 +1465,7 @@ func TestPatchPersesDatasourceURL(t *testing.T) {
 			},
 		}
 
-		err := patchPersesDatasourceURL(configMap)
+		err := patchPersesDatasourceURL(configMap, "redhat-ai-gateway-infra")
 		g.Expect(err).NotTo(HaveOccurred())
 	})
 }
