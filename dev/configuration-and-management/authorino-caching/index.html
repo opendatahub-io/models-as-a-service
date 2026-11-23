@@ -2277,6 +2277,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#cache-entry-size" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cache Entry Size
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#when-to-tune" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3484,6 +3495,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#cache-entry-size" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cache Entry Size
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#when-to-tune" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3531,47 +3553,46 @@
 
 
 <h1 id="authorino-caching-configuration">Authorino Caching Configuration</h1>
-<p>This document describes how to tune Authorino cache TTLs for metadata and authorization evaluators in MaaS.</p>
+<p>This document describes how to tune the Authorino cache TTL for metadata evaluators in MaaS.</p>
 <hr />
 <h2 id="what-is-cached">What is Cached</h2>
-<p>MaaS-generated AuthPolicy resources enable caching on:</p>
+<p>MaaS-generated AuthPolicy resources cache the metadata evaluators that call maas-api:</p>
 <ul>
-<li><strong>Metadata evaluators</strong> (HTTP calls to maas-api):</li>
 <li><code>apiKeyValidation</code> - validates API keys and returns user identity + groups</li>
-<li>
-<p><code>subscription-info</code> - selects the appropriate subscription for the request</p>
-</li>
-<li>
-<p><strong>Authorization evaluators</strong> (OPA policy evaluation):</p>
-</li>
-<li><code>auth-valid</code>, <code>subscription-valid</code>, <code>require-group-membership</code></li>
+<li><code>subscription-info</code> - selects the appropriate subscription for the request</li>
 </ul>
-<p>Caching reduces load on maas-api and OPA CPU by reusing results when the cache key repeats within the TTL window. Cache keys are scoped to the individual API key (using the full unique key string, equivalent to keying on the token JTI), plus groups, subscription, and model, to prevent cross-principal or cross-subscription cache sharing.</p>
+<p>Authorization evaluators are not cached. They recompute from the cached metadata on
+every request; caching their results could retain an allow decision after newer
+metadata contains a denial.</p>
+<p>Caching reduces load on maas-api by reusing results when the cache key repeats within the TTL window. The <code>apiKeyValidation</code> key is the API key itself. The <code>subscription-info</code> key covers every input of the subscription select request, so requests only share a cached result when they send maas-api the same request:</p>
+<ul>
+<li><strong>API keys:</strong> the key ID, the key's username and bound subscription, and the model. A key's groups are fixed when it is created, so they are left out, and the <code>X-MaaS-Subscription</code> header does not change the cached result.</li>
+<li><strong>OpenShift and OIDC tokens:</strong> the identity, groups, requested subscription, and model.</li>
+</ul>
+<p>An entry larger than Authorino's per-entry limit is not cached; see <a href="#cache-entry-size">Cache Entry Size</a>.</p>
 <hr />
 <h2 id="configuration">Configuration</h2>
 <h3 id="cli-flags">CLI Flags</h3>
-<p>The maas-controller deployment configures cache TTLs with command-line flags:</p>
+<p>The maas-controller deployment configures the cache TTL with a command-line flag:</p>
 <ul>
-<li><code>--metadata-cache-ttl</code>: TTL for metadata HTTP caching in seconds. Default: <code>60</code>. Must be <code>&gt;= 0</code>.</li>
-<li><code>--authz-cache-ttl</code>: TTL for OPA authorization caching in seconds. Default: <code>60</code>. Must be <code>&gt;= 0</code>.</li>
+<li><code>--metadata-cache-ttl</code>: TTL for metadata HTTP caching in seconds. Default: <code>60</code>. Must be <code>&gt;= 0</code>; <code>0</code> disables caching.</li>
+<li><code>--authz-cache-ttl</code>: Deprecated and ignored. It remains accepted so existing deployments continue to start.</li>
 </ul>
-<p><strong>Authorization cache TTL capping:</strong> Authorization caches are automatically capped at the metadata cache TTL to prevent stale authorization decisions. If the configured authorization TTL is greater than the configured metadata TTL, the authorization cache uses the metadata TTL instead, and a warning is logged at startup.</p>
 <h3 id="deployment-configuration">Deployment Configuration</h3>
 <h4 id="via-controller-deployment-args-running-cluster">Via controller Deployment args (running cluster)</h4>
-<p>The cache TTLs are configured as command-line flags on the maas-controller Deployment. To change them on a running cluster, patch the Deployment args and restart:</p>
+<p>The cache TTL is configured as a command-line flag on the maas-controller Deployment. To change it on a running cluster, patch the Deployment args and restart:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nv">CONTROLLER_NS</span><span class="o">=</span>opendatahub
-<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>
-<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>kubectl<span class="w"> </span>patch<span class="w"> </span>deployment<span class="w"> </span>maas-controller<span class="w"> </span>-n<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$CONTROLLER_NS</span><span class="s2">&quot;</span><span class="w"> </span>--type<span class="o">=</span><span class="s1">&#39;json&#39;</span><span class="w"> </span>-p<span class="o">=</span><span class="s1">&#39;[</span>
-<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="s1">  {&quot;op&quot;:&quot;replace&quot;,&quot;path&quot;:&quot;/spec/template/spec/containers/0/args/6&quot;,&quot;value&quot;:&quot;--metadata-cache-ttl=300&quot;},</span>
-<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="s1">  {&quot;op&quot;:&quot;replace&quot;,&quot;path&quot;:&quot;/spec/template/spec/containers/0/args/7&quot;,&quot;value&quot;:&quot;--authz-cache-ttl=30&quot;}</span>
-<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="s1">]&#39;</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="nv">ARGS</span><span class="o">=</span><span class="k">$(</span>kubectl<span class="w"> </span>get<span class="w"> </span>deployment<span class="w"> </span>maas-controller<span class="w"> </span>-n<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$CONTROLLER_NS</span><span class="s2">&quot;</span><span class="w"> </span>-o<span class="w"> </span>json<span class="w"> </span><span class="p">|</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">  </span>jq<span class="w"> </span>-c<span class="w"> </span><span class="s1">&#39;.spec.template.spec.containers[0].args | map(select(startswith(&quot;--metadata-cache-ttl=&quot;) | not)) + [&quot;--metadata-cache-ttl=300&quot;]&#39;</span><span class="k">)</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>kubectl<span class="w"> </span>patch<span class="w"> </span>deployment<span class="w"> </span>maas-controller<span class="w"> </span>-n<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$CONTROLLER_NS</span><span class="s2">&quot;</span><span class="w"> </span>--type<span class="o">=</span><span class="s1">&#39;json&#39;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="w">  </span>-p<span class="o">=</span><span class="s2">&quot;[{\&quot;op\&quot;:\&quot;replace\&quot;,\&quot;path\&quot;:\&quot;/spec/template/spec/containers/0/args\&quot;,\&quot;value\&quot;:</span><span class="si">${</span><span class="nv">ARGS</span><span class="si">}</span><span class="s2">}]&quot;</span>
 </code></pre></div>
 <h4 id="via-manageryaml-base-deployment">Via manager.yaml (base deployment)</h4>
 <p>Edit <code>deployment/base/maas-controller/manager/manager.yaml</code> to change hardcoded values:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nt">args</span><span class="p">:</span>
 <a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">  </span><span class="c1"># ... other args ...</span>
 <a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">--metadata-cache-ttl=300</span><span class="w">  </span><span class="c1"># 5 minutes</span>
-<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">--authz-cache-ttl=30</span><span class="w">      </span><span class="c1"># 30 seconds</span>
 </code></pre></div>
 <blockquote>
 <p><strong>Note on Customization:</strong> Direct modification of Authorino deployments or settings may interact with operator reconciliation during upgrades. Test changes in non-production environments and document any customizations for support handoff.</p>
@@ -3581,9 +3602,11 @@
 <h3 id="stale-data-window">Stale Data Window</h3>
 <p>Cache TTL represents the maximum staleness window for access control changes:</p>
 <ul>
-<li><strong>API key revocation or group membership changes:</strong> May take up to the configured metadata cache TTL to propagate</li>
-<li><strong>Subscription selection:</strong> If a user's group membership changes, the cached subscription selection uses the old groups until the metadata cache TTL expires</li>
-<li><strong>Authorization policy changes:</strong> May take up to the effective authorization cache TTL (the minimum of the configured authorization TTL and metadata TTL) to propagate</li>
+<li><strong>API key revocation:</strong> May take up to the configured metadata cache TTL to propagate</li>
+<li><strong>API key expiry:</strong> Not delayed; maas-api returns expiry with validation, and the gateway checks it on every request</li>
+<li><strong>Group membership changes:</strong> API keys keep the groups they were created with, so a change needs a new key. For OpenShift and OIDC tokens the groups are part of the <code>subscription-info</code> cache key, so a request with different groups never gets a cached selection</li>
+<li><strong>Subscription changes:</strong> May take up to the metadata cache TTL to propagate, because a cached selection is reused until it expires</li>
+<li><strong>Authorization policy changes:</strong> May take up to the metadata cache TTL to propagate because the affected metadata can remain cached</li>
 </ul>
 <h4 id="security-implication-revocation-lag">Security implication: revocation lag</h4>
 <blockquote>
@@ -3600,22 +3623,86 @@
 </code></pre></div></li>
 <li><strong>Wait for TTL to expire</strong> — acceptable for non-urgent revocations; the default window is 60 seconds.</li>
 </ol>
+<h3 id="cache-entry-size">Cache Entry Size</h3>
+<p>Authorino gives every cached evaluator its own cache of <code>evaluatorCacheSize</code> megabytes (default <code>1</code>), split into 256 segments. It does not store an entry (cache key plus cached response) larger than a quarter of a segment minus 24 bytes. An entry that does not fit is skipped without an error: the request still succeeds, but maas-api is called on every request.</p>
+<p>MaaS wraps each cache key in a one-element list, which makes Authorino store a 32-byte hash of the key instead of the key itself. What counts against the limit is therefore the cached response.</p>
+<table>
+<thead>
+<tr>
+<th><code>evaluatorCacheSize</code></th>
+<th>Largest cached entry (key + response)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1 (default)</td>
+<td>1000 bytes</td>
+</tr>
+<tr>
+<td>2</td>
+<td>2024 bytes</td>
+</tr>
+<tr>
+<td>4</td>
+<td>4072 bytes</td>
+</tr>
+</tbody>
+</table>
+<p>maas-api leaves display metadata, labels and the model list out of the select response, so a long description or many models do not grow an entry. What grows it is the groups <code>apiKeyValidation</code> returns, and the headers (<code>experimental.maas.opendatahub.io/headers</code>) and guardrail checks the subscription returns.</p>
+<table>
+<thead>
+<tr>
+<th>Lookup</th>
+<th>Where groups count</th>
+<th>Cost per group</th>
+<th>Fits at size 1 (default)</th>
+<th>At size 2</th>
+<th>At size 4</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>subscription-info</code>, any identity</td>
+<td>nowhere: the key is stored as a hash, and the response carries no groups</td>
+<td>none</td>
+<td>any number</td>
+<td>any number</td>
+<td>any number</td>
+</tr>
+<tr>
+<td><code>apiKeyValidation</code>, API keys</td>
+<td>the response, which lists the key's groups twice</td>
+<td>about twice the name length plus 8 bytes</td>
+<td>about 6 groups</td>
+<td>about 20 groups</td>
+<td>about 48 groups</td>
+</tr>
+</tbody>
+</table>
+<p>The group counts assume 33-character group names and were measured on OpenShift with RHCL 1.4.3. Usernames, subscription names, subscription headers and guardrail checks also count, so treat them as rough. The groups that count are the ones the user had when the key was created.</p>
+<p>To see how many groups an OpenShift user has and how long their names are:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>oc<span class="w"> </span>get<span class="w"> </span>groups<span class="w"> </span>-o<span class="w"> </span>json<span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span>-r<span class="w"> </span>--arg<span class="w"> </span>u<span class="w"> </span>alice<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span><span class="s1">&#39;[.items[] | select(.users // [] | index($u)) | .metadata.name] | &quot;\(length) groups, \(join(&quot;&quot;) | length) characters&quot;&#39;</span>
+</code></pre></div>
+<p>To raise the limit, patch the Authorino CR in the Kuadrant namespace (<code>kuadrant-system</code> by default). Kuadrant does not manage this field, so the change persists:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>oc<span class="w"> </span>patch<span class="w"> </span>authorino<span class="w"> </span>authorino<span class="w"> </span>-n<span class="w"> </span>kuadrant-system<span class="w"> </span>--type<span class="w"> </span>merge<span class="w"> </span>-p<span class="w"> </span><span class="s1">&#39;{&quot;spec&quot;:{&quot;evaluatorCacheSize&quot;:4}}&#39;</span>
+</code></pre></div>
+<p>The operator restarts the Authorino pods, so caches start empty. Each cached evaluator of every AuthConfig gets its own cache, and MaaS caches two evaluators per AuthConfig. Kuadrant creates one AuthConfig per HTTPRoute rule behind the gateway, so memory per Authorino pod can grow up to the number of AuthConfigs times 2 times <code>evaluatorCacheSize</code> MB. Each cache only fills with entries for requests on its own route.</p>
 <h3 id="when-to-tune">When to Tune</h3>
 <p><strong>Increase metadata cache TTL</strong> if:
 - maas-api experiences high load from repeated validation calls
 - API key metadata changes infrequently
 - Example: <code>--metadata-cache-ttl=300</code> (5 minutes) reduces maas-api load by 5x</p>
-<p><strong>Decrease authorization cache TTL</strong> if:
-- Users are frequently added/removed from groups
-- Faster access change propagation is required for compliance
-- Example: <code>--authz-cache-ttl=30</code> (30 seconds) for faster group membership updates</p>
 <p><strong>Decrease metadata cache TTL</strong> if:
-- Faster API key revocation propagation is required (e.g., compliance or security policy requires a shorter revocation-lag window)
+- Faster API key revocation or subscription-change propagation is required (e.g., compliance or security policy requires a shorter staleness window)
 - Note: this increases load on maas-api's <code>/internal/v1/api-keys/validate</code> endpoint proportionally; monitor request rates before and after</p>
+<p><strong>Increase <code>evaluatorCacheSize</code></strong> if:
+- API keys of users in many groups call <code>/internal/v1/api-keys/validate</code> on every request even with caching enabled (see <a href="#cache-entry-size">Cache Entry Size</a>)</p>
 <p><strong>Monitor after changes:</strong>
-- maas-api load: Reduced <code>/internal/v1/api-keys/validate</code> and <code>/internal/v1/subscriptions/select</code> call rates
-- Authorino CPU: Reduced OPA evaluation usage
+- maas-api load: Reduced <code>/internal/v1/api-keys/validate</code> and <code>/internal/v1/subscriptions/select</code> call rates. Compare <code>maas_api_http_requests_total</code> for those routes with the gateway request rate; a ratio near 1 means lookups are not being cached
+- Authorino CPU: Reduced HTTP evaluator work
 - Request latency: Cache hits should show lower P99 latency</p>
+<p>If <code>/internal/v1/subscriptions/select</code> or <code>/internal/v1/api-keys/validate</code> calls stay close to the request rate after enabling caching, check <a href="#cache-entry-size">Cache Entry Size</a>: an entry that exceeds Authorino's per-entry limit is not stored.</p>
 <hr />
 <h2 id="references">References</h2>
 <ul>
@@ -3644,7 +3731,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="July 9, 2026 13:27:37 UTC">July 9, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="November 23, 2026 17:08:01 UTC">November 23, 2026</span>
   </span>
 
     
