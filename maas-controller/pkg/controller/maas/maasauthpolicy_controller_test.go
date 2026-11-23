@@ -1531,6 +1531,9 @@ func TestMaaSAuthPolicyReconciler_CacheKeyIsolation(t *testing.T) {
 		if !contains(key, `replace("Bearer ", "")`) {
 			t.Errorf("auth-valid cache key must include API key extraction expression, got: %s", key)
 		}
+		if !contains(key, `auth.metadata.apiKeyValidation.valid ? "valid" : "invalid"`) || !contains(key, `"unavailable"`) {
+			t.Errorf("auth-valid cache key must distinguish valid, invalid, and unavailable results, got: %s", key)
+		}
 	})
 
 	// Test 4: subscription-valid cache key must match subscription-info for coherence (gateway policy)
@@ -2374,6 +2377,9 @@ func TestBuildGatewayAuthPolicySpec_RouteScopedRules(t *testing.T) {
 		rego := nestedStringRequired(t, obj, "spec", "defaults", "rules", "authorization", "auth-valid", "opa", "rego")
 		if !contains(rego, "not input.auth.metadata.apiKeyValidation") {
 			t.Errorf("auth-valid rego should allow non-API-key tokens, got: %s", rego)
+		}
+		if !contains(rego, `not is_api_key`) || !contains(rego, `regex.match("^(Bearer )?sk-oai-.*", input.auth.identity)`) {
+			t.Errorf("auth-valid rego must fail closed when API-key validation metadata is absent, got: %s", rego)
 		}
 	})
 }
