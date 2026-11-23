@@ -3,6 +3,7 @@ package maas
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	goruntime "runtime"
 	"slices"
@@ -505,8 +506,64 @@ func TestLifecycleReconciler_PreservesReplacedTenancyProxyTLSSecret(t *testing.T
 		InfraNamespace:        "redhat-ai-gateway-infra",
 	}
 
-	g.Expect(r.ensureUsageLogs(context.Background(), ctrl.Log)).To(Succeed())
+	err := r.ensureUsageLogs(context.Background(), ctrl.Log)
+	g.Expect(err).To(HaveOccurred())
+	g.Expect(apierrors.IsConflict(err)).To(BeTrue())
 	got := &corev1.Secret{}
 	g.Expect(cl.Get(context.Background(), client.ObjectKeyFromObject(secret), got)).To(Succeed())
 	g.Expect(got.UID).To(Equal(types.UID("replacement-secret-uid")))
+}
+
+func TestDeleteOwnedRenderedResourcesPreservesReplacedResource(t *testing.T) {
+	const monitoringNS = "opendatahub"
+
+	g := NewWithT(t)
+	s := lifecycleTestScheme(t)
+	cfg := &maasv1alpha1.Config{
+		ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName, UID: types.UID("cfg-uid")},
+	}
+	resource := lifecycleTestUnstructured(
+		schema.GroupVersionKind{Group: "apps", Version: "v1", Kind: "Deployment"},
+		monitoringNS,
+		"usage-logs-tenancy-proxy",
+	)
+	resource.SetUID(types.UID("legacy-resource-uid"))
+	resource.SetResourceVersion("1")
+	resource.SetLabels(map[string]string{"app.kubernetes.io/managed-by": "maas-controller"})
+	deleteAttempted := false
+
+	cl := newSSAFakeClientBuilder(s).
+		WithStatusSubresource(&maasv1alpha1.Config{}).
+		WithObjects(cfg, resource).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+				if obj.GetName() != resource.GetName() {
+					return c.Delete(ctx, obj, opts...)
+				}
+				deleteAttempted = true
+				options := (&client.DeleteOptions{}).ApplyOptions(opts)
+				g.Expect(options.Preconditions).NotTo(BeNil())
+				g.Expect(string(*options.Preconditions.UID)).To(Equal("legacy-resource-uid"))
+				g.Expect(*options.Preconditions.ResourceVersion).To(Equal("1"))
+				return apierrors.NewConflict(
+					schema.GroupResource{Group: "apps", Resource: "deployments"},
+					resource.GetName(),
+					errors.New("resource was replaced"),
+				)
+			},
+		}).
+		Build()
+	r := &LifecycleReconciler{Client: cl, Scheme: s}
+
+	err := r.deleteOwnedRenderedResources(
+		context.Background(),
+		ctrl.Log,
+		*cfg,
+		[]unstructured.Unstructured{*resource},
+		"removed Python usage-logs tenancy proxy",
+	)
+	g.Expect(deleteAttempted).To(BeTrue())
+	g.Expect(err).To(HaveOccurred())
+	g.Expect(apierrors.IsConflict(err)).To(BeTrue())
+	g.Expect(cl.Get(context.Background(), client.ObjectKeyFromObject(resource), resource.DeepCopy())).To(Succeed())
 }

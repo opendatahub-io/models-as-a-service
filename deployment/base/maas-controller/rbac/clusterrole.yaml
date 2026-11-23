@@ -39,6 +39,14 @@ rules:
   - watch
 - apiGroups:
   - ""
+  resourceNames:
+  - usage-logs-tenancy-proxy-tls
+  resources:
+  - secrets
+  verbs:
+  - delete
+- apiGroups:
+  - ""
   resources:
   - serviceaccounts
   verbs:

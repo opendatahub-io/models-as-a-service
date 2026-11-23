@@ -55,6 +55,7 @@ import (
 )
 
 //+kubebuilder:rbac:groups=loki.grafana.com,resources=application,resourceNames=logs,verbs=get;create
+//+kubebuilder:rbac:groups="",resources=secrets,resourceNames=usage-logs-tenancy-proxy-tls,verbs=delete
 
 // CleanupFinalizer was historically added to the maas-controller Deployment for coordinated
 // teardown when ODH removed MaaS. It is no longer set; this constant remains so reconciles
@@ -771,7 +772,11 @@ func (r *LifecycleReconciler) deleteOwnedRenderedResources(
 			continue
 		}
 
-		if err := r.Delete(ctx, existing); err != nil {
+		uid, resourceVersion := existing.GetUID(), existing.GetResourceVersion()
+		if err := r.Delete(ctx, existing, client.Preconditions{
+			UID:             &uid,
+			ResourceVersion: &resourceVersion,
+		}); err != nil {
 			if apierrors.IsNotFound(err) {
 				continue
 			}
@@ -930,8 +935,8 @@ func (r *LifecycleReconciler) cleanupLegacyUsageLogsTenancyProxySecret(ctx conte
 
 	uid, resourceVersion := secret.UID, secret.ResourceVersion
 	err := r.Delete(ctx, secret, client.Preconditions{UID: &uid, ResourceVersion: &resourceVersion})
-	if apierrors.IsNotFound(err) || apierrors.IsConflict(err) {
-		log.V(1).Info("skipped deletion of replaced or modified legacy TLS Secret",
+	if apierrors.IsNotFound(err) {
+		log.V(1).Info("skipped deletion of already removed legacy TLS Secret",
 			"kind", secret.Kind, "name", secret.Name, "namespace", secret.Namespace)
 		return nil
 	}
