@@ -322,6 +322,7 @@ func (s *Service) ValidateAPIKey(ctx context.Context, key string) (*ValidationRe
 		GroupsJSON:   string(groupsJSON),
 		Subscription: metadata.Subscription,
 		Tenant:       metadata.Tenant,
+		ExpiresAt:    metadata.ExpirationDate,
 	}, nil
 }
 
