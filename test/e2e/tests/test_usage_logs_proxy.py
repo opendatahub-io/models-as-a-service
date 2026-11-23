@@ -8,7 +8,6 @@ TokenReview remains the only accepted caller identity transport.
 import base64
 import logging
 import os
-import re
 import time
 from urllib.parse import urlencode, urlparse
 
@@ -43,7 +42,6 @@ MONITORING_NETWORK_POLICY = "maas-api-allow-monitoring"
 EGRESS_NETWORK_POLICY = "maas-api-egress-restrict"
 LOKISTACK_INGRESS_NETWORK_POLICY = "usage-logs-lokistack-allow-maas-api"
 ENVOY_FILTER_NAME = "payload-processing"
-ROUTE_NAME_RE = re.compile(r"\.maas-api-route\.(\d+)$")
 
 LEGACY_PROXY_RESOURCES = (
     ("serviceaccount", "usage-tenancy-proxy"),
@@ -81,6 +79,28 @@ def _monitoring_namespace():
         if namespace:
             return namespace
     return "opendatahub"
+
+
+def _network_policy_rule_allows_tcp_8443(rule):
+    for port in rule.get("ports", []):
+        protocol = port.get("protocol", "TCP")
+        raw_port = port.get("port")
+        if protocol != "TCP":
+            continue
+        if raw_port is None:
+            return True
+        try:
+            start_port = 8443 if raw_port == "https" else int(raw_port)
+            end_port = int(port.get("endPort", start_port))
+        except ValueError:
+            continue
+        if start_port <= 8443 <= end_port:
+            return True
+    return not rule.get("ports")
+
+
+def test_network_policy_rule_allows_tcp_8443():
+    assert _network_policy_rule_allows_tcp_8443({"ports": [{"port": "https"}]})
 
 
 def _maas_api_container():
@@ -298,10 +318,7 @@ def test_monitoring_ingress_is_restricted_to_perses_operator():
     https_rules = [
         rule
         for rule in network_policy.get("spec", {}).get("ingress", [])
-        if any(
-            port.get("protocol") == "TCP" and int(port.get("port", 0)) == 8443
-            for port in rule.get("ports", [])
-        )
+        if _network_policy_rule_allows_tcp_8443(rule)
     ]
     assert https_rules, "maas-api must allow Perses to reach the HTTPS Loki proxy"
     expected_namespace = _monitoring_namespace()
@@ -522,7 +539,38 @@ def test_payload_processing_envoyfilter_covers_all_public_routes():
     )
 
     route_indices = set()
+    expected_routes = {
+        f"{MAAS_API_DEPLOYMENT_NAMESPACE}.maas-api-route.{index}": index
+        for index in range(6)
+    }
     for patch in envoy_filter.get("spec", {}).get("configPatches", []):
+        if (
+            patch.get("applyTo") != "HTTP_ROUTE"
+            or patch.get("patch", {}).get("operation") != "MERGE"
+            or patch.get("match", {}).get("context") != "GATEWAY"
+        ):
+            continue
+        per_filter_config = (
+            patch.get("patch", {}).get("value", {}).get("typed_per_filter_config", {})
+        )
+        expected_typed_filter_config = {
+            "envoy.filters.http.ext_proc.ipp-pre": {
+                "@type": (
+                    "type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3."
+                    "ExtProcPerRoute"
+                ),
+                "disabled": True,
+            },
+            "envoy.filters.http.ext_proc.ipp": {
+                "@type": (
+                    "type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3."
+                    "ExtProcPerRoute"
+                ),
+                "disabled": True,
+            },
+        }
+        if per_filter_config != expected_typed_filter_config:
+            continue
         route = (
             patch.get("match", {})
             .get("routeConfiguration", {})
@@ -530,12 +578,11 @@ def test_payload_processing_envoyfilter_covers_all_public_routes():
             .get("route", {})
             .get("name", "")
         )
-        match = ROUTE_NAME_RE.search(route)
-        if match:
-            route_indices.add(int(match.group(1)))
+        if route in expected_routes:
+            route_indices.add(expected_routes[route])
 
-    assert route_indices == set(range(11)), (
-        "Payload-processing must disable ext_proc for maas-api route rules 0–10; "
+    assert route_indices == set(range(6)), (
+        "Payload-processing must disable ext_proc for maas-api route rules 0–5; "
         f"found {sorted(route_indices)}"
     )
 

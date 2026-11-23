@@ -18,6 +18,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/platform/tenantreconcile"
@@ -272,6 +273,14 @@ func TestLifecycleReconciler_RemovesLegacyTenancyProxy(t *testing.T) {
 	legacy.SetName("usage-logs-tenancy-proxy")
 	legacy.SetNamespace(monitoringNS)
 	legacy.SetLabels(map[string]string{"app.kubernetes.io/managed-by": "maas-controller"})
+	legacyService := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      usageLogsTenancyProxyServiceName,
+			Namespace: monitoringNS,
+			UID:       types.UID("legacy-service-uid"),
+			Labels:    map[string]string{"app.kubernetes.io/managed-by": "maas-controller"},
+		},
+	}
 	legacySecret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      usageLogsTenancyProxyTLSSecretName,
@@ -287,7 +296,7 @@ func TestLifecycleReconciler_RemovesLegacyTenancyProxy(t *testing.T) {
 
 	cl := newSSAFakeClientBuilder(s).
 		WithStatusSubresource(&maasv1alpha1.Config{}).
-		WithObjects(cfg, &legacy, legacySecret).
+		WithObjects(cfg, &legacy, legacyService, legacySecret).
 		Build()
 	r := &LifecycleReconciler{
 		Client:                cl,
@@ -345,4 +354,159 @@ func TestLifecycleReconciler_PreservesUnrelatedTenancyProxyTLSSecret(t *testing.
 
 	g.Expect(r.ensureUsageLogs(context.Background(), ctrl.Log)).To(Succeed())
 	g.Expect(cl.Get(context.Background(), client.ObjectKeyFromObject(secret), &corev1.Secret{})).To(Succeed())
+}
+
+func TestLifecycleReconciler_PreservesTenancyProxyTLSSecretWithMismatchedServiceUID(t *testing.T) {
+	const monitoringNS = "opendatahub"
+
+	g := NewWithT(t)
+	s := lifecycleTestScheme(t)
+	cfg := &maasv1alpha1.Config{
+		ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName, UID: types.UID("cfg-uid")},
+	}
+	service := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      usageLogsTenancyProxyServiceName,
+			Namespace: monitoringNS,
+			UID:       types.UID("actual-service-uid"),
+			Labels:    map[string]string{"app.kubernetes.io/managed-by": "maas-controller"},
+		},
+	}
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      usageLogsTenancyProxyTLSSecretName,
+			Namespace: monitoringNS,
+			Annotations: map[string]string{
+				serviceCAServiceNameAnnotation: usageLogsTenancyProxyServiceName,
+				serviceCAServiceUIDAnnotation:  "claimed-service-uid",
+				serviceCAComponentAnnotation:   "service-ca",
+			},
+		},
+		Type: corev1.SecretTypeTLS,
+	}
+
+	cl := newSSAFakeClientBuilder(s).
+		WithStatusSubresource(&maasv1alpha1.Config{}).
+		WithObjects(cfg, service, secret).
+		Build()
+	r := &LifecycleReconciler{
+		Client:                cl,
+		Scheme:                s,
+		UsageLogsManifestPath: lifecycleUsageLogsPath(t),
+		MonitoringNamespace:   monitoringNS,
+		InfraNamespace:        "redhat-ai-gateway-infra",
+	}
+
+	g.Expect(r.ensureUsageLogs(context.Background(), ctrl.Log)).To(Succeed())
+	g.Expect(cl.Get(context.Background(), client.ObjectKeyFromObject(secret), &corev1.Secret{})).To(Succeed())
+}
+
+func TestLifecycleReconciler_PreservesTenancyProxyTLSSecretForUnownedService(t *testing.T) {
+	const monitoringNS = "opendatahub"
+
+	g := NewWithT(t)
+	s := lifecycleTestScheme(t)
+	cfg := &maasv1alpha1.Config{
+		ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName, UID: types.UID("cfg-uid")},
+	}
+	service := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      usageLogsTenancyProxyServiceName,
+			Namespace: monitoringNS,
+			UID:       types.UID("foreign-service-uid"),
+		},
+	}
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      usageLogsTenancyProxyTLSSecretName,
+			Namespace: monitoringNS,
+			Annotations: map[string]string{
+				serviceCAServiceNameAnnotation: usageLogsTenancyProxyServiceName,
+				serviceCAServiceUIDAnnotation:  "foreign-service-uid",
+				serviceCAComponentAnnotation:   "service-ca",
+			},
+		},
+		Type: corev1.SecretTypeTLS,
+	}
+
+	cl := newSSAFakeClientBuilder(s).
+		WithStatusSubresource(&maasv1alpha1.Config{}).
+		WithObjects(cfg, service, secret).
+		Build()
+	r := &LifecycleReconciler{
+		Client:                cl,
+		Scheme:                s,
+		UsageLogsManifestPath: lifecycleUsageLogsPath(t),
+		MonitoringNamespace:   monitoringNS,
+		InfraNamespace:        "redhat-ai-gateway-infra",
+	}
+
+	g.Expect(r.ensureUsageLogs(context.Background(), ctrl.Log)).To(Succeed())
+	g.Expect(cl.Get(context.Background(), client.ObjectKeyFromObject(secret), &corev1.Secret{})).To(Succeed())
+}
+
+func TestLifecycleReconciler_PreservesReplacedTenancyProxyTLSSecret(t *testing.T) {
+	const monitoringNS = "opendatahub"
+
+	g := NewWithT(t)
+	s := lifecycleTestScheme(t)
+	cfg := &maasv1alpha1.Config{
+		ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName, UID: types.UID("cfg-uid")},
+	}
+	service := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      usageLogsTenancyProxyServiceName,
+			Namespace: monitoringNS,
+			UID:       types.UID("legacy-service-uid"),
+			Labels:    map[string]string{"app.kubernetes.io/managed-by": "maas-controller"},
+		},
+	}
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      usageLogsTenancyProxyTLSSecretName,
+			Namespace: monitoringNS,
+			UID:       types.UID("legacy-secret-uid"),
+			Annotations: map[string]string{
+				serviceCAServiceNameAnnotation: usageLogsTenancyProxyServiceName,
+				serviceCAServiceUIDAnnotation:  "legacy-service-uid",
+				serviceCAComponentAnnotation:   "service-ca",
+			},
+		},
+		Type: corev1.SecretTypeTLS,
+	}
+
+	cl := newSSAFakeClientBuilder(s).
+		WithStatusSubresource(&maasv1alpha1.Config{}).
+		WithObjects(cfg, service, secret).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+				if obj.GetName() != usageLogsTenancyProxyTLSSecretName {
+					return c.Delete(ctx, obj, opts...)
+				}
+				replacement, ok := obj.DeepCopyObject().(*corev1.Secret)
+				g.Expect(ok).To(BeTrue())
+				replacement.UID = types.UID("replacement-secret-uid")
+				replacement.ResourceVersion = ""
+				if err := c.Delete(ctx, obj); err != nil {
+					return err
+				}
+				if err := c.Create(ctx, replacement); err != nil {
+					return err
+				}
+				return c.Delete(ctx, obj, opts...)
+			},
+		}).
+		Build()
+	r := &LifecycleReconciler{
+		Client:                cl,
+		Scheme:                s,
+		UsageLogsManifestPath: lifecycleUsageLogsPath(t),
+		MonitoringNamespace:   monitoringNS,
+		InfraNamespace:        "redhat-ai-gateway-infra",
+	}
+
+	g.Expect(r.ensureUsageLogs(context.Background(), ctrl.Log)).To(Succeed())
+	got := &corev1.Secret{}
+	g.Expect(cl.Get(context.Background(), client.ObjectKeyFromObject(secret), got)).To(Succeed())
+	g.Expect(got.UID).To(Equal(types.UID("replacement-secret-uid")))
 }

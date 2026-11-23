@@ -54,7 +54,7 @@ import (
 	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/platform/tenantreconcile"
 )
 
-//+kubebuilder:rbac:groups=loki.grafana.com,resources=application,resourceNames=logs,verbs=get
+//+kubebuilder:rbac:groups=loki.grafana.com,resources=application,resourceNames=logs,verbs=get;create
 
 // CleanupFinalizer was historically added to the maas-controller Deployment for coordinated
 // teardown when ODH removed MaaS. It is no longer set; this constant remains so reconciles
@@ -698,7 +698,7 @@ func (r *LifecycleReconciler) ensureUsageLogs(ctx context.Context, log logr.Logg
 		return err
 	}
 
-	if err := r.cleanupLegacyUsageLogsTenancyProxySecret(ctx, log, r.MonitoringNamespace); err != nil {
+	if err := r.cleanupLegacyUsageLogsTenancyProxySecret(ctx, log, cfg.UID, r.MonitoringNamespace); err != nil {
 		return err
 	}
 	return r.deleteOwnedRenderedResources(
@@ -892,7 +892,7 @@ func patchPersesDatasourceMaaSAPILoki(res *unstructured.Unstructured, infraNames
 	return nil
 }
 
-func (r *LifecycleReconciler) cleanupLegacyUsageLogsTenancyProxySecret(ctx context.Context, log logr.Logger, namespace string) error {
+func (r *LifecycleReconciler) cleanupLegacyUsageLogsTenancyProxySecret(ctx context.Context, log logr.Logger, configUID types.UID, namespace string) error {
 	secret := &corev1.Secret{}
 	key := client.ObjectKey{Namespace: namespace, Name: usageLogsTenancyProxyTLSSecretName}
 	if err := r.Get(ctx, key, secret); err != nil {
@@ -906,7 +906,36 @@ func (r *LifecycleReconciler) cleanupLegacyUsageLogsTenancyProxySecret(ctx conte
 			"kind", secret.Kind, "name", secret.Name, "namespace", secret.Namespace)
 		return nil
 	}
-	if err := r.Delete(ctx, secret); err != nil && !apierrors.IsNotFound(err) {
+
+	service := &corev1.Service{}
+	serviceKey := client.ObjectKey{Namespace: namespace, Name: usageLogsTenancyProxyServiceName}
+	if err := r.Get(ctx, serviceKey, service); err != nil {
+		if apierrors.IsNotFound(err) {
+			log.V(1).Info("skipping deletion of legacy TLS Secret because its Service is absent",
+				"kind", secret.Kind, "name", secret.Name, "namespace", secret.Namespace)
+			return nil
+		}
+		return fmt.Errorf("get legacy Service %s/%s: %w", namespace, usageLogsTenancyProxyServiceName, err)
+	}
+	if !isOwnedByConfigOrController(service, configUID) {
+		log.V(1).Info("skipping deletion of legacy TLS Secret because its Service is not owned by MaaS",
+			"kind", secret.Kind, "name", secret.Name, "namespace", secret.Namespace)
+		return nil
+	}
+	if string(service.UID) != strings.TrimSpace(secret.Annotations[serviceCAServiceUIDAnnotation]) {
+		log.V(1).Info("skipping deletion of legacy TLS Secret because its Service UID does not match",
+			"kind", secret.Kind, "name", secret.Name, "namespace", secret.Namespace)
+		return nil
+	}
+
+	uid, resourceVersion := secret.UID, secret.ResourceVersion
+	err := r.Delete(ctx, secret, client.Preconditions{UID: &uid, ResourceVersion: &resourceVersion})
+	if apierrors.IsNotFound(err) || apierrors.IsConflict(err) {
+		log.V(1).Info("skipped deletion of replaced or modified legacy TLS Secret",
+			"kind", secret.Kind, "name", secret.Name, "namespace", secret.Namespace)
+		return nil
+	}
+	if err != nil {
 		return fmt.Errorf("delete legacy Secret %s/%s: %w", namespace, usageLogsTenancyProxyTLSSecretName, err)
 	}
 	log.Info("deleted service-ca Secret for the removed Python usage-logs tenancy proxy",

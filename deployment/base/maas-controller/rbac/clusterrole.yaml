@@ -273,6 +273,7 @@ rules:
   resources:
   - application
   verbs:
+  - create
   - get
 - apiGroups:
   - maas.opendatahub.io
