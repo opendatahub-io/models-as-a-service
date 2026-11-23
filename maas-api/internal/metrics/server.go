@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"path/filepath"
+	"slices"
 	"sync"
 	"time"
 
@@ -100,9 +101,22 @@ func NewMetricsServer(opts ServerOptions) (*http.Server, error) {
 			return nil, err
 		}
 		srv.TLSConfig = tlsCfg
+		if !slices.Contains(tlsCfg.NextProtos, "h2") {
+			disableHTTP2(srv)
+		}
 	}
 
 	return srv, nil
+}
+
+// disableHTTP2 prevents net/http from running its HTTP/2 setup on a server
+// whose TLS configuration cannot serve it. NextProtos alone is not enough:
+// ListenAndServeTLS runs the HTTP/2 startup check before applying ALPN, and
+// that check rejects TLS 1.2 cipher lists without an ECDHE AES-128-GCM suite.
+func disableHTTP2(srv *http.Server) {
+	protocols := new(http.Protocols)
+	protocols.SetHTTP1(true)
+	srv.Protocols = protocols
 }
 
 type metricsCertLoader struct {
@@ -139,12 +153,30 @@ func buildMetricsTLSConfig(certDir string, profileMinVersion uint16, profileCiph
 	tlsCfg := &tls.Config{
 		GetCertificate: loader.getCertificate,
 		MinVersion:     minVersion,
-		NextProtos:     []string{"h2", "http/1.1"},
+		NextProtos:     metricsNextProtos(minVersion, profileCipherSuites),
 	}
 	if len(profileCipherSuites) > 0 {
 		tlsCfg.CipherSuites = profileCipherSuites
 	}
 	return tlsCfg, nil
+}
+
+func metricsNextProtos(minVersion uint16, cipherSuites []uint16) []string {
+	if minVersion < tls.VersionTLS12 {
+		return []string{"http/1.1"}
+	}
+	// TLS 1.3 and an empty TLS 1.2 cipher list both use Go's defaults, which
+	// include an HTTP/2-eligible ECDHE AES-128-GCM suite.
+	if minVersion >= tls.VersionTLS13 || len(cipherSuites) == 0 {
+		return []string{"h2", "http/1.1"}
+	}
+	for _, id := range cipherSuites {
+		if id == tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256 ||
+			id == tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256 {
+			return []string{"h2", "http/1.1"}
+		}
+	}
+	return []string{"http/1.1"}
 }
 
 // ListenAndServe starts the metrics server (HTTPS when TLSConfig is set).

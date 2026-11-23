@@ -7,6 +7,7 @@ import (
 	goruntime "runtime"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -132,6 +133,60 @@ func TestLifecycleReconciler_CreatesConfigWhenMissing(t *testing.T) {
 
 	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: maasv1alpha1.ConfigInstanceName}, &cfg)).To(Succeed())
 	g.Expect(cfg.Name).To(Equal(maasv1alpha1.ConfigInstanceName))
+}
+
+func TestLifecycleReconciler_StripsLegacyFinalizerBeforeConfigRequeue(t *testing.T) {
+	g := NewWithT(t)
+	s := lifecycleTestScheme(t)
+	dep := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{
+		Name:       "maas-controller",
+		Namespace:  "opendatahub",
+		Finalizers: []string{CleanupFinalizer, "example.com/other"},
+	}}
+	// A Config without a UID makes normal reconciliation requeue before module
+	// setup. Legacy finalizers still need to be cleared on this first pass.
+	cfg := &maasv1alpha1.Config{ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName}}
+	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(dep, cfg).Build()
+	r := &LifecycleReconciler{Client: cl, Scheme: s}
+	key := client.ObjectKeyFromObject(dep)
+
+	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key})
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(res.RequeueAfter).To(Equal(2 * time.Second))
+
+	var updated appsv1.Deployment
+	g.Expect(cl.Get(context.Background(), key, &updated)).To(Succeed())
+	g.Expect(updated.Finalizers).To(Equal([]string{"example.com/other"}))
+}
+
+func TestLifecycleReconciler_SkipsOwnerReferenceOnTerminatingTenantConfig(t *testing.T) {
+	g := NewWithT(t)
+	s := lifecycleTestScheme(t)
+	const tenantNS = "models-as-a-service"
+
+	cfg := &maasv1alpha1.Config{ObjectMeta: metav1.ObjectMeta{
+		Name: maasv1alpha1.ConfigInstanceName,
+		UID:  types.UID("cfg-new"),
+	}}
+	// A terminating MaasTenantConfig must not be re-parented to the current Config:
+	// the patch both mis-links a deleting object and fails when its namespace is gone.
+	deletion := metav1.NewTime(time.Date(2026, 10, 28, 1, 46, 41, 0, time.UTC))
+	tenant := &maasv1alpha1.MaasTenantConfig{ObjectMeta: metav1.ObjectMeta{
+		Name:              maasv1alpha1.MaasTenantConfigInstanceName,
+		Namespace:         tenantNS,
+		DeletionTimestamp: &deletion,
+		Finalizers:        []string{tenantFinalizer},
+	}}
+	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cfg, tenant).Build()
+	r := &LifecycleReconciler{Client: cl, Scheme: s, TenantSubscriptionNamespace: tenantNS}
+
+	res, err := r.ensureTenantReferencesConfig(context.Background())
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(res).To(BeNil())
+
+	var updated maasv1alpha1.MaasTenantConfig
+	g.Expect(cl.Get(context.Background(), client.ObjectKeyFromObject(tenant), &updated)).To(Succeed())
+	g.Expect(updated.OwnerReferences).To(BeEmpty())
 }
 
 func TestLifecycleReconciler_DoesNotRecreateConfigWhenTeardownRequested(t *testing.T) {
@@ -660,6 +715,64 @@ func TestLifecycleReconciler_LinksDefaultAITenantToConfig(t *testing.T) {
 	g.Expect(ref.Controller).To(BeNil())
 }
 
+func TestLifecycleReconciler_SkipsConfigOwnerRefOnTerminatingDefaultAITenant(t *testing.T) {
+	g := NewWithT(t)
+	s := lifecycleTestScheme(t)
+
+	const depNS = "opendatahub"
+	now := metav1.Now()
+
+	dep := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      tenantreconcile.MaaSControllerDeploymentName,
+			Namespace: depNS,
+		},
+		Spec: appsv1.DeploymentSpec{
+			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "maas-controller"}},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": "maas-controller"}},
+				Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "manager", Image: "test"}}},
+			},
+		},
+	}
+	cfg := &maasv1alpha1.Config{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: maasv1alpha1.ConfigInstanceName,
+			UID:  types.UID("cfg-uid-new"),
+		},
+	}
+	aitenant := &maasv1alpha1.AITenant{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              tenantreconcile.DefaultAITenantName,
+			Namespace:         tenantreconcile.DefaultAITenantNamespace,
+			DeletionTimestamp: &now,
+			Finalizers:        []string{aitenantFinalizer},
+		},
+		Status: maasv1alpha1.AITenantStatus{Phase: "Terminating"},
+	}
+
+	cl := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&maasv1alpha1.Config{}, &maasv1alpha1.AITenant{}).WithObjects(dep, cfg, aitenant).Build()
+	r := &LifecycleReconciler{
+		Client:            cl,
+		Scheme:            s,
+		DeploymentName:    tenantreconcile.MaaSControllerDeploymentName,
+		DeploymentNS:      depNS,
+		AITenantNamespace: tenantreconcile.DefaultAITenantNamespace,
+	}
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: tenantreconcile.MaaSControllerDeploymentName, Namespace: depNS},
+	})
+	g.Expect(err).NotTo(HaveOccurred())
+
+	var updated maasv1alpha1.AITenant
+	g.Expect(cl.Get(context.Background(), client.ObjectKey{
+		Name:      tenantreconcile.DefaultAITenantName,
+		Namespace: tenantreconcile.DefaultAITenantNamespace,
+	}, &updated)).To(Succeed())
+	g.Expect(updated.OwnerReferences).To(BeEmpty())
+}
+
 func ownerReferenceToConfig(refs []metav1.OwnerReference, uid types.UID) (metav1.OwnerReference, bool) {
 	for _, ref := range refs {
 		if ref.APIVersion == maasv1alpha1.GroupVersion.String() &&
@@ -786,8 +899,8 @@ func TestEnsureUsageLogs(t *testing.T) {
 		wantCollector    bool
 		wantLokiInstance string
 	}{
-		{name: "usageLogging unset uses dsci-managed", spec: maasv1alpha1.ConfigSpec{}, wantCollector: false, wantLokiInstance: "data-science-lokistack"},
-		{name: "usageLogging false uses dsci-managed", spec: maasv1alpha1.ConfigSpec{UsageLogging: ptr.To(false)}, wantCollector: false, wantLokiInstance: "data-science-lokistack"},
+		{name: "usageLogging unset uses dsci-managed", spec: maasv1alpha1.ConfigSpec{}, wantCollector: false, wantLokiInstance: "data-science-usage-logs-lokistack"},
+		{name: "usageLogging false uses dsci-managed", spec: maasv1alpha1.ConfigSpec{UsageLogging: ptr.To(false)}, wantCollector: false, wantLokiInstance: "data-science-usage-logs-lokistack"},
 		{name: "usageLogging true uses usage-logs", spec: maasv1alpha1.ConfigSpec{UsageLogging: ptr.To(true)}, wantCollector: true, wantLokiInstance: "usage"},
 	}
 
@@ -897,7 +1010,7 @@ func TestEnsureUsageLogs(t *testing.T) {
 		g.Expect(cl.Get(context.Background(), client.ObjectKey{
 			Name: "usage-tenancy-proxy-egress-restrict", Namespace: monitoringNS,
 		}, np)).To(Succeed())
-		g.Expect(lokiStackInstanceLabel(np)).To(Equal("data-science-lokistack"))
+		g.Expect(lokiStackInstanceLabel(np)).To(Equal("data-science-usage-logs-lokistack"))
 	})
 
 	t.Run("enabling usageLogging creates usage-logs resources and keeps shared ones", func(t *testing.T) {
@@ -985,6 +1098,54 @@ func TestEnsureUsageLogs(t *testing.T) {
 		gotCRB.SetGroupVersionKind(gvkClusterRoleBinding)
 		g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: "usage-collector-application-logs-write"}, gotCRB)).To(Succeed())
 		g.Expect(gotCRB.GetOwnerReferences()).To(BeEmpty())
+	})
+
+	t.Run("tenancy proxy serves TLS 1.3 with hybrid post-quantum key exchange", func(t *testing.T) {
+		g := NewWithT(t)
+		s := lifecycleTestScheme(t)
+
+		cfg := &maasv1alpha1.Config{
+			ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName, UID: types.UID("cfg-uid")},
+			Spec:       maasv1alpha1.ConfigSpec{UsageLogging: ptr.To(false)},
+		}
+		cl := newSSAFakeClientBuilder(s).WithStatusSubresource(&maasv1alpha1.Config{}).WithObjects(cfg).Build()
+		r := &LifecycleReconciler{
+			Client:                cl,
+			Scheme:                s,
+			MonitoringNamespace:   monitoringNS,
+			UsageLogsManifestPath: usageLogsPath,
+		}
+
+		g.Expect(r.ensureUsageLogs(context.Background(), ctrl.Log)).To(Succeed())
+
+		dep := &appsv1.Deployment{}
+		g.Expect(cl.Get(context.Background(), client.ObjectKey{
+			Name: usageLogsTenancyProxyDeploymentName, Namespace: monitoringNS,
+		}, dep)).To(Succeed())
+
+		var proxy *corev1.Container
+		for i := range dep.Spec.Template.Spec.Containers {
+			if dep.Spec.Template.Spec.Containers[i].Name == usageLogsTenancyProxyContainerName {
+				proxy = &dep.Spec.Template.Spec.Containers[i]
+			}
+		}
+		g.Expect(proxy).NotTo(BeNil(), "proxy container should exist")
+
+		openSSLConf := ""
+		for _, env := range proxy.Env {
+			if env.Name == "OPENSSL_CONF" {
+				openSSLConf = env.Value
+			}
+		}
+		g.Expect(openSSLConf).To(Equal("/opt/app-root/src/proxy/openssl.conf"))
+
+		cm := &corev1.ConfigMap{}
+		g.Expect(cl.Get(context.Background(), client.ObjectKey{
+			Name: "usage-tenancy-proxy-source", Namespace: monitoringNS,
+		}, cm)).To(Succeed())
+		g.Expect(cm.Data).To(HaveKey("openssl.conf"))
+		g.Expect(cm.Data["openssl.conf"]).To(ContainSubstring("X25519MLKEM768"))
+		g.Expect(cm.Data["main.py"]).To(ContainSubstring("TLSVersion.TLSv1_3"))
 	})
 }
 

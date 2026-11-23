@@ -70,11 +70,6 @@ type AITenantSpec struct {
 	// +kubebuilder:validation:Optional
 	OIDC *TenantExternalOIDCConfig `json:"oidc,omitempty"`
 
-	// Responses requests tenant-owned Responses and Conversations support.
-	// Omission disables both APIs. AI Gateway owns runtime and storage readiness.
-	// +optional
-	Responses *AITenantResponsesConfig `json:"responses,omitempty"`
-
 	// RBAC is retained only for compatibility with existing AITenant manifests.
 	// The controller ignores this field and does not create RoleBindings from it.
 	//
@@ -91,51 +86,22 @@ type AITenantSpec struct {
 	// +listType=atomic
 	// +kubebuilder:validation:MaxItems=64
 	Guardrails []GuardrailAttachment `json:"guardrails,omitempty"`
+
+	// ConsumerPortal controls the consumer portal auth proxy for this tenant.
+	// ai-gateway-controller reads spec.consumerPortal.enabled to decide whether
+	// to deploy the consumer portal auth proxy, routes and AuthPolicies. When
+	// this field is unset the portal is enabled.
+	// +kubebuilder:validation:Optional
+	ConsumerPortal *AITenantConsumerPortalConfig `json:"consumerPortal,omitempty"`
 }
 
-// AITenantResponsesConfig configures Responses infrastructure, not model capabilities.
-type AITenantResponsesConfig struct {
-	// Enabled enables Responses and Conversations together. Requires Praxis.
-	// +optional
-	// +kubebuilder:default=false
-	Enabled bool `json:"enabled,omitempty"`
-
-	// Storage selects the separate platform Responses database binding.
-	// It never reuses the MaaS API-key database or provisions a database.
-	// +optional
-	// +kubebuilder:default={}
-	Storage AITenantResponsesStorage `json:"storage,omitempty"`
-
-	// Retention limits persisted Responses, conversation items and continuation state.
-	// Omission does not request a tenant-specific retention limit.
-	// +optional
-	Retention *AITenantResponsesRetention `json:"retention,omitempty"`
-}
-
-// AITenantResponsesStorage selects the supported platform storage contract.
-type AITenantResponsesStorage struct {
-	// Mode selects the platform-provisioned Responses connection and CA binding.
-	// +optional
-	// +kubebuilder:default=PlatformDefault
-	// +kubebuilder:validation:Enum=PlatformDefault
-	Mode string `json:"mode,omitempty"`
-
-	// DeletionPolicy retains content when Responses is disabled or the tenant is deleted.
-	// Externally managed databases are never deleted by tenant reconciliation.
-	// +optional
-	// +kubebuilder:default=Retain
-	// +kubebuilder:validation:Enum=Retain
-	DeletionPolicy string `json:"deletionPolicy,omitempty"`
-}
-
-// AITenantResponsesRetention requests a positive persisted-content lifetime.
-type AITenantResponsesRetention struct {
-	// MaxAge is a positive duration, for example "168h".
-	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:MaxLength=32
-	// +kubebuilder:validation:Pattern=`^([0-9]+(\.[0-9]+)?(ms|s|m|h))+$`
-	// +kubebuilder:validation:XValidation:rule="duration(self) > duration('0s')",message="maxAge must be a positive duration"
-	MaxAge string `json:"maxAge"`
+// AITenantConsumerPortalConfig toggles the consumer portal for this tenant.
+type AITenantConsumerPortalConfig struct {
+	// Enabled controls whether ai-gateway-controller deploys the consumer
+	// portal auth proxy, routes and AuthPolicies for this tenant. Unset
+	// defaults to enabled, matching the ai-gateway-controller reconciler.
+	// +kubebuilder:validation:Optional
+	Enabled *bool `json:"enabled,omitempty"`
 }
 
 // AITenantGatewayRef references the existing Gateway API Gateway for this tenant.

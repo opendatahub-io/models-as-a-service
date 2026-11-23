@@ -68,6 +68,45 @@ func TestMaaSSubscriptionValidator_ValidateCreate(t *testing.T) {
 			wantErr:     true,
 			errContains: "not enabled for MaaS tenant resources",
 		},
+		{
+			name: "allow create with short rate-limit identity spec",
+			subscription: &maasv1alpha1.MaaSSubscription{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-sub",
+					Namespace: "ai-tenant-redteam",
+				},
+				Spec: maasv1alpha1.MaaSSubscriptionSpec{
+					RateLimitIdentity: rateLimitIdentityShort,
+				},
+			},
+			tenant: &maasv1alpha1.Tenant{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "default-tenant",
+					Namespace: "ai-tenant-redteam",
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "reject create with unknown rate-limit identity spec",
+			subscription: &maasv1alpha1.MaaSSubscription{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-sub",
+					Namespace: "ai-tenant-redteam",
+				},
+				Spec: maasv1alpha1.MaaSSubscriptionSpec{
+					RateLimitIdentity: "bogus",
+				},
+			},
+			tenant: &maasv1alpha1.Tenant{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "default-tenant",
+					Namespace: "ai-tenant-redteam",
+				},
+			},
+			wantErr:     true,
+			errContains: "spec.rateLimitIdentity",
+		},
 	}
 
 	for _, tt := range tests {
@@ -115,25 +154,87 @@ func TestMaaSSubscriptionValidator_ValidateUpdate(t *testing.T) {
 		},
 	}
 
-	oldSub := &maasv1alpha1.MaaSSubscription{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-sub",
-			Namespace: "ai-tenant-test",
+	withIdentity := func(v string) *maasv1alpha1.MaaSSubscription {
+		return &maasv1alpha1.MaaSSubscription{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-sub",
+				Namespace: "ai-tenant-test",
+			},
+			Spec: maasv1alpha1.MaaSSubscriptionSpec{
+				RateLimitIdentity: v,
+			},
+		}
+	}
+
+	tests := []struct {
+		name        string
+		old         *maasv1alpha1.MaaSSubscription
+		new         *maasv1alpha1.MaaSSubscription
+		wantErr     bool
+		errContains string
+	}{
+		{
+			name: "update without identity spec",
+			old:  withIdentity(""),
+			new:  withIdentity(""),
+		},
+		{
+			name: "allow short to legacy opt-in",
+			old:  withIdentity(rateLimitIdentityShort),
+			new:  withIdentity(rateLimitIdentityLegacy),
+		},
+		{
+			name: "allow clearing identity spec (status remains sticky)",
+			old:  withIdentity(rateLimitIdentityShort),
+			new:  withIdentity(""),
+		},
+		{
+			name:        "reject garbage identity via ValidateUpdate",
+			old:         withIdentity(rateLimitIdentityShort),
+			new:         withIdentity("bogus"),
+			wantErr:     true,
+			errContains: "spec.rateLimitIdentity",
 		},
 	}
 
-	newSub := &maasv1alpha1.MaaSSubscription{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-sub",
-			Namespace: "ai-tenant-test",
-		},
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := validator.ValidateUpdate(context.Background(), tt.old, tt.new)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("ValidateUpdate() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if tt.errContains != "" && (err == nil || !contains(err.Error(), tt.errContains)) {
+				t.Fatalf("ValidateUpdate() error = %v, want error containing %q", err, tt.errContains)
+			}
+		})
 	}
+}
 
-	// Update should not validate namespace (it's immutable)
-	_, err := validator.ValidateUpdate(context.Background(), oldSub, newSub)
-	if err != nil {
-		t.Errorf("ValidateUpdate() unexpected error: %v", err)
+func TestValidateRateLimitIdentitySpec(t *testing.T) {
+	t.Parallel()
+	assertNil := func(t *testing.T, err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 	}
+	assertErr := func(t *testing.T, err error) {
+		t.Helper()
+		if err == nil {
+			t.Fatal("expected error")
+		}
+	}
+	assertNil(t, validateRateLimitIdentitySpec(nil))
+	assertNil(t, validateRateLimitIdentitySpec(&maasv1alpha1.MaaSSubscription{}))
+	assertNil(t, validateRateLimitIdentitySpec(&maasv1alpha1.MaaSSubscription{
+		Spec: maasv1alpha1.MaaSSubscriptionSpec{RateLimitIdentity: rateLimitIdentityShort},
+	}))
+	assertNil(t, validateRateLimitIdentitySpec(&maasv1alpha1.MaaSSubscription{
+		Spec: maasv1alpha1.MaaSSubscriptionSpec{RateLimitIdentity: rateLimitIdentityLegacy},
+	}))
+	assertErr(t, validateRateLimitIdentitySpec(&maasv1alpha1.MaaSSubscription{
+		Spec: maasv1alpha1.MaaSSubscriptionSpec{RateLimitIdentity: "bogus"},
+	}))
 }
 
 func TestMaaSSubscriptionValidator_ValidateUpdateOrganizationAssociation(t *testing.T) {

@@ -26,26 +26,26 @@ import (
 // subInfo is one (subscription, modelRef) pair that reconcileTRLPForModel
 // needs to place in the grouped TokenRateLimitPolicy: the rates that put it in
 // a group (groupKey), or unlimited when it has no token budget, the fully
-// model-scoped identity hashed into that group's short-ID predicate
-// (modelScoped), and the subscription's own name for the TRLP's tracking
-// annotation.
+// model-scoped identity used in that group's predicate (modelScoped), the
+// subscription's own name for the TRLP's tracking annotation, and whether this
+// member still uses pre-1546 selected_subscription_key matching (legacy).
 type subInfo struct {
 	subNamespace, subName string
 	rates                 []any
 	unlimited             bool
 	modelScoped           string
 	groupKey              string
+	legacy                bool
 }
 
 // buildGroupedLimits turns the valid (subscription, modelRef) pairs for one
 // model into a TokenRateLimitPolicy limits map: one limit per distinct rate
-// set, predicate the OR of that group's subscriptions' selected_subscription_id,
-// counters keyed on both selected_subscription_id and userid so subscriptions
-// sharing a limit still get independent budgets. It also returns the sorted,
-// deduplicated subscription names for the TRLP's tracking annotation.
-// Unlimited subscriptions go into the shared unlimitedLimitName limit instead
-// of a rate group, and are listed in the annotation too: cleanupStaleTRLPs
-// relies on it to rebuild the TRLP when a subscription drops the model.
+// set. New (short-ID) and legacy (key) members of the same rate cannot share a
+// limit because their counter expressions differ; mixed groups emit the legacy
+// members under the original tokens-* name and the short-ID members under
+// tokens-*-id. Unlimited subscriptions share unlimitedLimitName with mixed
+// predicates (they have no counters). Returns the sorted, deduplicated
+// subscription names for the TRLP's tracking annotation.
 //
 // Output is fully deterministic (sorted group keys, sorted member refs) so an
 // unchanged input reconciles to a byte-identical spec and never triggers a
@@ -55,7 +55,7 @@ func buildGroupedLimits(subs []subInfo) (map[string]any, []string) {
 	var groupKeys []string
 	seenSub := map[string]struct{}{}
 	var subNames []string
-	var unlimitedIDs []string
+	var unlimited []subInfo
 	for _, si := range subs {
 		name := qualifiedName(si.subNamespace, si.subName)
 		if _, ok := seenSub[name]; !ok {
@@ -64,7 +64,7 @@ func buildGroupedLimits(subs []subInfo) (map[string]any, []string) {
 		}
 
 		if si.unlimited {
-			unlimitedIDs = append(unlimitedIDs, SubscriptionRateLimitID(si.modelScoped))
+			unlimited = append(unlimited, si)
 			continue
 		}
 		if _, ok := byGroup[si.groupKey]; !ok {
@@ -75,14 +75,40 @@ func buildGroupedLimits(subs []subInfo) (map[string]any, []string) {
 	sort.Strings(groupKeys)
 	sort.Strings(subNames)
 
-	limitsMap := make(map[string]any, len(groupKeys))
+	limitsMap := make(map[string]any, len(groupKeys)+1)
 	for _, key := range groupKeys {
-		limitsMap[rateGroupLimitName(key)] = buildGroupLimit(byGroup[key])
+		addRateGroupLimits(limitsMap, key, byGroup[key])
 	}
-	if len(unlimitedIDs) > 0 {
-		limitsMap[unlimitedLimitName] = unlimitedTokenLimit(unlimitedIDs)
+	if len(unlimited) > 0 {
+		limitsMap[unlimitedLimitName] = unlimitedTokenLimit(unlimited)
 	}
 	return limitsMap, subNames
+}
+
+// addRateGroupLimits writes one or two limits for a rate set. Homogeneous
+// groups keep the tokens-* name so pre-1546 Limitador counters stay put for
+// all-legacy models and current tests / new-only models keep the 1546 name.
+// Mixed groups must split: renaming the legacy limit would reset old quotas
+// the first time a short-ID subscription joins.
+func addRateGroupLimits(limitsMap map[string]any, key string, members []subInfo) {
+	var short, legacy []subInfo
+	for _, m := range members {
+		if m.legacy {
+			legacy = append(legacy, m)
+			continue
+		}
+		short = append(short, m)
+	}
+	name := rateGroupLimitName(key)
+	switch {
+	case len(short) > 0 && len(legacy) > 0:
+		limitsMap[name] = buildGroupLimit(legacy)
+		limitsMap[name+"-id"] = buildGroupLimit(short)
+	case len(legacy) > 0:
+		limitsMap[name] = buildGroupLimit(legacy)
+	case len(short) > 0:
+		limitsMap[name] = buildGroupLimit(short)
+	}
 }
 
 // buildGroupLimit renders one rate group's members into a TokenRateLimitPolicy
@@ -90,19 +116,15 @@ func buildGroupedLimits(subs []subInfo) (map[string]any, []string) {
 // duplicates, and List gives no ordering guarantee, so the rates are rendered
 // in canonical order rather than as any one member wrote them - otherwise the
 // spec could change between reconciles and trigger needless policy updates.
-// Predicates and counters use the short selected_subscription_id so the
-// Kuadrant WASM shim does not embed long subscription@model strings.
+// Callers must not mix legacy and short-ID members: those use different
+// counter expressions, so addRateGroupLimits splits them first.
 func buildGroupLimit(members []subInfo) map[string]any {
-	ids := make([]string, len(members))
+	clauses := make([]string, len(members))
 	for i, si := range members {
-		ids[i] = SubscriptionRateLimitID(si.modelScoped)
+		clauses[i] = subscriptionSelectClause(si)
 	}
-	sort.Strings(ids)
+	sort.Strings(clauses)
 
-	clauses := make([]string, len(ids))
-	for i, id := range ids {
-		clauses[i] = fmt.Sprintf(`auth.identity.selected_subscription_id == "%s"`, id)
-	}
 	predicate := clauses[0]
 	if len(clauses) > 1 {
 		predicate = "(" + strings.Join(clauses, " || ") + ")"
@@ -119,7 +141,7 @@ func buildGroupLimit(members []subInfo) map[string]any {
 			},
 		},
 		"counters": []any{
-			map[string]any{"expression": "auth.identity.selected_subscription_id"},
+			map[string]any{"expression": subscriptionCounterExpression(members[0].legacy)},
 			map[string]any{"expression": "auth.identity.userid"},
 		},
 	}

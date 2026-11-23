@@ -29,7 +29,7 @@ from test_helper import (
 
 log = logging.getLogger(__name__)
 
-pytestmark = [pytest.mark.xdist_group("models"), pytest.mark.worker_tenant]
+pytestmark = [pytest.mark.xdist_group("models_gw_authpolicy"), pytest.mark.worker_tenant]
 
 
 def _gateway_auth_rego(context) -> str:
@@ -49,6 +49,7 @@ def _gateway_auth_rego(context) -> str:
 class TestGatewayAuthPolicyStructure:
     """S10: AuthPolicy targets Gateway; no legacy per-model policies."""
 
+    @pytest.mark.smoke
     def test_gateway_auth_policy_contract(self, worker_tenant_context):
         """Gateway AuthPolicy targets the Gateway and replaces per-model policies."""
         context = worker_tenant_context
@@ -98,7 +99,6 @@ class TestGatewayAuthPolicyLifecycle:
             _wait_for_maas_auth_policy_phase(
                 policy_name,
                 namespace=context.tenant_namespace,
-                timeout=120,
                 require_auth_policies=False,
             )
 

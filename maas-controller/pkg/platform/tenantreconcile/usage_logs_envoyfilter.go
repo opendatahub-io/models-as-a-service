@@ -10,6 +10,7 @@ import (
 // usageLogsServiceNamespaceAttr is the OTel resource attribute carrying the namespace that
 // usage log records are attributed to.
 const usageLogsServiceNamespaceAttr = "service.namespace"
+const usageLogsTenantNameAttr = "tenant_name"
 
 // otelAccessLoggerName is the Envoy access logger that carries resource_attributes.
 // HttpConnectionManager.access_log is a repeated field, and resource_attributes exists only
@@ -70,6 +71,56 @@ func PatchUsageLogsServiceNamespace(ef *unstructured.Unstructured, namespace str
 				continue
 			}
 			if err := appendUsageLogsResourceAttribute(accessLogEntry, usageLogsServiceNamespaceAttr, namespace); err != nil {
+				return err
+			}
+			patched = true
+		}
+	}
+	if !patched {
+		return fmt.Errorf("no %s access_log entry found in configPatches", otelAccessLoggerName)
+	}
+	return nil
+}
+
+// PatchUsageLogsProducerScope appends the authoritative tenant resource attribute.
+// Its value comes from the reconciled tenant, never from request headers.
+func PatchUsageLogsProducerScope(ef *unstructured.Unstructured, tenantName string) error {
+	if tenantName == "" {
+		return errors.New("tenant name must not be empty")
+	}
+
+	raw, found, err := unstructured.NestedFieldNoCopy(ef.Object, "spec", "configPatches")
+	if err != nil {
+		return fmt.Errorf("read configPatches: %w", err)
+	}
+	configPatches, ok := raw.([]any)
+	if !found || !ok || len(configPatches) == 0 {
+		return errors.New("configPatches not found or empty")
+	}
+
+	patched := false
+	for _, cp := range configPatches {
+		patch, ok := cp.(map[string]any)
+		if !ok {
+			continue
+		}
+		accessLogRaw, found, err := unstructured.NestedFieldNoCopy(patch, "patch", "value", "typed_config", "access_log")
+		if err != nil {
+			return fmt.Errorf("read access_log: %w", err)
+		}
+		accessLog, ok := accessLogRaw.([]any)
+		if !found || !ok {
+			continue
+		}
+		for i, entry := range accessLog {
+			accessLogEntry, ok := entry.(map[string]any)
+			if !ok {
+				return fmt.Errorf("access_log[%d] is not an object", i)
+			}
+			if name, _, _ := unstructured.NestedString(accessLogEntry, "name"); name != otelAccessLoggerName {
+				continue
+			}
+			if err := appendUsageLogsResourceAttribute(accessLogEntry, usageLogsTenantNameAttr, tenantName); err != nil {
 				return err
 			}
 			patched = true
@@ -215,6 +266,8 @@ func patchUsageLogsIdentityCapture(ef *unstructured.Unstructured, capture usageL
 }
 
 // PatchUsageLogsClusterAddress sets the collector address in the CLUSTER configPatch.
+// When the cluster carries a TLS transport socket, it also sets its SNI to the same
+// DNS name so the verified server name always matches the configured endpoint.
 func PatchUsageLogsClusterAddress(ef *unstructured.Unstructured, address string) error {
 	configPatches, found, err := unstructured.NestedSlice(ef.Object, "spec", "configPatches")
 	if err != nil {
@@ -257,6 +310,17 @@ func PatchUsageLogsClusterAddress(ef *unstructured.Unstructured, address string)
 		return fmt.Errorf("set socket_address.address: %w", err)
 	}
 
+	_, hasTransportSocket, err := unstructured.NestedMap(patch, "patch", "value", "transport_socket")
+	if err != nil {
+		return fmt.Errorf("read transport_socket: %w", err)
+	}
+	if hasTransportSocket {
+		if err := unstructured.SetNestedField(patch, address,
+			"patch", "value", "transport_socket", "typed_config", "sni"); err != nil {
+			return fmt.Errorf("set transport_socket sni: %w", err)
+		}
+	}
+
 	lbEndpoints[0] = lbe0
 	ep0["lb_endpoints"] = lbEndpoints
 	endpoints[0] = ep0
@@ -264,6 +328,28 @@ func PatchUsageLogsClusterAddress(ef *unstructured.Unstructured, address string)
 		"patch", "value", "load_assignment", "endpoints"); err != nil {
 		return fmt.Errorf("write back endpoints: %w", err)
 	}
+	configPatches[0] = patch
+	return unstructured.SetNestedSlice(ef.Object, configPatches, "spec", "configPatches")
+}
+
+// DisableUsageLogsClusterTLS removes the TLS transport socket from the CLUSTER
+// configPatch. The self-hosted usage-logs collector serves plaintext OTLP; the
+// data-science collector keeps the TLS transport socket from the manifest.
+func DisableUsageLogsClusterTLS(ef *unstructured.Unstructured) error {
+	configPatches, found, err := unstructured.NestedSlice(ef.Object, "spec", "configPatches")
+	if err != nil {
+		return fmt.Errorf("read configPatches: %w", err)
+	}
+	if !found || len(configPatches) == 0 {
+		return errors.New("configPatches not found or empty")
+	}
+
+	patch, ok := configPatches[0].(map[string]any)
+	if !ok {
+		return errors.New("configPatches[0] is not an object")
+	}
+
+	unstructured.RemoveNestedField(patch, "patch", "value", "transport_socket")
 	configPatches[0] = patch
 	return unstructured.SetNestedSlice(ef.Object, configPatches, "spec", "configPatches")
 }

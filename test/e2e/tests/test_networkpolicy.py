@@ -15,7 +15,7 @@ import requests
 
 from conftest import TLS_VERIFY
 
-pytestmark = pytest.mark.xdist_group("readonly")
+pytestmark = [pytest.mark.xdist_group("readonly"), pytest.mark.smoke]
 
 from multitenancy_helpers import (
     DEFAULT_GATEWAY_NAME,

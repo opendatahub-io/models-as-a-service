@@ -1,44 +1,47 @@
-# Promote Main to Stable Workflow
-#
-# Creates a promotional PR to sync the stable branch with main.
-# Runs automatically every Sunday night (midnight UTC) and can be triggered manually.
-#
-# This workflow:
-#   1. Checks if stable is behind main
-#   2. Verifies there are no merge conflicts (strict — fails on any conflict)
-#   3. Creates/updates a PR from main → stable only if merge is clean
+# Opens a PR to merge main into stable, twice a week, using the odh-release-bot
+# App token so the PR triggers CI without manual approval.
 
 name: Promote Main to Stable
 
 on:
   schedule:
-    - cron: '0 0 * * 0'  # Every Sunday at midnight UTC
+    - cron: '0 0 * * 0,3'  # Sunday and Wednesday at midnight UTC
   workflow_dispatch:
 
-permissions:
-  contents: read
-  pull-requests: write
-
-env:
-  GH_USER_NAME: github-actions[bot]
-  GH_USER_EMAIL: github-actions[bot]@users.noreply.github.com
+permissions: {}
 
 jobs:
   promote:
     name: Promote main to stable
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+
+    concurrency:
+      group: promote-main-to-stable
+      cancel-in-progress: false
 
     steps:
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@7e473efe3cb98aa54f8d4bac15400b15fad77d94 # v2.2.0
+        with:
+          app-id: ${{ secrets.ODH_RELEASE_BOT_APP_ID }}
+          private-key: ${{ secrets.ODH_RELEASE_BOT_PRIVATE_KEY }}
+          permission-contents: read
+          permission-pull-requests: write
+
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
         with:
           fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ steps.app-token.outputs.token }}
 
       - name: Configure Git
         run: |
-          git config user.name "${{ env.GH_USER_NAME }}"
-          git config user.email "${{ env.GH_USER_EMAIL }}"
+          git config user.name "odh-release-bot[bot]"
+          git config user.email "169063859+odh-release-bot[bot]@users.noreply.github.com"
 
       - name: Check for new commits
         id: check
@@ -48,7 +51,7 @@ jobs:
           DIFF_COUNT=$(git rev-list --count origin/stable..origin/main)
           if [ "$DIFF_COUNT" -eq 0 ]; then
             echo "stable is already up to date with main. Nothing to promote."
-            echo "## Promote Main to Stable" >> "$GITHUB_STEP_SUMMARY"
+            echo "## ✅ Promote Main to Stable" >> "$GITHUB_STEP_SUMMARY"
             echo "stable is already up to date with main. No changes to merge." >> "$GITHUB_STEP_SUMMARY"
             echo "skip=true" >> "$GITHUB_OUTPUT"
             exit 0
@@ -64,15 +67,20 @@ jobs:
           git checkout origin/stable
 
           if ! git merge --no-commit --no-ff origin/main; then
-            echo "::error::Merge conflicts detected between main and stable."
+            echo "::error title=Merge conflict::main -> stable promotion found merge conflicts"
+            echo "❌ Merge conflicts detected between main and stable."
+            echo ""
+            echo "Conflicted files:"
+            git diff --name-only --diff-filter=U | sed 's/^/  - /'
             {
-              echo "## Promote Main to Stable — FAILED"
-              echo "### Merge conflicts detected"
+              echo "## ❌ Promote Main to Stable — FAILED"
               echo ""
-              echo "The following files have conflicts:"
-              echo '````'
+              echo "Merge conflicts detected between \`main\` and \`stable\`."
+              echo ""
+              echo "### Conflicted files"
+              echo '```'
               git diff --name-only --diff-filter=U
-              echo '````'
+              echo '```'
               echo ""
               echo "Please resolve conflicts manually before re-running this workflow."
             } >> "$GITHUB_STEP_SUMMARY"
@@ -85,12 +93,12 @@ jobs:
       - name: Create or update promotion PR
         if: steps.check.outputs.skip != 'true'
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           DIFF_COUNT: ${{ steps.check.outputs.diff_count }}
         run: |
           set -euo pipefail
 
-          COMMIT_LOG=$(git log --oneline origin/stable..origin/main --no-merges | head -50)
+          COMMIT_LOG=$(git log -n 50 --oneline origin/stable..origin/main --no-merges)
 
           BODY="## Promotion: main → stable"
           BODY="${BODY}"$'\n\n'"Automated promotion of **${DIFF_COUNT} commit(s)** from \`main\` to \`stable\`."
@@ -104,7 +112,9 @@ jobs:
           BODY="${BODY}"$'\n\n'"---"
           BODY="${BODY}"$'\n'"⚠️ **Merge this PR with a merge commit** (do not squash or rebase)."
 
-          EXISTING_PR=$(gh pr list --base stable --head main --state open --json number,url --jq '.[0] // empty')
+          EXISTING_PR=$(gh pr list --base stable --head main --state open \
+            --json number,url,isCrossRepository \
+            --jq '[.[] | select(.isCrossRepository == false)] | .[0] // empty')
 
           if [ -n "$EXISTING_PR" ]; then
             PR_NUMBER=$(echo "$EXISTING_PR" | jq -r '.number')
@@ -120,8 +130,13 @@ jobs:
             echo "Created new promotion PR #${PR_NUMBER}"
           fi
 
+          # Ensure Tide merges this PR with a merge commit (not the default squash)
+          gh pr edit "$PR_NUMBER" --add-label "tide/merge-method-merge"
+
+          echo "✅ Promotion PR #${PR_NUMBER} is ready: ${PR_URL}"
+
           {
-            echo "## Promote Main to Stable — PR Created"
+            echo "## ✅ Promote Main to Stable — PR Created"
             echo ""
             echo "**PR:** [#${PR_NUMBER}](${PR_URL})"
             echo ""

@@ -10,7 +10,7 @@
 #   1. Creates ConfigMap with test realm JSONs
 #   2. Patches Keycloak instance to mount the ConfigMap
 #   3. Restarts Keycloak to trigger realm import
-#   4. Waits for Keycloak to be ready
+#   4. Waits for Keycloak and both test realms to be reachable
 #
 # Prerequisites:
 #   - Keycloak must be deployed (run ./scripts/setup-keycloak.sh)
@@ -25,7 +25,13 @@ set -euo pipefail
 NAMESPACE="keycloak-system"
 KEYCLOAK_NAME="maas-keycloak"
 CONFIGMAP_NAME="keycloak-test-realms"
+KEYCLOAK_READINESS_TIMEOUT="${KEYCLOAK_READINESS_TIMEOUT:-180}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+if ! [[ "$KEYCLOAK_READINESS_TIMEOUT" =~ ^[1-9][0-9]*$ ]]; then
+  echo "❌ ERROR: KEYCLOAK_READINESS_TIMEOUT must be a positive integer (got '$KEYCLOAK_READINESS_TIMEOUT')"
+  exit 1
+fi
 
 echo "⚠️  WARNING: Deploying TEST realms with hardcoded passwords"
 echo "   These are for development/testing ONLY - NOT for production"
@@ -127,8 +133,53 @@ if ! kubectl rollout status statefulset "${KEYCLOAK_NAME}" -n "$NAMESPACE" --tim
   exit 1
 fi
 
-# Additional wait for pods to be fully ready
-sleep 10
+echo ""
+echo "🌐 Waiting for Keycloak realm discovery endpoints..."
+
+KEYCLOAK_HOSTNAME=$(kubectl get httproute keycloak-route -n "$NAMESPACE" \
+  -o jsonpath='{.spec.hostnames[0]}' 2>/dev/null || true)
+if [[ -z "$KEYCLOAK_HOSTNAME" ]]; then
+  cluster_domain=$(kubectl get ingresses.config.openshift.io cluster \
+    -o jsonpath='{.spec.domain}' 2>/dev/null || true)
+  if [[ -n "$cluster_domain" ]]; then
+    KEYCLOAK_HOSTNAME="keycloak.${cluster_domain}"
+  fi
+fi
+if [[ -z "$KEYCLOAK_HOSTNAME" ]]; then
+  echo "❌ ERROR: Could not determine Keycloak hostname"
+  echo "  Check the keycloak-route HTTPRoute in namespace $NAMESPACE"
+  exit 1
+fi
+
+readiness_deadline=$((SECONDS + KEYCLOAK_READINESS_TIMEOUT))
+tenant_a_status="000"
+tenant_b_status="000"
+while (( SECONDS < readiness_deadline )); do
+  tenant_a_status=$(curl -sk --connect-timeout 5 --max-time 10 \
+    -o /dev/null -w '%{http_code}' \
+    "https://${KEYCLOAK_HOSTNAME}/realms/tenant-a/.well-known/openid-configuration" \
+    2>/dev/null || echo "000")
+  tenant_b_status=$(curl -sk --connect-timeout 5 --max-time 10 \
+    -o /dev/null -w '%{http_code}' \
+    "https://${KEYCLOAK_HOSTNAME}/realms/tenant-b/.well-known/openid-configuration" \
+    2>/dev/null || echo "000")
+
+  if [[ "$tenant_a_status" == "200" && "$tenant_b_status" == "200" ]]; then
+    echo "✓ Keycloak realms are ready"
+    break
+  fi
+
+  echo "  tenant-a=${tenant_a_status}, tenant-b=${tenant_b_status}; retrying in 5s..."
+  sleep 5
+done
+
+if [[ "$tenant_a_status" != "200" || "$tenant_b_status" != "200" ]]; then
+  echo "❌ ERROR: Keycloak realms were not ready after ${KEYCLOAK_READINESS_TIMEOUT}s"
+  echo "  Keycloak hostname: ${KEYCLOAK_HOSTNAME}"
+  echo "  Check pod status: kubectl get pods -n $NAMESPACE"
+  echo "  Check logs: kubectl logs -n $NAMESPACE -l app=keycloak"
+  exit 1
+fi
 
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -153,10 +204,6 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo "📝 Verify Deployment"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
-
-# Get Keycloak hostname
-KEYCLOAK_HOSTNAME=$(kubectl get httproute keycloak-route -n "$NAMESPACE" \
-  -o jsonpath='{.spec.hostnames[0]}' 2>/dev/null || echo "keycloak.{cluster-domain}")
 
 echo "Access Keycloak Admin Console:"
 echo "  https://${KEYCLOAK_HOSTNAME}"

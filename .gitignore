@@ -21,6 +21,7 @@ coverage.html
 
 # Go binaries
 bin/
+*.test
 
 # Python
 __pycache__/

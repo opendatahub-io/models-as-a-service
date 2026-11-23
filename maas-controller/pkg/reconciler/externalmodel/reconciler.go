@@ -42,6 +42,20 @@ var inferenceExternalModelGVK = schema.GroupVersionKind{
 	Kind:    "ExternalModel",
 }
 
+var inferenceExternalProviderGVK = schema.GroupVersionKind{
+	Group:   "inference.opendatahub.io",
+	Version: "v1alpha1",
+	Kind:    "ExternalProvider",
+}
+
+// IPP's legacy migration labels the inference ExternalModel and
+// ExternalProvider it creates for a legacy ExternalModel of the same name.
+const (
+	labelManagedBy              = "app.kubernetes.io/managed-by"
+	labelMigratedFrom           = "inference.opendatahub.io/migrated-from"
+	managedByIPPLegacyMigration = "ipp-legacy-migration"
+)
+
 // Reconciler watches ExternalModel CRs and creates the Istio resources
 // needed to route to the external provider.
 //
@@ -112,6 +126,8 @@ func getTLSInfo(extModel *maasv1alpha1.ExternalModel) (tls bool, port int32, err
 //+kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;delete
 //+kubebuilder:rbac:groups=networking.istio.io,resources=serviceentries,verbs=get;list;watch;create;update
 //+kubebuilder:rbac:groups=networking.istio.io,resources=destinationrules,verbs=get;list;watch;create;update;delete
+// Changing ownerReferences needs delete permission on the object (OwnerReferencesPermissionEnforcement).
+//+kubebuilder:rbac:groups=inference.opendatahub.io,resources=externalmodels;externalproviders,verbs=get;update;delete
 
 // Reconcile handles create/update/delete of ExternalModel CRs.
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -131,9 +147,22 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{}, nil
 	}
 
+	inferenceEM, err := r.getInferenceExternalModel(ctx, extModel)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+
+	// Release before the superseded check: an inference ExternalModel without a
+	// route name yet would still be garbage-collected with its legacy owner.
+	if inferenceEM != nil {
+		if err := r.releaseMigratedResources(ctx, extModel, inferenceEM); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
+
 	// If an inference.opendatahub.io ExternalModel exists for this model,
 	// the IPP controller owns networking. Tear down legacy maas-* children.
-	if superseded, err := r.isSupersededByInference(ctx, req.NamespacedName); err != nil {
+	if superseded, err := isSupersededByInference(extModel, inferenceEM); err != nil {
 		return ctrl.Result{}, err
 	} else if superseded {
 		oteljson.FromContext(ctx).Info("inference ExternalModel exists, tearing down legacy networking",
@@ -337,6 +366,24 @@ func (r *Reconciler) applyHTTPRoute(ctx context.Context, log logr.Logger, desire
 	return r.Update(ctx, existing)
 }
 
+// getInferenceExternalModel returns the inference.opendatahub.io ExternalModel with
+// the same name/namespace, or nil if there is none.
+//
+// When the inference CRD is not installed (IsNoMatchError), it also returns nil and
+// the legacy reconciler proceeds normally, so pure 3.4 clusters are unaffected.
+func (r *Reconciler) getInferenceExternalModel(ctx context.Context, extModel *maasv1alpha1.ExternalModel) (*unstructured.Unstructured, error) {
+	key := client.ObjectKeyFromObject(extModel)
+	obj := &unstructured.Unstructured{}
+	obj.SetGroupVersionKind(inferenceExternalModelGVK)
+	if err := r.Get(ctx, key, obj); err != nil {
+		if apierrors.IsNotFound(err) || apimeta.IsNoMatchError(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to check inference ExternalModel %s/%s: %w", key.Namespace, key.Name, err)
+	}
+	return obj, nil
+}
+
 // isSupersededByInference reports whether an inference.opendatahub.io ExternalModel
 // exists for the same name/namespace AND has published its HTTPRoute
 // (status.httpRouteName is set), meaning the IPP controller now owns networking.
@@ -346,23 +393,65 @@ func (r *Reconciler) applyHTTPRoute(ctx context.Context, log logr.Logger, desire
 // programmed — there would be a window with no route for the model, causing a
 // routing/auth gap during the migration cutover. The MaaSModelRef handler waits for
 // the same signal (see providers_external.go), so this keeps the two in lockstep.
-//
-// When the inference CRD is not installed (IsNoMatchError), the legacy reconciler
-// proceeds normally, so pure 3.4 clusters are unaffected.
-func (r *Reconciler) isSupersededByInference(ctx context.Context, key types.NamespacedName) (bool, error) {
-	obj := &unstructured.Unstructured{}
-	obj.SetGroupVersionKind(inferenceExternalModelGVK)
-	if err := r.Get(ctx, key, obj); err != nil {
-		if apierrors.IsNotFound(err) || apimeta.IsNoMatchError(err) {
-			return false, nil
-		}
-		return false, fmt.Errorf("failed to check inference ExternalModel %s/%s: %w", key.Namespace, key.Name, err)
+func isSupersededByInference(extModel *maasv1alpha1.ExternalModel, inferenceEM *unstructured.Unstructured) (bool, error) {
+	if inferenceEM == nil {
+		return false, nil
 	}
-	routeName, _, err := unstructured.NestedString(obj.Object, "status", "httpRouteName")
+	routeName, _, err := unstructured.NestedString(inferenceEM.Object, "status", "httpRouteName")
 	if err != nil {
-		return false, fmt.Errorf("failed to read status.httpRouteName on inference ExternalModel %s/%s: %w", key.Namespace, key.Name, err)
+		return false, fmt.Errorf("failed to read status.httpRouteName on inference ExternalModel %s/%s: %w", inferenceEM.GetNamespace(), inferenceEM.GetName(), err)
 	}
-	return routeName != "", nil
+	// Once migrated, the legacy model stays superseded while its inference
+	// ExternalModel exists. That model may lose its route name, for example
+	// when it fails, and the legacy networking must not come back.
+	return routeName != "" || extModel.Status.Phase == "Migrated", nil
+}
+
+// releaseMigratedResources removes this legacy ExternalModel's owner reference
+// from the inference ExternalModel and ExternalProvider that IPP's legacy
+// migration created for it. The legacy API is deprecated, so deleting a
+// Migrated legacy object looks like routine cleanup, but the garbage collector
+// would delete the live model and provider with it.
+func (r *Reconciler) releaseMigratedResources(ctx context.Context, extModel *maasv1alpha1.ExternalModel, inferenceEM *unstructured.Unstructured) error {
+	if err := r.releaseFromLegacyOwner(ctx, extModel, inferenceEM); err != nil {
+		return err
+	}
+	provider := &unstructured.Unstructured{}
+	provider.SetGroupVersionKind(inferenceExternalProviderGVK)
+	if err := r.Get(ctx, client.ObjectKeyFromObject(extModel), provider); err != nil {
+		if apierrors.IsNotFound(err) || apimeta.IsNoMatchError(err) {
+			return nil
+		}
+		return fmt.Errorf("failed to get inference ExternalProvider %s/%s: %w", extModel.Namespace, extModel.Name, err)
+	}
+	return r.releaseFromLegacyOwner(ctx, extModel, provider)
+}
+
+// releaseFromLegacyOwner removes extModel's owner reference from obj if IPP's
+// legacy migration created obj for it.
+func (r *Reconciler) releaseFromLegacyOwner(ctx context.Context, extModel *maasv1alpha1.ExternalModel, obj *unstructured.Unstructured) error {
+	labels := obj.GetLabels()
+	if labels[labelManagedBy] != managedByIPPLegacyMigration || labels[labelMigratedFrom] != extModel.Name {
+		return nil
+	}
+	refs := obj.GetOwnerReferences()
+	kept := make([]metav1.OwnerReference, 0, len(refs))
+	for _, ref := range refs {
+		if ref.UID != extModel.UID {
+			kept = append(kept, ref)
+		}
+	}
+	if len(kept) == len(refs) {
+		return nil
+	}
+	// Update, as granted on these resources, checks the resourceVersion read above.
+	obj.SetOwnerReferences(kept)
+	if err := r.Update(ctx, obj); err != nil {
+		return fmt.Errorf("failed to release inference %s %s/%s from its legacy owner: %w", obj.GetKind(), extModel.Namespace, extModel.Name, err)
+	}
+	oteljson.FromContext(ctx).Info("released migrated inference resource from its legacy owner",
+		"kind", obj.GetKind(), "name", extModel.Name, "namespace", extModel.Namespace)
+	return nil
 }
 
 // teardownLegacyChildren deletes the maas-* networking resources (Service,
@@ -406,8 +495,9 @@ func (r *Reconciler) teardownLegacyChildren(ctx context.Context, extModel *maasv
 }
 
 // markMigrated records that the inference API now owns networking for this
-// legacy ExternalModel. The legacy object remains as the owner of the migrated
-// inference resources, so the status gives users a durable migration signal.
+// legacy ExternalModel. The legacy object no longer owns the migrated inference
+// resources (see releaseMigratedResources), so the status gives users a durable
+// migration signal and the legacy object can be deleted on its own.
 func (r *Reconciler) markMigrated(ctx context.Context, extModel *maasv1alpha1.ExternalModel) error {
 	desiredMessage := fmt.Sprintf("Model migrated to inference.opendatahub.io ExternalModel: %s", extModel.Name)
 	if extModel.Status.Phase == "Migrated" && extModel.Status.Message == desiredMessage {

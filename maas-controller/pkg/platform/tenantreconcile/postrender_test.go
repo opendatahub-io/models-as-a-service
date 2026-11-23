@@ -2,166 +2,31 @@ package tenantreconcile
 
 import (
 	"context"
-	"os"
 	"testing"
 
 	"github.com/go-logr/logr"
-	"github.com/google/cel-go/cel"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"sigs.k8s.io/yaml"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
-	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/groupname"
 )
 
 func boolPtr(b bool) *bool { return &b }
 
-// TestPatchAuthPolicyWithOIDC_GroupsExprUsesCanonicalPattern ensures the
-// per-tenant maas-api AuthPolicy post-render gates X-MaaS-Group-OC JSON
-// construction on the canonical group-name pattern (maas-controller/pkg/
-// groupname). This is the AuthPolicy-side twin of the maas-api API-key
-// mint-time validation (maas-api/internal/api_keys/groupname.go).
-func TestPatchAuthPolicyWithOIDC_GroupsExprUsesCanonicalPattern(t *testing.T) {
-	resource := &unstructured.Unstructured{Object: map[string]any{}}
-	// SetNestedField requires intermediate maps to exist; the rendered
-	// maas-api AuthPolicy provides them in production.
-	for _, path := range [][]string{
-		{"spec", "rules", "authentication"},
-		{"spec", "rules", "authentication", "openshift-identities"},
-		{"spec", "rules", "authorization"},
-		{"spec", "rules", "response", "success", "headers"},
-	} {
-		require.NoError(t, unstructured.SetNestedField(resource.Object, map[string]any{}, path...))
-	}
-
-	oidc := &maasv1alpha1.TenantExternalOIDCConfig{IssuerURL: "https://idp.example.com/realms/test", ClientID: "maas"}
-	require.NoError(t, patchAuthPolicyWithOIDC(logr.Discard(), resource, oidc))
-
-	expr, found, err := unstructured.NestedString(resource.Object, "spec", "rules", "response", "success", "headers", "X-MaaS-Group-OC", "plain", "expression")
-	require.NoError(t, err)
-	require.True(t, found, "X-MaaS-Group-OC expression should be set")
-	assert.Contains(t, expr, "g.matches('"+groupname.Pattern+"')",
-		"OIDC groups must be gated on the canonical group-name pattern")
-	assert.Contains(t, expr, `'["system:authenticated","' + auth.identity.groups.join('","') + '"]'`,
-		"safe groups must be joined with the implicit system:authenticated prefix")
-	// The pattern must accept slash groups (IdP full-path claims) while the
-	// expression still falls back for unsafe ones.
-	assert.Regexp(t, `/`, groupname.Pattern, "canonical pattern must allow slashes")
-	assert.True(t, groupname.Valid("/Engineering"))
-	assert.False(t, groupname.Valid(`bad"group`))
-
-	// Security: the group source is selected by identity type, never by claim
-	// presence — a JWT carrying a crafted "user" claim must never reach the
-	// TokenReview branch — and both sources are gated on the pattern.
-	assert.Contains(t, expr, "has(auth.identity.iss)",
-		"JWT identities must be selected by iss, not by groups-claim presence")
-	assert.Contains(t, expr, "auth.identity.user.groups.all(g, g.matches('"+groupname.Pattern+"')",
-		"TokenReview groups must be gated on the canonical group-name pattern")
-}
-
-func TestPatchAuthPolicyWithOIDCRequiresPurposePair(t *testing.T) {
-	resource := &unstructured.Unstructured{Object: map[string]any{"spec": map[string]any{}}}
-	oidc := &maasv1alpha1.TenantExternalOIDCConfig{
-		IssuerURL:               "https://issuer.example.com/realms/test",
-		ClientID:                "maas-api",
-		AccessTokenPurposeClaim: "token_use",
-	}
-
-	err := patchAuthPolicyWithOIDC(logr.Discard(), resource, oidc)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "must be configured together")
-}
-
-func TestPatchAuthPolicyWithOIDCTokenContract(t *testing.T) {
-	resource := &unstructured.Unstructured{Object: map[string]any{"spec": map[string]any{}}}
-	oidc := &maasv1alpha1.TenantExternalOIDCConfig{
-		IssuerURL:               "https://issuer.example.com/realms/test",
-		ClientID:                "maas-api",
-		Audience:                "maas-api",
-		AccessTokenPurposeClaim: "token_use",
-		AccessTokenPurpose:      "access",
-	}
-
-	require.NoError(t, patchAuthPolicyWithOIDC(logr.Discard(), resource, oidc))
-	patterns, found, err := unstructured.NestedSlice(
-		resource.Object,
-		"spec", "rules", "authorization", "oidc-client-bound", "patternMatching", "patterns",
-	)
-	require.NoError(t, err)
-	require.True(t, found)
-	require.Len(t, patterns, 4)
-
-	expected := []map[string]string{
-		{"selector": "auth.identity.iss", "operator": "eq", "value": oidc.IssuerURL},
-		{"selector": "auth.identity.azp", "operator": "eq", "value": oidc.ClientID},
-		{"selector": "auth.identity.token_use", "operator": "eq", "value": oidc.AccessTokenPurpose},
-	}
-	for index, patternIndex := range []int{0, 1, 3} {
-		patternMap, ok := patterns[patternIndex].(map[string]any)
-		require.True(t, ok)
-		assert.Equal(t, expected[index]["selector"], patternMap["selector"])
-		assert.Equal(t, expected[index]["operator"], patternMap["operator"])
-		assert.Equal(t, expected[index]["value"], patternMap["value"])
-	}
-
-	audiencePattern, ok := patterns[2].(map[string]any)
-	require.True(t, ok)
-	assert.Equal(t,
-		`has(auth.identity.aud) && (auth.identity.aud == "maas-api" || "maas-api" in auth.identity.aud)`,
-		audiencePattern["predicate"],
-	)
-}
-
-func TestDefaultDenyStateOperations(t *testing.T) {
-	data, err := os.ReadFile("../../../../deployment/base/maas-controller/policies/gateway-default-deny.yaml")
-	require.NoError(t, err)
-	var policy map[string]any
-	require.NoError(t, yaml.Unmarshal(data, &policy))
-	when, found, err := unstructured.NestedSlice(policy, "spec", "defaults", "limits", "deny-all-by-default", "when")
-	require.NoError(t, err)
-	require.True(t, found)
-	require.NotEmpty(t, when)
-	entry, ok := when[0].(map[string]any)
-	require.True(t, ok)
-	predicate, ok := entry["predicate"].(string)
-	require.True(t, ok)
-	env, err := cel.NewEnv(cel.Variable("request", cel.DynType))
-	require.NoError(t, err)
-	ast, issues := env.Compile(predicate)
-	require.NoError(t, issues.Err())
-	program, err := env.Program(ast)
-	require.NoError(t, err)
-	for _, tt := range []struct {
-		method, path string
-		deny         bool
-	}{
-		{"POST", "/v1/conversations", false},
-		{"POST", "/v1/conversations/conv_test/items", false},
-		{"GET", "/v1/conversations/conv_test", false},
-		{"DELETE", "/v1/conversations/conv_test", false},
-		{"GET", "/v1/responses/resp_test", false},
-		{"GET", "/v1/responses/resp_test/input_items", false},
-		{"DELETE", "/v1/responses/resp_test", false},
-		{"POST", "/v1/responses", true},
-		{"POST", "/v1/responses/", true},
-		{"POST", "/v1/responses/resp_test/cancel", true},
-		{"POST", "/v1/conversations-forged", true},
-		{"PUT", "/v1/conversations/conv_test", true},
-		{"POST", "/tenant/model/v1/chat/completions", true},
-		{"GET", "/v1/models", false},
-	} {
-		t.Run(tt.method+tt.path, func(t *testing.T) {
-			out, _, err := program.Eval(map[string]any{"request": map[string]any{"method": tt.method, "path": tt.path}})
-			require.NoError(t, err)
-			assert.Equal(t, tt.deny, out.Value())
-		})
-	}
-}
-
 func TestBuildTelemetryLabels(t *testing.T) {
+	telemetryTenant := &maasv1alpha1.MaasTenantConfig{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      maasv1alpha1.MaasTenantConfigInstanceName,
+			Namespace: "models-as-a-service",
+			Labels: map[string]string{
+				LabelTenantName:      "models-as-a-service",
+				LabelTenantNamespace: "models-as-a-service",
+			},
+		},
+	}
 	tests := []struct {
 		name           string
 		config         *maasv1alpha1.TenantTelemetryConfig
@@ -172,12 +37,14 @@ func TestBuildTelemetryLabels(t *testing.T) {
 			name:   "nil config uses defaults",
 			config: nil,
 			expectedLabels: map[string]any{
-				"subscription":    "auth.identity.selected_subscription",
-				"cost_center":     `has(auth.identity.subscription_info.costCenter) ? auth.identity.subscription_info.costCenter : ""`,
-				"organization_id": `has(auth.identity.subscription_info.organizationId) ? auth.identity.subscription_info.organizationId : ""`,
-				"model":           "responseBodyJSON(\"/model\")",
+				"tenant_name":      `"models-as-a-service"`,
+				"tenant_namespace": `"models-as-a-service"`,
+				"subscription":     "auth.identity.selected_subscription",
+				"cost_center":      `has(auth.identity.subscription_info.costCenter) ? auth.identity.subscription_info.costCenter : ""`,
+				"organization_id":  `has(auth.identity.subscription_info.organizationId) ? auth.identity.subscription_info.organizationId : ""`,
+				"model":            "responseBodyJSON(\"/model\")",
 			},
-			absentKeys: []string{"user", "group"},
+			absentKeys: []string{"user", "group", "subscription_namespace"},
 		},
 		{
 			name: "captureGroup true emits groups_str path",
@@ -239,19 +106,21 @@ func TestBuildTelemetryLabels(t *testing.T) {
 				},
 			},
 			expectedLabels: map[string]any{
-				"subscription":    "auth.identity.selected_subscription",
-				"cost_center":     `has(auth.identity.subscription_info.costCenter) ? auth.identity.subscription_info.costCenter : ""`,
-				"organization_id": `has(auth.identity.subscription_info.organizationId) ? auth.identity.subscription_info.organizationId : ""`,
-				"user":            "auth.identity.userid",
-				"group":           "auth.identity.groups_str",
-				"model":           "responseBodyJSON(\"/model\")",
+				"tenant_name":      `"models-as-a-service"`,
+				"tenant_namespace": `"models-as-a-service"`,
+				"subscription":     "auth.identity.selected_subscription",
+				"cost_center":      `has(auth.identity.subscription_info.costCenter) ? auth.identity.subscription_info.costCenter : ""`,
+				"organization_id":  `has(auth.identity.subscription_info.organizationId) ? auth.identity.subscription_info.organizationId : ""`,
+				"user":             "auth.identity.userid",
+				"group":            "auth.identity.groups_str",
+				"model":            "responseBodyJSON(\"/model\")",
 			},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			labels := buildTelemetryLabels(logr.Discard(), tt.config)
+			labels := buildTelemetryLabels(logr.Discard(), tt.config, telemetryTenant)
 
 			for k, v := range tt.expectedLabels {
 				assert.Equal(t, v, labels[k], "label %q", k)
@@ -261,6 +130,80 @@ func TestBuildTelemetryLabels(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestConfigureTelemetryPolicyResourcesIncludesProducerScope(t *testing.T) {
+	tenant := &maasv1alpha1.MaasTenantConfig{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      maasv1alpha1.MaasTenantConfigInstanceName,
+			Namespace: "ai-tenant-redteam",
+			Labels: map[string]string{
+				LabelTenantName:      "redteam",
+				LabelTenantNamespace: "ai-tenant-redteam",
+			},
+		},
+	}
+	var resources []unstructured.Unstructured
+	params := PlatformParams{
+		GatewayNamespace: "openshift-ingress",
+		GatewayName:      "redteam",
+		TenantIdentifier: "redteam",
+	}
+
+	require.NoError(t, configureTelemetryPolicyResources(logr.Discard(), tenant, &resources, params))
+	require.Len(t, resources, 1)
+
+	labels, found, err := unstructured.NestedMap(resources[0].Object,
+		"spec", "metrics", "default", "labels")
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, `"redteam"`, labels["tenant_name"])
+	assert.Equal(t, `"ai-tenant-redteam"`, labels["tenant_namespace"])
+	assert.Equal(t, "auth.identity.selected_subscription", labels["subscription"])
+	assert.NotContains(t, labels, "subscription_namespace")
+	assert.Contains(t, labels, "organization_id")
+}
+
+func TestBuildIstioTelemetryTagOverridesIncludesProducerScope(t *testing.T) {
+	tenant := &maasv1alpha1.MaasTenantConfig{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      maasv1alpha1.MaasTenantConfigInstanceName,
+			Namespace: "ai-tenant-redteam",
+			Labels:    map[string]string{LabelTenantName: "redteam"},
+		},
+	}
+	overrides := buildIstioTelemetryTagOverrides(tenant, nil)
+	assert.Equal(t, map[string]any{
+		"operation": "UPSERT",
+		"value":     `"redteam"`,
+	}, overrides["tenant_name"])
+	assert.Equal(t, map[string]any{
+		"operation": "UPSERT",
+		"value":     `"ai-tenant-redteam"`,
+	}, overrides["tenant_namespace"])
+	assert.Equal(t, map[string]any{
+		"operation": "UPSERT",
+		"value":     `request.headers["x-maas-subscription"]`,
+	}, overrides["subscription"])
+	assert.NotContains(t, overrides, "subscription_namespace")
+	assert.Equal(t, map[string]any{
+		"operation": "UPSERT",
+		"value":     `request.headers["x-maas-organization-id"]`,
+	}, overrides["organization_id"])
+	assert.NotContains(t, overrides, "user")
+
+	overrides = buildIstioTelemetryTagOverrides(tenant, &maasv1alpha1.TenantTelemetryConfig{
+		Metrics: &maasv1alpha1.TenantMetricsConfig{CaptureUser: boolPtr(true)},
+	})
+	assert.NotContains(t, overrides, "user")
+
+	overrides = buildIstioTelemetryTagOverrides(tenant, &maasv1alpha1.TenantTelemetryConfig{
+		Metrics: &maasv1alpha1.TenantMetricsConfig{CaptureOrganization: boolPtr(false)},
+	})
+	assert.NotContains(t, overrides, "organization_id")
+
+	overrides = buildIstioTelemetryTagOverrides(tenant, nil)
+	assert.NotContains(t, overrides, "user")
 }
 
 func TestConfigurePayloadProcessingHPA(t *testing.T) {

@@ -72,6 +72,7 @@ func TestDetectConflictingAuthPolicies_NoConflicts(t *testing.T) {
 		WithScheme(scheme).
 		WithRESTMapper(testRESTMapper()).
 		WithObjects(
+			legacyNamespace(namespace),
 			model,
 			route,
 			maasPolicy,
@@ -132,7 +133,7 @@ func TestDetectConflictingAuthPolicies_RogueDetected(t *testing.T) {
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithRESTMapper(testRESTMapper()).
-		WithObjects(model, route, maasPolicy, rogueAP, newReadyGatewayAuthPolicy(gatewayNS, maasGatewayAuthPolicyName)).
+		WithObjects(legacyNamespace(namespace), model, route, maasPolicy, rogueAP, newReadyGatewayAuthPolicy(gatewayNS, maasGatewayAuthPolicyName)).
 		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
 		Build()
 
@@ -183,7 +184,7 @@ func TestDetectConflictingAuthPolicies_MultipleRogues(t *testing.T) {
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithRESTMapper(testRESTMapper()).
-		WithObjects(model, route, maasPolicy, rogue1, rogue2, newReadyGatewayAuthPolicy(gatewayNS, maasGatewayAuthPolicyName)).
+		WithObjects(legacyNamespace(namespace), model, route, maasPolicy, rogue1, rogue2, newReadyGatewayAuthPolicy(gatewayNS, maasGatewayAuthPolicyName)).
 		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
 		Build()
 
@@ -236,7 +237,7 @@ func TestDetectConflictingAuthPolicies_DifferentRoute(t *testing.T) {
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithRESTMapper(testRESTMapper()).
-		WithObjects(model, route, maasPolicy, unrelatedAP, newReadyGatewayAuthPolicy(gatewayNS, maasGatewayAuthPolicyName)).
+		WithObjects(legacyNamespace(namespace), model, route, maasPolicy, unrelatedAP, newReadyGatewayAuthPolicy(gatewayNS, maasGatewayAuthPolicyName)).
 		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
 		Build()
 
@@ -280,7 +281,7 @@ func TestDetectConflictingAuthPolicies_CrossNamespaceIsolation(t *testing.T) {
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithRESTMapper(testRESTMapper()).
-		WithObjects(model, route, maasPolicy, rogueInOtherNS, newReadyGatewayAuthPolicy(gatewayNS, maasGatewayAuthPolicyName)).
+		WithObjects(legacyNamespace(policyNS), model, route, maasPolicy, rogueInOtherNS, newReadyGatewayAuthPolicy(gatewayNS, maasGatewayAuthPolicyName)).
 		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
 		Build()
 
@@ -323,7 +324,7 @@ func TestDetectConflictingAuthPolicies_ConflictResolved(t *testing.T) {
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithRESTMapper(testRESTMapper()).
-		WithObjects(model, route, maasPolicy, rogueAP, newReadyGatewayAuthPolicy(gatewayNS, maasGatewayAuthPolicyName)).
+		WithObjects(legacyNamespace(namespace), model, route, maasPolicy, rogueAP, newReadyGatewayAuthPolicy(gatewayNS, maasGatewayAuthPolicyName)).
 		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
 		Build()
 
@@ -381,7 +382,7 @@ func TestDetectConflictingAuthPolicies_MissingModel(t *testing.T) {
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithRESTMapper(testRESTMapper()).
-		WithObjects(maasPolicy, newReadyGatewayAuthPolicy(gatewayNS, maasGatewayAuthPolicyName)).
+		WithObjects(legacyNamespace(namespace), maasPolicy, newReadyGatewayAuthPolicy(gatewayNS, maasGatewayAuthPolicyName)).
 		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
 		Build()
 
@@ -436,7 +437,7 @@ func TestDetectConflictingAuthPolicies_GatewayTarget(t *testing.T) {
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithRESTMapper(testRESTMapper()).
-		WithObjects(model, route, maasPolicy, gatewayAP, newReadyGatewayAuthPolicy(gatewayNS, maasGatewayAuthPolicyName)).
+		WithObjects(legacyNamespace(namespace), model, route, maasPolicy, gatewayAP, newReadyGatewayAuthPolicy(gatewayNS, maasGatewayAuthPolicyName)).
 		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
 		Build()
 

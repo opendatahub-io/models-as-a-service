@@ -57,6 +57,13 @@ func TestPostgresStoreFromURL(t *testing.T) {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "invalid database URL")
 	})
+	t.Run("InvalidReadURL", func(t *testing.T) {
+		_, err := api_keys.NewPostgresStoreFromURLs(
+			ctx, testLogger, "postgresql://localhost/test", "mysql://localhost/test", "test-tenant")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid database URL")
+		assert.Contains(t, err.Error(), "read-only database")
+	})
 }
 
 func TestAPIKeyOperations(t *testing.T) {
@@ -374,6 +381,36 @@ func TestBulkRevoke_EmptyScopeRejected(t *testing.T) {
 	_, err = store.BulkRevoke(ctx, "", "", "tenant-a", true)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "at least one of username or subscription is required")
+}
+
+func TestBulkRevokeBySubscriptions(t *testing.T) {
+	ctx := t.Context()
+	store := createTestStore(t)
+	defer store.Close()
+
+	require.NoError(t, store.AddKey(ctx, "alice", "admin-scope-a", "hash-admin-a", "Key A", "", nil, "sub-a", "tenant-a", nil, false, nil))
+	require.NoError(t, store.AddKey(ctx, "alice", "admin-scope-b", "hash-admin-b", "Key B", "", nil, "sub-b", "tenant-a", nil, false, nil))
+	require.NoError(t, store.AddKey(ctx, "alice", "admin-scope-c", "hash-admin-c", "Key C", "", nil, "sub-c", "tenant-a", nil, false, nil))
+	require.NoError(t, store.AddKey(ctx, "alice", "admin-scope-other-tenant", "hash-admin-ot", "Key Other Tenant", "", nil, "sub-a", "tenant-b", nil, false, nil))
+
+	count, err := store.BulkRevokeBySubscriptions(ctx, "alice", []string{"sub-a", "sub-b"}, "tenant-a", true)
+	require.NoError(t, err)
+	assert.Equal(t, 2, count)
+
+	count, err = store.BulkRevokeBySubscriptions(ctx, "alice", []string{"sub-a", "sub-b"}, "tenant-a", false)
+	require.NoError(t, err)
+	assert.Equal(t, 2, count)
+
+	for _, keyID := range []string{"admin-scope-a", "admin-scope-b"} {
+		key, err := store.Get(ctx, keyID)
+		require.NoError(t, err)
+		assert.Equal(t, api_keys.StatusRevoked, key.Status)
+	}
+	for _, keyID := range []string{"admin-scope-c", "admin-scope-other-tenant"} {
+		key, err := store.Get(ctx, keyID)
+		require.NoError(t, err)
+		assert.Equal(t, api_keys.StatusActive, key.Status)
+	}
 }
 
 func TestInvalidateTenant(t *testing.T) {

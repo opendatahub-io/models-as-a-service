@@ -9,8 +9,10 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/authpolicy"
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/constant"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/subscription"
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/token"
 )
 
 const (
@@ -145,14 +147,41 @@ func TestSelector_OrganizationIDPrecedence(t *testing.T) {
 			}
 
 			selector := subscription.NewSelector(logger.New(false), &fakeLister{subscriptions: []*unstructured.Unstructured{subscriptionObject}}, nil, nil)
-			response, err := selector.Select([]string{"g1"}, "", "", "")
-			if err != nil {
-				t.Fatalf("Select() error = %v", err)
-			}
-			if response.OrganizationID != test.expectedOrgID {
-				t.Fatalf("OrganizationID = %q, want %q", response.OrganizationID, test.expectedOrgID)
+			for _, selection := range []struct {
+				name                  string
+				requestedSubscription string
+			}{
+				{name: "automatic"},
+				{name: "explicit name", requestedSubscription: "test-sub"},
+				{name: "explicit qualified name", requestedSubscription: "test-ns/test-sub"},
+			} {
+				t.Run(selection.name, func(t *testing.T) {
+					response, err := selector.Select([]string{"g1"}, "", selection.requestedSubscription, "")
+					if err != nil {
+						t.Fatalf("Select() error = %v", err)
+					}
+					if response.OrganizationID != test.expectedOrgID {
+						t.Fatalf("OrganizationID = %q, want %q", response.OrganizationID, test.expectedOrgID)
+					}
+				})
 			}
 		})
+	}
+}
+
+func TestSelector_SubscriptionHeadersAnnotation(t *testing.T) {
+	subscriptionObject := createSubscription("headers-sub", []string{"g1"}, nil, 10, defaultTestTokenRateLimit, "", "")
+	subscriptionObject.SetAnnotations(map[string]string{
+		"experimental.maas.opendatahub.io/headers": `{"x-grid-geo-fencing":["region1","region2"]}`,
+	})
+
+	selector := subscription.NewSelector(logger.New(false), &fakeLister{subscriptions: []*unstructured.Unstructured{subscriptionObject}}, nil, nil)
+	response, err := selector.Select([]string{"g1"}, "", "", "")
+	if err != nil {
+		t.Fatalf("Select() error = %v", err)
+	}
+	if !slices.Equal(response.Headers["x-grid-geo-fencing"], []string{"region1", "region2"}) {
+		t.Fatalf("Headers = %#v, want normalized x-grid-geo-fencing values", response.Headers)
 	}
 }
 
@@ -381,6 +410,45 @@ func TestGetAllAccessible(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestGetAllAccessibleExactGroupsPreserveTrailingSpaces(t *testing.T) {
+	subscriptionObject := createSubscription("literal-group", []string{"org/users "}, nil, 10, defaultTestTokenRateLimit, "", "")
+	selector := subscription.NewSelector(logger.New(false), &fakeLister{subscriptions: []*unstructured.Unstructured{subscriptionObject}}, nil, nil)
+
+	accessible, err := selector.GetAllAccessible([]string{"org/users "}, "")
+	if err != nil {
+		t.Fatalf("GetAllAccessible() error = %v", err)
+	}
+	if len(accessible) != 1 || accessible[0].Name != "literal-group" {
+		t.Fatalf("GetAllAccessible() = %#v, want literal-group", accessible)
+	}
+}
+
+func TestListInventorySeparatesQualifiedGroupsByOrganization(t *testing.T) {
+	orgA := "42c3e46f-2477-44d7-a85b-d3b43f6b31fa"
+	orgB := "6a9f6e3e-0c4c-4d14-9a9b-2a26c1ebeea1"
+	selector := subscription.NewSelector(logger.New(false), &fakeLister{subscriptions: []*unstructured.Unstructured{
+		createSubscription("org-a-sub", []string{orgA + "/users"}, nil, 10, defaultTestTokenRateLimit, "", ""),
+		createSubscription("org-b-sub", []string{orgB + "/users"}, nil, 10, defaultTestTokenRateLimit, "", ""),
+	}}, nil, nil)
+
+	for _, test := range []struct {
+		organizationID string
+		wantName       string
+	}{
+		{organizationID: orgA, wantName: "org-a-sub"},
+		{organizationID: orgB, wantName: "org-b-sub"},
+	} {
+		identity := &token.VerifiedIdentity{Source: "oidc", Claims: token.VerifiedClaims{OrgID: test.organizationID}}
+		inventory, err := selector.ListInventory([]string{test.organizationID + "/users"}, "alex", identity)
+		if err != nil {
+			t.Fatalf("ListInventory() error = %v", err)
+		}
+		if len(inventory) != 1 || inventory[0].SubscriptionIDHeader != test.wantName {
+			t.Fatalf("ListInventory() = %#v, want only %q", inventory, test.wantName)
+		}
 	}
 }
 
@@ -2178,6 +2246,280 @@ func TestSelector_ResolvedModelFromAlias(t *testing.T) {
 	}
 }
 
+// A subscription may list several modelRefs sharing one client-facing name
+// (per-tenant modelRefs for a shared model, or distinct models with one
+// client-facing name) while the caller's authorized set covers only some of
+// them. findModelRef returns the first alias match, so authorization must
+// not consider unauthorized refs: an unauthorized ref listed first must not
+// deny a request that a later, authorized ref serves.
+func TestSelect_SharedAliasAuthorizationOrdering(t *testing.T) {
+	log := logger.New(false)
+	sub := createSubscriptionWithModelRefs("sub1", []string{"g1"}, []map[string]any{
+		{"name": "model-a", "namespace": "ns1"},
+		{"name": "model-b", "namespace": "ns2"},
+	})
+	aliased := func(name, ns string) *unstructured.Unstructured {
+		ref := createMaaSModelRef(name, ns, "ExternalModel")
+		if err := unstructured.SetNestedField(ref.Object, "client-name", "status", "resolvedModelAlias"); err != nil {
+			t.Fatalf("SetNestedField: %v", err)
+		}
+		return ref
+	}
+	modelLister := &fakeModelLister{items: []*unstructured.Unstructured{
+		aliased("model-a", "ns1"),
+		aliased("model-b", "ns2"),
+	}}
+	accessChecker := &fakeAccessChecker{
+		authorized: map[authpolicy.ModelKey]bool{
+			{Namespace: "ns2", Name: "model-b"}: true,
+		},
+	}
+	selector := subscription.NewSelector(log, &fakeLister{subscriptions: []*unstructured.Unstructured{sub}}, modelLister, accessChecker)
+
+	t.Run("auto selection allows the authorized carrier", func(t *testing.T) {
+		result, err := selector.Select([]string{"g1"}, "", "", "client-name")
+		if err != nil {
+			t.Fatalf("Select: %v", err)
+		}
+		if !result.AccessAllowed {
+			t.Error("AccessAllowed = false, want true when a later same-alias ref is authorized")
+		}
+	})
+
+	t.Run("explicit selection allows the authorized carrier", func(t *testing.T) {
+		result, err := selector.Select([]string{"g1"}, "", "sub1", "client-name")
+		if err != nil {
+			t.Fatalf("Select: %v", err)
+		}
+		if !result.AccessAllowed {
+			t.Error("AccessAllowed = false, want true when a later same-alias ref is authorized")
+		}
+	})
+
+	t.Run("no authorized carrier denies", func(t *testing.T) {
+		none := &fakeAccessChecker{authorized: map[authpolicy.ModelKey]bool{}}
+		selector := subscription.NewSelector(log, &fakeLister{subscriptions: []*unstructured.Unstructured{sub}}, modelLister, none)
+		_, err := selector.Select([]string{"g1"}, "", "", "client-name")
+		var denied *subscription.AccessDeniedError
+		if !errors.As(err, &denied) {
+			t.Fatalf("expected AccessDeniedError, got %T: %v", err, err)
+		}
+	})
+}
+
+// An exact namespace/name request must not be authorized through a different
+// reference that merely carries the same client-facing name: the exact
+// reference identifies the routed model, and its authorization result is the
+// answer even when an alias carrier in the same namespace is authorized.
+func TestSelect_ExactRefNotSubstitutedByAuthorizedAliasCarrier(t *testing.T) {
+	log := logger.New(false)
+	sub := createSubscriptionWithModelRefs("sub1", []string{"g1"}, []map[string]any{
+		{"name": "client-name", "namespace": "tenant-b"},
+		{"name": "modelref-b", "namespace": "tenant-b"},
+	})
+	aliased := func(name, ns string) *unstructured.Unstructured {
+		ref := createMaaSModelRef(name, ns, "ExternalModel")
+		if err := unstructured.SetNestedField(ref.Object, "client-name", "status", "resolvedModelAlias"); err != nil {
+			t.Fatalf("SetNestedField: %v", err)
+		}
+		return ref
+	}
+	modelLister := &fakeModelLister{items: []*unstructured.Unstructured{
+		aliased("client-name", "tenant-b"),
+		aliased("modelref-b", "tenant-b"),
+	}}
+	accessChecker := &fakeAccessChecker{
+		authorized: map[authpolicy.ModelKey]bool{
+			{Namespace: "tenant-b", Name: "modelref-b"}: true,
+		},
+	}
+	selector := subscription.NewSelector(log, &fakeLister{subscriptions: []*unstructured.Unstructured{sub}}, modelLister, accessChecker)
+
+	t.Run("explicit selection denies the unauthorized exact reference", func(t *testing.T) {
+		result, err := selector.Select([]string{"g1"}, "", "sub1", "tenant-b/client-name")
+		if err != nil {
+			t.Fatalf("Select: %v", err)
+		}
+		if result.AccessAllowed {
+			t.Error("AccessAllowed = true, want false when the exact reference is unauthorized")
+		}
+	})
+
+	t.Run("auto selection denies the unauthorized exact reference", func(t *testing.T) {
+		_, err := selector.Select([]string{"g1"}, "", "", "tenant-b/client-name")
+		var denied *subscription.AccessDeniedError
+		if !errors.As(err, &denied) {
+			t.Fatalf("expected AccessDeniedError, got %T: %v", err, err)
+		}
+	})
+}
+
+// The auto-selection pre-filter must admit a subscription whose refs share a
+// client-facing name in one namespace when the authorized subset resolves the
+// ambiguity, instead of dropping it with NoSubscriptionError before the
+// authorization filter can run.
+func TestSelect_AmbiguousAliasAuthorizedSubsetAutoSelection(t *testing.T) {
+	log := logger.New(false)
+	sub := createSubscriptionWithModelRefs("sub1", []string{"g1"}, []map[string]any{
+		{"name": "modelref-a", "namespace": "tenant-a"},
+		{"name": "modelref-b", "namespace": "tenant-a"},
+	})
+	aliased := func(name, ns string) *unstructured.Unstructured {
+		ref := createMaaSModelRef(name, ns, "ExternalModel")
+		if err := unstructured.SetNestedField(ref.Object, "client-name", "status", "resolvedModelAlias"); err != nil {
+			t.Fatalf("SetNestedField: %v", err)
+		}
+		return ref
+	}
+	modelLister := &fakeModelLister{items: []*unstructured.Unstructured{
+		aliased("modelref-a", "tenant-a"),
+		aliased("modelref-b", "tenant-a"),
+	}}
+	accessChecker := &fakeAccessChecker{
+		authorized: map[authpolicy.ModelKey]bool{
+			{Namespace: "tenant-a", Name: "modelref-b"}: true,
+		},
+	}
+	selector := subscription.NewSelector(log, &fakeLister{subscriptions: []*unstructured.Unstructured{sub}}, modelLister, accessChecker)
+
+	result, err := selector.Select([]string{"g1"}, "", "", "tenant-a/client-name")
+	if err != nil {
+		t.Fatalf("Select: %v, want selection via the authorized carrier", err)
+	}
+	if !result.AccessAllowed {
+		t.Error("AccessAllowed = false, want true when exactly one ambiguous carrier is authorized")
+	}
+}
+
+func TestSelect_RateLimitIDOnlyForShortIdentity(t *testing.T) {
+	log := logger.New(false)
+	requestedModel := "ns1/model-a"
+
+	legacy := createSubscriptionWithModelRefs("legacy-sub", []string{"g1"}, []map[string]any{
+		{"name": "model-a", "namespace": "ns1"},
+	})
+	fresh := createSubscriptionWithModelRefs("fresh-sub", []string{"g1"}, []map[string]any{
+		{"name": "model-a", "namespace": "ns1"},
+	})
+	if status, ok := fresh.Object["status"].(map[string]any); ok {
+		status["rateLimitIdentity"] = constant.RateLimitIdentityShort
+	} else {
+		fresh.Object["status"] = map[string]any{
+			"rateLimitIdentity": constant.RateLimitIdentityShort,
+		}
+	}
+
+	t.Run("legacy omits rateLimitId", func(t *testing.T) {
+		selector := subscription.NewSelector(log, &fakeLister{subscriptions: []*unstructured.Unstructured{legacy}}, nil, nil)
+		result, err := selector.Select([]string{"g1"}, "", "", requestedModel)
+		if err != nil {
+			t.Fatalf("Select: %v", err)
+		}
+		if result.RateLimitID != "" {
+			t.Errorf("RateLimitID = %q, want empty for legacy subscription", result.RateLimitID)
+		}
+	})
+
+	t.Run("short status returns rateLimitId", func(t *testing.T) {
+		selector := subscription.NewSelector(log, &fakeLister{subscriptions: []*unstructured.Unstructured{fresh}}, nil, nil)
+		result, err := selector.Select([]string{"g1"}, "", "", requestedModel)
+		if err != nil {
+			t.Fatalf("Select: %v", err)
+		}
+		want := subscription.RateLimitIDFor("test-ns", "fresh-sub", requestedModel)
+		if result.RateLimitID != want {
+			t.Errorf("RateLimitID = %q, want %q", result.RateLimitID, want)
+		}
+	})
+}
+
+// TRLP limits are keyed on the modelref, not the requested identity: a
+// request carrying a client-facing alias — bare or as a path pair's name
+// segment — must resolve ResolvedModel (and with it RateLimitID) to the
+// matched ref's namespace/name so the modelref's rate limits apply.
+func TestSelect_RateLimitIDUsesMatchedRefOnAliasPath(t *testing.T) {
+	log := logger.New(false)
+	sub := createSubscriptionWithModelRefs("fresh-sub", []string{"g1"}, []map[string]any{
+		{"name": "model-a", "namespace": "ns1"},
+	})
+	if status, ok := sub.Object["status"].(map[string]any); ok {
+		status["rateLimitIdentity"] = constant.RateLimitIdentityShort
+	} else {
+		sub.Object["status"] = map[string]any{
+			"rateLimitIdentity": constant.RateLimitIdentityShort,
+		}
+	}
+	modelRef := createMaaSModelRef("model-a", "ns1", "ExternalModel")
+	if err := unstructured.SetNestedField(modelRef.Object, "client-name", "status", "resolvedModelAlias"); err != nil {
+		t.Fatalf("SetNestedField: %v", err)
+	}
+	selector := subscription.NewSelector(
+		log,
+		&fakeLister{subscriptions: []*unstructured.Unstructured{sub}},
+		&fakeModelLister{items: []*unstructured.Unstructured{modelRef}},
+		nil,
+	)
+
+	wantModel := "ns1/model-a"
+	wantRateLimitID := subscription.RateLimitIDFor("test-ns", "fresh-sub", wantModel)
+
+	for _, requested := range []string{"ns1/client-name", "client-name"} {
+		t.Run("request "+requested, func(t *testing.T) {
+			//nolint:unqueryvet,nolintlint // False positive - not a SQL query
+			result, err := selector.Select([]string{"g1"}, "", "", requested)
+			if err != nil {
+				t.Fatalf("Select: %v", err)
+			}
+			if result.ResolvedModel != wantModel {
+				t.Errorf("ResolvedModel = %q, want %q", result.ResolvedModel, wantModel)
+			}
+			if result.RateLimitID != wantRateLimitID {
+				t.Errorf("RateLimitID = %q, want %q", result.RateLimitID, wantRateLimitID)
+			}
+		})
+	}
+	t.Run("bare alias with several carriers resolves to the matched ref", func(t *testing.T) {
+		sharedSub := createSubscriptionWithModelRefs("fresh-sub", []string{"g1"}, []map[string]any{
+			{"name": "model-a", "namespace": "ns1"},
+			{"name": "model-b", "namespace": "ns2"},
+		})
+		if status, ok := sharedSub.Object["status"].(map[string]any); ok {
+			status["rateLimitIdentity"] = constant.RateLimitIdentityShort
+		} else {
+			sharedSub.Object["status"] = map[string]any{
+				"rateLimitIdentity": constant.RateLimitIdentityShort,
+			}
+		}
+		aliased := func(name, ns string) *unstructured.Unstructured {
+			ref := createMaaSModelRef(name, ns, "ExternalModel")
+			if err := unstructured.SetNestedField(ref.Object, "client-name", "status", "resolvedModelAlias"); err != nil {
+				t.Fatalf("SetNestedField: %v", err)
+			}
+			return ref
+		}
+		sharedSelector := subscription.NewSelector(
+			log,
+			&fakeLister{subscriptions: []*unstructured.Unstructured{sharedSub}},
+			&fakeModelLister{items: []*unstructured.Unstructured{
+				aliased("model-a", "ns1"),
+				aliased("model-b", "ns2"),
+			}},
+			nil,
+		)
+		//nolint:unqueryvet,nolintlint // False positive - not a SQL query
+		result, err := sharedSelector.Select([]string{"g1"}, "", "", "client-name")
+		if err != nil {
+			t.Fatalf("Select: %v", err)
+		}
+		if result.ResolvedModel != wantModel {
+			t.Errorf("ResolvedModel = %q, want %q", result.ResolvedModel, wantModel)
+		}
+		if result.RateLimitID != wantRateLimitID {
+			t.Errorf("RateLimitID = %q, want %q", result.RateLimitID, wantRateLimitID)
+		}
+	})
+}
+
 // createSubscriptionWithFlowControl returns a subscription for models ns1/model-a and
 // ns1/model-b with the given status.flowControlStatuses.
 func createSubscriptionWithFlowControl(t *testing.T, statuses ...map[string]any) *unstructured.Unstructured {
@@ -2262,5 +2604,48 @@ func TestSelect_FlowControlObjectiveMissing(t *testing.T) {
 				t.Errorf("Objective = %q, FairnessID = %q; want both empty", resp.Objective, resp.FairnessID)
 			}
 		})
+	}
+}
+
+func TestUserHasAccessIsExactAcrossOrganizations(t *testing.T) {
+	log := logger.New(false)
+
+	orgA := "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+	orgB := "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+
+	subscriptions := []*unstructured.Unstructured{
+		createSubscription("sub-org-a", []string{orgA + "/team"}, nil, 10, defaultTestTokenRateLimit, "", ""),
+		createSubscription("sub-org-b", []string{orgB + "/team"}, nil, 10, defaultTestTokenRateLimit, "", ""),
+	}
+
+	lister := &fakeLister{subscriptions: subscriptions}
+	selector := subscription.NewSelector(log, lister, nil, nil)
+
+	// User in org A should only access org A subscription
+	userGroupsOrgA := []string{orgA + "/team"}
+	accessible, err := selector.GetAllAccessible(userGroupsOrgA, "alice")
+	if err != nil {
+		t.Fatalf("GetAllAccessible failed: %v", err)
+	}
+
+	if len(accessible) != 1 {
+		t.Fatalf("Expected 1 accessible subscription for org A, got %d", len(accessible))
+	}
+	if accessible[0].Name != "sub-org-a" {
+		t.Errorf("Expected sub-org-a, got %s", accessible[0].Name)
+	}
+
+	// User in org B should only access org B subscription
+	userGroupsOrgB := []string{orgB + "/team"}
+	accessible, err = selector.GetAllAccessible(userGroupsOrgB, "bob")
+	if err != nil {
+		t.Fatalf("GetAllAccessible failed: %v", err)
+	}
+
+	if len(accessible) != 1 {
+		t.Fatalf("Expected 1 accessible subscription for org B, got %d", len(accessible))
+	}
+	if accessible[0].Name != "sub-org-b" {
+		t.Errorf("Expected sub-org-b, got %s", accessible[0].Name)
 	}
 }

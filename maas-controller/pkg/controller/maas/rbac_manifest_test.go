@@ -22,6 +22,49 @@ func TestSupplementalConfigRBACManifestSupportsControllerCaches(t *testing.T) {
 	g.Expect(hasDangerousVerb(configRole.Rules)).To(BeFalse())
 }
 
+// TestControllerRBACCoversMaaSAPIClusterRoles guards the API-server escalation check:
+// TenantReconciler applies the maas-api ClusterRoles, so maas-controller must already
+// hold every permission they grant.
+func TestControllerRBACCoversMaaSAPIClusterRoles(t *testing.T) {
+	controllerRules := slices.Concat(
+		readClusterRoleManifest(t, "clusterrole.yaml").Rules,
+		readClusterRoleManifest(t, filepath.Join("ocp", "clusterrole_ocp.yaml")).Rules,
+	)
+
+	for _, name := range []string{"clusterrole.yaml", "supplemental-clusterrole.yaml"} {
+		var role rbacv1.ClusterRole
+		readManifest(t, filepath.Join("deployment", "base", "maas-api", "rbac", name), &role)
+		for _, rule := range role.Rules {
+			for _, group := range rule.APIGroups {
+				for _, resource := range rule.Resources {
+					for _, verb := range rule.Verbs {
+						if !coversPermission(controllerRules, group, resource, verb, rule.ResourceNames) {
+							t.Errorf("maas-api %s grants %s %q/%s (resourceNames %v) but maas-controller does not hold it",
+								name, verb, group, resource, rule.ResourceNames)
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+// coversPermission reports whether rules grant verb on group/resource for every
+// requested resource name (or unrestricted access when none are requested).
+func coversPermission(rules []rbacv1.PolicyRule, group, resource, verb string, resourceNames []string) bool {
+	for _, rule := range rules {
+		if !rbacManifestContains(rule.APIGroups, group) ||
+			!rbacManifestContains(rule.Resources, resource) ||
+			!rbacManifestContains(rule.Verbs, verb) {
+			continue
+		}
+		if len(rule.ResourceNames) == 0 || (len(resourceNames) > 0 && containsAll(rule.ResourceNames, resourceNames)) {
+			return true
+		}
+	}
+	return false
+}
+
 func readClusterRoleManifest(t *testing.T, name string) rbacv1.ClusterRole {
 	t.Helper()
 	var role rbacv1.ClusterRole
@@ -31,7 +74,13 @@ func readClusterRoleManifest(t *testing.T, name string) rbacv1.ClusterRole {
 
 func readRBACManifest(t *testing.T, name string, out any) {
 	t.Helper()
-	path := filepath.Join("..", "..", "..", "..", "deployment", "base", "maas-controller", "rbac", name)
+	readManifest(t, filepath.Join("deployment", "base", "maas-controller", "rbac", name), out)
+}
+
+func readManifest(t *testing.T, repoPath string, out any) {
+	t.Helper()
+	name := repoPath
+	path := filepath.Join("..", "..", "..", "..", repoPath)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read RBAC manifest %s: %v", name, err)

@@ -4,11 +4,14 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
+	confv1 "github.com/openshift/api/config/v1"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -61,7 +64,8 @@ func TestBuildTLSConfig_FlagDefaultWhenNoProfile(t *testing.T) {
 		"flag default should apply when profileMinVersion is 0")
 	assert.Nil(t, tlsCfg.CipherSuites,
 		"CipherSuites should be nil when no profile suites provided")
-	assert.Equal(t, []string{"h2", "http/1.1"}, tlsCfg.NextProtos)
+	assert.Equal(t, []string{"h2", "http/1.1"}, tlsCfg.NextProtos,
+		"Go defaults include an HTTP/2-eligible suite when CipherSuites is nil")
 }
 
 func TestBuildTLSConfig_ProfileCipherSuitesEmpty(t *testing.T) {
@@ -83,6 +87,60 @@ func TestBuildTLSConfig_ProfileCipherSuitesEmpty(t *testing.T) {
 	assert.Nil(t, tlsCfg.CipherSuites,
 		"CipherSuites should be nil when profile provides empty slice (Go defaults apply)")
 	assert.Equal(t, []string{"h2", "http/1.1"}, tlsCfg.NextProtos)
+}
+
+func TestBuildTLSConfig_HTTP2RequiresTLS12AndAES128GCM(t *testing.T) {
+	cfg := &config.Config{TLS: config.TLSConfig{SelfSigned: true}, Name: "test-service"}
+	tests := []struct {
+		name       string
+		minVersion uint16
+		ciphers    []uint16
+		want       []string
+	}{
+		{"TLS 1.2 with AES-128-GCM", tls.VersionTLS12,
+			[]uint16{tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256}, []string{"h2", "http/1.1"}},
+		{"TLS 1.2 without AES-128-GCM", tls.VersionTLS12,
+			[]uint16{tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384}, []string{"http/1.1"}},
+		{"TLS 1.1 with AES-128-GCM", tls.VersionTLS11,
+			[]uint16{tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256}, []string{"http/1.1"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tlsCfg, err := buildTLSConfig(cfg, tt.minVersion, tt.ciphers)
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, tlsCfg.NextProtos)
+		})
+	}
+}
+
+func TestNewServer_AES256OnlyTLS12DisablesHTTP2AndStarts(t *testing.T) {
+	cfg := &config.Config{
+		Address: "127.0.0.1:0",
+		Secure:  true,
+		TLS:     config.TLSConfig{SelfSigned: true},
+		Name:    "test-service",
+	}
+	srv, err := newServer(cfg, http.NewServeMux(), tls.VersionTLS12,
+		[]uint16{tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384})
+	require.NoError(t, err)
+	require.NotNil(t, srv.Protocols)
+	assert.False(t, srv.Protocols.HTTP2())
+	assert.Equal(t, []string{"http/1.1"}, srv.TLSConfig.NextProtos)
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- srv.ServeTLS(ln, "", "")
+	}()
+
+	select {
+	case err := <-errCh:
+		require.NoError(t, err, "AES-256-only TLS 1.2 profile must not fail HTTP/2 startup")
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	require.NoError(t, srv.Close())
 }
 
 func TestFetchTLSProfileWithRetry_TransientErrorFallsBackToIntermediate(t *testing.T) {
@@ -177,6 +235,60 @@ func TestFetchTLSProfileWithRetry_ForbiddenSurfacesAuthorizationError(t *testing
 	require.Error(t, err, "authorization errors against a served config.openshift.io must be preserved")
 	require.ErrorContains(t, err, "forbidden")
 	assert.Equal(t, 1, calls, "authorization errors must not be retried into a watcher that cannot sync")
+	assert.False(t, watchSettings)
+	assert.Equal(t, tlsprofile.ProfileIntermediate, settings.Profile.Type)
+}
+
+func TestFetchTLSProfileWithRetry_UnauthorizedSurfacesAuthorizationError(t *testing.T) {
+	originalFetch := fetchClusterTLSSettings
+	originalAvailable := configAPIAvailable
+	defer func() {
+		fetchClusterTLSSettings = originalFetch
+		configAPIAvailable = originalAvailable
+	}()
+
+	configAPIAvailable = func(context.Context, *rest.Config) (bool, error) { return true, nil }
+	calls := 0
+	fetchClusterTLSSettings = func(context.Context, *rest.Config) (tlsprofile.Settings, error) {
+		calls++
+		return tlsprofile.DefaultSettings(), apierrors.NewUnauthorized("expired credentials")
+	}
+
+	settings, watchSettings, err := fetchTLSSettingsWithRetry(context.Background(), logger.New(false), &rest.Config{})
+
+	require.Error(t, err)
+	assert.True(t, apierrors.IsUnauthorized(err))
+	assert.Equal(t, 1, calls)
+	assert.False(t, watchSettings)
+	assert.Equal(t, tlsprofile.ProfileIntermediate, settings.Profile.Type)
+}
+
+func TestFetchTLSProfileWithRetry_InvalidProfileFailsImmediately(t *testing.T) {
+	originalFetch := fetchClusterTLSSettings
+	originalAvailable := configAPIAvailable
+	defer func() {
+		fetchClusterTLSSettings = originalFetch
+		configAPIAvailable = originalAvailable
+	}()
+
+	configAPIAvailable = func(context.Context, *rest.Config) (bool, error) { return true, nil }
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"kind":"APIServer","apiVersion":"config.openshift.io/v1",` +
+			`"metadata":{"name":"cluster"},"spec":{"tlsSecurityProfile":{"type":"Custom",` +
+			`"custom":{"ciphers":["ECDHE-RSA-AES128-GCM-SHA256"],` +
+			`"minTLSVersion":"VersionTLS99"}}}}`))
+	}))
+	defer server.Close()
+	fetchClusterTLSSettings = tlsprofile.FetchTLSSettings
+
+	settings, watchSettings, err := fetchTLSSettingsWithRetry(
+		context.Background(), logger.New(false), &rest.Config{Host: server.URL})
+
+	require.ErrorContains(t, err, "invalid cluster TLS profile")
+	assert.Equal(t, 1, calls)
 	assert.False(t, watchSettings)
 	assert.Equal(t, tlsprofile.ProfileIntermediate, settings.Profile.Type)
 }
@@ -419,4 +531,32 @@ func TestSetupTLSProfile_WatcherStartSucceeds(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.False(t, cancelled)
+}
+
+func TestSetupTLSProfile_RejectsUnusableCipherSuites(t *testing.T) {
+	originalFetch := fetchClusterTLSSettings
+	originalAvailable := configAPIAvailable
+	defer func() {
+		fetchClusterTLSSettings = originalFetch
+		configAPIAvailable = originalAvailable
+	}()
+
+	configAPIAvailable = func(context.Context, *rest.Config) (bool, error) { return true, nil }
+	settings := tlsprofile.DefaultSettings()
+	settings.Profile = tlsprofile.ProfileSpec{
+		Type: tlsprofile.ProfileCustom,
+		TLSProfileSpec: confv1.TLSProfileSpec{
+			Ciphers:       []string{"TLS_AES_128_GCM_SHA256"},
+			MinTLSVersion: confv1.VersionTLS12,
+		},
+	}
+	settings.Adherence = confv1.TLSAdherencePolicyStrictAllComponents
+	fetchClusterTLSSettings = func(context.Context, *rest.Config) (tlsprofile.Settings, error) {
+		return settings, nil
+	}
+
+	_, _, err := setupTLSProfile(t.Context(), logger.New(false), &config.Config{Secure: true}, &rest.Config{}, func() {
+		t.Fatal("cancel should not be called when TLS profile validation fails")
+	})
+	require.ErrorContains(t, err, "no configured cipher suites are usable")
 }

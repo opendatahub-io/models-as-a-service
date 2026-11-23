@@ -24,7 +24,6 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	netwv1 "k8s.io/api/networking/v1"
-	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -38,6 +37,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/controller-runtime/pkg/source"
+	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/oteljson"
@@ -49,7 +49,10 @@ import (
 // The MaasTenantConfig CR is the runtime object; DSC.modelsAsService controls only enablement.
 type TenantReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	// APIReader bypasses the informer cache for migration safety decisions that
+	// must observe current ExternalModel and IPP ConfigMap state.
+	APIReader client.Reader
+	Scheme    *runtime.Scheme
 	// OperatorNamespace overrides POD_NAMESPACE / WATCH_NAMESPACE when discovering namespaced platform workloads (tests).
 	OperatorNamespace string
 	// ManifestPath is the directory containing kustomization.yaml for the ODH maas-api overlay (e.g. maas-api/deploy/overlays/odh).
@@ -117,7 +120,8 @@ type TenantReconciler struct {
 // ClusterRoles. The API-server escalation check requires the applying SA to already hold every permission those
 // ClusterRoles grant — which is why secrets get;list;watch must remain unrestricted (payload-processing-reader
 // grants unrestricted get on secrets; Kubernetes also does not support resourceNames on list/watch).
-// The client-side predicate secretNamedMaaSDB() filters informer events to maas-db-config only.
+// The client-side predicate watchedPlatformSecrets() filters informer events to
+// maas-db-config and usage-logs-loki only.
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles,verbs=get;list;watch;create;patch;delete
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterrolebindings,verbs=get;list;watch;create;patch;delete
@@ -135,6 +139,8 @@ type TenantReconciler struct {
 // +kubebuilder:rbac:groups=authorization.k8s.io,resources=subjectaccessreviews,verbs=create
 // +kubebuilder:rbac:groups=maas.opendatahub.io,resources=maasmodelrefs,verbs=get;list;watch
 // +kubebuilder:rbac:groups=maas.opendatahub.io,resources=maassubscriptions,verbs=get;list;watch
+// aiguardrails: read by the maas-api guardrail resolver (aitenants/maastenantconfigs are covered by full-verb rules).
+// +kubebuilder:rbac:groups=aigateway.opendatahub.io,resources=aiguardrails,verbs=get;list;watch
 
 // Escalation-check mirror for payload-processing-reader ClusterRole — maas-controller must hold every verb it grants.
 // +kubebuilder:rbac:groups=inference.opendatahub.io,resources=externalmodels;externalproviders,verbs=get;list;watch;create;update
@@ -224,9 +230,13 @@ func crdLabeledForMaaSComponent() predicate.Predicate {
 	})
 }
 
-func secretNamedMaaSDB() predicate.Predicate {
+// watchedPlatformSecrets matches Secrets whose lifecycle must trigger a tenant
+// platform reconcile: maas-db-config gates maas-api startup, and usage-logs-loki
+// toggles the maas-api Loki read proxy (LOKI_READ_ENDPOINT).
+func watchedPlatformSecrets() predicate.Predicate {
 	return predicate.NewPredicateFuncs(func(o client.Object) bool {
-		return o.GetName() == tenantreconcile.MaaSDBSecretName
+		name := o.GetName()
+		return name == tenantreconcile.MaaSDBSecretName || name == tenantreconcile.LokiReadSecretName
 	})
 }
 
@@ -308,6 +318,9 @@ func configResourceDefault() predicate.Predicate {
 // SetupWithManager registers the MaasTenantConfig controller.
 func (r *TenantReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	ctx := context.Background()
+	if r.APIReader == nil {
+		r.APIReader = mgr.GetAPIReader()
+	}
 
 	b := ctrl.NewControllerManagedBy(mgr).
 		For(&maasv1alpha1.MaasTenantConfig{}, builder.WithPredicates(
@@ -328,14 +341,22 @@ func (r *TenantReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			handler.EnqueueRequestsFromMapFunc(r.enqueueTenantForAITenant),
 		).
 		Watches(
-			&extv1.CustomResourceDefinition{},
+			&gatewayapiv1.Gateway{},
+			handler.EnqueueRequestsFromMapFunc(r.mapGatewayToMaasTenantConfigs),
+			builder.WithPredicates(predicate.Or(
+				predicate.GenerationChangedPredicate{},
+				predicate.AnnotationChangedPredicate{},
+			)),
+		).
+		WatchesMetadata(
+			crdPartialMetadata(),
 			handler.EnqueueRequestsFromMapFunc(r.enqueueDefaultTenant),
 			builder.WithPredicates(crdLabeledForMaaSComponent()),
 		).
 		Watches(
 			&corev1.Secret{},
 			handler.EnqueueRequestsFromMapFunc(r.enqueueDefaultTenant),
-			builder.WithPredicates(secretNamedMaaSDB(), r.inTenantWorkNamespaces()),
+			builder.WithPredicates(watchedPlatformSecrets(), r.inTenantWorkNamespaces()),
 		).
 		Watches(
 			&netwv1.NetworkPolicy{},
@@ -407,4 +428,44 @@ func (r *TenantReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	}
 
 	return nil
+}
+
+// mapGatewayToMaasTenantConfigs re-renders every tenant whose resolved Gateway
+// matches the changed Gateway. The configured default Gateway is always mapped
+// because legacy/default installations may not have an AITenant object yet.
+func (r *TenantReconciler) mapGatewayToMaasTenantConfigs(ctx context.Context, obj client.Object) []reconcile.Request {
+	gateway, ok := obj.(*gatewayapiv1.Gateway)
+	if !ok {
+		return nil
+	}
+	requests := map[types.NamespacedName]struct{}{}
+	if gateway.Namespace == r.GatewayNamespace && gateway.Name == r.GatewayName {
+		requests[types.NamespacedName{
+			Name:      maasv1alpha1.MaasTenantConfigInstanceName,
+			Namespace: r.TenantNamespace,
+		}] = struct{}{}
+	}
+	enqueueRequests := func() []reconcile.Request {
+		result := make([]reconcile.Request, 0, len(requests))
+		for key := range requests {
+			result = append(result, reconcile.Request{NamespacedName: key})
+		}
+		return result
+	}
+	var tenants maasv1alpha1.AITenantList
+	if err := r.List(ctx, &tenants); err != nil {
+		oteljson.FromContext(ctx).Error(err, "failed to list AITenants for Gateway annotation change")
+		return enqueueRequests()
+	}
+	for i := range tenants.Items {
+		ref := tenants.Items[i].Status.GatewayRef
+		if ref.Namespace != gateway.Namespace || ref.Name != gateway.Name {
+			continue
+		}
+		requests[types.NamespacedName{
+			Name:      maasv1alpha1.MaasTenantConfigInstanceName,
+			Namespace: tenantreconcile.TenantNamespaceForAITenant(tenants.Items[i].Name, r.TenantNamespace),
+		}] = struct{}{}
+	}
+	return enqueueRequests()
 }

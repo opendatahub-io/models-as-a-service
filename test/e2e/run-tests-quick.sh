@@ -56,7 +56,7 @@ echo "  DEPLOYMENT_NAMESPACE: ${DEPLOYMENT_NAMESPACE}"
 echo "  MAAS_SUBSCRIPTION_NAMESPACE: ${MAAS_SUBSCRIPTION_NAMESPACE}"
 echo "  MAAS_API_BASE_URL: ${MAAS_API_BASE_URL}"
 echo "  TOKEN: ${TOKEN:0:20}..."
-export E2E_PARALLEL_WORKERS="${E2E_PARALLEL_WORKERS:-7}"
+export E2E_PARALLEL_WORKERS="${E2E_PARALLEL_WORKERS:-5}"
 if ! [[ "$E2E_PARALLEL_WORKERS" =~ ^[1-9][0-9]*$ ]]; then
     echo "ERROR: E2E_PARALLEL_WORKERS must be a positive integer (>= 1), got '$E2E_PARALLEL_WORKERS'" >&2
     exit 1
@@ -64,6 +64,15 @@ fi
 if [[ "$E2E_PARALLEL_WORKERS" -gt 1 ]]; then
     echo "  E2E_PARALLEL_WORKERS: ${E2E_PARALLEL_WORKERS}"
 fi
+# Lanes are implemented but off by default: pass-2b files share model auth
+# state even when they declare different xdist_groups, so 2+ lanes race (see
+# prow_run_smoke_test.sh). Opt in explicitly once the dependency audit lands.
+export E2E_SERIAL_WORKERS="${E2E_SERIAL_WORKERS:-1}"
+if ! [[ "$E2E_SERIAL_WORKERS" =~ ^[1-9][0-9]*$ ]]; then
+    echo "ERROR: E2E_SERIAL_WORKERS must be a positive integer (>= 1), got '$E2E_SERIAL_WORKERS'" >&2
+    exit 1
+fi
+echo "  E2E_SERIAL_WORKERS: ${E2E_SERIAL_WORKERS}"
 echo ""
 echo "Running tests..."
 echo ""

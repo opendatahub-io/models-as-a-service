@@ -18,6 +18,7 @@ package maas
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -26,9 +27,11 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/serializer/yaml"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/platform/tenantreconcile"
@@ -39,8 +42,10 @@ const (
 
 	// usageLogsCollectorService is the collector used when Config.spec.usageLogging is true.
 	usageLogsCollectorService = "usage-logs-collector"
-	// dataScienceUsageLogsCollectorService is the collector used when usageLogging is false or omitted.
-	dataScienceUsageLogsCollectorService = "data-science-usage-logs-collector"
+	// dataScienceUsageLogsCollectorService is the headless collector service used when
+	// usageLogging is false or omitted. The headless Service lets Envoy load-balance
+	// OTLP/gRPC across collector pods; it serves TLS signed by the service CA.
+	dataScienceUsageLogsCollectorService = "data-science-usage-logs-collector-headless"
 )
 
 // usageLogsCollectorServiceName returns the collector Service name for the EnvoyFilter endpoint.
@@ -174,9 +179,18 @@ func (r *TenantReconciler) applyUsageLogsEnvoyFilter(
 		}
 	}
 
-	collectorAddress := fmt.Sprintf("%s.%s.svc", usageLogsCollectorServiceName(mcfg), r.MonitoringNamespace)
+	collectorService := usageLogsCollectorServiceName(mcfg)
+	collectorAddress := fmt.Sprintf("%s.%s.svc.cluster.local", collectorService, r.MonitoringNamespace)
 	if err := tenantreconcile.PatchUsageLogsClusterAddress(ef, collectorAddress); err != nil {
 		return false, fmt.Errorf("patch collector address in EnvoyFilter: %w", err)
+	}
+	if collectorService == usageLogsCollectorService {
+		// The self-hosted collector serves plaintext OTLP. The data-science
+		// collector keeps the manifest's TLS transport socket, which trusts
+		// the service CA and verifies the headless-service SNI.
+		if err := tenantreconcile.DisableUsageLogsClusterTLS(ef); err != nil {
+			return false, fmt.Errorf("disable collector TLS in EnvoyFilter: %w", err)
+		}
 	}
 
 	if err := tenantreconcile.PatchUsageLogsEnvoyFilterWorkloadSelector(ef, gatewayName); err != nil {
@@ -188,10 +202,27 @@ func (r *TenantReconciler) applyUsageLogsEnvoyFilter(
 	if err := tenantreconcile.PatchUsageLogsServiceNamespace(ef, tenant.GetNamespace()); err != nil {
 		return false, fmt.Errorf("patch service.namespace in EnvoyFilter: %w", err)
 	}
+	tenantName, err := tenantreconcile.TenantNameFor(tenant)
+	if err != nil {
+		return false, fmt.Errorf("resolve tenant name for usage logs: %w", err)
+	}
+	if err := tenantreconcile.PatchUsageLogsProducerScope(ef, tenantName); err != nil {
+		return false, fmt.Errorf("patch producer scope in EnvoyFilter: %w", err)
+	}
 
 	ef.SetName(efName)
 	ef.SetNamespace(r.GatewayNamespace)
 	applyUsageLogsEnvoyFilterMetadata(ef, tenant)
+	// Config is the controller owner, same as gateway TelemetryPolicy via ApplyRendered,
+	// so deleting Config garbage-collects the per-tenant usage-logs filter.
+	if err := setUsageLogsEnvoyFilterConfigOwner(mcfg, ef, r.Scheme); err != nil {
+		var already *controllerutil.AlreadyOwnedError
+		if !errors.As(err, &already) {
+			return false, fmt.Errorf("set controller reference (Config) on EnvoyFilter %s/%s: %w", r.GatewayNamespace, efName, err)
+		}
+		log.Info("skipping Config controller reference: EnvoyFilter already owned by another controller",
+			"name", efName, "namespace", r.GatewayNamespace, "existingOwner", already)
+	}
 
 	if err := r.Apply(ctx, client.ApplyConfigurationFromUnstructured(ef), client.ForceOwnership, client.FieldOwner("maas-controller")); err != nil {
 		if apimeta.IsNoMatchError(err) {
@@ -206,6 +237,15 @@ func (r *TenantReconciler) applyUsageLogsEnvoyFilter(
 		"gateway", gatewayName, "collector", collectorAddress,
 		"serviceNamespace", tenant.GetNamespace())
 	return true, nil
+}
+
+// setUsageLogsEnvoyFilterConfigOwner sets Config as the controller owner of the EnvoyFilter.
+// Cluster-scoped Config may own namespaced objects in the gateway namespace.
+func setUsageLogsEnvoyFilterConfigOwner(mcfg *maasv1alpha1.Config, ef client.Object, scheme *runtime.Scheme) error {
+	if mcfg == nil || mcfg.UID == "" {
+		return errors.New("config with UID is required to own the usage-logs EnvoyFilter")
+	}
+	return controllerutil.SetControllerReference(mcfg, ef, scheme)
 }
 
 func applyUsageLogsEnvoyFilterMetadata(obj client.Object, tenant *maasv1alpha1.MaasTenantConfig) {

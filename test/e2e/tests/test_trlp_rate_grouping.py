@@ -78,7 +78,13 @@ from test_helper import (
 
 log = logging.getLogger(__name__)
 
-pytestmark = [pytest.mark.serial]
+pytestmark = [
+    pytest.mark.serial,
+    pytest.mark.limitador,
+    # Same group as test_subscription: both mutate the UNCONFIGURED model's
+    # AuthPolicy, Subscriptions and TRLP, so a second lane would race them.
+    pytest.mark.xdist_group("api_unconfigured_model"),
+]
 
 MODEL_REF = UNCONFIGURED_MODEL_REF
 MODEL_PATH = UNCONFIGURED_MODEL_PATH
@@ -418,6 +424,7 @@ def cleanup():
         subscriptions = [name for kind, name in created.crs if kind == "maassubscription"]
         for name in subscriptions:
             try:
+                # Multi-sub TRLP rebuild can delay finalizers past the 30s default.
                 _wait_for_cr_absent("maassubscription", name, namespace=ns, timeout=60)
             except Exception as e:
                 log.warning("maassubscription %s/%s not removed: %s", ns, name, e)
@@ -666,6 +673,7 @@ class TestRateGrouping:
             f"{_rate_key(old_rate)} -> {_rate_key(new_rate)}"
         )
 
+    @pytest.mark.serial_exclusive  # measures the shared gateway wasm object
     def test_gateway_wasm_config_grows_by_clause_not_limit(self, cleanup):
         """Subscriptions at an existing rate add predicate clauses to the
         gateway's wasm config, not limits (RHOAIENG-95277).

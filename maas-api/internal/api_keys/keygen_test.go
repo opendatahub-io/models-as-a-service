@@ -131,11 +131,11 @@ func TestHashAPIKey(t *testing.T) {
 
 func TestParseAPIKey(t *testing.T) {
 	tests := []struct {
-		name        string
-		key         string
-		wantKeyID   string
-		wantSecret  string
-		wantErr     bool
+		name       string
+		key        string
+		wantKeyID  string
+		wantSecret string
+		wantErr    bool
 	}{
 		{
 			name:       "valid key",

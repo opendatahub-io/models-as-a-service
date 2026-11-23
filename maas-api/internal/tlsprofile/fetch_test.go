@@ -113,6 +113,21 @@ func TestParseProfileFromAPIServer_CustomProfile(t *testing.T) {
 	assert.Equal(t, []string{"ECDHE-RSA-AES128-GCM-SHA256", "ECDHE-RSA-AES256-GCM-SHA384"}, spec.Ciphers)
 }
 
+func TestParseProfileFromAPIServer_CustomTLS13AllowsEmptyCiphers(t *testing.T) {
+	obj := newAPIServerObj(&confv1.TLSSecurityProfile{
+		Type: confv1.TLSProfileCustomType,
+		Custom: &confv1.CustomTLSProfile{
+			TLSProfileSpec: confv1.TLSProfileSpec{MinTLSVersion: confv1.VersionTLS13},
+		},
+	})
+
+	spec, err := tlsprofile.ProfileFromAPIServer(obj)
+
+	require.NoError(t, err)
+	assert.Equal(t, confv1.VersionTLS13, spec.MinTLSVersion)
+	assert.Empty(t, spec.Ciphers)
+}
+
 func TestParseProfileFromAPIServer_CustomMissingCiphers(t *testing.T) {
 	obj := newAPIServerObj(&confv1.TLSSecurityProfile{
 		Type: confv1.TLSProfileCustomType,
@@ -147,6 +162,7 @@ func TestParseProfileFromAPIServer_CustomInvalidMinVersion(t *testing.T) {
 	_, err := tlsprofile.ProfileFromAPIServer(obj)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unrecognized minTLSVersion")
+	assert.True(t, tlsprofile.IsProfileValidationError(err))
 }
 
 func TestParseProfileFromAPIServer_CustomDefaultMinVersion(t *testing.T) {

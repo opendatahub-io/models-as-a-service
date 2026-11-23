@@ -124,6 +124,30 @@ func TestPostgresStore_BackwardCompatibility_NullLabels(t *testing.T) {
 	assert.Nil(t, key.Labels) // Important: should be nil, not empty map
 }
 
+func TestAddKeyAndGetByHashStorePlainGroups(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+	if os.Getenv("TEST_DATABASE_URL") == "" {
+		t.Skip("Skipping integration test (TEST_DATABASE_URL not set)")
+	}
+
+	ctx := context.Background()
+	tenant := "plain-groups-" + uuid.NewString()
+	store := setupTestPostgresStoreForTenant(t, tenant)
+	defer store.Close()
+
+	userGroups := []string{"team-a", uuid.NewString() + "/admins"}
+	keyID := uuid.NewString()
+	keyHash := uuid.NewString()
+	require.NoError(t, store.AddKey(ctx, "plain-user", keyID, keyHash,
+		"plain groups key", "", userGroups, "plain-subscription", tenant, nil, false, nil))
+
+	key, err := store.GetByHash(ctx, keyHash)
+	require.NoError(t, err)
+	assert.Equal(t, userGroups, key.Groups)
+}
+
 // TestPostgresStore_LifecycleInvalidation verifies that lifecycle cleanup
 // soft-deletes keys, prevents validation, and preserves subscription scope.
 func TestPostgresStore_LifecycleInvalidation(t *testing.T) {
@@ -152,6 +176,42 @@ func TestPostgresStore_LifecycleInvalidation(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 2, count)
 
+	retainedID := uuid.NewString()
+	retainedHash := uuid.NewString()
+	require.NoError(t, store.AddKey(ctx, "lifecycle-user", retainedID, retainedHash,
+		"retained-key", "", nil, "sub-keep", tenant, nil, false, nil))
+	require.NoError(t, store.Revoke(ctx, retainedID))
+
+	deletedSubscription := "sub-delete"
+	singleSubscriptionResult, err := store.Search(
+		ctx,
+		"lifecycle-user",
+		tenant,
+		&api_keys.SearchFilters{
+			Subscription: &deletedSubscription,
+			Status:       []string{string(api_keys.StatusRevoked)},
+		},
+		&api_keys.SortParams{By: "created_at", Order: "desc"},
+		&api_keys.PaginationParams{Limit: 10, Offset: 0},
+	)
+	require.NoError(t, err)
+	assert.Empty(t, singleSubscriptionResult.Keys)
+
+	subscriptionNamesResult, err := store.Search(
+		ctx,
+		"lifecycle-user",
+		tenant,
+		&api_keys.SearchFilters{
+			SubscriptionNames: []string{"sub-delete", "sub-keep"},
+			Status:            []string{string(api_keys.StatusRevoked)},
+		},
+		&api_keys.SortParams{By: "created_at", Order: "desc"},
+		&api_keys.PaginationParams{Limit: 10, Offset: 0},
+	)
+	require.NoError(t, err)
+	require.Len(t, subscriptionNamesResult.Keys, 1)
+	assert.Equal(t, retainedID, subscriptionNamesResult.Keys[0].ID)
+
 	for i, id := range keyIDs[:2] {
 		key, err := store.Get(ctx, id)
 		require.NoError(t, err)
@@ -165,7 +225,7 @@ func TestPostgresStore_LifecycleInvalidation(t *testing.T) {
 
 	count, err = store.InvalidateTenant(ctx, tenant)
 	require.NoError(t, err)
-	assert.Equal(t, 1, count, "tenant cleanup should only newly invalidate the remaining subscription key")
+	assert.Equal(t, 2, count, "tenant cleanup should only newly invalidate remaining live rows")
 
 	// Move one soft-deleted row beyond retention and verify physical cleanup is
 	// still restricted to this store's tenant.

@@ -289,6 +289,17 @@ spec:
                   Higher numbers have higher priority. Defaults to 0.
                 format: int32
                 type: integer
+              rateLimitIdentity:
+                description: |-
+                  RateLimitIdentity selects the TokenRateLimitPolicy identity scheme.
+                  Unset lets the controller choose (short for new CRs, legacy for upgrade
+                  survivors) and persist the result on status.rateLimitIdentity.
+                  Explicit short or legacy is an operator escape hatch; changing it resets
+                  that subscription's in-window Limitador quota.
+                enum:
+                - short
+                - legacy
+                type: string
               tokenMetadata:
                 description: TokenMetadata contains metadata for token attribution
                   and metering
@@ -511,6 +522,15 @@ spec:
                 - Degraded
                 - Failed
                 - Invalid
+                type: string
+              rateLimitIdentity:
+                description: |-
+                  RateLimitIdentity is the sticky effective TRLP identity scheme (short or
+                  legacy). Owned by the controller so GitOps tools that ignore status do
+                  not flap OutOfSync when the value is first chosen.
+                enum:
+                - short
+                - legacy
                 type: string
               tokenRateLimitStatuses:
                 description: TokenRateLimitStatuses reports the status of each generated

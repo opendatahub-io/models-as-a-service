@@ -1,6 +1,7 @@
 package subscription
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"math"
@@ -42,6 +43,7 @@ type Selector struct {
 	modelLister           models.MaaSModelRefLister
 	accessChecker         ModelAccessChecker
 	subjectInventory      authpolicy.SubjectInventoryProvider
+	guardrailResolver     GuardrailPlanResolver
 	logger                *logger.Logger
 	tenantName            string
 	subscriptionNamespace string
@@ -60,6 +62,12 @@ func WithTenantName(name string) SelectorOption {
 // an additional guard for callers that provide a broader test lister.
 func WithSubscriptionNamespace(namespace string) SelectorOption {
 	return func(s *Selector) { s.subscriptionNamespace = namespace }
+}
+
+// WithGuardrailPlanResolver enables effective guardrail selection for
+// successful model selections.
+func WithGuardrailPlanResolver(resolver GuardrailPlanResolver) SelectorOption {
+	return func(s *Selector) { s.guardrailResolver = resolver }
 }
 
 // NewSelector creates a new subscription selector.
@@ -122,7 +130,13 @@ func (s *Selector) buildModelIndex() map[string]*unstructured.Unstructured {
 
 // resolveModelAlias maps a body-based-routing model identity (e.g. publisher ID
 // or targetModel) back to canonical "namespace/name" using MaaSModelRef
-// status.resolvedModelAlias. Returns the input unchanged when no alias matches.
+// status.resolvedModelAlias. Returns the input unchanged when no alias matches,
+// or when several MaaSModelRefs carry the alias: a shared model has one
+// modelRef per tenant in the model's namespace, and distinct models may share
+// a client-facing name across namespaces — rewriting to an arbitrary carrier
+// would fail every other tenant's subscription matching. The raw name is left
+// for findModelRef to match against the caller's own subscription, which is
+// the tenant-scoped disambiguator.
 func (s *Selector) resolveModelAlias(requestedModel string) string {
 	if s.modelLister == nil || requestedModel == "" {
 		return requestedModel
@@ -131,17 +145,30 @@ func (s *Selector) resolveModelAlias(requestedModel string) string {
 	if err != nil {
 		return requestedModel
 	}
+	resolved := ""
 	for _, u := range items {
 		alias, found, _ := unstructured.NestedString(u.Object, "status", "resolvedModelAlias")
-		if found && alias == requestedModel {
-			return u.GetNamespace() + "/" + u.GetName()
+		if !found || alias != requestedModel {
+			continue
 		}
+		if resolved != "" {
+			// The alias is shared by several MaaSModelRefs (per-tenant
+			// modelRefs for one shared model, or distinct models with one
+			// client-facing name): leave the raw name so findModelRef
+			// matches it against the caller's own subscription.
+			return requestedModel
+		}
+		resolved = u.GetNamespace() + "/" + u.GetName()
+	}
+	if resolved != "" {
+		return resolved
 	}
 	return requestedModel
 }
 
 // subscription represents a parsed MaaSSubscription for selection.
 type subscription struct {
+	Object                   *unstructured.Unstructured
 	Name                     string
 	Namespace                string
 	DisplayName              string
@@ -154,11 +181,13 @@ type subscription struct {
 	OrganizationID           string
 	CostCenter               string
 	Labels                   map[string]string
+	Headers                  map[string][]string
 	ModelRefs                []ModelRefInfo
 	Phase                    string                 // status.phase: "Active", "Failed", "Pending", or ""
 	Ready                    bool                   // computed from status.conditions Ready condition
 	DeletionTimestamp        *string                // metadata.deletionTimestamp (set when being deleted)
 	TokenRateLimitStatuses   []TokenRateLimitStatus // per-model TRLP status from status.tokenRateLimitStatuses
+	UseShortRateLimitID      bool                   // status.rateLimitIdentity=short
 	Objectives               map[string]string      // "namespace/name" of a model -> InferenceObjective name, from status.flowControlStatuses
 }
 
@@ -224,6 +253,17 @@ func isResolvedModelAuthorized(sub *subscription, requestedModel string, authori
 	if authorizedSet == nil {
 		return false
 	}
+	// An exact namespace/name pair identifies the routed model — the same
+	// precedence findModelRef documents. Never substitute an alias carrier
+	// for it, even when the exact ref is unauthorized.
+	if ns, name, ok := strings.Cut(requestedModel, "/"); ok {
+		for i := range sub.ModelRefs {
+			if sub.ModelRefs[i].Namespace == ns && sub.ModelRefs[i].Name == name {
+				return authorizedSet[authpolicy.ModelKey{Namespace: ns, Name: name}]
+			}
+		}
+	}
+	sub = authorizedSelectionSubscription(sub, authorizedSet)
 	ref := findModelRef(sub, requestedModel)
 	if ref == nil {
 		return false
@@ -232,13 +272,18 @@ func isResolvedModelAuthorized(sub *subscription, requestedModel string, authori
 }
 
 func (s *Selector) buildAuthorizedResponse(sub *subscription, requestedModel string, authorizedSet map[authpolicy.ModelKey]bool) (*SelectResponse, error) {
-	resp := s.toResponseWithResolvedModel(sub, requestedModel)
+	// Response construction and health checks resolve within the authorized
+	// subset, but the authorization decision itself must see the full
+	// subscription: filtering first would let an authorized alias carrier
+	// substitute for an unauthorized exact namespace/name reference.
+	selectionSub := authorizedSelectionSubscription(sub, authorizedSet)
+	resp := s.toResponseWithResolvedModel(selectionSub, requestedModel)
 	resp.AccessAllowed = isResolvedModelAuthorized(sub, requestedModel, authorizedSet)
 	if authorizedSet != nil {
 		resp.ModelRefs = filterAuthorizedModels(resp.ModelRefs, authorizedSet)
 	}
 	if authorizedSet == nil || resp.AccessAllowed || requestedModel == "" {
-		if err := checkModelHealth(sub, requestedModel); err != nil {
+		if err := checkModelHealth(selectionSub, requestedModel); err != nil {
 			return nil, err
 		}
 	}
@@ -549,9 +594,26 @@ func filterAuthorizedModels(refs []ModelRefInfo, authorizedSet map[authpolicy.Mo
 	return out
 }
 
+// authorizedSelectionSubscription returns a shallow copy of sub whose
+// ModelRefs are restricted to the authorized set, so alias resolution —
+// findModelRef returns the first alias match — can only select refs the
+// caller is authorized for. Without this filter, an unauthorized ref listed
+// before an authorized one sharing the same client-facing name would falsely
+// deny the request. Returns sub unchanged when authorization is
+// unrestricted (nil set).
+func authorizedSelectionSubscription(sub *subscription, authorizedSet map[authpolicy.ModelKey]bool) *subscription {
+	if authorizedSet == nil {
+		return sub
+	}
+	filtered := *sub
+	filtered.ModelRefs = filterAuthorizedModels(sub.ModelRefs, authorizedSet)
+	return &filtered
+}
+
 // selectExplicit handles the explicit subscription selection branch of Select.
 // It supports both "namespace/name" and bare "name" formats.
 func (s *Selector) selectExplicit(
+	ctx context.Context,
 	subscriptions []subscription,
 	requestedSubscription, requestedModel, username string,
 	groups []string,
@@ -569,7 +631,7 @@ func (s *Selector) selectExplicit(
 			if requestedModel != "" && authorizedSet == nil && !subscriptionIncludesModel(&sub, requestedModel) {
 				return nil, &ModelNotInSubscriptionError{Subscription: requestedSubscription, Model: requestedModel}
 			}
-			return s.buildAuthorizedResponse(&sub, requestedModel, authorizedSet)
+			return s.completeSelection(ctx, &sub, requestedModel, authorizedSet)
 		}
 	}
 
@@ -587,7 +649,7 @@ func (s *Selector) selectExplicit(
 			if requestedModel != "" && authorizedSet == nil && !subscriptionIncludesModel(&sub, requestedModel) {
 				return nil, &ModelNotInSubscriptionError{Subscription: requestedSubscription, Model: requestedModel}
 			}
-			return s.buildAuthorizedResponse(&sub, requestedModel, authorizedSet)
+			return s.completeSelection(ctx, &sub, requestedModel, authorizedSet)
 		}
 	}
 
@@ -598,6 +660,11 @@ func (s *Selector) selectExplicit(
 // Returns the selected subscription or an error if none found.
 // If requestedModel is provided, validates that the selected subscription includes that model.
 func (s *Selector) Select(groups []string, username string, requestedSubscription string, requestedModel string) (*SelectResponse, error) {
+	return s.SelectWithContext(context.Background(), groups, username, requestedSubscription, requestedModel)
+}
+
+// SelectWithContext selects a subscription and passes ctx to guardrail resolution.
+func (s *Selector) SelectWithContext(ctx context.Context, groups []string, username string, requestedSubscription string, requestedModel string) (*SelectResponse, error) {
 	if len(groups) == 0 && username == "" {
 		return nil, errors.New("either groups or username must be provided")
 	}
@@ -621,7 +688,7 @@ func (s *Selector) Select(groups []string, username string, requestedSubscriptio
 	}
 
 	if requestedSubscription != "" {
-		return s.selectExplicit(subscriptions, requestedSubscription, requestedModel, username, groups, authorizedSet)
+		return s.selectExplicit(ctx, subscriptions, requestedSubscription, requestedModel, username, groups, authorizedSet)
 	}
 
 	// Auto-selection
@@ -631,7 +698,13 @@ func (s *Selector) Select(groups []string, username string, requestedSubscriptio
 			continue
 		}
 		if userHasAccess(&sub, username, groups) {
-			if requestedModel != "" && !subscriptionIncludesModel(&sub, requestedModel) {
+			// The unfiltered view can be ambiguous (several refs sharing a
+			// client-facing name in one namespace) while the authorized
+			// subset is not: admit the subscription when either view
+			// includes the model and let the authorization filter decide.
+			if requestedModel != "" &&
+				!subscriptionIncludesModel(&sub, requestedModel) &&
+				!subscriptionIncludesModel(authorizedSelectionSubscription(&sub, authorizedSet), requestedModel) {
 				continue
 			}
 			accessibleSubs = append(accessibleSubs, sub)
@@ -658,7 +731,7 @@ func (s *Selector) Select(groups []string, username string, requestedSubscriptio
 	}
 
 	if len(accessibleSubs) == 1 {
-		return s.buildAuthorizedResponse(&accessibleSubs[0], requestedModel, authorizedSet)
+		return s.completeSelection(ctx, &accessibleSubs[0], requestedModel, authorizedSet)
 	}
 
 	subNames := make([]string, len(accessibleSubs))
@@ -666,6 +739,69 @@ func (s *Selector) Select(groups []string, username string, requestedSubscriptio
 		subNames[i] = sub.Name
 	}
 	return nil, &MultipleSubscriptionsError{Subscriptions: subNames}
+}
+
+func (s *Selector) completeSelection(ctx context.Context, sub *subscription, requestedModel string, authorizedSet map[authpolicy.ModelKey]bool) (*SelectResponse, error) {
+	response, err := s.buildAuthorizedResponse(sub, requestedModel, authorizedSet)
+	if err != nil || requestedModel == "" || !response.AccessAllowed || s.guardrailResolver == nil {
+		return response, err
+	}
+	// Guardrail resolution selects within the authorized subset, matching
+	// the reference the authorization decision approved.
+	selectionSub := authorizedSelectionSubscription(sub, authorizedSet)
+	modelRef := findModelRef(selectionSub, requestedModel)
+	if modelRef == nil {
+		return nil, &GuardrailResolutionError{cause: fmt.Errorf("selected model %q is not in subscription", requestedModel)}
+	}
+	model, err := s.modelByKey(modelRef.Namespace, modelRef.Name)
+	if err != nil {
+		return nil, &GuardrailResolutionError{cause: err}
+	}
+	checks, err := s.guardrailResolver.SelectedChecks(ctx, sub.Object, model)
+	if err != nil {
+		return nil, &GuardrailResolutionError{cause: err}
+	}
+	response.SelectedGuardrailChecks = &checks
+	return response, nil
+}
+
+// GuardrailResolutionError indicates that an authorized model's effective
+// guardrail selection could not be resolved.
+type GuardrailResolutionError struct {
+	cause error
+}
+
+func (e *GuardrailResolutionError) Error() string {
+	return "selected guardrails could not be resolved"
+}
+
+func (e *GuardrailResolutionError) Unwrap() error {
+	return e.cause
+}
+
+// modelByKey looks up one MaaSModelRef, using a direct cache Get when the
+// lister supports it and falling back to a List scan otherwise.
+func (s *Selector) modelByKey(namespace, name string) (*unstructured.Unstructured, error) {
+	if s.modelLister == nil {
+		return nil, errors.New("MaaSModelRef lister is not configured")
+	}
+	if getter, ok := s.modelLister.(ResourceGetter); ok {
+		item, err := getter.Get(namespace, name)
+		if err != nil {
+			return nil, fmt.Errorf("get MaaSModelRef %s/%s: %w", namespace, name, err)
+		}
+		return item, nil
+	}
+	items, err := s.modelLister.List()
+	if err != nil {
+		return nil, fmt.Errorf("list MaaSModelRefs: %w", err)
+	}
+	for _, item := range items {
+		if item.GetNamespace() == namespace && item.GetName() == name {
+			return item, nil
+		}
+	}
+	return nil, fmt.Errorf("MaaSModelRef %s/%s not found", namespace, name)
 }
 
 // SelectHighestPriority returns the accessible subscription with highest spec.priority
@@ -735,6 +871,7 @@ func (s *Selector) loadSubscriptions() ([]subscription, error) {
 			continue
 		}
 		s.enrichModelRefs(sub.ModelRefs, modelIndex)
+		sub.Object = obj
 		subscriptions = append(subscriptions, sub)
 	}
 
@@ -782,11 +919,29 @@ func parseSubscription(obj *unstructured.Unstructured) (subscription, error) {
 		Namespace: obj.GetNamespace(),
 	}
 
-	// Parse annotations for display metadata
+	// Parse annotations for display metadata.
 	if annotations := obj.GetAnnotations(); annotations != nil {
 		sub.DisplayName = annotations[constant.AnnotationDisplayName]
 		sub.Description = annotations[constant.AnnotationDescription]
+		headers, err := parseSubscriptionHeaders(annotations[constant.AnnotationSubscriptionHeaders])
+		if err != nil {
+			return subscription{}, fmt.Errorf("parse subscription headers annotation: %w", err)
+		}
+		sub.Headers = headers
 	}
+
+	// Match controller precedence: spec escape hatch, sticky status, then
+	// legacy annotation from early short-ID builds.
+	identity, _, _ := unstructured.NestedString(obj.Object, "spec", "rateLimitIdentity")
+	if identity == "" {
+		identity, _, _ = unstructured.NestedString(obj.Object, "status", "rateLimitIdentity")
+	}
+	if identity == "" {
+		if annotations := obj.GetAnnotations(); annotations != nil {
+			identity = annotations[constant.AnnotationRateLimitIdentity]
+		}
+	}
+	sub.UseShortRateLimitID = UsesShortRateLimitID(identity)
 
 	// Parse owner
 	if owner, found, _ := unstructured.NestedMap(spec, "owner"); found {
@@ -1025,11 +1180,8 @@ func userHasAccess(sub *subscription, username string, groups []string) bool {
 
 	// Check group match
 	for _, subGroup := range sub.Groups {
-		for _, userGroup := range groups {
-			userGroup = strings.TrimSpace(userGroup)
-			if userGroup == subGroup {
-				return true
-			}
+		if slices.Contains(groups, subGroup) {
+			return true
 		}
 	}
 
@@ -1053,6 +1205,16 @@ func subscriptionIncludesModel(sub *subscription, requestedModel string) bool {
 // holds the model name from the request body, not the CRD namespace/name.
 // Raw model names may themselves contain "/", so alias matching runs even
 // when the value parses as namespace/name.
+//
+// Matching precedence: the modelRef's own "namespace/name" pair first, then
+// the pair's namespace plus the modelRef's resolved alias (ModelName), then
+// the full raw value against the alias, then against the modelRef name. The
+// pair-plus-alias step serves path-routed requests, which carry the
+// client-facing model name — it differs from the modelRef name for renamed
+// models and for per-tenant modelRefs serving one shared model. A pair whose
+// alias matches several distinct modelRefs in the subscription fails closed:
+// one client-facing identity claimed twice is ambiguous, and an arbitrary
+// pick could authorize against the wrong modelRef's rate limits.
 func findModelRef(sub *subscription, requestedModel string) *ModelRefInfo {
 	parts := strings.SplitN(requestedModel, "/", 2)
 	if len(parts) == 2 {
@@ -1060,6 +1222,25 @@ func findModelRef(sub *subscription, requestedModel string) *ModelRefInfo {
 			if sub.ModelRefs[i].Namespace == parts[0] && sub.ModelRefs[i].Name == parts[1] {
 				return &sub.ModelRefs[i]
 			}
+		}
+		// Path-routed requests carry the client-facing model name as the
+		// pair's name segment, but the modelRef may be named differently
+		// (renamed models, per-tenant modelRefs for a shared model). Fall
+		// back to the pair's namespace plus the modelRef's resolved alias,
+		// which carries the client-facing name.
+		var aliasMatch *ModelRefInfo
+		for i := range sub.ModelRefs {
+			ref := &sub.ModelRefs[i]
+			if ref.ModelName == "" || ref.Namespace != parts[0] || ref.ModelName != parts[1] {
+				continue
+			}
+			if aliasMatch != nil && aliasMatch.Name != ref.Name {
+				return nil
+			}
+			aliasMatch = ref
+		}
+		if aliasMatch != nil {
+			return aliasMatch
 		}
 	}
 	for i := range sub.ModelRefs {
@@ -1308,6 +1489,7 @@ func toResponse(sub *subscription) *SelectResponse {
 		AssociatedOrganizationID: sub.AssociatedOrganizationID,
 		CostCenter:               sub.CostCenter,
 		Labels:                   sub.Labels,
+		Headers:                  sub.Headers,
 		Phase:                    sub.Phase,
 		Ready:                    sub.Ready,
 	}
@@ -1324,11 +1506,20 @@ func (s *Selector) toResponseWithResolvedModel(sub *subscription, resolvedModel 
 	resp := toResponse(sub)
 	resp.ResolvedModel = resolvedModel
 	resp.FairnessID = s.tenantName
-	if sub != nil {
+	if sub == nil {
+		return resp
+	}
+	// TRLP limits are keyed on the modelref, not the requested identity: a
+	// request carrying a client-facing alias (bare or as a pair's name
+	// segment) must resolve to the matched ref's namespace/name so its rate
+	// limits apply. An exact pair already equals the ref's identity.
+	if ref := findModelRef(sub, resolvedModel); ref != nil {
+		resolvedModel = ref.Namespace + "/" + ref.Name
+		resp.ResolvedModel = resolvedModel
+		resp.Objective = sub.Objectives[resolvedModel]
+	}
+	if sub.UseShortRateLimitID {
 		resp.RateLimitID = RateLimitIDFor(sub.Namespace, sub.Name, resolvedModel)
-		if ref := findModelRef(sub, resolvedModel); ref != nil {
-			resp.Objective = sub.Objectives[ref.Namespace+"/"+ref.Name]
-		}
 	}
 	return resp
 }

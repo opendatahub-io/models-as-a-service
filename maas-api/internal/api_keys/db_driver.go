@@ -41,42 +41,101 @@ var concurrentMigrations = []concurrentMigration{
 	// Future concurrent indexes go here.
 }
 
-// NewPostgresStoreFromURL creates a PostgreSQL store from a connection URL.
+// NewPostgresStoreFromURL creates a PostgreSQL store from a writable connection URL.
 // It automatically applies database schema migrations on startup using golang-migrate.
 // URL format: postgresql://user:password@host:port/database
 // tenantName is used to filter all database queries to enforce tenant isolation.
 func NewPostgresStoreFromURL(ctx context.Context, log *logger.Logger, databaseURL string, tenantName string) (*PostgresStore, error) {
-	databaseURL = strings.TrimSpace(databaseURL)
+	return NewPostgresStoreFromURLs(ctx, log, databaseURL, "", tenantName)
+}
 
-	if !strings.HasPrefix(databaseURL, "postgresql://") && !strings.HasPrefix(databaseURL, "postgres://") {
-		return nil, errors.New(
-			"invalid database URL: must start with postgresql:// or postgres://")
+// NewPostgresStoreFromURLs creates a PostgreSQL store with separate writable and
+// optional read-only connection pools. Schema migrations run only against the
+// writable pool. An explicitly configured read pool must be reachable at startup.
+//
+// The two pools are intentionally not interchangeable. The writable pool owns schema
+// state and every mutation. The read pool keeps the API-key validation hot path and
+// administrative queries local to a cluster. Read routing is an explicit consistency
+// contract: revocation visibility is bounded by asynchronous replication lag.
+func NewPostgresStoreFromURLs(ctx context.Context, log *logger.Logger, writeURL, readURL string, tenantName string) (*PostgresStore, error) {
+	writeURL = strings.TrimSpace(writeURL)
+	readURL = strings.TrimSpace(readURL)
+
+	if err := validateDatabaseURL(writeURL); err != nil {
+		return nil, fmt.Errorf("invalid database URL: writable database %w", err)
+	}
+	if readURL != "" {
+		if err := validateDatabaseURL(readURL); err != nil {
+			return nil, fmt.Errorf("invalid database URL: read-only database %w", err)
+		}
 	}
 
-	db, err := sql.Open("pgx", databaseURL)
+	writeDB, err := sql.Open("pgx", writeURL)
 	if err != nil {
-		return nil, fmt.Errorf("failed to open PostgreSQL connection: %w", err)
+		return nil, fmt.Errorf("failed to open writable PostgreSQL connection: %w", err)
 	}
 
-	configureConnectionPool(db)
+	configureConnectionPool(writeDB)
 
-	if err := db.PingContext(ctx); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("failed to connect to PostgreSQL: %w", err)
+	// Ping before migration so network, authentication, and TLS failures are reported as
+	// connection failures rather than as confusing migration errors. Startup remains
+	// fail-closed for the primary because no read replica can substitute for schema
+	// ownership or writable state.
+	if err := writeDB.PingContext(ctx); err != nil {
+		writeDB.Close()
+		return nil, fmt.Errorf("failed to connect to writable PostgreSQL: %w", err)
 	}
 
-	// Apply schema migrations
-	if err := runMigrations(db, log); err != nil {
-		db.Close()
+	// Apply ordinary and concurrent migrations before opening the read pool. PostgreSQL
+	// replicas receive DDL through replication; executing it directly against a read-only
+	// endpoint would fail and could also hide a topology where the replica is not actually
+	// following this primary.
+	if err := runMigrations(writeDB, log); err != nil {
+		writeDB.Close()
 		return nil, fmt.Errorf("failed to apply schema migrations: %w", err)
 	}
-	if err := runConcurrentMigrations(ctx, db, log); err != nil {
-		db.Close()
+	if err := runConcurrentMigrations(ctx, writeDB, log); err != nil {
+		writeDB.Close()
 		return nil, fmt.Errorf("failed to apply concurrent migrations: %w", err)
 	}
 
-	log.Info("Connected to PostgreSQL database (schema applied)", "tenant", tenantName)
-	return &PostgresStore{db: db, logger: log, tenantName: tenantName}, nil
+	readDB := writeDB
+	if readURL != "" {
+		readDB, err = sql.Open("pgx", readURL)
+		if err != nil {
+			writeDB.Close()
+			return nil, fmt.Errorf("failed to open read-only PostgreSQL connection: %w", err)
+		}
+		configureConnectionPool(readDB)
+		// A configured read endpoint is also fail-closed at startup. Falling back silently
+		// here would make a GitOps typo or missing Service look like a successful rollout
+		// while every local read, including API-key validation, crosses clusters to
+		// the primary.
+		if err := readDB.PingContext(ctx); err != nil {
+			readDB.Close()
+			writeDB.Close()
+			return nil, fmt.Errorf("failed to connect to read-only PostgreSQL: %w", err)
+		}
+		log.Info("Connected to PostgreSQL read replica", "tenant", tenantName)
+	}
+
+	log.Info("Connected to PostgreSQL database (schema applied)", "tenant", tenantName, "read_replica_configured", readURL != "")
+	store := &PostgresStore{
+		writeDB:    writeDB,
+		readDB:     readDB,
+		logger:     log,
+		tenantName: tenantName,
+		metrics:    newStoreMetrics(),
+	}
+	store.readHealthy.Store(true)
+	return store, nil
+}
+
+func validateDatabaseURL(databaseURL string) error {
+	if !strings.HasPrefix(databaseURL, "postgresql://") && !strings.HasPrefix(databaseURL, "postgres://") {
+		return errors.New("must start with postgresql:// or postgres://")
+	}
+	return nil
 }
 
 // runMigrations applies database schema migrations using golang-migrate.

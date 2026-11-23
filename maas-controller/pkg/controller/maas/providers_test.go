@@ -24,6 +24,7 @@ import (
 
 	"github.com/go-logr/logr"
 	llmdv1alpha2 "github.com/llm-d/llm-d-router/apix/v1alpha2"
+	corev1 "k8s.io/api/core/v1"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -46,6 +47,10 @@ func init() {
 }
 
 var scheme = runtime.NewScheme()
+
+func legacyNamespace(name string) *corev1.Namespace {
+	return &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: name}}
+}
 
 // nsRestScope implements apimeta.RESTScope for namespace-scoped resources.
 type nsRestScope struct{}

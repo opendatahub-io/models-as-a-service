@@ -131,7 +131,7 @@ func (h *Handler) SelectSubscription(c *gin.Context) {
 		"requestedModel", req.RequestedModel,
 	)
 
-	response, err := h.selector.Select(req.Groups, req.Username, req.RequestedSubscription, req.RequestedModel)
+	response, err := h.selector.SelectWithContext(c.Request.Context(), req.Groups, req.Username, req.RequestedSubscription, req.RequestedModel)
 	if err != nil {
 		// NOTE: All error responses return http.StatusOK with error fields populated in SelectResponse.
 		// This is intentional for Authorino integration, which expects 200 OK responses with metadata
@@ -142,6 +142,7 @@ func (h *Handler) SelectSubscription(c *gin.Context) {
 		var multipleSubsErr *MultipleSubscriptionsError
 		var modelNotInSubErr *ModelNotInSubscriptionError
 		var modelUnhealthyErr *ModelUnhealthyError
+		var guardrailErr *GuardrailResolutionError
 
 		if errors.As(err, &noSubErr) {
 			h.recordRejection(constant.RejectionNoCapacity)
@@ -218,6 +219,20 @@ func (h *Handler) SelectSubscription(c *gin.Context) {
 				Error:   "model_unhealthy",
 				Message: modelUnhealthyErr.Message,
 				Phase:   modelUnhealthyErr.Phase,
+			})
+			return
+		}
+
+		if errors.As(err, &guardrailErr) {
+			h.recordRejection(constant.RejectionGuardrailUnavailable)
+			h.logger.Error("Selected guardrails could not be resolved",
+				"error", guardrailErr.Unwrap(),
+				"subscription", req.RequestedSubscription,
+				"model", req.RequestedModel,
+			)
+			c.JSON(http.StatusOK, SelectResponse{
+				Error:   "guardrail_unavailable",
+				Message: "selected guardrails are unavailable",
 			})
 			return
 		}

@@ -7,9 +7,12 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/dynamic/dynamicinformer"
 	"k8s.io/client-go/kubernetes"
@@ -40,6 +43,13 @@ type ClusterConfig struct {
 
 	// MaaSAuthPolicyLister lists MaaSAuthPolicy CRs from the informer cache for model access checks.
 	MaaSAuthPolicyLister authpolicy.Lister
+
+	// AITenantGetter, MaasTenantConfigGetter, and AIGuardrailGetter provide
+	// cached resources needed to compose selected guardrail checks.
+	AITenantGetter         subscription.ResourceGetter
+	MaasTenantConfigGetter subscription.ResourceGetter
+	// AIGuardrailGetter is nil when the API is unavailable at startup.
+	AIGuardrailGetter subscription.ResourceGetter
 
 	// AdminChecker uses SubjectAccessReview to check if a user is an admin.
 	// Admin is determined by RBAC: can user create maasauthpolicies in the configured MaaS namespace?
@@ -83,8 +93,20 @@ func (u *unstructuredLister) List() ([]*unstructured.Unstructured, error) {
 	return out, nil
 }
 
+func (u *unstructuredLister) Get(namespace, name string) (*unstructured.Unstructured, error) {
+	obj, err := u.lister.ByNamespace(namespace).Get(name)
+	if err != nil {
+		return nil, err
+	}
+	item, ok := obj.(*unstructured.Unstructured)
+	if !ok {
+		return nil, fmt.Errorf("cached object %s/%s has unexpected type %T", namespace, name, obj)
+	}
+	return item, nil
+}
+
 func NewClusterConfig(
-	_ string, subscriptionNamespace string, resyncPeriod time.Duration,
+	aitenantNamespace, subscriptionNamespace string, resyncPeriod time.Duration,
 	sarCacheMaxSize int, metricsRegisterer prometheus.Registerer, log infoLogger,
 ) (*ClusterConfig, error) {
 	restConfig, err := LoadRestConfig()
@@ -122,6 +144,21 @@ func NewClusterConfig(
 	authPolicyInformer := authPolicyDynamicFactory.ForResource(authPolicyGVR)
 	authPolicyListerVal := &unstructuredLister{lister: authPolicyInformer.Lister(), log: log}
 
+	// Guardrail composition uses the configured AITenant, its resolved tenant namespace for MaaSTenantConfig and tenant-scoped policies
+	// and policies in the selected model's namespace for model-scoped attachments.
+	tenantDynamicFactory := dynamicinformer.NewFilteredDynamicSharedInformerFactory(dynamicClient, resyncPeriod, aitenantNamespace, nil)
+	tenantGVR := schema.GroupVersionResource{Group: "maas.opendatahub.io", Version: "v1alpha1", Resource: "aitenants"}
+	tenantInformer := tenantDynamicFactory.ForResource(tenantGVR)
+	tenantListerVal := &unstructuredLister{lister: tenantInformer.Lister(), log: log}
+
+	// MaasTenantConfig is only read from the tenant namespace, which the resolver requires to equal the subscription namespace.
+	tenantConfigGVR := schema.GroupVersionResource{Group: "maas.opendatahub.io", Version: "v1alpha1", Resource: "maastenantconfigs"}
+	tenantConfigInformer := subscriptionDynamicFactory.ForResource(tenantConfigGVR)
+	tenantConfigListerVal := &unstructuredLister{lister: tenantConfigInformer.Lister(), log: log}
+
+	// AIGuardrail stays cluster-wide: model-scoped attachments resolve in the model's namespace.
+	guardrailDynamicFactory := dynamicinformer.NewDynamicSharedInformerFactory(dynamicClient, resyncPeriod)
+
 	// SAR-based admin checker: uses SubjectAccessReview to check RBAC permissions.
 	// Admin is determined by: can user create maasauthpolicies in the MaaS namespace?
 	// This aligns with RBAC from opendatahub-operator#3301 which grants admin groups CRUD access to MaaS resources.
@@ -129,13 +166,15 @@ func NewClusterConfig(
 	sarChecker := auth.NewSARAdminChecker(clientset, subscriptionNamespace)
 	adminCheckerVal := auth.NewCachedAdminChecker(sarChecker, 30*time.Second, 2*time.Second, sarCacheMaxSize, metricsRegisterer, nil)
 
-	return &ClusterConfig{
+	cluster := &ClusterConfig{
 		ClientSet:     clientset,
 		DynamicClient: dynamicClient,
 
 		MaaSModelRefLister:     maasModelRefListerVal,
 		MaaSSubscriptionLister: maasSubscriptionListerVal,
 		MaaSAuthPolicyLister:   authPolicyListerVal,
+		AITenantGetter:         tenantListerVal,
+		MaasTenantConfigGetter: tenantConfigListerVal,
 		AdminChecker:           adminCheckerVal,
 
 		restConfig: restConfig,
@@ -143,14 +182,48 @@ func NewClusterConfig(
 			maasInformer.Informer().HasSynced,
 			subscriptionInformer.Informer().HasSynced,
 			authPolicyInformer.Informer().HasSynced,
+			tenantInformer.Informer().HasSynced,
+			tenantConfigInformer.Informer().HasSynced,
 		},
 		startFuncs: []func(<-chan struct{}){
 			maasDynamicFactory.Start,
 			subscriptionDynamicFactory.Start,
 			authPolicyDynamicFactory.Start,
+			tenantDynamicFactory.Start,
+			guardrailDynamicFactory.Start,
 		},
 		log: log,
-	}, nil
+	}
+	discoveryCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := cluster.setupGuardrailInformer(discoveryCtx, clientset.Discovery(), guardrailDynamicFactory); err != nil {
+		return nil, err
+	}
+	return cluster, nil
+}
+
+// setupGuardrailInformer checks once at startup. Installing the API later requires a restart.
+func (c *ClusterConfig) setupGuardrailInformer(
+	ctx context.Context, discoveryClient discovery.DiscoveryInterfaceWithContext,
+	factory dynamicinformer.DynamicSharedInformerFactory,
+) error {
+	gvr := schema.GroupVersionResource{Group: "aigateway.opendatahub.io", Version: "v1alpha1", Resource: "aiguardrails"}
+	resources, err := discoveryClient.ServerResourcesForGroupVersionWithContext(ctx, gvr.GroupVersion().String())
+	if err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("discovering AIGuardrail API: %w", err)
+	}
+	if err == nil {
+		for _, resource := range resources.APIResources {
+			if resource.Name == gvr.Resource {
+				informer := factory.ForResource(gvr)
+				c.AIGuardrailGetter = &unstructuredLister{lister: informer.Lister(), log: c.log}
+				c.informersSynced = append(c.informersSynced, informer.Informer().HasSynced)
+				return nil
+			}
+		}
+	}
+	c.log.Info("AIGuardrail API unavailable; skipping informer until restart")
+	return nil
 }
 
 func (c *ClusterConfig) StartAndWaitForSync(stopCh <-chan struct{}) bool {

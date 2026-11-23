@@ -10,11 +10,13 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
@@ -105,16 +107,7 @@ func run() error {
 	}
 	h.RegisterRoutes(engine, authMiddleware...)
 
-	srv := &http.Server{
-		Addr:              *addr,
-		Handler:           engine,
-		TLSConfig:         tlsConfig,
-		ReadHeaderTimeout: 5 * time.Second,
-		ReadTimeout:       15 * time.Second,
-		WriteTimeout:      30 * time.Second,
-		IdleTimeout:       60 * time.Second,
-		MaxHeaderBytes:    1 << 20,
-	}
+	srv := newServer(*addr, engine, tlsConfig)
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -146,6 +139,33 @@ func run() error {
 	}
 	log.Info("server stopped")
 	return nil
+}
+
+func newServer(addr string, handler http.Handler, tlsConfig *tls.Config) *http.Server {
+	srv := &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		TLSConfig:         tlsConfig,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       60 * time.Second,
+		MaxHeaderBytes:    1 << 20,
+	}
+	if tlsConfig != nil && !slices.Contains(tlsConfig.NextProtos, "h2") {
+		disableHTTP2(srv)
+	}
+	return srv
+}
+
+// disableHTTP2 prevents net/http from running its HTTP/2 setup on a server
+// whose TLS configuration cannot serve it. NextProtos alone is not enough:
+// ListenAndServeTLS runs the HTTP/2 startup check before applying ALPN, and
+// that check rejects TLS 1.2 cipher lists without an ECDHE AES-128-GCM suite.
+func disableHTTP2(srv *http.Server) {
+	protocols := new(http.Protocols)
+	protocols.SetHTTP1(true)
+	srv.Protocols = protocols
 }
 
 func parseLogLevel(raw string) (slog.Level, error) {
@@ -224,13 +244,33 @@ func buildTLSConfig(certFile, keyFile string, selfSigned bool, profileMinVersion
 	cfg := &tls.Config{
 		Certificates: []tls.Certificate{tlsCert},
 		MinVersion:   minVersion,
-		NextProtos:   []string{"h2", "http/1.1"},
+		NextProtos:   tlsNextProtos(minVersion, profileCipherSuites),
 	}
 	if len(profileCipherSuites) > 0 {
 		cfg.CipherSuites = profileCipherSuites
 	}
 
 	return cfg, nil
+}
+
+func tlsNextProtos(minVersion uint16, cipherSuites []uint16) []string {
+	if minVersion < tls.VersionTLS12 {
+		return []string{"http/1.1"}
+	}
+	// TLS 1.3 and an empty TLS 1.2 cipher list both use Go's defaults, which
+	// include an HTTP/2-eligible ECDHE AES-128-GCM suite.
+	if minVersion >= tls.VersionTLS13 || len(cipherSuites) == 0 {
+		return []string{"h2", "http/1.1"}
+	}
+	for _, id := range cipherSuites {
+		// Go's net/http requires an ECDHE AES-128-GCM suite for HTTP/2;
+		// RSA key exchange suites do not qualify.
+		if id == tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256 ||
+			id == tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256 {
+			return []string{"h2", "http/1.1"}
+		}
+	}
+	return []string{"http/1.1"}
 }
 
 func setupTLSProfile(ctx context.Context, log *slog.Logger, restConfig *rest.Config, cancel context.CancelFunc) (uint16, []uint16, error) {
@@ -250,13 +290,13 @@ func setupTLSProfile(ctx context.Context, log *slog.Logger, restConfig *rest.Con
 		"minTLSVersion", profile.MinTLSVersion,
 		"tlsAdherence", settings.Adherence)
 
-	profileMinVersion, profileCipherSuites, unsupported := tlsprofile.TLSConfigFromProfile(profile)
+	profileMinVersion, profileCipherSuites, unsupported, err := tlsprofile.TLSConfigFromProfile(profile)
+	if err != nil {
+		return 0, nil, fmt.Errorf("applying cluster TLS profile: %w", err)
+	}
 	if len(unsupported) > 0 {
 		log.Warn("TLS profile contains ciphers not supported by this Go version (ignored)",
 			"unsupportedCiphers", unsupported)
-	}
-	if len(profileCipherSuites) == 0 && profileMinVersion < tls.VersionTLS13 {
-		log.Warn("TLS profile produced no TLS 1.2 cipher suites; Go defaults will be used for TLS 1.2 negotiation")
 	}
 
 	if watchSettings {
@@ -292,6 +332,14 @@ func fetchTLSSettingsWithRetry(ctx context.Context, log *slog.Logger, restConfig
 			log.Info("config.openshift.io API not available, using default Intermediate TLS profile "+
 				"(expected on non-OpenShift clusters)", "error", err)
 			return tlsprofile.DefaultSettings(), false, nil
+		}
+
+		if apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err) {
+			return tlsprofile.DefaultSettings(), false, fmt.Errorf(
+				"cluster TLS profile is not readable (check the maas-discovery RBAC): %w", err)
+		}
+		if tlsprofile.IsProfileValidationError(err) {
+			return tlsprofile.DefaultSettings(), false, fmt.Errorf("invalid cluster TLS profile: %w", err)
 		}
 
 		lastErr = err

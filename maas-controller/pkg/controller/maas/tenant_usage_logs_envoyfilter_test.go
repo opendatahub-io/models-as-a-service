@@ -30,6 +30,9 @@ const (
 	usageLogsTestMonitoringNS  = "opendatahub"
 	usageLogsTestAITenantNS    = tenantreconcile.DefaultAITenantNamespace
 	usageLogsTestDefaultTenant = "models-as-a-service"
+
+	usageLogsDataScienceCollectorAddress = "data-science-usage-logs-collector-headless.opendatahub.svc.cluster.local"
+	usageLogsServiceCAFile               = "/var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt"
 )
 
 func testUsageLogsManifestPath(t *testing.T) string {
@@ -82,6 +85,7 @@ func newUsageLogsReconciler(t *testing.T, s *runtime.Scheme, cl client.Client, m
 		Scheme:              s,
 		GatewayNamespace:    usageLogsTestGatewayNS,
 		MonitoringNamespace: usageLogsTestMonitoringNS,
+		ClusterAudience:     "https://kubernetes.default.svc",
 	}
 	if mutate != nil {
 		mutate(r)
@@ -133,10 +137,158 @@ func usageLogsCollectorAddressOf(ef *unstructured.Unstructured) (string, error) 
 	return addr, nil
 }
 
+func usageLogsClusterValueOf(ef *unstructured.Unstructured) (map[string]any, error) {
+	configPatches, found, err := unstructured.NestedSlice(ef.Object, "spec", "configPatches")
+	if err != nil {
+		return nil, err
+	}
+	if !found || len(configPatches) == 0 {
+		return nil, errors.New("configPatches not found")
+	}
+	patch, ok := configPatches[0].(map[string]any)
+	if !ok {
+		return nil, errors.New("configPatches[0] is not an object")
+	}
+	value, found, err := unstructured.NestedMap(patch, "patch", "value")
+	if err != nil {
+		return nil, err
+	}
+	if !found {
+		return nil, errors.New("cluster patch value not found")
+	}
+	return value, nil
+}
+
+func expectUsageLogsClusterTLS(g Gomega, ef *unstructured.Unstructured, wantSNI string) {
+	value, err := usageLogsClusterValueOf(ef)
+	g.Expect(err).NotTo(HaveOccurred())
+
+	name, _, _ := unstructured.NestedString(value, "transport_socket", "name")
+	g.Expect(name).To(Equal("envoy.transport_sockets.tls"))
+
+	sni, _, _ := unstructured.NestedString(value, "transport_socket", "typed_config", "sni")
+	g.Expect(sni).To(Equal(wantSNI))
+
+	minVersion, _, _ := unstructured.NestedString(value,
+		"transport_socket", "typed_config", "common_tls_context", "tls_params", "tls_minimum_protocol_version")
+	g.Expect(minVersion).To(Equal("TLSv1_2"))
+
+	caFile, _, _ := unstructured.NestedString(value,
+		"transport_socket", "typed_config", "common_tls_context", "validation_context", "trusted_ca", "filename")
+	g.Expect(caFile).To(Equal(usageLogsServiceCAFile))
+}
+
+func expectUsageLogsClusterPlaintext(g Gomega, ef *unstructured.Unstructured) {
+	value, err := usageLogsClusterValueOf(ef)
+	g.Expect(err).NotTo(HaveOccurred())
+	_, found, err := unstructured.NestedMap(value, "transport_socket")
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(found).To(BeFalse(), "self-hosted collector is plaintext and must not inherit the data-science TLS transport socket")
+}
+
+func expectUsageLogsEnvoyFilterOwnedByConfig(g Gomega, ef *unstructured.Unstructured, cfg *maasv1alpha1.Config) {
+	refs := ef.GetOwnerReferences()
+	g.Expect(refs).To(HaveLen(1))
+	g.Expect(refs[0].APIVersion).To(Equal(maasv1alpha1.GroupVersion.String()))
+	g.Expect(refs[0].Kind).To(Equal("Config"))
+	g.Expect(refs[0].Name).To(Equal(cfg.Name))
+	g.Expect(refs[0].UID).To(Equal(cfg.UID))
+	g.Expect(refs[0].Controller).To(Equal(ptr.To(true)))
+	g.Expect(refs[0].BlockOwnerDeletion).To(Equal(ptr.To(true)))
+}
+
 func defaultUsageLogsPlatformContext() tenantreconcile.PlatformContext {
 	return tenantreconcile.PlatformContext{
 		GatewayRef: maasv1alpha1.TenantGatewayRef{Name: tenantreconcile.DefaultAITenantName, Namespace: usageLogsTestGatewayNS},
 	}
+}
+
+func usageLogsResourceAttribute(ef *unstructured.Unstructured, key string) (string, error) {
+	configPatches, _, err := unstructured.NestedSlice(ef.Object, "spec", "configPatches")
+	if err != nil {
+		return "", err
+	}
+	for _, cp := range configPatches {
+		patch, ok := cp.(map[string]any)
+		if !ok {
+			continue
+		}
+		accessLog, found, err := unstructured.NestedSlice(patch, "patch", "value", "typed_config", "access_log")
+		if err != nil {
+			return "", err
+		}
+		if !found {
+			continue
+		}
+		for _, entry := range accessLog {
+			logEntry, ok := entry.(map[string]any)
+			if !ok {
+				continue
+			}
+			values, found, err := unstructured.NestedSlice(logEntry, "typed_config", "resource_attributes", "values")
+			if err != nil {
+				return "", err
+			}
+			if !found {
+				continue
+			}
+			for _, value := range values {
+				attr, ok := value.(map[string]any)
+				if !ok {
+					continue
+				}
+				if attrKey, _, _ := unstructured.NestedString(attr, "key"); attrKey == key {
+					attrValue, _, _ := unstructured.NestedString(attr, "value", "string_value")
+					return attrValue, nil
+				}
+			}
+		}
+	}
+	return "", errors.New(key + " resource attribute not found in EnvoyFilter")
+}
+
+func usageLogsAttribute(ef *unstructured.Unstructured, key string) (string, error) {
+	configPatches, _, err := unstructured.NestedSlice(ef.Object, "spec", "configPatches")
+	if err != nil {
+		return "", err
+	}
+	for _, cp := range configPatches {
+		patch, ok := cp.(map[string]any)
+		if !ok {
+			continue
+		}
+		accessLog, found, err := unstructured.NestedSlice(patch, "patch", "value", "typed_config", "access_log")
+		if err != nil {
+			return "", err
+		}
+		if !found {
+			continue
+		}
+		for _, entry := range accessLog {
+			logEntry, ok := entry.(map[string]any)
+			if !ok {
+				continue
+			}
+			values, found, err := unstructured.NestedSlice(logEntry, "typed_config", "attributes", "values")
+			if err != nil {
+				return "", err
+			}
+			if !found {
+				continue
+			}
+			for _, value := range values {
+				attr, ok := value.(map[string]any)
+				if !ok {
+					continue
+				}
+				if attrKey, _, _ := unstructured.NestedString(attr, "key"); attrKey == key {
+					attrValue, _, _ := unstructured.NestedString(attr, "value", "string_value")
+					return attrValue, nil
+				}
+			}
+		}
+	}
+	return "", errors.New(key + " attribute not found in EnvoyFilter")
 }
 
 func TestTenantEnsureUsageLogsEnvoyFilter(t *testing.T) {
@@ -207,7 +359,8 @@ func TestTenantEnsureUsageLogsEnvoyFilter(t *testing.T) {
 			To(Succeed())
 		addr, err := usageLogsCollectorAddressOf(ef)
 		g.Expect(err).NotTo(HaveOccurred())
-		g.Expect(addr).To(Equal("data-science-usage-logs-collector.opendatahub.svc"))
+		g.Expect(addr).To(Equal(usageLogsDataScienceCollectorAddress))
+		expectUsageLogsClusterTLS(g, ef, usageLogsDataScienceCollectorAddress)
 	})
 
 	t.Run("usageLogging unset uses data-science collector", func(t *testing.T) {
@@ -234,7 +387,8 @@ func TestTenantEnsureUsageLogsEnvoyFilter(t *testing.T) {
 			To(Succeed())
 		addr, err := usageLogsCollectorAddressOf(ef)
 		g.Expect(err).NotTo(HaveOccurred())
-		g.Expect(addr).To(Equal("data-science-usage-logs-collector.opendatahub.svc"))
+		g.Expect(addr).To(Equal(usageLogsDataScienceCollectorAddress))
+		expectUsageLogsClusterTLS(g, ef, usageLogsDataScienceCollectorAddress)
 	})
 
 	t.Run("empty monitoring namespace skips without warning", func(t *testing.T) {
@@ -348,12 +502,14 @@ func TestTenantEnsureUsageLogsEnvoyFilter(t *testing.T) {
 		addr, found, err := unstructured.NestedString(lbe0, "endpoint", "address", "socket_address", "address")
 		g.Expect(err).NotTo(HaveOccurred())
 		g.Expect(found).To(BeTrue())
-		g.Expect(addr).To(Equal("usage-logs-collector.opendatahub.svc"))
+		g.Expect(addr).To(Equal("usage-logs-collector.opendatahub.svc.cluster.local"))
+		expectUsageLogsClusterPlaintext(g, ef)
 
 		g.Expect(ef.GetLabels()).To(HaveKeyWithValue(tenantreconcile.LabelManagedByAITenant, "true"))
 		g.Expect(ef.GetLabels()).To(HaveKeyWithValue(tenantreconcile.LabelTenantName, tenantreconcile.DefaultAITenantName))
 		g.Expect(ef.GetAnnotations()).To(HaveKeyWithValue(tenantreconcile.AnnotationAITenantName, tenantreconcile.DefaultAITenantName))
 		g.Expect(ef.GetAnnotations()).To(HaveKeyWithValue(tenantreconcile.AnnotationAITenantNamespace, usageLogsTestAITenantNS))
+		expectUsageLogsEnvoyFilterOwnedByConfig(g, ef, cfg)
 
 		namespace, err := usageLogsServiceNamespace(ef)
 		g.Expect(err).NotTo(HaveOccurred())
@@ -387,6 +543,11 @@ func TestTenantEnsureUsageLogsEnvoyFilter(t *testing.T) {
 		namespace, err := usageLogsServiceNamespace(ef)
 		g.Expect(err).NotTo(HaveOccurred())
 		g.Expect(namespace).To(Equal("ai-tenant-redteam"))
+		tenantName, err := usageLogsResourceAttribute(ef, "tenant_name")
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(tenantName).To(Equal("redteam"))
+		_, err = usageLogsAttribute(ef, "subscription_namespace")
+		g.Expect(err).To(HaveOccurred())
 	})
 
 	t.Run("applies over existing filter when usageLogging is false", func(t *testing.T) {
@@ -413,6 +574,7 @@ func TestTenantEnsureUsageLogsEnvoyFilter(t *testing.T) {
 		ef.SetGroupVersionKind(tenantreconcile.GVKEnvoyFilter)
 		g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: tenantreconcile.UsageLogsEnvoyFilterName(""), Namespace: usageLogsTestGatewayNS}, ef)).
 			To(Succeed())
+		expectUsageLogsEnvoyFilterOwnedByConfig(g, ef, cfg)
 	})
 
 	t.Run("returns warning when manifest not found", func(t *testing.T) {

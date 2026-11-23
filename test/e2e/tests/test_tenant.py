@@ -251,6 +251,7 @@ def _restore_tenant_spec(baseline: dict, original_spec: dict) -> None:
 
 
 class TestTenantLifecycle:
+    @pytest.mark.smoke
     def test_tenant_ready_and_phase_healthy(self):
         st = _wait_tenant_ready()
         assert st is not None, "MaasTenantConfig Ready did not become True in time."
@@ -514,6 +515,7 @@ class TestTenantLifecycle:
             _restore_tenant_spec(baseline, original_spec)
 
 
+@pytest.mark.smoke
 class TestTenantContract:
     def test_status_has_phase_and_conditions(self):
         st = _tenant_status()
@@ -534,6 +536,7 @@ class TestTenantContract:
                 assert key in cond, f"condition {cond.get('type')!r} missing {key!r}"
 
 
+@pytest.mark.smoke
 class TestTenantNoFalseOwnership:
     def test_maas_user_crs_not_owned_by_tenant(self):
         checks = [

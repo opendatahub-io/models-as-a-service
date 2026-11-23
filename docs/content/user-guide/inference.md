@@ -25,6 +25,8 @@ The gateway reads the `model` field from the JSON body and routes the request to
 !!! info "Legacy path-based endpoints"
     MaaS also supports **path-based endpoints** where the model is encoded in the URL path (e.g. `https://maas.<cluster-domain>/llm/my-model/v1/chat/completions` or `.../v1/embeddings`). These endpoints continue to work, but the body-based endpoint above is recommended for new integrations because it matches the standard OpenAI API contract and works with a single `base_url` for all models. See [Path-Based Routing (Legacy)](#path-based-routing-legacy) for details.
 
+    Administrators who standardize on body-based routing can opt LLMInferenceService backends into `serving.kserve.io/model-based-routing-only: "true"`, which removes per-model path matches from the managed HTTPRoute (~19 → ~9 matches) and shrinks gateway rate-limit config. Path URLs for those models then stop working. See [Reduce LLMInferenceService route matches](../advanced-administration/subscription-cardinality.md#reduce-llminferenceservice-route-matches).
+
 !!! info "Multi-tenant deployments"
     In a multi-tenant setup, non-default tenants use their own gateway URL (e.g. `https://<tenant-gateway>/v1/chat/completions` or `.../v1/embeddings`) with a tenant-scoped API key. See [Multi-Tenant Validation](../install/multi-tenant-validation.md) for details.
 

@@ -233,9 +233,12 @@ func TestRecordRejection(t *testing.T) {
 	r.RecordRejection("rate-limited")
 	r.RecordRejection("no-capacity")
 	r.RecordRejection("quota-exceeded")
+	r.RecordRejection("guardrail-unavailable")
 
 	assert.InDelta(t, float64(2), gatherMetricValue(t, reg, "maas_request_rejections_total",
 		map[string]string{"reason": "unauthorized"}), 0)
+	assert.InDelta(t, float64(1), gatherMetricValue(t, reg, "maas_request_rejections_total",
+		map[string]string{"reason": "guardrail-unavailable"}), 0)
 	assert.InDelta(t, float64(1), gatherMetricValue(t, reg, "maas_request_rejections_total",
 		map[string]string{"reason": "rate-limited"}), 0)
 	assert.InDelta(t, float64(1), gatherMetricValue(t, reg, "maas_request_rejections_total",
@@ -258,7 +261,7 @@ func TestRecordRejectionIgnoresUnknownReason(t *testing.T) {
 		if f.GetName() != "maas_request_rejections_total" {
 			continue
 		}
-		assert.Len(t, f.GetMetric(), 4, "unknown reasons must not create extra series")
+		assert.Len(t, f.GetMetric(), 5, "unknown reasons must not create extra series")
 	}
 }
 
@@ -289,6 +292,7 @@ func TestRejectionLabelsPreInitialized(t *testing.T) {
 	assert.True(t, reasons["unauthorized"], "unauthorized label not pre-initialized")
 	assert.True(t, reasons["no-capacity"], "no-capacity label not pre-initialized")
 	assert.True(t, reasons["quota-exceeded"], "quota-exceeded label not pre-initialized")
+	assert.True(t, reasons["guardrail-unavailable"], "guardrail-unavailable label not pre-initialized")
 }
 
 func TestNewMetricsStayUnderCardinalityCeiling(t *testing.T) {

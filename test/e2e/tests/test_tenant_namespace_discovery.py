@@ -65,7 +65,7 @@ from multitenancy_helpers import (
 )
 from test_helper import MODEL_NAMESPACE, MODEL_REF, _wait_for_maas_auth_policy_phase
 
-pytestmark = pytest.mark.xdist_group("mt_lifecycle")
+pytestmark = pytest.mark.xdist_group("mt_lc_ns_discovery")
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -78,6 +78,7 @@ def _require_multitenancy_prerequisites():
 class TestTenantNamespaceDiscovery:
     """S27 section 1 — tenant namespace discovery (S1 / PR #975)."""
 
+    @pytest.mark.serial  # waits for Active while pass 1 churns openshift-ingress/maas-gateway-auth
     def test_labeled_tenant_namespace_is_discovered(self):
         """1.1: Controller discovers labeled tenant namespaces and reconciles CRs."""
         case = new_discovery_case(use_default_gateway=True)
@@ -160,6 +161,7 @@ class TestTenantNamespaceDiscovery:
             delete_maas_subscription(sub_name, unlabeled_ns)
             delete_namespace_best_effort(unlabeled_ns)
 
+    @pytest.mark.serial  # same shared default-gateway AuthPolicy dependency as 1.1
     def test_dynamic_discovery_after_label_added(self):
         """1.2 variant: Pre-existing CRs reconcile after namespace gains discovery labels."""
         case = new_discovery_case(use_default_gateway=True)
@@ -190,23 +192,29 @@ class TestTenantNamespaceDiscovery:
             pytest.skip("OIDC_ISSUER_URL not set; per-tenant OIDC E2E requires external OIDC deploy")
 
         issuer = os.environ["OIDC_ISSUER_URL"]
-        case = new_discovery_case(use_default_gateway=True)
+        config_aitenant = os.environ.get("CONFIG_AITENANT_NAME", "models-as-a-service")
+        config_tenant_ns = os.environ.get("MAAS_SUBSCRIPTION_NAMESPACE", "models-as-a-service")
 
-        try:
-            bootstrap_aitenant_tenant(case, use_default_gateway=True)
-            apply_maas_auth_policy(case["policy_name"], case["tenant_ns"])
-            _wait_for_maas_auth_policy_phase(case["policy_name"], namespace=case["tenant_ns"], timeout=180)
+        doc = get_json_or_none("aitenant", config_aitenant, AITENANT_NAMESPACE)
+        assert doc is not None, (
+            f"AITenant {config_aitenant} must exist on shared nightly pools "
+            "(Konflux OIDC parity patches the config tenant, not a second default-gateway AITenant)"
+        )
+        tenant_oidc = (doc.get("spec") or {}).get("oidc") or {}
+        assert tenant_oidc.get("issuerUrl"), (
+            f"AITenant {config_aitenant} must carry spec.oidc.issuerUrl when EXTERNAL_OIDC=true"
+        )
 
-            gw_auth = get_gateway_authpolicy()
-            assert gw_auth is not None, f"{GATEWAY_AUTH_POLICY_NAME} should exist in {GATEWAY_NAMESPACE}"
-            assert_no_per_model_authpolicy(MODEL_REF, MODEL_NAMESPACE)
+        gw_auth = get_gateway_authpolicy()
+        assert gw_auth is not None, f"{GATEWAY_AUTH_POLICY_NAME} should exist in {GATEWAY_NAMESPACE}"
+        assert_no_per_model_authpolicy(MODEL_REF, MODEL_NAMESPACE)
 
-            live_issuer = get_gateway_authpolicy_issuer()
-            assert live_issuer.rstrip("/") == issuer.rstrip("/"), (
-                f"expected gateway AuthPolicy issuer {issuer}, got {live_issuer!r}"
-            )
-        finally:
-            cleanup_discovery_case(case, delete_gateway=False)
+        live_issuer = get_gateway_authpolicy_issuer()
+        expected = tenant_oidc.get("issuerUrl", issuer)
+        assert live_issuer.rstrip("/") == expected.rstrip("/"), (
+            f"expected gateway AuthPolicy issuer {expected!r}, got {live_issuer!r} "
+            f"(config tenant {config_aitenant} ns={config_tenant_ns})"
+        )
 
     def test_namespace_qualified_collision_prevention(self):
         """1.5: Same-named CRs in two tenant namespaces use namespace-qualified TRLP tracking."""

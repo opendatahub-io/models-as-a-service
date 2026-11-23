@@ -22,7 +22,7 @@ from test_helper import kubectl_curl as _kubectl_curl
 
 log = logging.getLogger(__name__)
 
-pytestmark = pytest.mark.xdist_group("readonly")
+pytestmark = [pytest.mark.xdist_group("readonly"), pytest.mark.smoke]
 
 
 def test_tenant_discovery_requires_auth(maas_api_internal_url: str):

@@ -47,9 +47,26 @@ func settingsFromAPIServer(apiServer *confv1.APIServer) (Settings, error) {
 
 func profileFromAPIServer(apiServer *confv1.APIServer) (ProfileSpec, error) {
 	if apiServer == nil {
-		return DefaultProfile(), errors.New("APIServer must not be nil")
+		return DefaultProfile(), &profileValidationError{err: errors.New("APIServer must not be nil")}
 	}
-	return profileFromTLSSecurityProfile(apiServer.Spec.TLSSecurityProfile)
+	profile, err := profileFromTLSSecurityProfile(apiServer.Spec.TLSSecurityProfile)
+	if err != nil {
+		return DefaultProfile(), &profileValidationError{err: err}
+	}
+	return profile, nil
+}
+
+type profileValidationError struct {
+	err error
+}
+
+func (e *profileValidationError) Error() string { return e.err.Error() }
+
+func (e *profileValidationError) Unwrap() error { return e.err }
+
+func IsProfileValidationError(err error) bool {
+	var target *profileValidationError
+	return errors.As(err, &target)
 }
 
 func profileFromTLSSecurityProfile(profile *confv1.TLSSecurityProfile) (ProfileSpec, error) {
@@ -69,14 +86,14 @@ func profileFromTLSSecurityProfile(profile *confv1.TLSSecurityProfile) (ProfileS
 	}
 
 	spec := profile.Custom.TLSProfileSpec
-	if len(spec.Ciphers) == 0 {
-		return DefaultProfile(), errors.New("custom profile has empty cipher list")
-	}
 	if spec.MinTLSVersion == "" {
 		spec.MinTLSVersion = confv1.VersionTLS12
 	}
 	if _, ok := protocolVersion[spec.MinTLSVersion]; !ok {
 		return DefaultProfile(), fmt.Errorf("custom profile has unrecognized minTLSVersion %q", spec.MinTLSVersion)
+	}
+	if len(spec.Ciphers) == 0 && spec.MinTLSVersion != confv1.VersionTLS13 {
+		return DefaultProfile(), errors.New("custom profile has empty cipher list")
 	}
 
 	return cloneProfile(ProfileCustom, spec), nil

@@ -86,6 +86,7 @@ func modelRefsFor(lister fakeMaaSModelRefLister) []any {
 // Returns a single default subscription granting modelRefs so that tests auto-select it.
 type fakeSubscriptionLister struct {
 	modelRefs []any
+	groups    []string
 }
 
 func (f *fakeSubscriptionLister) List() ([]*unstructured.Unstructured, error) {
@@ -100,10 +101,15 @@ func (f *fakeSubscriptionLister) List() ([]*unstructured.Unstructured, error) {
 	sub.SetNamespace(fixtures.TestNamespace)
 
 	// Set spec.owner.groups to match test users
-	_ = unstructured.SetNestedSlice(sub.Object, []any{
-		map[string]any{"name": "free-users"},
-		map[string]any{"name": "premium-users"},
-	}, "spec", "owner", "groups")
+	groups := f.groups
+	if groups == nil {
+		groups = []string{"free-users", "premium-users"}
+	}
+	groupRefs := make([]any, 0, len(groups))
+	for _, group := range groups {
+		groupRefs = append(groupRefs, map[string]any{"name": group})
+	}
+	_ = unstructured.SetNestedSlice(sub.Object, groupRefs, "spec", "owner", "groups")
 	if len(f.modelRefs) > 0 {
 		_ = unstructured.SetNestedSlice(sub.Object, f.modelRefs, "spec", "modelRefs")
 	}
@@ -115,6 +121,42 @@ func (f *fakeSubscriptionLister) List() ([]*unstructured.Unstructured, error) {
 	}, "status", "conditions")
 
 	return []*unstructured.Unstructured{sub}, nil
+}
+
+func TestListModelsUsesVerifiedFlatIdentityGroups(t *testing.T) {
+	const orgID = "42c3e46f-2477-44d7-a85b-d3b43f6b31fa"
+	testLogger := logger.Development()
+	modelServer := createMockModelServer(t, "org-model")
+	lister := fakeMaaSModelRefLister{
+		fixtures.TestNamespace: []*unstructured.Unstructured{
+			maasModelRefUnstructured("org-model", fixtures.TestNamespace, modelServer.URL, true, nil),
+		},
+	}
+	modelMgr, err := models.NewManager(testLogger, 15, "", false, 0, nil)
+	require.NoError(t, err)
+	selector := subscription.NewSelector(testLogger, &fakeSubscriptionLister{
+		modelRefs: modelRefsFor(lister),
+		groups:    []string{orgID + "/users"},
+	}, nil, nil)
+	modelsHandler := handlers.NewModelsHandler(testLogger, modelMgr, selector, lister, nil)
+	router, _ := fixtures.SetupTestServer(t, fixtures.TestServerConfig{Objects: []runtime.Object{}})
+	_, cleanup := fixtures.StubTokenProviderAPIs(t)
+	defer cleanup()
+
+	tokenHandler := token.NewHandler(testLogger, fixtures.TestTenant)
+	router.GET("/v1/models", tokenHandler.ExtractVerifiedIdentityOptional(), tokenHandler.ExtractUserInfoOptional(), modelsHandler.ListLLMs)
+	request := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	request.Header.Set("Authorization", "Bearer valid-token")
+	//nolint:lll // JSON identity envelope requires full structure on one line
+	request.Header.Set(constant.HeaderIdentity, `{"source":"oidc","claims":{"iss":"https://issuer.example.com","sub":"user-1","aud":"maas-api","azp":"maas-client","groups":["users"],"org_id":"`+orgID+`"}}`)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	var response pagination.Page[models.Model]
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &response))
+	require.Len(t, response.Data, 1)
+	assert.Equal(t, "org-model", response.Data[0].ID)
 }
 
 // fakeSubDef holds a subscription's owner groups and optional model refs (name/namespace).

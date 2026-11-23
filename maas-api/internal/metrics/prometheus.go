@@ -21,10 +21,11 @@ type PrometheusRecorder struct {
 }
 
 var allowedRejectionReasons = map[string]struct{}{
-	constant.RejectionRateLimited:   {},
-	constant.RejectionUnauthorized:  {},
-	constant.RejectionNoCapacity:    {},
-	constant.RejectionQuotaExceeded: {},
+	constant.RejectionRateLimited:          {},
+	constant.RejectionUnauthorized:         {},
+	constant.RejectionNoCapacity:           {},
+	constant.RejectionQuotaExceeded:        {},
+	constant.RejectionGuardrailUnavailable: {},
 }
 
 func NewPrometheusRecorder(reg prometheus.Registerer) (*PrometheusRecorder, error) {
@@ -85,6 +86,7 @@ func NewPrometheusRecorder(reg prometheus.Registerer) (*PrometheusRecorder, erro
 	maasRequestRejections.WithLabelValues(constant.RejectionUnauthorized)
 	maasRequestRejections.WithLabelValues(constant.RejectionNoCapacity)
 	maasRequestRejections.WithLabelValues(constant.RejectionQuotaExceeded)
+	maasRequestRejections.WithLabelValues(constant.RejectionGuardrailUnavailable)
 
 	return &PrometheusRecorder{
 		requestsTotal:         requestsTotal,

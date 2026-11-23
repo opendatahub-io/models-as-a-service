@@ -56,7 +56,7 @@ def _oc_json(args):
     return json.loads(result.stdout)
 
 
-pytestmark = pytest.mark.xdist_group("readonly")
+pytestmark = [pytest.mark.xdist_group("readonly"), pytest.mark.smoke]
 
 CONFIG_CRD = "configs.maas.opendatahub.io"
 CONFIG_NAME = "default"

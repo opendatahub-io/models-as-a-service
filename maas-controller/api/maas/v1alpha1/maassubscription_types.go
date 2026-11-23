@@ -69,6 +69,15 @@ type MaaSSubscriptionSpec struct {
 	// +listType=atomic
 	// +kubebuilder:validation:MaxItems=64
 	Guardrails []GuardrailAttachment `json:"guardrails,omitempty"`
+
+	// RateLimitIdentity selects the TokenRateLimitPolicy identity scheme.
+	// Unset lets the controller choose (short for new CRs, legacy for upgrade
+	// survivors) and persist the result on status.rateLimitIdentity.
+	// Explicit short or legacy is an operator escape hatch; changing it resets
+	// that subscription's in-window Limitador quota.
+	// +optional
+	// +kubebuilder:validation:Enum=short;legacy
+	RateLimitIdentity string `json:"rateLimitIdentity,omitempty"`
 }
 
 // SubscriptionOrganization identifies the single organization that administers
@@ -277,6 +286,13 @@ type MaaSSubscriptionStatus struct {
 	// Conditions represent the latest available observations of the subscription's state
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+
+	// RateLimitIdentity is the sticky effective TRLP identity scheme (short or
+	// legacy). Owned by the controller so GitOps tools that ignore status do
+	// not flap OutOfSync when the value is first chosen.
+	// +optional
+	// +kubebuilder:validation:Enum=short;legacy
+	RateLimitIdentity string `json:"rateLimitIdentity,omitempty"`
 
 	// ModelRefStatuses reports the status of each referenced MaaSModelRef
 	// +optional

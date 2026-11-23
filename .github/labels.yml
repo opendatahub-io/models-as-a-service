@@ -1,0 +1,90 @@
+# Labels owned by this file, synced by .github/workflows/sync-labels.yml.
+#
+# A description says when its label applies. GitHub shows it in the label picker and
+# caps it at 100 characters.
+#
+# Set an area/* label with `/area <name>` in the PR description or a comment.
+# Prow sets changes/* labels from the `labels` in OWNERS files.
+#
+# Prow labels (approved, lgtm, needs-*, do-not-merge/*, tide/*, jira/*, lifecycle/*)
+# are not listed because Prow owns them. The sync runs with skip-delete, so a label
+# missing from this file is left alone. Deleting one would strip it from every PR,
+# and Tide merges on approved and lgtm.
+
+# Feature areas
+- name: area/tenancy
+  color: "1d76db"
+  description: "Tenant and AITenant lifecycle, tenant reconcile, maas-discovery, namespace isolation"
+- name: area/auth
+  color: "1d76db"
+  description: "MaaSAuthPolicy, generated AuthPolicy, OIDC, API keys, tokens, Authorino"
+- name: area/subscriptions
+  color: "1d76db"
+  description: "MaaSSubscription, rate limits, token quotas, group scoping, inference priority"
+- name: area/models
+  color: "1d76db"
+  description: "MaaSModelRef, ExternalModel, providers, model naming and conflicts, /v1/models"
+- name: area/payload-processing
+  color: "1d76db"
+  description: "IPP, Praxis, ExtProc, API translation, the gateway filter chain"
+- name: area/guardrails
+  color: "1d76db"
+  description: "AIGuardrail binding and attachment, guardrail composition"
+- name: area/grid
+  color: "1d76db"
+  description: "AI Grid: organizations, verified identity, admin inventory, governance"
+- name: area/usage
+  color: "1d76db"
+  description: "Usage capture and metering: usage logs, token attribution, oteljson"
+- name: area/observability
+  color: "1d76db"
+  description: "Metrics, dashboards, alerts, tracing, logging, telemetry stack. Usage metering is area/usage"
+- name: area/networking
+  color: "1d76db"
+  description: "Gateway resources, NetworkPolicy, TLS, certificates, routes"
+
+# Component fallbacks
+- name: area/controller
+  color: "bfdadc"
+  description: "Only when no feature area fits: controller plumbing such as manager setup or caches"
+- name: area/maas-api
+  color: "bfdadc"
+  description: "Only when no feature area fits: maas-api plumbing such as server, middleware, health"
+
+# Review flags, set by Prow from OWNERS files
+- name: changes/api-contract
+  color: "d93f0b"
+  description: "Changes CRD types or the OpenAPI spec"
+- name: changes/rbac
+  color: "d93f0b"
+  description: "Changes RBAC manifests. Controller RBAC needs parent operator PRs, see AGENTS.md"
+- name: needs-area
+  color: "fbca04"
+  description: "No area/* label yet. Add one with an /area <name> comment"
+
+# Delivery
+- name: area/deployment
+  color: "c5def5"
+  description: "Install and deploy: scripts/deploy.sh and friends, Kustomize, images, upgrade, migration"
+- name: area/e2e
+  color: "c5def5"
+  description: "E2E tests or harness are the purpose of the PR"
+- name: area/ci
+  color: "c5def5"
+  description: "GitHub workflows, Tekton and Konflux pipelines, CI scripts, security scanners"
+- name: area/docs
+  color: "c5def5"
+  description: "Documentation is the purpose of the PR"
+
+# Set by Dependabot, see .github/dependabot.yml
+- name: dependencies
+  color: "0366d6"
+  description: "Pull requests that update a dependency file"
+
+# Set by .github/workflows/approval-policy.yml
+- name: maas/policy-lightweight
+  color: "ededed"
+  description: "Set by approval-policy: docs, CI or tests only, one approving review"
+- name: maas/policy-standard
+  color: "ededed"
+  description: "Set by approval-policy: production paths, two approving reviews"

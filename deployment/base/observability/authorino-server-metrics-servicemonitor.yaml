@@ -19,6 +19,7 @@ metadata:
   namespace: kuadrant-system
   labels:
     app.kubernetes.io/part-of: maas-observability
+    monitoring.opendatahub.io/scrape: "true"
 spec:
   selector:
     matchLabels:

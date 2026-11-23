@@ -49,8 +49,13 @@ type MaaSModelSpec struct {
 	// TenantRef is the name of the AITenant this model belongs to.
 	// When omitted, the controller auto-resolves the tenant from the
 	// HTTPRoute's gateway parentRef via reverse lookup against AITenants.
-	// Set this only as an advanced override; prefer letting the controller
-	// resolve the tenant automatically.
+	// It can also be set as an explicit override — for example to pin a
+	// model to a specific tenant regardless of gateway attachment.
+	// Auto-resolution requires the model to be attached to exactly one
+	// gateway: an ExternalModel attached to several gateways (e.g. one per
+	// tenant) cannot be disambiguated and reconciliation fails until
+	// TenantRef is set to select the tenant. Single-gateway models can
+	// leave it unset and let the controller resolve the tenant.
 	// +optional
 	// +kubebuilder:validation:MaxLength=253
 	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
@@ -105,10 +110,12 @@ type ModelReference struct {
 //   - RuntimeReady: whether the model backend is healthy and serving, independent
 //     of governance state.
 //   - ModelIdentityUnique: whether this model's ResolvedModelAlias collides with
-//     another MaaSModelRef in the same namespace. False on a collision — body-based
-//     routing cannot disambiguate two MaaSModelRefs with the same resolved alias, so
-//     requests may be routed to the wrong backend/subscription. Informational only;
-//     does not affect Phase.
+//     another MaaSModelRef in the same namespace resolving to the same tenant.
+//     False on a collision — body-based routing cannot disambiguate two
+//     MaaSModelRefs with the same resolved alias, so requests may be routed to
+//     the wrong backend/subscription. ModelRefs resolving to different tenants
+//     are the per-tenant modelRefs serving one shared model and are not
+//     conflicts. Informational only; does not affect Phase.
 type MaaSModelStatus struct {
 	// Phase represents the current phase of the model.
 	// Pending = awaiting governance pairing or backend readiness.
@@ -151,8 +158,10 @@ type MaaSModelStatus struct {
 
 	// ResolvedModelAlias is the model identity used in body-based routing headers.
 	// For LLMInferenceService: publishers/{namespace}/models/{spec.model.name}.
-	// For ExternalModel: the targetModel from spec.externalProviderRefs[0].targetModel.
-	// The maas-api uses this for reverse-lookup when matching subscription model refs.
+	// For ExternalModel: the client-facing model name — the ExternalModel's
+	// spec.modelName when set, otherwise the ExternalModel CR name — which is
+	// also the name segment of the gateway path /{namespace}/{name}. The
+	// maas-api uses this for reverse-lookup when matching subscription model refs.
 	// +optional
 	ResolvedModelAlias string `json:"resolvedModelAlias,omitempty"`
 
@@ -162,7 +171,7 @@ type MaaSModelStatus struct {
 	//   - GovernanceAttached: active MaaSSubscription + MaaSAuthPolicy pairing exists.
 	//   - RuntimeReady: backend is healthy and serving.
 	//   - ModelIdentityUnique: no other MaaSModelRef in this namespace resolves to the
-	//     same model alias (see MaaSModelStatus doc for details).
+	//     same model alias and the same tenant (see MaaSModelStatus doc for details).
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }

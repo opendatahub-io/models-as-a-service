@@ -1,7 +1,7 @@
+//nolint:testpackage // exercises unexported cache internals
 package cache
 
 import (
-	"context"
 	"testing"
 	"time"
 
@@ -187,8 +187,7 @@ func TestMarkAllTenantsDirty_IncludesIndexedTenantNames(t *testing.T) {
 }
 
 func TestDrainLoop_MaxWaitPreventsStarvation(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	rebuildCh := make(chan struct{}, 1)
 	done := make(chan struct{})

@@ -33,7 +33,7 @@ from multitenancy_helpers import (
 from test_helper import _wait_for_subscription_trlp_status
 from test_helper import _delete_cr, _delete_governance_and_wait, _get_cluster_token
 
-pytestmark = pytest.mark.xdist_group("tenant_isolation")
+pytestmark = pytest.mark.xdist_group("tenant_iso_auth")
 
 
 def _mint_oidc_token_for_tenant(tenant: str) -> str:
@@ -87,6 +87,14 @@ def _mint_oidc_token_for_tenant(tenant: str) -> str:
 
 
 # Tenant auth isolation tests are enabled by default (Phase 1 implementation)
+
+
+def _oidc_token_source_configured(tenant: str) -> bool:
+    """True when a token source for this tenant exists in the environment."""
+    if os.environ.get(f"OIDC_TOKEN_TENANT_{tenant.upper()}"):
+        return True
+    url_var = "OIDC_TOKEN_URL" if tenant == "a" else "OIDC_TOKEN_URL_TENANT_B"
+    return bool(os.environ.get(url_var))
 
 
 @pytest.fixture(scope="module")
@@ -215,6 +223,17 @@ class TestTenantAuthIsolation:
             f"Tenant A key should be rejected on Tenant B gateway (got {response.status_code}): {response_summary(response)}"
         )
 
+    @pytest.mark.skipif(
+        not (
+            _oidc_token_source_configured("a")
+            and _oidc_token_source_configured("b")
+        ),
+        reason=(
+            "Per-tenant OIDC token sources not configured (OIDC_TOKEN_URL / "
+            "OIDC_TOKEN_URL_TENANT_B or OIDC_TOKEN_TENANT_A / OIDC_TOKEN_TENANT_B); "
+            "skipping at collection so the tenant fixture is not built for nothing"
+        ),
+    )
     def test_oidc_token_validation_per_tenant(self, tenant_env):
         """3.4: Tenant OIDC tokens are accepted only by their configured tenant endpoint."""
         token_a = _mint_oidc_token_for_tenant("a")
@@ -227,11 +246,23 @@ class TestTenantAuthIsolation:
 
         tenant_a, tenant_b = tenant_env
         response_a = search_api_keys_at(tenant_a["base_url"], token_a)
-        assert response_a.status_code != 401, f"Tenant A rejected its OIDC token: {response_summary(response_a)}"
+        assert response_a.status_code != 401, (
+            f"Tenant A rejected its OIDC token: {response_summary(response_a)}"
+        )
+
+        response_b = search_api_keys_at(tenant_b["base_url"], token_b)
+        assert response_b.status_code != 401, (
+            f"Tenant B rejected its OIDC token: {response_summary(response_b)}"
+        )
 
         cross_response = search_api_keys_at(tenant_b["base_url"], token_a)
         assert cross_response.status_code in (401, 403), (
             f"Tenant B should reject Tenant A OIDC token: {response_summary(cross_response)}"
+        )
+
+        reverse_cross_response = search_api_keys_at(tenant_a["base_url"], token_b)
+        assert reverse_cross_response.status_code in (401, 403), (
+            f"Tenant A should reject Tenant B OIDC token: {response_summary(reverse_cross_response)}"
         )
 
     def test_api_key_list_scoped_to_tenant(self, tenant_auth_setup, tenant_api_keys):
@@ -296,7 +327,6 @@ class TestTenantAuthIsolation:
             tenant_auth_setup["subscription"],
             expected_ready=True,
             namespace=tenant_a["namespace"],
-            timeout=120,
         )
         response = select_subscription_at(
             tenant_internal_url(tenant_a["name"]),

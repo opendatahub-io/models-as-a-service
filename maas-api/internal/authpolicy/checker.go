@@ -282,7 +282,7 @@ func policyMatchesSubject(spec map[string]any, groups []string, username string)
 	if username != "" {
 		if users, ok := subjects["users"].([]any); ok {
 			for _, u := range users {
-				if s, ok := u.(string); ok && strings.TrimSpace(s) == strings.TrimSpace(username) {
+				if s, ok := u.(string); ok && s == username {
 					return true
 				}
 			}
@@ -292,7 +292,7 @@ func policyMatchesSubject(spec map[string]any, groups []string, username string)
 	if groupRefs, ok := subjects["groups"].([]any); ok {
 		groupSet := make(map[string]bool, len(groups))
 		for _, g := range groups {
-			groupSet[strings.TrimSpace(g)] = true
+			groupSet[g] = true
 		}
 		for _, g := range groupRefs {
 			gMap, ok := g.(map[string]any)
@@ -300,7 +300,7 @@ func policyMatchesSubject(spec map[string]any, groups []string, username string)
 				continue
 			}
 			name, _ := gMap["name"].(string)
-			if groupSet[strings.TrimSpace(name)] {
+			if groupSet[name] {
 				return true
 			}
 		}

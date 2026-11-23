@@ -131,6 +131,28 @@ func tenantAssociationIndexer(obj client.Object) []string {
 	return []string{tenantAssociationUnresolved}
 }
 
+// backendNotReadyRequeueInterval is how often a model whose backend is not yet
+// ready is re-checked without an event.
+//
+// The LLMInferenceService watch normally delivers the Ready transition, but the
+// dynamic (late-CRD) path registers the watch asynchronously and may miss the
+// event if the backend becomes ready in the narrow window before the watch is
+// established. This backstop closes that gap. It is deliberately narrow: it
+// fires only while the backend itself is not ready, not for models that are
+// intentionally not Ready because governance is missing or the HTTPRoute has
+// not appeared yet — those have their own watches and do not need polling.
+const backendNotReadyRequeueInterval = 10 * time.Second
+
+// requeueWhileBackendNotReady returns a timed re-check when the backend is not
+// yet ready, so a dropped LLMInferenceService Ready event cannot strand the
+// phase. Returns an empty Result (event-only) once the backend is ready.
+func requeueWhileBackendNotReady(runtimeReady bool) ctrl.Result {
+	if runtimeReady {
+		return ctrl.Result{}
+	}
+	return ctrl.Result{RequeueAfter: backendNotReadyRequeueInterval}
+}
+
 // Reconcile is part of the main kubernetes reconciliation loop
 func (r *MaaSModelRefReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	ctx = oteljson.IntoContext(ctx)
@@ -179,8 +201,8 @@ func (r *MaaSModelRefReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			return ctrl.Result{}, r.updateStatusWithReason(ctx, model, "Failed", fmt.Sprintf("kind not implemented: %s", kind), "Unsupported", statusSnapshot)
 		}
 		if errors.Is(err, ErrHTTPRouteNotFound) {
-			// HTTPRoute doesn't exist yet - this is normal during startup.
-			// Set status to Pending (not Failed). The HTTPRoute watch will trigger reconciliation when the route is created.
+			// HTTPRoute doesn't exist yet — normal during startup. The HTTPRoute
+			// watch re-enqueues this model when the route is created.
 			model.Status.Endpoint = ""
 			return ctrl.Result{}, r.updateStatus(ctx, model, "Pending", "Waiting for HTTPRoute to be created", statusSnapshot)
 		}
@@ -240,7 +262,10 @@ func (r *MaaSModelRefReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	if phase != "Ready" {
 		model.Status.Endpoint = ""
 	}
-	return ctrl.Result{}, r.updateStatus(ctx, model, phase, message, statusSnapshot)
+	if err := r.updateStatus(ctx, model, phase, message, statusSnapshot); err != nil {
+		return ctrl.Result{}, err
+	}
+	return requeueWhileBackendNotReady(runtimeReady), nil
 }
 
 // checkGovernanceAttached returns true if there is at least one active
@@ -491,10 +516,20 @@ func crdExists(ctx context.Context, reader client.Reader, crdName string) bool {
 	return false
 }
 
+// crdPartialMetadata returns a PartialObjectMetadata stub for the CRD GVK.
+// Using metadata-only informers avoids caching full CRD objects (50–200KB each
+// due to OpenAPI schemas), which is the single biggest memory contributor on
+// large clusters with 600+ CRDs.
+func crdPartialMetadata() *metav1.PartialObjectMetadata {
+	m := &metav1.PartialObjectMetadata{}
+	m.SetGroupVersionKind(apiextensionsv1.SchemeGroupVersion.WithKind("CustomResourceDefinition"))
+	return m
+}
+
 // registerWatchWhenCRDAppears dynamically registers a resource watch the first time
-// the target CRD becomes available. It watches CRD objects (always available) and
-// calls makeSource() exactly once via sync.Once when the named CRD is detected —
-// so multiple CRD update events never produce duplicate watchers. No pod restart needed.
+// the target CRD becomes available. It watches CRD metadata (to avoid caching full
+// objects) and calls makeSource() exactly once via sync.Once when the named CRD is
+// detected — so multiple CRD update events never produce duplicate watchers.
 func registerWatchWhenCRDAppears(
 	c controller.Controller,
 	mgr ctrl.Manager,
@@ -506,9 +541,9 @@ func registerWatchWhenCRDAppears(
 	var once sync.Once
 	return c.Watch(source.Kind(
 		mgr.GetCache(),
-		&apiextensionsv1.CustomResourceDefinition{},
-		handler.TypedEnqueueRequestsFromMapFunc[*apiextensionsv1.CustomResourceDefinition](
-			func(ctx context.Context, crd *apiextensionsv1.CustomResourceDefinition) []reconcile.Request {
+		crdPartialMetadata(),
+		handler.TypedEnqueueRequestsFromMapFunc[*metav1.PartialObjectMetadata](
+			func(ctx context.Context, crd *metav1.PartialObjectMetadata) []reconcile.Request {
 				if crd.Name != crdName {
 					return nil
 				}
@@ -529,6 +564,9 @@ func registerWatchWhenCRDAppears(
 // follow-up hook. Once the named CRD reports Established=True, it registers the watch and
 // then runs onEstablished, enqueuing the requests it returns on c. Unlike
 // registerWatchWhenCRDAppears, both steps are retried with backoff until they succeed.
+//
+// The CRD informer uses metadata-only objects to avoid caching full CRD specs.
+// The Established condition is checked via a live API read when the CRD name matches.
 func registerWatchWhenCRDEstablished(
 	c controller.Controller,
 	mgr ctrl.Manager,
@@ -536,17 +574,18 @@ func registerWatchWhenCRDEstablished(
 	makeSource func() source.Source,
 	onEstablished func(context.Context) ([]reconcile.Request, error),
 ) error {
+	reader := mgr.GetAPIReader()
 	b := newCRDBootstrap(crdName, func() error { return c.Watch(makeSource()) }, onEstablished)
 	b.log.Info("CRD not yet registered at startup; will register watch when it is established")
 	return c.Watch(source.Kind(
 		mgr.GetCache(),
-		&apiextensionsv1.CustomResourceDefinition{},
-		handler.TypedFuncs[*apiextensionsv1.CustomResourceDefinition, reconcile.Request]{
-			CreateFunc: func(ctx context.Context, e event.TypedCreateEvent[*apiextensionsv1.CustomResourceDefinition], q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
-				b.handle(ctx, e.Object, q)
+		crdPartialMetadata(),
+		handler.TypedFuncs[*metav1.PartialObjectMetadata, reconcile.Request]{
+			CreateFunc: func(ctx context.Context, e event.TypedCreateEvent[*metav1.PartialObjectMetadata], q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
+				b.handleMetadata(ctx, e.Object.Name, reader, q)
 			},
-			UpdateFunc: func(ctx context.Context, e event.TypedUpdateEvent[*apiextensionsv1.CustomResourceDefinition], q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
-				b.handle(ctx, e.ObjectNew, q)
+			UpdateFunc: func(ctx context.Context, e event.TypedUpdateEvent[*metav1.PartialObjectMetadata], q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
+				b.handleMetadata(ctx, e.ObjectNew.Name, reader, q)
 			},
 		},
 	))
@@ -578,18 +617,20 @@ func newCRDBootstrap(crdName string, register func() error, onEstablished func(c
 	}
 }
 
-// handle starts the bootstrap on the first event for the established CRD.
-func (b *crdBootstrap) handle(ctx context.Context, crd *apiextensionsv1.CustomResourceDefinition, q workqueue.TypedInterface[reconcile.Request]) {
-	if crd.Name != b.crdName || !crdEstablished(crd) || !b.started.CompareAndSwap(false, true) {
+// handleMetadata starts the bootstrap when a metadata-only CRD event matches.
+// It claims ownership via CompareAndSwap on the first matching event and polls
+// for the Established condition with exponential backoff on a background context
+// that outlives the event handler. The goroutine terminates when the process exits.
+func (b *crdBootstrap) handleMetadata(ctx context.Context, name string, reader client.Reader, q workqueue.TypedInterface[reconcile.Request]) {
+	if name != b.crdName || !b.started.CompareAndSwap(false, true) {
 		return
 	}
-	// The event handler's context is cancelled when the handler returns, so the retries
-	// run on a context that keeps its values but not its cancellation.
-	go b.run(context.WithoutCancel(ctx), q)
+	go b.waitForEstablishedAndRun(context.WithoutCancel(ctx), reader, q)
 }
 
-func (b *crdBootstrap) run(ctx context.Context, q workqueue.TypedInterface[reconcile.Request]) {
+func (b *crdBootstrap) waitForEstablishedAndRun(ctx context.Context, reader client.Reader, q workqueue.TypedInterface[reconcile.Request]) {
 	defer close(b.done)
+	b.pollEstablished(ctx, reader)
 	if !b.retry(ctx, "register watch", b.register) {
 		return
 	}
@@ -604,6 +645,29 @@ func (b *crdBootstrap) run(ctx context.Context, q workqueue.TypedInterface[recon
 		}
 		return nil
 	})
+}
+
+// pollEstablished polls indefinitely until the CRD reports Established=True.
+// API errors are logged at Error; "not yet established" is logged at V(1)
+// since it is the normal state during CRD install.
+func (b *crdBootstrap) pollEstablished(ctx context.Context, reader client.Reader) {
+	delay := b.initialDelay
+	for {
+		var crd apiextensionsv1.CustomResourceDefinition
+		if err := reader.Get(ctx, types.NamespacedName{Name: b.crdName}, &crd); err != nil {
+			b.log.Error(err, "failed to read CRD for Established check; retrying", "after", delay)
+		} else if crdEstablished(&crd) {
+			return
+		} else {
+			b.log.V(1).Info("CRD not yet established; retrying", "after", delay)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(delay):
+		}
+		delay = min(delay*2, b.maxDelay)
+	}
 }
 
 // retry calls fn until it succeeds, doubling the delay between attempts up to maxDelay.
@@ -635,24 +699,6 @@ func crdEstablished(crd *apiextensionsv1.CustomResourceDefinition) bool {
 	return false
 }
 
-// unstructuredLLMIsvcReadyStatus extracts the Ready condition status from an
-// unstructured LLMInferenceService — mirrors llmisvcReadyStatus for typed objects.
-func unstructuredLLMIsvcReadyStatus(obj *unstructured.Unstructured) string {
-	conditions, _, _ := unstructured.NestedSlice(obj.Object, "status", "conditions")
-	for _, c := range conditions {
-		cond, ok := c.(map[string]any)
-		if !ok {
-			continue
-		}
-		if cond["type"] == "Ready" {
-			if status, ok := cond["status"].(string); ok {
-				return status
-			}
-		}
-	}
-	return ""
-}
-
 func (r *MaaSModelRefReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	ctx := context.Background()
 
@@ -679,8 +725,9 @@ func (r *MaaSModelRefReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		), builder.WithPredicates(httpRouteChangedForModelRef())).
 		// Watch sibling MaaSModelRefs so model-identity-conflict detection stays
 		// current: a newly created/deleted sibling, or one whose resolved alias
-		// changed, can introduce or resolve a conflict for every other model in
-		// the namespace even though those models' own specs didn't change.
+		// or resolved tenant changed, can introduce or resolve a conflict for
+		// every other model in the namespace even though those models' own
+		// specs didn't change.
 		//
 		// Only siblings sharing the affected alias are enqueued (not the entire
 		// namespace) to avoid O(N²) fan-out in namespaces with many models.
@@ -693,7 +740,7 @@ func (r *MaaSModelRefReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			UpdateFunc: func(ctx context.Context, e event.UpdateEvent, q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
 				oldM, ok1 := e.ObjectOld.(*maasv1alpha1.MaaSModelRef)
 				newM, ok2 := e.ObjectNew.(*maasv1alpha1.MaaSModelRef)
-				if ok1 && ok2 && oldM.Status.ResolvedModelAlias != newM.Status.ResolvedModelAlias {
+				if ok1 && ok2 && siblingConflictFieldsChanged(oldM, newM) {
 					r.enqueueSiblingsWithAlias(ctx, newM, q, oldM.Status.ResolvedModelAlias)
 				}
 			},
@@ -751,41 +798,21 @@ func (r *MaaSModelRefReconciler) SetupWithManager(mgr ctrl.Manager) error {
 
 	if !llmisvcExists {
 		if err := registerWatchWhenCRDAppears(c, mgr, llmisvcCRD, func() source.Source {
-			// Use unstructured to bypass the REST mapper — typed watches require the REST
-			// mapper to know the GVK, which may be stale when the CRD is installed after startup.
-			llmisvc := &unstructured.Unstructured{}
-			llmisvc.SetGroupVersionKind(schema.GroupVersionKind{
-				Group: "serving.kserve.io", Version: "v1alpha2", Kind: "LLMInferenceService",
-			})
-			return source.Kind(mgr.GetCache(), llmisvc,
-				// Mirror the static-path predicates (GenerationChangedPredicate +
-				// llmisvcReadyChangedPredicate) using handler.TypedFuncs so we have
-				// access to both old and new objects on Update events.
-				handler.TypedFuncs[*unstructured.Unstructured, reconcile.Request]{
-					CreateFunc: func(ctx context.Context, e event.TypedCreateEvent[*unstructured.Unstructured], q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
-						for _, req := range r.mapLLMISvcToMaaSModelRefs(ctx, e.Object) {
-							q.Add(req)
-						}
-					},
-					UpdateFunc: func(ctx context.Context, e event.TypedUpdateEvent[*unstructured.Unstructured], q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
-						if e.ObjectOld == nil || e.ObjectNew == nil {
-							return
-						}
-						// Mirrors GenerationChangedPredicate + llmisvcReadyChangedPredicate.
-						if e.ObjectOld.GetGeneration() == e.ObjectNew.GetGeneration() &&
-							unstructuredLLMIsvcReadyStatus(e.ObjectOld) == unstructuredLLMIsvcReadyStatus(e.ObjectNew) {
-							return
-						}
-						for _, req := range r.mapLLMISvcToMaaSModelRefs(ctx, e.ObjectNew) {
-							q.Add(req)
-						}
-					},
-					DeleteFunc: func(ctx context.Context, e event.TypedDeleteEvent[*unstructured.Unstructured], q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
-						for _, req := range r.mapLLMISvcToMaaSModelRefs(ctx, e.Object) {
-							q.Add(req)
-						}
-					},
-				},
+			// Use a typed watch, identical to the static path above. An unstructured
+			// watch would look equivalent but creates a separate informer: controller-
+			// runtime keys informers by object type, so an unstructured watch and the
+			// typed r.Get in Status() run independent LIST/WATCH loops with independent
+			// resource versions. A Ready transition event can then arrive while the
+			// typed informer still returns the pre-transition object, leaving the model
+			// stranded in a not-ready phase with no further requeue.
+			//
+			// source.Kind retries GetInformer until the REST mapper knows the GVK
+			// (the dynamic REST mapper reloads on a NoKindMatchError), so a typed
+			// late-CRD watch is safe — this pattern is already used for InferenceObjective
+			// in the subscription controller.
+			return source.Kind(mgr.GetCache(), client.Object(&kservev1alpha2.LLMInferenceService{}),
+				handler.EnqueueRequestsFromMapFunc(r.mapLLMISvcToMaaSModelRefs),
+				predicate.Or(predicate.GenerationChangedPredicate{}, llmisvcReadyChangedPredicate{}),
 			)
 		}); err != nil {
 			return fmt.Errorf("failed to register CRD watcher for LLMInferenceService: %w", err)
@@ -883,6 +910,16 @@ func (r *MaaSModelRefReconciler) mapHTTPRouteToMaaSModelRefs(ctx context.Context
 		})
 	}
 	return requests
+}
+
+// siblingConflictFieldsChanged reports whether an update to a MaaSModelRef can
+// change its model-identity-conflict verdict against its siblings. The verdict
+// depends on both the resolved alias and the resolved tenant: a tenant change
+// alone can flip a sibling's ModelIdentityUnique condition while the alias
+// stays the same, so siblings sharing the alias must be requeued either way.
+func siblingConflictFieldsChanged(oldM, newM *maasv1alpha1.MaaSModelRef) bool {
+	return oldM.Status.ResolvedModelAlias != newM.Status.ResolvedModelAlias ||
+		oldM.Status.ResolvedTenantRef != newM.Status.ResolvedTenantRef
 }
 
 // enqueueSiblingsWithAlias enqueues only the sibling MaaSModelRefs whose
@@ -1008,9 +1045,6 @@ func (r *MaaSModelRefReconciler) mapAITenantToMaaSModelRefs(ctx context.Context,
 // mapLLMISvcToMaaSModelRefs returns reconcile requests for all MaaSModels that
 // reference the given LLMInferenceService by name in the same namespace.
 func (r *MaaSModelRefReconciler) mapLLMISvcToMaaSModelRefs(ctx context.Context, obj client.Object) []reconcile.Request {
-	// Use GetName/GetNamespace — works for both typed *kservev1alpha2.LLMInferenceService
-	// (static watch at startup) and *unstructured.Unstructured (dynamic watch registered
-	// via registerWatchWhenCRDAppears when KServe CRD appears after startup).
 	return r.modelRefsReferencing(ctx, "LLMInferenceService", obj)
 }
 

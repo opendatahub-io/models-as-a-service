@@ -15,6 +15,7 @@ configMapGenerator:
       - proxy/main.py
       - proxy/auth.py
       - proxy/rewriter.py
+      - proxy/openssl.conf
     options:
       disableNameSuffixHash: true
       labels:

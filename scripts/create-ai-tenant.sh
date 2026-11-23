@@ -29,13 +29,13 @@
 #   maas-api is deployed) and from any model namespaces (where LLMInferenceServices
 #   run). Since these namespaces vary per cluster, the recommended approach is a
 #   per-gateway label selector. The controller automatically labels the
-#   infrastructure namespace. After running this script, label any model
-#   namespaces that need to attach HTTPRoutes:
+#   infrastructure namespace and the tenant namespace. After running this script,
+#   label any other model namespaces that need to attach HTTPRoutes:
 #
 #   NAMESPACE_SELECTOR_LABELS="maas.opendatahub.io/gateway-access-myteam=true" \
 #     ./scripts/create-ai-tenant.sh myteam
 #
-#   # Label model namespaces (infra namespace is labeled automatically):
+#   # Label model namespaces (infra and tenant namespaces are labeled automatically):
 #   oc label namespace llm \
 #     maas.opendatahub.io/gateway-access-myteam=true --overwrite
 #
