@@ -479,6 +479,9 @@ func (m *MockStore) GetByHash(ctx context.Context, keyHash string) (*ApiKey, err
 			meta := k.metadata
 			meta.Username = k.username
 			meta.Groups = k.groups
+			if !k.expiresAt.IsZero() {
+				meta.ExpirationDate = k.expiresAt.UTC().Format(time.RFC3339)
+			}
 			if k.lastUsedAt != nil {
 				meta.LastUsedAt = k.lastUsedAt.Format(time.RFC3339)
 			}
