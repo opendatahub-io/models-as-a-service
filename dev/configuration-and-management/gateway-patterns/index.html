@@ -3779,19 +3779,13 @@ and troubleshooting guidance for common failure modes.</p>
 <li><strong>Authorino and maas-api TLS</strong>: Configured separately. See <a href="../tls-configuration/">TLS Configuration</a>.</li>
 </ul>
 <h2 id="clusterip-gateway-with-openshift-route-re-encrypt">ClusterIP Gateway with OpenShift Route (re-encrypt)</h2>
-<div class="admonition warning">
-<p class="admonition-title">Unsupported Configuration</p>
-<p>This pattern mixes incompatible routing paradigms by connecting OpenShift Routes 
-(HAProxy-based) to Kubernetes Gateway API resources (Envoy-based).</p>
-<p><strong>Known limitations:</strong></p>
-<ul>
-<li>The <code>/v1/tenants</code> endpoint cannot discover the external hostname (Gateway has no hostname 
-  in <code>spec.listeners</code>, returns error instead of internal service name)</li>
-<li>Not compliant with Gateway API specification</li>
-<li>May have unexpected behavior or compatibility issues</li>
-</ul>
-<p><strong>Recommended alternative:</strong> Deploy Gateway with LoadBalancer service type and configure
-<code>spec.listeners[].hostname</code> to follow the Gateway API standard pattern.</p>
+<div class="admonition note">
+<p class="admonition-title">Tenant discovery</p>
+<p>The Gateway Service does not need a hostname in <code>spec.listeners</code>. When <code>/v1/tenants</code>
+resolves a local Gateway address, maas-api discovers an admitted, host-only OpenShift
+Route that targets a Service selecting the Gateway. If no compatible Route exists, the
+endpoint returns HTTP 500 with <code>Failed to resolve gateway</code> and <code>Unable to determine
+external hostname from Gateway status</code>.</p>
 </div>
 <p>This pattern deploys a Gateway API Gateway as a <strong>ClusterIP</strong> service (no external
 LoadBalancer) and uses an <strong>OpenShift Route</strong> with <strong>re-encrypt</strong> TLS termination
@@ -4199,7 +4193,7 @@ which gateway owns the contested label.</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="November 4, 2026 22:40:05 UTC">November 4, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="November 23, 2026 13:41:30 UTC">November 23, 2026</span>
   </span>
 
     
