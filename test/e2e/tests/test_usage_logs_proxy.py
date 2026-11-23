@@ -41,6 +41,7 @@ DEFAULT_LOKI_INSTANCE = "data-science-usage-logs-lokistack"
 LEGACY_LOKI_INSTANCE = "usage"
 MONITORING_NETWORK_POLICY = "maas-api-allow-monitoring"
 EGRESS_NETWORK_POLICY = "maas-api-egress-restrict"
+LOKISTACK_INGRESS_NETWORK_POLICY = "usage-logs-lokistack-allow-maas-api"
 ENVOY_FILTER_NAME = "payload-processing"
 ROUTE_NAME_RE = re.compile(r"\.maas-api-route\.(\d+)$")
 
@@ -316,6 +317,67 @@ def test_monitoring_ingress_is_restricted_to_perses_operator():
             assert pod_labels.get("app.kubernetes.io/managed-by") == "perses-operator"
 
 
+def test_lokistack_ingress_allows_only_maas_api():
+    endpoint = _container_env(_maas_api_container(), "LOKI_READ_ENDPOINT")
+    if endpoint != _expected_loki_endpoint():
+        pytest.skip(
+            "Loki endpoint is overridden; the default LokiStack rule is not rendered"
+        )
+
+    network_policy = get_json_or_none(
+        "networkpolicy",
+        LOKISTACK_INGRESS_NETWORK_POLICY,
+        _monitoring_namespace(),
+    )
+    assert network_policy is not None, (
+        f"NetworkPolicy {LOKISTACK_INGRESS_NETWORK_POLICY} must exist in "
+        f"{_monitoring_namespace()}"
+    )
+
+    spec = network_policy.get("spec", {})
+    assert spec.get("policyTypes") == ["Ingress"]
+    pod_selector = spec.get("podSelector", {})
+    assert pod_selector.get("matchLabels") == {
+        "app.kubernetes.io/name": "lokistack",
+        "app.kubernetes.io/component": "lokistack-gateway",
+    }
+    instance_expression = next(
+        (
+            expression
+            for expression in pod_selector.get("matchExpressions", [])
+            if expression.get("key") == "app.kubernetes.io/instance"
+        ),
+        None,
+    )
+    assert instance_expression == {
+        "key": "app.kubernetes.io/instance",
+        "operator": "In",
+        "values": [DEFAULT_LOKI_INSTANCE, LEGACY_LOKI_INSTANCE],
+    }
+
+    ingress_rules = spec.get("ingress", [])
+    assert len(ingress_rules) == 1, "Expected exactly one LokiStack ingress rule"
+    rule = ingress_rules[0]
+    assert rule.get("ports") == [{"protocol": "TCP", "port": 8080}]
+    peers = rule.get("from", [])
+    assert peers == [
+        {
+            "namespaceSelector": {
+                "matchLabels": {
+                    "kubernetes.io/metadata.name": MAAS_API_DEPLOYMENT_NAMESPACE,
+                }
+            },
+            "podSelector": {
+                "matchLabels": {
+                    "app.kubernetes.io/name": "maas-api",
+                    "app.kubernetes.io/component": "api",
+                    "app.kubernetes.io/part-of": "models-as-a-service",
+                }
+            },
+        }
+    ]
+
+
 def test_retired_python_usage_proxy_is_removed():
     namespace = _monitoring_namespace()
     for kind, name in LEGACY_PROXY_RESOURCES:
@@ -390,7 +452,7 @@ def test_internal_loki_proxy_requires_tokenreview(
     )
 
 
-def test_internal_loki_proxy_query_when_lokistack_exists(
+def test_internal_loki_proxy_queries_when_lokistack_exists(
     maas_api_internal_url: str,
     token: str,
 ):
@@ -415,25 +477,41 @@ def test_internal_loki_proxy_query_when_lokistack_exists(
             "query": 'sum(count_over_time({service_name="models-as-a-service"}[5m]))',
         }
     )
-    url = f"{maas_api_internal_url}/v1/logs/loki/api/v1/query?{query}"
-    status, body = 0, ""
-    query_deadline = time.monotonic() + 120
-    while time.monotonic() < query_deadline:
-        status, body = kubectl_curl(
-            url,
-            headers={"Authorization": f"Bearer {token}"},
-            attempts=1,
-            max_duration=max(1, int(query_deadline - time.monotonic())),
+    for endpoint in ("query", "query_range"):
+        url = f"{maas_api_internal_url}/v1/logs/loki/api/v1/{endpoint}?{query}"
+        status, body = 0, ""
+        query_deadline = time.monotonic() + 120
+        while time.monotonic() < query_deadline:
+            status, body = kubectl_curl(
+                url,
+                headers={"Authorization": f"Bearer {token}"},
+                attempts=1,
+                max_duration=max(1, int(query_deadline - time.monotonic())),
+            )
+            if status == 200 or status not in (0, 502, 503):
+                break
+            remaining = query_deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            time.sleep(min(5, remaining))
+        assert status == 200, (
+            f"TokenReview-authenticated self-scoped Loki {endpoint} should return "
+            f"200, got {status}: {body[:500]}"
         )
-        if status == 200 or status not in (0, 502, 503):
-            break
-        remaining = query_deadline - time.monotonic()
-        if remaining <= 0:
-            break
-        time.sleep(min(5, remaining))
-    assert status == 200, (
-        "TokenReview-authenticated self-scoped Loki query should return 200, "
-        f"got {status}: {body[:500]}"
+
+
+def test_internal_loki_proxy_labels_reject_post_parse_identity_filters(
+    maas_api_internal_url: str,
+    token: str,
+):
+    url = f"{maas_api_internal_url}/v1/logs/loki/api/v1/labels?only_user=true"
+    status, body = kubectl_curl(
+        url,
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert status == 400, (
+        "Self-scoped label listing must reject post-parse identity filters instead "
+        f"of returning unscoped label metadata; got {status}: {body[:500]}"
     )
 
 

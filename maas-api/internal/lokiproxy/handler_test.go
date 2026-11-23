@@ -10,7 +10,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"testing"
 
@@ -132,6 +131,42 @@ func userIdentity() string {
 	return identityEnvelope(`[]`)
 }
 
+func requireQueryEnforcement(t *testing.T, query, organizationID, username string) {
+	t.Helper()
+
+	expr, err := logqlv2.ParseExpr(query)
+	require.NoError(t, err)
+
+	selectorCount := 0
+	logQueryCount := 0
+	var selectorMatchers []string
+	filterStages := make([]string, 0, 2)
+	if organizationID != "" {
+		filterStages = append(filterStages, `organization_id = "`+organizationID+`"`)
+	}
+	if username != "" {
+		filterStages = append(filterStages, `user_id = "`+username+`"`)
+	}
+	requiredFilter := "| " + strings.Join(filterStages, " and ")
+
+	expr.Walk(func(e any) {
+		switch le := e.(type) {
+		case *logqlv2.StreamMatcherExpr:
+			selectorCount++
+			for _, matcher := range le.Matchers() {
+				selectorMatchers = append(selectorMatchers, matcher.String())
+			}
+		case *logqlv2.LogQueryExpr:
+			logQueryCount++
+			require.Contains(t, le.String(), requiredFilter, "log query: %s", le.String())
+		}
+	})
+
+	require.Positive(t, selectorCount)
+	require.Equal(t, selectorCount, logQueryCount)
+	require.Contains(t, selectorMatchers, `tenant_name="test-tenant"`)
+}
+
 // noOrganizationIdentity builds a verified OIDC identity envelope without any
 // organization claim (the parser rejects org_id unless it is a valid UUID and
 // forbids org_name/roles without org_id), exercising the tenant-admin
@@ -139,26 +174,6 @@ func userIdentity() string {
 func noOrganizationIdentity() string {
 	return `{"source":"oidc","claims":{"iss":"https://issuer.example.com","sub":"admin-subject","aud":"maas-api","azp":"maas-client","preferred_username":"` +
 		testUsername + `","groups":["ai-grid-users"]}}`
-}
-
-// selectorMatchers parses a LogQL expression and returns the matchers of every
-// stream selector found in it (sorted for stable comparison).
-func selectorMatchers(t *testing.T, query string) []string {
-	t.Helper()
-
-	expr, err := logqlv2.ParseExpr(query)
-	require.NoError(t, err)
-
-	var matchers []string
-	expr.Walk(func(e any) {
-		if le, ok := e.(*logqlv2.StreamMatcherExpr); ok {
-			for _, m := range le.Matchers() {
-				matchers = append(matchers, m.String())
-			}
-		}
-	})
-	sort.Strings(matchers)
-	return matchers
 }
 
 func TestProxyQueryRangeEnforcesOrganizationMatcher(t *testing.T) {
@@ -173,9 +188,8 @@ func TestProxyQueryRangeEnforcesOrganizationMatcher(t *testing.T) {
 	require.Equal(t, "/api/logs/v1/application/loki/api/v1/query_range", record.path)
 	require.Equal(t, "100", record.query.Get("limit"))
 
-	matchers := selectorMatchers(t, record.query.Get("query"))
-	require.Contains(t, matchers, `organization_id="`+testOrganizationID+`"`)
-	require.NotContains(t, matchers, `organization_id="other-org"`)
+	requireQueryEnforcement(t, record.query.Get("query"), testOrganizationID, "")
+	require.Contains(t, record.query.Get("query"), `organization_id="other-org"`)
 }
 
 func TestProxyQueryInstantEnforcesOrganizationMatcher(t *testing.T) {
@@ -189,9 +203,8 @@ func TestProxyQueryInstantEnforcesOrganizationMatcher(t *testing.T) {
 	require.Equal(t, "/api/logs/v1/application/loki/api/v1/query", record.path)
 	require.Equal(t, "1234567890", record.query.Get("time"))
 
-	matchers := selectorMatchers(t, record.query.Get("query"))
-	require.Contains(t, matchers, `organization_id="`+testOrganizationID+`"`)
-	require.NotContains(t, matchers, `organization_id="other-org"`)
+	requireQueryEnforcement(t, record.query.Get("query"), testOrganizationID, "")
+	require.Contains(t, record.query.Get("query"), `organization_id="other-org"`)
 }
 
 func TestProxyQueryInstantOnlyUserEnforcesMatchers(t *testing.T) {
@@ -206,33 +219,33 @@ func TestProxyQueryInstantOnlyUserEnforcesMatchers(t *testing.T) {
 	require.Equal(t, "/loki/api/v1/query", record.path)
 	require.NotContains(t, record.query, "only_user")
 
-	matchers := selectorMatchers(t, record.query.Get("query"))
-	require.Contains(t, matchers, `organization_id="`+testOrganizationID+`"`)
-	require.Contains(t, matchers, `user_id="admin@example.com"`)
-	require.NotContains(t, matchers, `organization_id="other-org"`)
-	require.NotContains(t, matchers, `user_id="victim"`)
+	requireQueryEnforcement(
+		t,
+		record.query.Get("query"),
+		testOrganizationID,
+		testUsername,
+	)
+	require.Contains(t, record.query.Get("query"), `organization_id="other-org"`)
+	require.Contains(t, record.query.Get("query"), `user_id="victim"`)
 }
 
-func TestProxyLabelsInjectsSelectorWhenQueryAbsent(t *testing.T) {
+func TestProxyLabelsRejectsPostParseIdentityFilters(t *testing.T) {
 	router, record := newAdminRouter(t, "")
 
 	w := lokiRequest(t, router, http.MethodGet, "/v1/logs/loki/api/v1/labels?start=1", adminIdentity())
 
-	require.Equal(t, http.StatusOK, w.Code)
-	require.Equal(t, "/loki/api/v1/labels", record.path)
-	require.Equal(t, "1", record.query.Get("start"))
-	require.Equal(t, []string{`organization_id="` + testOrganizationID + `"`, `tenant_name="test-tenant"`}, selectorMatchers(t, record.query.Get("query")))
+	require.Equal(t, http.StatusBadRequest, w.Code)
+	require.Empty(t, record.path, "upstream must not be called")
 }
 
-func TestProxyLabelValues(t *testing.T) {
+func TestProxyLabelValuesRejectsPostParseIdentityFilters(t *testing.T) {
 	router, record := newAdminRouter(t, "")
 
 	w := lokiRequest(t, router, http.MethodGet, "/v1/logs/loki/api/v1/label/organization_id/values?query="+
 		url.QueryEscape(`{organization_id="other"}`), adminIdentity())
 
-	require.Equal(t, http.StatusOK, w.Code)
-	require.Equal(t, "/loki/api/v1/label/organization_id/values", record.path)
-	require.Equal(t, []string{`organization_id="` + testOrganizationID + `"`, `tenant_name="test-tenant"`}, selectorMatchers(t, record.query.Get("query")))
+	require.Equal(t, http.StatusBadRequest, w.Code)
+	require.Empty(t, record.path, "upstream must not be called")
 }
 
 func TestProxyRejectsInvalidLabelName(t *testing.T) {
@@ -377,24 +390,18 @@ func TestProxyOnlyUserInjectsUserAndOrganizationMatchers(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code)
 	require.NotContains(t, record.query, "only_user", "only_user must not be forwarded upstream")
 
-	matchers := selectorMatchers(t, record.query.Get("query"))
-	require.Contains(t, matchers, `organization_id="`+testOrganizationID+`"`)
-	require.Contains(t, matchers, `user_id="admin@example.com"`)
-	require.NotContains(t, matchers, `organization_id="other-org"`)
-	require.NotContains(t, matchers, `user_id="victim"`)
+	requireQueryEnforcement(t, record.query.Get("query"), testOrganizationID, testUsername)
+	require.Contains(t, record.query.Get("query"), `organization_id="other-org"`)
+	require.Contains(t, record.query.Get("query"), `user_id="victim"`)
 }
 
-func TestProxyOnlyUserInjectsSelectorWhenQueryAbsent(t *testing.T) {
+func TestProxyOnlyUserLabelsRejectPostParseIdentityFilters(t *testing.T) {
 	router, record := newRouter(t)
 
 	w := lokiRequest(t, router, http.MethodGet, "/v1/logs/loki/api/v1/labels?only_user=true&start=1", userIdentity())
 
-	require.Equal(t, http.StatusOK, w.Code)
-	require.Equal(t, []string{
-		`organization_id="` + testOrganizationID + `"`,
-		`tenant_name="test-tenant"`,
-		`user_id="admin@example.com"`,
-	}, selectorMatchers(t, record.query.Get("query")))
+	require.Equal(t, http.StatusBadRequest, w.Code)
+	require.Empty(t, record.path, "upstream must not be called")
 }
 
 func TestProxyOnlyUserAdminKeepsOrganizationWideViewWithoutFlag(t *testing.T) {
@@ -407,10 +414,8 @@ func TestProxyOnlyUserAdminKeepsOrganizationWideViewWithoutFlag(t *testing.T) {
 		adminIdentity())
 
 	require.Equal(t, http.StatusOK, w.Code)
-	matchers := selectorMatchers(t, record.query.Get("query"))
-	require.Contains(t, matchers, `organization_id="`+testOrganizationID+`"`)
-	require.Contains(t, matchers, `user_id="someone-else"`)
-	require.NotContains(t, matchers, `user_id="admin@example.com"`)
+	requireQueryEnforcement(t, record.query.Get("query"), testOrganizationID, "")
+	require.Contains(t, record.query.Get("query"), `user_id="someone-else"`)
 }
 
 func TestProxyOnlyUserInvalidFlagValue(t *testing.T) {
@@ -704,11 +709,9 @@ func TestProxyKubernetesAuthzMatrix(t *testing.T) {
 		router, record := newRouterWithAdminChecker(t, "", stubAdminChecker{admin: false})
 		w := headerRequest(router, query, "")
 		require.Equal(t, http.StatusOK, w.Code)
-		matchers := selectorMatchers(t, record.query.Get("query"))
-		require.Contains(t, matchers, `tenant_name="test-tenant"`)
-		require.Contains(t, matchers, `user_id="kube-admin@example.com"`)
-		require.NotContains(t, matchers, `user_id="victim"`)
-		require.NotContains(t, matchers, `organization_id=`)
+		requireQueryEnforcement(t, record.query.Get("query"), "", "kube-admin@example.com")
+		require.Contains(t, record.query.Get("query"), `user_id="victim"`)
+		require.NotContains(t, record.query.Get("query"), `organization_id="`)
 	})
 
 	t.Run("gateway admin without only_user is rejected (non-k8s auth source)", func(t *testing.T) {
@@ -722,9 +725,8 @@ func TestProxyKubernetesAuthzMatrix(t *testing.T) {
 		router, record := newRouterWithAdminChecker(t, "", stubAdminChecker{admin: true})
 		w := headerRequest(router, query, "")
 		require.Equal(t, http.StatusOK, w.Code)
-		matchers := selectorMatchers(t, record.query.Get("query"))
-		require.Contains(t, matchers, `user_id="kube-admin@example.com"`)
-		require.NotContains(t, matchers, `organization_id=`)
+		requireQueryEnforcement(t, record.query.Get("query"), "", "kube-admin@example.com")
+		require.NotContains(t, record.query.Get("query"), `organization_id="`)
 	})
 
 	t.Run("gateway admin check failure is never reached (non-k8s auth source)", func(t *testing.T) {
@@ -758,10 +760,11 @@ func TestProxyGatewayIdentityWithOrganizationIsOrgScoped(t *testing.T) {
 		router, record := newRouterWithAdminChecker(t, "", stubAdminChecker{admin: false})
 		w := headerRequest(router, "/v1/logs/loki/api/v1/query_range?only_user=true&query=%7B%7D", testOrganizationID)
 		require.Equal(t, http.StatusOK, w.Code)
-		require.Equal(t, []string{
-			`organization_id="` + testOrganizationID + `"`,
-			`tenant_name="test-tenant"`,
-			`user_id="kube-admin@example.com"`,
-		}, selectorMatchers(t, record.query.Get("query")))
+		requireQueryEnforcement(
+			t,
+			record.query.Get("query"),
+			testOrganizationID,
+			"kube-admin@example.com",
+		)
 	})
 }
