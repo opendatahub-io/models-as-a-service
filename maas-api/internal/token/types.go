@@ -11,6 +11,38 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// AuthSource identifies which authentication mechanism produced a UserContext.
+// Exactly one mechanism is selected per request (see Handler.ExtractUserInfo).
+const (
+	// AuthSourceOIDC is the gateway-verified OIDC identity envelope
+	// (X-MaaS-Identity), parsed by ParseIdentityEnvelope.
+	AuthSourceOIDC = "oidc"
+
+	// AuthSourceGateway is the trusted gateway-injected identity headers
+	// (X-MaaS-Username / X-MaaS-Group) from the Authorino auth policy.
+	AuthSourceGateway = "gateway"
+
+	// AuthSourceK8s is a Kubernetes bearer token validated via TokenReview
+	// (the fallback used when the gateway injects no identity headers).
+	AuthSourceK8s = "k8s"
+)
+
+// UserContext holds user information extracted from the token.
+type UserContext struct {
+	Username       string   `json:"username"`
+	Groups         []string `json:"groups"`
+	Tenant         string   `json:"tenant"`
+	OrganizationID string   `json:"organizationId,omitempty"`
+	// Roles are the organization roles parsed by the auth layer from the
+	// verified identity envelope's roles claim (e.g. "admins"); empty for
+	// callers authenticated without an organization.
+	Roles []string `json:"roles,omitempty"`
+	// AuthSource records which mechanism authenticated the caller
+	// ("oidc", "gateway", or "k8s"); empty for contexts created before
+	// the field existed.
+	AuthSource string `json:"authSource,omitempty"`
+}
+
 // ParseDurationWithDays extends time.ParseDuration to support "d" (days) suffix
 // Supports: "30d", "6h", "90m", "2h30m", "1.5h".
 func ParseDurationWithDays(s string) (time.Duration, error) {
@@ -23,14 +55,6 @@ func ParseDurationWithDays(s string) (time.Duration, error) {
 		return time.Duration(days * 24 * float64(time.Hour)), nil
 	}
 	return time.ParseDuration(s)
-}
-
-// UserContext holds user information extracted from the token.
-type UserContext struct {
-	Username       string   `json:"username"`
-	Groups         []string `json:"groups"`
-	Tenant         string   `json:"tenant"`
-	OrganizationID string   `json:"organizationId,omitempty"`
 }
 
 const organizationIDContextKey = "organization_id"
