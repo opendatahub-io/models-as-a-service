@@ -182,33 +182,3 @@ func TestExtractUserInfo_KubernetesFallbackDisabled(t *testing.T) {
 
 	assert.Equal(t, http.StatusInternalServerError, w.Code)
 }
-
-func TestExtractUserInfo_KubernetesOnly(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-
-	client := fake.NewSimpleClientset()
-	client.PrependReactor("create", "tokenreviews", func(action k8stesting.Action) (bool, runtime.Object, error) {
-		return true, &authv1.TokenReview{Status: *authenticatedReview()}, nil
-	})
-	handler := token.NewHandler(logger.Development(), "test-tenant").WithKubeClient(client)
-	router := gin.New()
-	router.Use(handler.ExtractUserInfo(token.AuthModeKubernetes))
-	router.GET("/test", func(c *gin.Context) {
-		user, _ := c.Get("user")
-		c.JSON(http.StatusOK, user)
-	})
-
-	request := httptest.NewRequest(http.MethodGet, "/test", nil)
-	request.Header.Set("Authorization", "Bearer sha256~oc-token")
-	request.Header.Set(constant.HeaderUsername, "spoofed-gateway-user")
-	request.Header.Set(constant.HeaderGroup, `["cluster-admins"]`)
-	recorder := httptest.NewRecorder()
-	router.ServeHTTP(recorder, request)
-
-	require.Equal(t, http.StatusOK, recorder.Code)
-	var user token.UserContext
-	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &user))
-	assert.Equal(t, "kube-user", user.Username)
-	assert.Equal(t, token.AuthSourceK8s, user.AuthSource)
-	assert.Len(t, client.Actions(), 1, "TokenReview must authenticate Kubernetes-only routes")
-}

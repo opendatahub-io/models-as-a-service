@@ -1,9 +1,10 @@
 # Admin usage dashboard — queries Loki structured logs via LogQL.
 # Uses $__range to bind LogQL windows to the native time picker.
 # All four dropdowns (user, subscription, model, API key) follow the dashboard time
-# picker and use LokiLogQLVariable with [$__range]. They auto-populate from
-# structured metadata via count by (...), bypassing /label/values (which requires
-# stream labels). API key values are "key_name (user_id)".
+# picker. User and API key use LokiLogQLVariable with [$__range] — auto-populates
+# from structured metadata via count by (...), bypassing /label/values
+# (which requires stream labels). API key values are "key_name (user_id)".
+# Subscription/model use LokiLabelValuesVariable.
 # customAllValue: ".*" on ListVariables ensures "All" matches entries with
 # absent labels (e.g. subscription when capturing is disabled). Do not remove.
 # API-key filter copies ${api_key:regexliteral} into a LogQL double-quoted
@@ -54,13 +55,14 @@ spec:
         customAllValue: ".*"
         defaultValue: "$__all"
         plugin:
-          kind: LokiLogQLVariable
+          kind: LokiLabelValuesVariable
           spec:
             datasource:
               kind: LokiDatasource
               name: usage-logs-all
-            expr: 'count by (subscription) (count_over_time({service_name="models-as-a-service", subscription!="-"} [$__range]))'
             labelName: subscription
+            matchers:
+              - '{service_name="models-as-a-service", subscription!="-"}'
     - kind: ListVariable
       spec:
         name: model
@@ -71,13 +73,14 @@ spec:
         customAllValue: ".*"
         defaultValue: "$__all"
         plugin:
-          kind: LokiLogQLVariable
+          kind: LokiLabelValuesVariable
           spec:
             datasource:
               kind: LokiDatasource
               name: usage-logs-all
-            expr: 'count by (model) (count_over_time({service_name="models-as-a-service", model!="-", response_type!="error"} [$__range]))'
             labelName: model
+            matchers:
+              - '{service_name="models-as-a-service", model!="-", response_type!="error"}'
     - kind: ListVariable
       spec:
         name: api_key
@@ -569,10 +572,12 @@ spec:
         proxy:
           kind: HTTPProxy
           spec:
-            # maas-api read-only Loki proxy (GET /v1/logs*); always deployed.
-            # maas-api routes to the usage-logs-loki Secret endpoint when
-            # present, otherwise to the default LokiStack gateway.
-            url: 'https://maas-api:8443/v1/logs'
+            url: 'https://maas-api.redhat-ai-gateway-infra.svc.cluster.local:8443/v1/logs'
+            dropHeaders:
+              - X-MaaS-Identity
+              - X-MaaS-Username
+              - X-MaaS-Group
+              - X-MaaS-Organization-Id
             allowedEndpoints:
               - endpointPattern: "/loki/api/v1/query"
                 method: GET
@@ -588,8 +593,7 @@ spec:
       enable: true
     tls:
       enable: true
-      # The service-ca file mounted in every pod verifies maas-api's
-      # service-ca-signed serving certificate.
+      insecureSkipVerify: false
       caCert:
         type: file
         certPath: /var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt

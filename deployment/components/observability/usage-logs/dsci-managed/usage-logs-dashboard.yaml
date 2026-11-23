@@ -1,12 +1,11 @@
-# User-scoped usage dashboard — queries go through the maas-api Loki proxy,
-# which injects user_id filtering based on the caller's Kubernetes identity.
-# Subscription/model dropdowns use LokiLogQLVariable (not /label/values):
-# label-values requests require indexed stream labels, while query requests can
-# filter structured metadata.
+# User-scoped usage dashboard — queries go through the maas-api Loki proxy
+# injects user_id filtering based on the logged-in user's Kubernetes token.
+# Subscription/model dropdowns use LokiLogQLVariable rather than /label/values
+# because their values are structured metadata rather than stream labels.
 # customAllValue: ".*" on ListVariables ensures "All" matches entries with
 # absent labels (e.g. user_id when capturing is disabled). Do not remove.
 # API key uses LokiLogQLVariable: key_name is structured metadata (not a stream
-# label), and the proxy can user-scope /query and /query_range.
+# label), and maas-api scopes all proxied LogQL requests.
 # API-key filter copies ${api_key:regexliteral} into a LogQL double-quoted
 # label (__ak_sel), then the Go template reads .__ak_sel. Do not interpolate
 # the name into a backtick string: a backtick in an existing key name would
@@ -459,8 +458,8 @@ spec:
             content:
               "$ref": "#/spec/panels/tokenConsumptionTable"
 ---
-# User-scoped Loki datasource — routes through maas-api, which injects
-# user_id filtering. Named "usage-logs-multi-tenancy" to avoid
+# User-scoped Loki datasource — routes through maas-api which
+# injects user_id filtering. Named "usage-logs-multi-tenancy" to avoid
 # collision with the admin "usage-logs" datasource.
 apiVersion: perses.dev/v1alpha1
 kind: PersesDatasource
@@ -482,12 +481,12 @@ spec:
           kind: HTTPProxy
           spec:
             secret: usage-logs-multi-tenancy-secret
-            # maas-api read-only Loki proxy (GET /v1/logs*) with the
-            # caller-scoped view: only_user=true restricts queries to the
-            # calling user's own logs. maas-api routes to the usage-logs-loki
-            # Secret endpoint when present, otherwise to the default
-            # LokiStack gateway.
-            url: https://maas-api:8443/v1/logs?only_user=true
+            url: https://maas-api.redhat-ai-gateway-infra.svc.cluster.local:8443/v1/logs?only_user=true
+            dropHeaders:
+              - X-MaaS-Identity
+              - X-MaaS-Username
+              - X-MaaS-Group
+              - X-MaaS-Organization-Id
             allowedEndpoints:
               - endpointPattern: "/loki/api/v1/query"
                 method: GET
@@ -498,8 +497,6 @@ spec:
       enable: true
     tls:
       enable: true
-      # The service-ca file mounted in every pod verifies maas-api's
-      # service-ca-signed serving certificate.
       caCert:
         type: file
         certPath: /var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt

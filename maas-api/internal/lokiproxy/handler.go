@@ -4,11 +4,13 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -25,24 +27,25 @@ const (
 	// organizationLabel is the Loki label carrying the caller's organization.
 	organizationLabel = "organization_id"
 
+	// tenantLabel is the Loki label carrying the tenant that produced a log line.
+	tenantLabel = "tenant_name"
+
 	// userLabel is the Loki label carrying the user that produced a log line.
 	userLabel = "user_id"
+
+	// adminsRole is the group that grants organization-admin access.
+	adminsRole = "admins"
 
 	// onlyUserParam narrows the query to the calling user's own logs (see
 	// authorize). It is consumed by the proxy and never forwarded upstream.
 	onlyUserParam = "only_user"
 
+	// upstreamScopeOrgIDHeader selects the application tenant on LokiStack.
+	upstreamScopeOrgIDHeader = "X-Scope-Orgid"
+	applicationTenant        = "application"
+
 	// proxyTimeout bounds a single upstream Loki request.
 	proxyTimeout = 60 * time.Second
-
-	// maxUpstreamResponseSize preserves the retired Python proxy's response
-	// body limit and prevents an oversized Loki response from exhausting memory.
-	maxUpstreamResponseSize = 10 * 1024 * 1024
-
-	// lokiTenantHeader and lokiTenantID preserve the tenant header sent by the
-	// retired Python proxy to the LokiStack gateway.
-	lokiTenantHeader = "X-Scope-Orgid"
-	lokiTenantID     = "application"
 )
 
 // upstreamPaths maps the maas-api route to the proxied Loki read API path.
@@ -56,10 +59,12 @@ const (
 // Handler proxies a restricted subset of the Loki read API to an upstream Loki,
 // injecting the caller's organization as a label matcher into every query.
 type Handler struct {
-	logger    *logger.Logger
-	upstream  *url.URL
-	tokenFile string
-	client    *http.Client
+	logger     *logger.Logger
+	upstream   *url.URL
+	token      string
+	tokenPath  string
+	scopeOrgID string
+	client     *http.Client
 	// adminChecker resolves tenant admins via SubjectAccessReview
 	// (the cached checker wired in cmd/main.go); a nil checker fails closed.
 	adminChecker AdminChecker
@@ -74,17 +79,17 @@ type AdminChecker interface {
 
 // NewHandler creates a Loki proxy handler for the given upstream read endpoint
 // (LOKI_READ_ENDPOINT, e.g. https://loki-gateway.example.svc:8080/api/logs/v1/application).
-// tokenFile (LOKI_READ_TOKEN_FILE) is read per request for the Authorization:
-// Bearer credential, so projected ServiceAccount token rotation needs no
-// restart; when it resolves to empty no Authorization header is sent.
-// caFile (LOKI_READ_CA_FILE) holds a PEM bundle appended to (never replacing)
-// the system trust pool used for upstream requests; it is read once at
-// startup. A missing file is logged and skipped: the proxy stays enabled and
-// relies on the system pool alone. A file whose content is not parseable PEM
-// is rejected so a corrupt bundle fails loudly at startup instead of
+// token (LOKI_READ_TOKEN) is sent as the Authorization: Bearer credential on
+// every proxied upstream request; when empty no Authorization header is sent
+// unless WithServiceAccountTokenPath is used. The path-based token is read for
+// every request so projected service-account token rotations are honored.
+// caPEM (LOKI_READ_CA) is a certificate bundle appended to (never replacing)
+// the system trust pool used for upstream requests; when empty the system
+// pool alone is used. A non-empty caPEM from which no certificate can be
+// parsed is rejected so a corrupt bundle fails loudly at startup instead of
 // half-verifying some chains. adminChecker backs the tenant-admin check for
 // callers without an organization; a nil checker fails closed.
-func NewHandler(log *logger.Logger, endpoint, tokenFile, caFile string, adminChecker AdminChecker) (*Handler, error) {
+func NewHandler(log *logger.Logger, endpoint, token, caPEM string, adminChecker AdminChecker) (*Handler, error) {
 	if log == nil {
 		log = logger.Production()
 	}
@@ -103,66 +108,45 @@ func NewHandler(log *logger.Logger, endpoint, tokenFile, caFile string, adminChe
 	}
 
 	client := &http.Client{Timeout: proxyTimeout}
-	if path := strings.TrimSpace(caFile); path != "" {
-		content, err := os.ReadFile(path)
+	if ca := strings.TrimSpace(caPEM); ca != "" {
+		pool, err := x509.SystemCertPool()
 		if err != nil {
-			if os.IsNotExist(err) {
-				log.Warn("Loki read CA file not found; using the system trust pool only", "path", path)
-			} else {
-				return nil, fmt.Errorf("read Loki read CA file %q: %w", path, err)
-			}
-		} else if ca := strings.TrimSpace(string(content)); ca != "" {
-			if err := appendCACert(client, ca, fmt.Sprintf("CA file %q", path)); err != nil {
-				return nil, err
-			}
+			return nil, fmt.Errorf("load system CA pool for Loki read proxy: %w", err)
 		}
+		if !pool.AppendCertsFromPEM([]byte(ca)) {
+			return nil, errors.New("invalid Loki read CA bundle (LOKI_READ_CA): no PEM certificate could be parsed")
+		}
+		base, ok := http.DefaultTransport.(*http.Transport)
+		if !ok {
+			base = &http.Transport{}
+		}
+		transport := base.Clone()
+		transport.TLSClientConfig = &tls.Config{RootCAs: pool}
+		client.Transport = transport
 	}
 
 	return &Handler{
 		logger:       log,
 		upstream:     upstream,
-		tokenFile:    strings.TrimSpace(tokenFile),
+		token:        strings.TrimSpace(token),
+		scopeOrgID:   applicationTenant,
 		client:       client,
 		adminChecker: adminChecker,
 	}, nil
 }
 
-// appendCACert appends a PEM bundle to a clone of the system trust pool on the
-// given client. source names the configuration the bundle came from for error
-// messages.
-func appendCACert(client *http.Client, ca, source string) error {
-	pool, err := x509.SystemCertPool()
-	if err != nil {
-		return fmt.Errorf("load system CA pool for Loki read proxy: %w", err)
-	}
-	if !pool.AppendCertsFromPEM([]byte(ca)) {
-		return fmt.Errorf("invalid Loki read CA bundle (%s): no PEM certificate could be parsed", source)
-	}
-	base, ok := http.DefaultTransport.(*http.Transport)
-	if !ok {
-		base = &http.Transport{}
-	}
-	transport := base.Clone()
-	transport.TLSClientConfig = &tls.Config{RootCAs: pool}
-	client.Transport = transport
-	return nil
+// WithServiceAccountTokenPath sends the bearer token stored at path on every
+// proxied upstream request. An explicit LOKI_READ_TOKEN still takes precedence.
+func (h *Handler) WithServiceAccountTokenPath(path string) *Handler {
+	h.tokenPath = strings.TrimSpace(path)
+	return h
 }
 
-// bearerToken reads the token file (LOKI_READ_TOKEN_FILE) on every call so
-// rotated projected ServiceAccount tokens and Secret-mounted tokens take
-// effect without a restart. Read failures are logged and yield an empty
-// token, which sends no Authorization header — the failure then surfaces as
-// an upstream 401 at query time.
-func (h *Handler) bearerToken(requestLogger *logger.Logger) string {
-	if h.tokenFile == "" {
-		return ""
-	}
-	content, err := os.ReadFile(h.tokenFile)
-	if err != nil {
-		requestLogger.Warn("Failed to read Loki read token file; sending no Authorization header", "path", h.tokenFile, "error", err)
-		return ""
-	}
-	return strings.TrimSpace(string(content))
+// WithScopeOrgID overrides the upstream Loki tenant header. An empty value
+// disables the header for gateways that do not use LokiStack tenant selection.
+func (h *Handler) WithScopeOrgID(scope string) *Handler {
+	h.scopeOrgID = strings.TrimSpace(scope)
+	return h
 }
 
 // RegisterRoutes registers the read-only Loki proxy routes on the given group.
@@ -222,25 +206,67 @@ func isDigit(r rune) bool {
 	return r >= '0' && r <= '9'
 }
 
-// authorize resolves the caller's identity from the auth context and returns
-// the label matchers that restrict the query, or false after writing an error
-// response when the request must not be proxied.
+// accessMode classifies a request by the scope of logs it may read. It is
+// derived from the request shape (the only_user flag and the caller's
+// organization) and selects both the authorization requirement and the label
+// filters applied to the query.
+type accessMode int
+
+const (
+	// accessModeTenantAdmin: only_user!=true with no organization. Requires
+	// the tenant-admin SubjectAccessReview check; sees all tenant logs.
+	accessModeTenantAdmin accessMode = iota
+
+	// accessModeTenantUser: only_user=true with no organization. Requires an
+	// identified user; sees only the caller's own logs within the tenant.
+	accessModeTenantUser
+
+	// accessModeOrganizationAdmin: only_user!=true with an organization.
+	// Requires the admins role; sees all logs of the caller's organization.
+	accessModeOrganizationAdmin
+
+	// accessModeOrganizationUser: only_user=true with an organization.
+	// Requires an identified user and organization; sees only the caller's
+	// own logs within the organization.
+	accessModeOrganizationUser
+)
+
+// resolveAccessMode maps the request shape to the access mode: only_user
+// selects the user variants, a non-empty organization ID selects the
+// organization variants.
+func resolveAccessMode(onlyUser bool, organizationID string) accessMode {
+	switch {
+	case !onlyUser && organizationID == "":
+		return accessModeTenantAdmin
+	case onlyUser && organizationID == "":
+		return accessModeTenantUser
+	case !onlyUser && organizationID != "":
+		return accessModeOrganizationAdmin
+	default:
+		return accessModeOrganizationUser
+	}
+}
+
+// authorize resolves the caller's identity from the auth context, classifies
+// the request into an access mode, and delegates to the per-mode authorizer,
+// which returns the label matchers that restrict the query. It returns false
+// after writing an error response when the request must not be proxied.
 //
-// Authorization applies the same stacking rules to the TokenReview-authenticated
-// caller:
+// Access modes are derived from the request shape regardless of which
+// mechanism authenticated the caller (OIDC envelope, gateway-injected
+// headers, or the Kubernetes TokenReview fallback):
 //
-//  1. only_user=true applies the user_id filter.
-//  2. an organization on the identity applies the organization filter
-//     (Kubernetes-authenticated callers normally carry none).
-//  3. only_user!=true with no organization requires the tenant-admin check
-//     (SubjectAccessReview keyed on the username — the OIDC
-//     preferred_username for envelope callers); admins get unfiltered,
-//     cluster-wide visibility, everyone else is rejected.
-//
-// Tech debt: any TokenReview-authenticated caller is assumed to
-// have tenant access; this should become a real SubjectAccessReview check.
+//   - tenant admin: only_user!=true and no organization — requires a
+//     TokenReview-authenticated caller whose Kubernetes identity passes the
+//     SubjectAccessReview admin check; sees tenant-wide logs.
+//   - tenant user: only_user=true and no organization — requires an
+//     identified user; sees only the caller's own tenant logs.
+//   - organization admin: only_user!=true with an organization — requires
+//     the admins role; sees the whole organization's logs.
+//   - organization user: only_user=true with an organization — requires an
+//     identified user and organization; sees only the caller's own logs.
 func (h *Handler) authorize(c *gin.Context, onlyUser bool) ([]*labels.Matcher, bool) {
-	requestLogger := h.requestLogger(c.Request.Context(), c)
+	requestLogger := h.requestLogger(c)
 
 	value, ok := c.Get("user")
 	if !ok {
@@ -264,27 +290,51 @@ func (h *Handler) authorize(c *gin.Context, onlyUser bool) ([]*labels.Matcher, b
 		return nil, false
 	}
 
-	organizationMatcher := &labels.Matcher{Type: labels.MatchEqual, Name: organizationLabel, Value: user.OrganizationID}
-	userMatcher := &labels.Matcher{Type: labels.MatchEqual, Name: userLabel, Value: user.Username}
+	switch resolveAccessMode(onlyUser, user.OrganizationID) {
+	case accessModeTenantAdmin:
+		return h.authorizeTenantAdminMode(c, user, requestLogger)
+	case accessModeTenantUser:
+		return h.authorizeTenantUserMode(c, user, requestLogger)
+	case accessModeOrganizationAdmin:
+		return h.authorizeOrganizationAdminMode(c, user, requestLogger)
+	case accessModeOrganizationUser:
+		return h.authorizeOrganizationUserMode(c, user, requestLogger)
+	default:
+		// Unreachable: resolveAccessMode covers every combination.
+		requestLogger.Error("Rejected Loki proxy request with unknown access mode")
+		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
+			"error":             "forbidden",
+			"exceptionCode":     "AUTHZ_FAILURE",
+			"error_description": "the access mode could not be resolved",
+		})
+		return nil, false
+	}
+}
 
-	// The three rules stack: only_user=true applies the user_id filter (the
-	// label carries the username the usage-logs pipeline records for inference
-	// traffic); an organization applies the organization filter. With either
-	// filter in place the query is scoped and authorized.
-	matchers := make([]*labels.Matcher, 0, 2)
-	if onlyUser {
-		matchers = append(matchers, userMatcher)
-	}
-	if user.OrganizationID != "" {
-		matchers = append(matchers, organizationMatcher)
-	}
-	if len(matchers) > 0 {
-		return matchers, true
-	}
+// tenantMatcher builds the tenant_name matcher scoping a query to the
+// caller's tenant.
+func tenantMatcher(user *token.UserContext) *labels.Matcher {
+	return &labels.Matcher{Type: labels.MatchEqual, Name: tenantLabel, Value: user.Tenant}
+}
 
-	// No organization and no only_user: only tenant admins are authorized and
-	// see unfiltered, cluster-wide logs — no tenant→organization mapping
-	// exists in the system (organization_id is subscription-scoped).
+// organizationMatcher builds the organization_id matcher scoping a query to
+// the caller's organization.
+func organizationMatcher(user *token.UserContext) *labels.Matcher {
+	return &labels.Matcher{Type: labels.MatchEqual, Name: organizationLabel, Value: user.OrganizationID}
+}
+
+// userMatcher builds the user_id matcher scoping a query to the caller's own
+// log lines (the label carries the username the usage-logs pipeline records
+// for inference traffic).
+func userMatcher(user *token.UserContext) *labels.Matcher {
+	return &labels.Matcher{Type: labels.MatchEqual, Name: userLabel, Value: user.Username}
+}
+
+// authorizeTenantAdminMode enforces the tenant-admin requirement and scopes
+// the query to the tenant via the tenant_name label. Only tenant admins are
+// authorized; no tenant→organization mapping exists in the system
+// (organization_id is subscription-scoped).
+func (h *Handler) authorizeTenantAdminMode(c *gin.Context, user *token.UserContext, requestLogger *logger.Logger) ([]*labels.Matcher, bool) {
 	isAdmin, ok := h.authorizeTenantAdmin(c, user, requestLogger)
 	if !ok {
 		return nil, false
@@ -300,18 +350,75 @@ func (h *Handler) authorize(c *gin.Context, onlyUser bool) ([]*labels.Matcher, b
 		})
 		return nil, false
 	}
+	return []*labels.Matcher{tenantMatcher(user)}, true
+}
 
-	return nil, true
+// authorizeTenantUserMode requires an identified user and scopes the query
+// to the caller's own log lines within the tenant via the tenant_name and
+// user_id labels.
+func (h *Handler) authorizeTenantUserMode(c *gin.Context, user *token.UserContext, requestLogger *logger.Logger) ([]*labels.Matcher, bool) {
+	if user.Username == "" {
+		requestLogger.Warn("Rejected Loki proxy request without a user identity")
+		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
+			"error":             "forbidden",
+			"exceptionCode":     "AUTHZ_FAILURE",
+			"error_description": "a user identity is required",
+		})
+		return nil, false
+	}
+	return []*labels.Matcher{tenantMatcher(user), userMatcher(user)}, true
+}
+
+// authorizeOrganizationAdminMode requires the admins role and scopes the
+// query to the caller's organization via the tenant_name and organization_id
+// labels.
+func (h *Handler) authorizeOrganizationAdminMode(c *gin.Context, user *token.UserContext, requestLogger *logger.Logger) ([]*labels.Matcher, bool) {
+	// Roles are parsed by the auth layer from the verified identity envelope's
+	// roles claim, so only OIDC-authenticated callers with an organization can
+	// hold the admins role.
+	if !slices.Contains(user.Roles, adminsRole) {
+		requestLogger.Warn("Rejected Loki proxy request without the admins role",
+			"username", logger.RedactValue(user.Username),
+		)
+		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
+			"error":             "forbidden",
+			"exceptionCode":     "AUTHZ_FAILURE",
+			"error_description": "organization admin access is required, or request only_user=true for your own logs",
+		})
+		return nil, false
+	}
+	return []*labels.Matcher{tenantMatcher(user), organizationMatcher(user)}, true
+}
+
+// authorizeOrganizationUserMode requires an identified user and organization
+// and scopes the query to the caller's own log lines within the organization
+// via the tenant_name, organization_id, and user_id labels.
+func (h *Handler) authorizeOrganizationUserMode(c *gin.Context, user *token.UserContext, requestLogger *logger.Logger) ([]*labels.Matcher, bool) {
+	if user.Username == "" || user.OrganizationID == "" {
+		requestLogger.Warn("Rejected Loki proxy request without a user identity or organization",
+			"username", logger.RedactValue(user.Username),
+		)
+		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
+			"error":             "forbidden",
+			"exceptionCode":     "AUTHZ_FAILURE",
+			"error_description": "a user identity and organization are required",
+		})
+		return nil, false
+	}
+	return []*labels.Matcher{tenantMatcher(user), organizationMatcher(user), userMatcher(user)}, true
 }
 
 // authorizeTenantAdmin resolves and enforces the tenant-admin requirement,
 // writing the error response and returning false when the admin check itself
 // fails. A false isAdmin with ok=true is a plain authorization denial the
-// caller still has to translate into a 403. Tenant-admin resolution runs the
-// injected SubjectAccessReview checker for every caller (keyed on the
-// username — the OIDC preferred_username for envelope-authenticated
-// callers). A nil checker fails closed.
+// caller still has to translate into a 403. Only Kubernetes TokenReview
+// identities are eligible: OIDC and gateway usernames are not guaranteed to
+// map to Kubernetes subjects and must not be passed as SubjectAccessReview
+// impersonation inputs. A nil checker fails closed.
 func (h *Handler) authorizeTenantAdmin(c *gin.Context, user *token.UserContext, requestLogger *logger.Logger) (bool, bool) {
+	if user.AuthSource != token.AuthSourceK8s {
+		return false, true
+	}
 	if h.adminChecker == nil {
 		return false, true
 	}
@@ -331,12 +438,11 @@ func (h *Handler) authorizeTenantAdmin(c *gin.Context, user *token.UserContext, 
 	return isAdmin, true
 }
 
-// proxyHandler returns a gin handler that enforces the organization matcher and
-// forwards the request to the given upstream Loki path. When queryEndpoint is
-// true an empty query parameter is passed through untouched (Loki rejects it).
+// proxyHandler returns a gin handler that enforces the authorization matchers
+// and forwards the request to the given upstream Loki path.
 func (h *Handler) proxyHandler(upstreamPath string, queryEndpoint bool) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		requestLogger := h.requestLogger(c.Request.Context(), c)
+		requestLogger := h.requestLogger(c)
 
 		// only_user=true narrows the query to the caller's own logs and lowers
 		// the authorization bar to the organization user group. Any other value
@@ -387,15 +493,15 @@ func (h *Handler) proxyHandler(upstreamPath string, queryEndpoint bool) gin.Hand
 			return
 		}
 
-		// Authenticate against the upstream Loki with the resolved service
-		// account credential: the usage-logs-loki Secret token
-		// (LOKI_READ_TOKEN) when present, otherwise the projected
-		// ServiceAccount token file (LOKI_READ_TOKEN_FILE). The caller's own
-		// credentials are never forwarded upstream.
-		if token := h.bearerToken(requestLogger); token != "" {
+		// Authenticate against the upstream Loki with either the token from the
+		// usage-logs-loki Secret or maas-api's projected service-account token.
+		// The caller's own credentials are never forwarded upstream.
+		if token := h.upstreamToken(); token != "" {
 			req.Header.Set("Authorization", "Bearer "+token)
 		}
-		req.Header.Set(lokiTenantHeader, lokiTenantID)
+		if h.scopeOrgID != "" {
+			req.Header.Set(upstreamScopeOrgIDHeader, h.scopeOrgID)
+		}
 
 		resp, err := h.client.Do(req)
 		if err != nil {
@@ -408,33 +514,34 @@ func (h *Handler) proxyHandler(upstreamPath string, queryEndpoint bool) gin.Hand
 			}
 		}()
 
-		body, readErr := io.ReadAll(io.LimitReader(resp.Body, maxUpstreamResponseSize+1))
-		if readErr != nil {
-			h.proxyError(c, readErr)
-			return
-		}
-		if len(body) > maxUpstreamResponseSize {
-			requestLogger.Error("Loki proxy response exceeded size limit",
-				"size", len(body), "limit", maxUpstreamResponseSize)
-			c.AbortWithStatusJSON(http.StatusBadGateway, gin.H{
-				"error":             "loki proxy response too large",
-				"exceptionCode":     "UPSTREAM_FAILURE",
-				"error_description": "the upstream Loki response exceeded the size limit",
-			})
-			return
-		}
-
 		// Pass the upstream status, content type and body through verbatim.
 		if contentType := resp.Header.Get("Content-Type"); contentType != "" {
 			c.Header("Content-Type", contentType)
 		}
 		c.Status(resp.StatusCode)
-		_, _ = c.Writer.Write(body)
+		if _, err := io.Copy(c.Writer, resp.Body); err != nil {
+			requestLogger.Error("Failed to stream upstream Loki response", "error", err)
+		}
 	}
 }
 
+func (h *Handler) upstreamToken() string {
+	if h.token != "" {
+		return h.token
+	}
+	if h.tokenPath == "" {
+		return ""
+	}
+	token, err := os.ReadFile(h.tokenPath)
+	if err != nil {
+		h.logger.Warn("Failed to read the Loki service-account token", "path", h.tokenPath, "error", err)
+		return ""
+	}
+	return strings.TrimSpace(string(token))
+}
+
 func (h *Handler) proxyError(c *gin.Context, err error) {
-	h.requestLogger(c.Request.Context(), c).Error("Loki proxy request failed", "error", err)
+	h.requestLogger(c).Error("Loki proxy request failed", "error", err)
 	c.AbortWithStatusJSON(http.StatusBadGateway, gin.H{
 		"error":             "loki proxy failure",
 		"exceptionCode":     "UPSTREAM_FAILURE",
@@ -442,9 +549,9 @@ func (h *Handler) proxyError(c *gin.Context, err error) {
 	})
 }
 
-func (h *Handler) requestLogger(ctx context.Context, c *gin.Context) *logger.Logger {
+func (h *Handler) requestLogger(c *gin.Context) *logger.Logger {
 	if requestLogger := middleware.GetLogger(c); requestLogger != nil {
 		return requestLogger
 	}
-	return h.logger.WithContext(ctx)
+	return h.logger.WithContext(c.Request.Context())
 }

@@ -61,10 +61,6 @@ const (
 	// X-Api-Key) are rejected with 401 rather than falling through. Used by
 	// the Loki usage-logs proxy.
 	AuthModeGatewayOrKubernetes
-
-	// AuthModeKubernetes authenticates only OpenShift/Kubernetes bearer
-	// tokens via TokenReview. Gateway identity transports are never accepted.
-	AuthModeKubernetes
 )
 
 // ParseGroupsHeader parses the group header which may arrive as a JSON array
@@ -125,13 +121,8 @@ func ParseGroupsHeader(header string) ([]string, error) {
 func (h *Handler) ExtractUserInfo(mode AuthMode) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		requestLogger := h.logger.WithContext(c.Request.Context())
-		if mode == AuthModeKubernetes {
-			h.authenticateBearerToken(c.Request.Context(), c, requestLogger, true)
-			return
-		}
-
 		if value, exists := c.Get("verified_identity"); exists {
-			if !h.setUserContextFromVerifiedIdentity(c.Request.Context(), c, value) {
+			if !h.setUserContextFromVerifiedIdentity(c, value) {
 				return
 			}
 			c.Next()
@@ -149,7 +140,7 @@ func (h *Handler) ExtractUserInfo(mode AuthMode) gin.HandlerFunc {
 		}
 
 		if mode == AuthModeGatewayOrKubernetes {
-			h.authenticateBearerToken(c.Request.Context(), c, requestLogger, true)
+			h.authenticateBearerToken(c, requestLogger, true)
 			return
 		}
 
@@ -180,7 +171,7 @@ func (h *Handler) ExtractUserInfo(mode AuthMode) gin.HandlerFunc {
 func (h *Handler) ExtractUserInfoOptional(mode AuthMode) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if value, exists := c.Get("verified_identity"); exists {
-			if !h.setUserContextFromVerifiedIdentity(c.Request.Context(), c, value) {
+			if !h.setUserContextFromVerifiedIdentity(c, value) {
 				return
 			}
 			c.Next()
@@ -198,7 +189,7 @@ func (h *Handler) ExtractUserInfoOptional(mode AuthMode) gin.HandlerFunc {
 		}
 
 		if mode == AuthModeGatewayOrKubernetes {
-			h.authenticateBearerToken(c.Request.Context(), c, requestLogger, false)
+			h.authenticateBearerToken(c, requestLogger, false)
 			return
 		}
 
@@ -210,10 +201,10 @@ func (h *Handler) ExtractUserInfoOptional(mode AuthMode) gin.HandlerFunc {
 	}
 }
 
-func (h *Handler) setUserContextFromVerifiedIdentity(ctx context.Context, c *gin.Context, value any) bool {
+func (h *Handler) setUserContextFromVerifiedIdentity(c *gin.Context, value any) bool {
 	identity, ok := value.(*VerifiedIdentity)
 	if !ok || identity == nil {
-		requestLogger := h.logger.WithContext(ctx)
+		requestLogger := h.logger.WithContext(c.Request.Context())
 		requestLogger.Error("Invalid verified identity context type")
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error":         "Exception thrown while generating token",
@@ -226,7 +217,7 @@ func (h *Handler) setUserContextFromVerifiedIdentity(ctx context.Context, c *gin
 
 	groups, err := QualifiedGroups(identity)
 	if err != nil {
-		h.rejectIdentity(ctx, c, err)
+		h.rejectIdentity(c, err)
 		return false
 	}
 	if !groupname.AllValid(identity.Claims.Groups) {
@@ -242,6 +233,7 @@ func (h *Handler) setUserContextFromVerifiedIdentity(ctx context.Context, c *gin
 		Groups:         groups,
 		Tenant:         h.tenantName,
 		OrganizationID: identity.Claims.OrgID,
+		Roles:          append([]string(nil), identity.Claims.Roles...),
 		AuthSource:     AuthSourceOIDC,
 	})
 	return true
@@ -348,7 +340,7 @@ func bearerToken(header http.Header) (string, bool) {
 // "maas-api cannot reach the API server". When required is false (optional
 // variant) and no bearer token is present the chain continues without a user
 // context.
-func (h *Handler) authenticateBearerToken(ctx context.Context, c *gin.Context, requestLogger *logger.Logger, required bool) {
+func (h *Handler) authenticateBearerToken(c *gin.Context, requestLogger *logger.Logger, required bool) {
 	if hasInferenceAPIKeyCredential(c.Request.Header) {
 		requestLogger.Warn("Rejected inference API key credential on a route that does not accept it")
 		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
@@ -385,7 +377,7 @@ func (h *Handler) authenticateBearerToken(ctx context.Context, c *gin.Context, r
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, TokenReviewTimeout)
+	ctx, cancel := context.WithTimeout(c.Request.Context(), TokenReviewTimeout)
 	defer cancel()
 
 	user, err := ReviewToken(ctx, h.kubeClient, bearer)

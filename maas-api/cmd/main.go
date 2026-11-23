@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -328,8 +329,8 @@ func registerHandlers(
 	// existing trusted username/group headers.
 	modelAuthMiddleware := make([]gin.HandlerFunc, 0, 3)
 	modelAuthMiddleware = append(modelAuthMiddleware,
-		tokenHandler.ExtractVerifiedIdentityOptional(),              //nolint:contextcheck // Gin middleware uses c.Request.Context().
-		tokenHandler.ExtractUserInfoOptional(token.AuthModeGateway), //nolint:contextcheck // Gin middleware uses c.Request.Context().
+		tokenHandler.ExtractVerifiedIdentityOptional(),              //nolint:contextcheck // gin middleware uses c.Request.Context()
+		tokenHandler.ExtractUserInfoOptional(token.AuthModeGateway), //nolint:contextcheck // gin middleware uses c.Request.Context()
 		middleware.TenantLogger(log, tenantLogCfg),
 	)
 	v1Routes.GET("/models", append(modelAuthMiddleware, modelsHandler.ListLLMs)...)
@@ -338,8 +339,8 @@ func registerHandlers(
 	// it optional here preserves older gateways and deployments with no
 	// LLMInferenceService; malformed or duplicate envelopes still fail closed.
 	optionalAuthMiddleware := []gin.HandlerFunc{
-		tokenHandler.ExtractVerifiedIdentityOptional(),              //nolint:contextcheck // Gin middleware uses c.Request.Context().
-		tokenHandler.ExtractUserInfoOptional(token.AuthModeGateway), //nolint:contextcheck // Gin middleware uses c.Request.Context().
+		tokenHandler.ExtractVerifiedIdentityOptional(),              //nolint:contextcheck // gin middleware uses c.Request.Context()
+		tokenHandler.ExtractUserInfoOptional(token.AuthModeGateway), //nolint:contextcheck // gin middleware uses c.Request.Context()
 		middleware.TenantLogger(log, tenantLogCfg),
 	}
 
@@ -358,8 +359,8 @@ func registerHandlers(
 	// an empty result when no LLMInferenceService is deployed (same rationale
 	// as /v1/models and /v1/subscriptions).
 	strictAuthMiddleware := []gin.HandlerFunc{
-		tokenHandler.ExtractVerifiedIdentityOptional(),      //nolint:contextcheck // Gin middleware uses c.Request.Context().
-		tokenHandler.ExtractUserInfo(token.AuthModeGateway), //nolint:contextcheck // Gin middleware uses c.Request.Context().
+		tokenHandler.ExtractVerifiedIdentityOptional(),      //nolint:contextcheck // gin middleware uses c.Request.Context()
+		tokenHandler.ExtractUserInfo(token.AuthModeGateway), //nolint:contextcheck // gin middleware uses c.Request.Context()
 		middleware.TenantLogger(log, tenantLogCfg),
 	}
 	apiKeyRoutes := v1Routes.Group("/api-keys", strictAuthMiddleware...)
@@ -375,7 +376,7 @@ func registerHandlers(
 	// Tenant/Gateway discovery route - authenticated via TokenReview + SubjectAccessReview (system:authenticated)
 	tenantHandler := tenant.NewHandler(log, cluster.DynamicClient, cfg.TenantName, cfg.GatewayName, cfg.GatewayNamespace)
 	v1Routes.GET("/tenants",
-		tokenHandler.RejectTrustedIdentityHeaders(),       //nolint:contextcheck // Gin middleware uses c.Request.Context().
+		tokenHandler.RejectTrustedIdentityHeaders(),       //nolint:contextcheck // gin middleware uses c.Request.Context()
 		auth.TenantAuthMiddleware(log, cluster.ClientSet), //nolint:contextcheck // gin middleware uses c.Request.Context()
 		tenantHandler.GetTenantInfo)
 
@@ -383,37 +384,37 @@ func registerHandlers(
 	// callbacks from the gateway. Cleanup routes require the dedicated cleanup
 	// ServiceAccount token and are additionally restricted by NetworkPolicy.
 	internalRoutes := router.Group("/internal/v1")
-	internalRoutes.POST("/api-keys/validate",
-		tokenHandler.RejectTrustedIdentityHeaders(), //nolint:contextcheck // Gin middleware uses c.Request.Context().
+	internalRoutes.POST("/api-keys/validate", tokenHandler.RejectTrustedIdentityHeaders(), //nolint:contextcheck // gin middleware uses c.Request.Context()
 		apiKeyHandler.ValidateAPIKeyHandler)
-	cleanupAuth := auth.CleanupAuthMiddleware( //nolint:contextcheck // gin middleware uses c.Request.Context()
-		log, cluster.ClientSet, "maas-api-cleanup", cfg.Namespace)
+	cleanupAuth := auth.CleanupAuthMiddleware(log, cluster.ClientSet, "maas-api-cleanup", cfg.Namespace) //nolint:contextcheck // gin middleware uses c.Request.Context()
 	internalRoutes.POST("/api-keys/cleanup", cleanupAuth, apiKeyHandler.CleanupExpiredEphemeralKeys)
 	internalRoutes.DELETE("/tenants/:tenant/api-keys", cleanupAuth, apiKeyHandler.RevokeTenantAPIKeys)
 	internalRoutes.DELETE("/tenants/:tenant/subscriptions/:subscription/api-keys", cleanupAuth, apiKeyHandler.RevokeSubscriptionAPIKeys)
-	internalRoutes.POST("/subscriptions/select",
-		tokenHandler.RejectTrustedIdentityHeaders(), //nolint:contextcheck // Gin middleware uses c.Request.Context().
+	internalRoutes.POST("/subscriptions/select", tokenHandler.RejectTrustedIdentityHeaders(), //nolint:contextcheck // gin middleware uses c.Request.Context()
 		subscriptionHandler.SelectSubscription)
 
-	// Read-only Loki proxy (GET /v1/logs*). Registered whenever
-	// LOKI_READ_ENDPOINT is configured; maas-controller always injects the
-	// default LokiStack endpoint, so the proxy is on for standard deployments.
-	// Like the retired Python proxy, callers authenticate only with Kubernetes
-	// TokenReview. User-scoped queries are restricted to the caller; organization
-	// membership restricts organization-aware identities, and unscoped access
-	// requires organization admin membership.
+	// Read-only Loki proxy (GET /v1/logs*). Only registered when
+	// LOKI_READ_ENDPOINT is configured. Dual-auth: gateway/OIDC identity as on
+	// every other route, plus a Kubernetes TokenReview fallback so
+	// OpenShift-authenticated users without gateway-injected identity headers
+	// can reach their usage logs. Inference API keys never authenticate these
+	// routes.
 	if cfg.LokiReadEndpoint != "" {
-		lokiHandler, err := lokiproxy.NewHandler(log, cfg.LokiReadEndpoint, cfg.LokiReadTokenFile, cfg.LokiReadCAFile, cluster.AdminChecker)
+		lokiHandler, err := lokiproxy.NewHandler(log, cfg.LokiReadEndpoint, cfg.LokiReadToken, cfg.LokiReadCA, cluster.AdminChecker)
 		if err != nil {
 			return fmt.Errorf("failed to create Loki proxy handler: %w", err)
 		}
+		if cfg.LokiReadUseServiceAccountToken && strings.TrimSpace(cfg.LokiReadToken) == "" {
+			lokiHandler.WithServiceAccountTokenPath("/var/run/secrets/kubernetes.io/serviceaccount/token")
+		}
+		lokiHandler.WithScopeOrgID(cfg.LokiReadScopeOrgID)
 		lokiAuthMiddleware := []gin.HandlerFunc{
-			tokenHandler.RejectKubernetesOnlyIdentityHeaders(),     //nolint:contextcheck // Gin middleware uses c.Request.Context().
-			tokenHandler.ExtractUserInfo(token.AuthModeKubernetes), //nolint:contextcheck // Gin middleware uses c.Request.Context().
+			tokenHandler.ExtractVerifiedIdentityOptional(),                  //nolint:contextcheck // gin middleware uses c.Request.Context()
+			tokenHandler.ExtractUserInfo(token.AuthModeGatewayOrKubernetes), //nolint:contextcheck // gin middleware uses c.Request.Context()
 			middleware.TenantLogger(log, tenantLogCfg),
 		}
 		lokiRoutes := v1Routes.Group("", lokiAuthMiddleware...)
-		lokiHandler.RegisterRoutes(lokiRoutes) //nolint:contextcheck // Gin middleware uses c.Request.Context().
+		lokiHandler.RegisterRoutes(lokiRoutes) //nolint:contextcheck // gin middleware uses c.Request.Context()
 		log.Info("Loki read proxy enabled", "upstream", cfg.LokiReadEndpoint)
 	} else {
 		log.Info("Loki read proxy disabled: LOKI_READ_ENDPOINT is not set")

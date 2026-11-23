@@ -175,7 +175,6 @@ const (
 	baseMaaSAPIKeyCleanupScriptConfigMapName       = "maas-api-key-cleanup-script" //nolint:gosec // Kubernetes resource name, not a credential
 	baseMaaSAPIDeploymentNSNetworkPolicyName       = "maas-api-allow-deployment-ns"
 	baseMaaSAPIGatewayNetworkPolicyName            = "maas-api-allow-gateway"
-	baseMaaSAPIAllowMonitoringNetworkPolicyName    = "maas-api-allow-monitoring"
 	baseMaaSAPIEgressRestrictNetworkPolicyName     = "maas-api-egress-restrict"
 	baseMaaSAPIServingCertName                     = "maas-api-serving-cert"
 	baseUsageLogsEnvoyFilterName                   = "maas-model-access-logs"
@@ -197,58 +196,26 @@ const (
 	MaaSDBSecretName             = "maas-db-config" //nolint:gosec // secret name reference, not a credential
 	MaaSDBSecretKey              = "DB_CONNECTION_URL"
 
-	// LokiReadSecretName is the Secret in the app namespace that overrides the
-	// default maas-api read-only Loki proxy (GET /v1/logs*) settings. When it is
-	// absent the proxy still runs, pointed at the default LokiStack gateway
-	// (see DefaultLokiReadEndpoint).
+	// LokiReadSecretName is the Secret in the app namespace that can override
+	// the maas-api Loki proxy endpoint and supply its upstream credentials.
 	LokiReadSecretName = "usage-logs-loki" //nolint:gosec // secret name reference, not a credential
 	// LokiReadSecretKey holds the Loki read API base URL injected as the
 	// LOKI_READ_ENDPOINT env var on the maas-api container.
 	LokiReadSecretKey = "LOKI_READ_ENDPOINT" //nolint:gosec // secret key reference, not a credential
-	// LokiReadTokenSecretKey holds the service account token mounted as a file
-	// on the maas-api container when present (LOKI_READ_TOKEN_FILE is repointed
-	// at the mount, so the token value never lands in the Deployment spec).
+	// LokiReadTokenSecretKey holds the service account token injected as the
+	// LOKI_READ_TOKEN env var on the maas-api container (via secretKeyRef, so
+	// the token value never lands in the Deployment spec).
 	LokiReadTokenSecretKey = "LOKI_READ_TOKEN" //nolint:gosec // secret key reference, not a credential
 
-	// LokiReadCASecretKey holds the PEM CA bundle mounted as a file for the
-	// maas-api container when present; the baked LOKI_READ_CA_FILE env var is
-	// repointed at the mount. A missing key falls back to the service-ca
-	// bundle file baked into the maas-api Deployment.
+	// LokiReadCASecretKey holds the PEM CA bundle injected as the LOKI_READ_CA
+	// env var on the maas-api container (via secretKeyRef). The bundle is
+	// appended to the system trust pool for proxied upstream Loki requests; a
+	// missing key keeps the system pool only.
 	LokiReadCASecretKey = "LOKI_READ_CA" //nolint:gosec // secret key reference, not a credential
 
-	// lokiReadSecretTokenVolumeName mounts the Secret-supplied Loki token,
-	// replacing the projected ServiceAccount token as the proxy credential.
-	lokiReadSecretTokenVolumeName = "loki-read-secret-token"
-	// lokiReadSecretTokenMountPath is the mount point of the Secret-supplied
-	// Loki token volume.
-	lokiReadSecretTokenMountPath = "/var/run/maas-api-loki-secret" //nolint:gosec // mount path, not a credential
-	// lokiReadSecretCAVolumeName mounts the Secret-supplied Loki CA bundle,
-	// replacing the service-ca bundle as the proxy trust anchor.
-	lokiReadSecretCAVolumeName = "loki-read-secret-ca"
-	// lokiReadSecretCAMountPath is the mount point of the Secret-supplied Loki
-	// CA volume.
-	lokiReadSecretCAMountPath = "/var/run/maas-api-loki-secret-ca" //nolint:gosec // mount path, not a credential
-
-	// DefaultLokiStackGatewayService is the gateway Service of the usage-logs
-	// LokiStack shipped with a standard RHOAI (DSCI/odh-observability managed)
-	// deployment. The maas-api Loki proxy defaults to it when the
-	// usage-logs-loki Secret does not supply an endpoint.
-	DefaultLokiStackGatewayService = "data-science-usage-logs-lokistack-gateway-http"
-	// DefaultLokiStackGatewayInstance is the LokiStack instance label for the
-	// standard RHOAI-managed usage-logs LokiStack.
-	DefaultLokiStackGatewayInstance = "data-science-usage-logs-lokistack"
-	// LegacyUsageLogsLokiStackGatewayService is the gateway Service used by the
-	// deprecated usageLogging-managed LokiStack.
-	LegacyUsageLogsLokiStackGatewayService = "usage-gateway-http"
-	// LegacyUsageLogsLokiStackGatewayInstance is the LokiStack instance label
-	// used by the deprecated usageLogging-managed LokiStack.
-	LegacyUsageLogsLokiStackGatewayInstance = "usage"
-	// DefaultLokiStackGatewayPort is the HTTPS port of the default LokiStack
-	// gateway Service.
-	DefaultLokiStackGatewayPort = 8080
-	// DefaultLokiReadPath is the LokiStack gateway tenancy path for application
-	// logs used by the default proxy endpoint.
-	DefaultLokiReadPath = "/api/logs/v1/application"
+	// LokiReadApplicationScope is the LokiStack tenant selected by the
+	// controller-managed default usage-logs gateway.
+	LokiReadApplicationScope = "application"
 
 	// Condition types aligned with ODH internal/controller/status for DSC aggregation parity.
 	ConditionDependenciesAvailable      = "DependenciesAvailable"
@@ -257,22 +224,6 @@ const (
 	ConditionTypeDegraded               = "Degraded"
 	ReadyConditionType                  = "Ready"
 )
-
-// DefaultLokiReadEndpoint returns the maas-api Loki proxy endpoint for the
-// LokiStack that ships with a standard RHOAI deployment in the given
-// monitoring namespace. An empty monitoring namespace yields an empty
-// endpoint, which leaves the proxy disabled.
-func DefaultLokiReadEndpoint(monitoringNamespace string, usageLogging bool) string {
-	if monitoringNamespace == "" {
-		return ""
-	}
-	gatewayService := DefaultLokiStackGatewayService
-	if usageLogging {
-		gatewayService = LegacyUsageLogsLokiStackGatewayService
-	}
-	return fmt.Sprintf("https://%s.%s.svc:%d%s",
-		gatewayService, monitoringNamespace, DefaultLokiStackGatewayPort, DefaultLokiReadPath)
-}
 
 // maasAPIDashboardDeploymentLabelValues lists deployment labels for pods that call maas-api
 // from the controller namespace (ODH/RHOAI dashboard + maas-ui BFF).

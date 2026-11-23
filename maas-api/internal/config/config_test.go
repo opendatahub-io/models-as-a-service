@@ -89,6 +89,26 @@ func TestLoad_EnvironmentVariables(t *testing.T) {
 				}
 			},
 		},
+		{
+			name:    "Loki scope defaults to the application tenant",
+			envVars: map[string]string{},
+			check: func(t *testing.T, cfg *Config) {
+				t.Helper()
+				if cfg.LokiReadScopeOrgID != "application" {
+					t.Errorf("expected application Loki scope, got %q", cfg.LokiReadScopeOrgID)
+				}
+			},
+		},
+		{
+			name:    "empty Loki scope explicitly disables tenant selection",
+			envVars: map[string]string{"LOKI_READ_SCOPE_ORG_ID": ""},
+			check: func(t *testing.T, cfg *Config) {
+				t.Helper()
+				if cfg.LokiReadScopeOrgID != "" {
+					t.Errorf("expected empty Loki scope, got %q", cfg.LokiReadScopeOrgID)
+				}
+			},
+		},
 	}
 
 	// All env vars that Load() reads, to be cleared before each subtest.
@@ -99,6 +119,7 @@ func TestLoad_EnvironmentVariables(t *testing.T) {
 		"TLS_CERT", "TLS_KEY", "TLS_SELF_SIGNED",
 		"METRICS_PORT", "METRICS_SECURE", "METRICS_CERT_DIR",
 		"API_KEY_DELETION_RETENTION_DAYS",
+		"LOKI_READ_SCOPE_ORG_ID",
 	}
 
 	for _, tt := range tests {

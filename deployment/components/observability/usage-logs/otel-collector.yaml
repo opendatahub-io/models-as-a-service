@@ -119,6 +119,7 @@ spec:
               - replace_pattern(attributes["cost_center"], "\"", "")
       groupbyattrs:
         keys:
+        - tenant_name
         - subscription
         - model
         - response_type

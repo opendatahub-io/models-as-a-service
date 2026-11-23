@@ -79,27 +79,35 @@ type PlatformParams struct {
 
 	// LokiReadEndpoint is injected as LOKI_READ_ENDPOINT on the maas-api
 	// container, enabling the read-only Loki proxy (GET /v1/logs*). It defaults
-	// to the LokiStack gateway of a standard RHOAI deployment in the monitoring
-	// namespace (DefaultLokiReadEndpoint); the usage-logs-loki Secret in the
-	// app namespace overrides it. Empty (no monitoring namespace and no
-	// Secret) disables the proxy. See resolveLokiReadEndpoint.
+	// to the LokiStack gateway in the monitoring namespace and can be overridden
+	// by the usage-logs-loki Secret; see resolveLokiReadEndpoint.
 	LokiReadEndpoint string
 
-	// LokiReadTokenFromSecret mounts the usage-logs-loki Secret's token key as
-	// a file on the maas-api container and repoints LOKI_READ_TOKEN_FILE at it,
-	// authenticating proxied upstream requests with that token. False leaves
-	// the volume and env override out of the render (and the SSA apply removes
-	// any previously applied ones), so the proxy authenticates with the pod's
-	// automounted ServiceAccount token instead. See resolveLokiReadEndpoint.
+	// LokiReadTokenFromSecret injects LOKI_READ_TOKEN on the maas-api container
+	// as a secretKeyRef to the usage-logs-loki Secret, authenticating proxied
+	// upstream requests with its service account token. False leaves the env
+	// var out of the render (and the SSA apply removes any previously applied
+	// value). See resolveLokiReadEndpoint.
 	LokiReadTokenFromSecret bool
 
-	// LokiReadCAFromSecret mounts the usage-logs-loki Secret's CA bundle key
-	// as a file on the maas-api container and repoints LOKI_READ_CA_FILE at
-	// it, verifying proxied upstream requests with that bundle. False leaves
-	// the volume and env override out of the render (and the SSA apply removes
-	// any previously applied ones), so the proxy verifies the upstream with
-	// the service-ca bundle baked into the Deployment instead. See
-	// resolveLokiReadEndpoint.
+	// LokiReadUseServiceAccountToken injects
+	// LOKI_READ_USE_SERVICE_ACCOUNT_TOKEN on the maas-api container. It is only
+	// enabled for the default in-cluster Loki endpoint and when no Secret token
+	// is configured, so maas-api's projected token is never sent to a custom
+	// endpoint override.
+	LokiReadUseServiceAccountToken bool
+
+	// LokiReadScopeOrgID injects LOKI_READ_SCOPE_ORG_ID on the maas-api
+	// container. The default LokiStack endpoint selects the application tenant;
+	// custom endpoint overrides set an explicitly empty value to disable the
+	// LokiStack tenant header.
+	LokiReadScopeOrgID string
+
+	// LokiReadCAFromSecret injects LOKI_READ_CA on the maas-api container as a
+	// secretKeyRef to the usage-logs-loki Secret, appending the PEM bundle to
+	// the system trust pool for proxied upstream requests. False leaves the env
+	// var out of the render (and the SSA apply removes any previously applied
+	// value). See resolveLokiReadEndpoint.
 	LokiReadCAFromSecret bool
 
 	// PayloadProcessingRouterExtProcFallback enables router-anchored ext_proc patches when
@@ -127,6 +135,9 @@ type PlatformParams struct {
 
 	// MaaSAPIEgressRules replaces the default maas-api egress block when non-empty.
 	MaaSAPIEgressRules []netwv1.NetworkPolicyEgressRule
+	// MaaSAPILokiEgressRule allows maas-api to reach the default LokiStack
+	// gateway when the read-only Loki proxy uses its default endpoint.
+	MaaSAPILokiEgressRule *netwv1.NetworkPolicyEgressRule
 	// MaaSAPIAdditionalEgressRules are appended after the base egress block.
 	MaaSAPIAdditionalEgressRules []netwv1.NetworkPolicyEgressRule
 	// MaaSAPIEgressNetworkPolicyDisabled omits maas-api-egress-restrict from the
@@ -138,10 +149,6 @@ type PlatformParams struct {
 	// MaaSAPIPreservedEgressRules is the live egress slice (allow-all stripped) used
 	// when MaaSAPIPreserveEgressOnUpgrade is true.
 	MaaSAPIPreservedEgressRules []any
-	// MaaSAPILokiEgressRules is appended to a preserved restrictive maas-api
-	// egress policy when the Loki proxy uses one of MaaS's default in-cluster
-	// LokiStack gateways.
-	MaaSAPILokiEgressRules []netwv1.NetworkPolicyEgressRule
 }
 
 // BuildPlatformParams resolves all runtime parameters from the tenant config object,
@@ -671,8 +678,6 @@ func patchNetworkPolicyResource(
 	params PlatformParams,
 ) error {
 	switch name {
-	case baseMaaSAPIAllowMonitoringNetworkPolicyName:
-		return patchMaaSAPIAllowMonitoringNetworkPolicy(r, params)
 	case baseMaaSAPIGatewayNetworkPolicyName:
 		r.SetName(MaaSAPIGatewayNetworkPolicyName(params.TenantIdentifier))
 		return patchMaaSAPIGatewayNetworkPolicy(r, params)
@@ -686,60 +691,6 @@ func patchNetworkPolicyResource(
 	default:
 		return nil
 	}
-}
-
-// patchMaaSAPIAllowMonitoringNetworkPolicy rewrites monitoring namespace
-// selectors for the cluster's resolved monitoring namespace.
-func patchMaaSAPIAllowMonitoringNetworkPolicy(r *unstructured.Unstructured, params PlatformParams) error {
-	if params.MonitoringNamespace == "" {
-		return nil
-	}
-
-	ingress, found, err := unstructured.NestedSlice(r.Object, "spec", "ingress")
-	if err != nil {
-		return fmt.Errorf("read maas-api monitoring NetworkPolicy ingress: %w", err)
-	}
-	if !found {
-		return errors.New("maas-api monitoring NetworkPolicy ingress is missing")
-	}
-
-	for ruleIndex, ruleValue := range ingress {
-		rule, ok := ruleValue.(map[string]any)
-		if !ok {
-			return fmt.Errorf("maas-api monitoring NetworkPolicy ingress[%d] is not an object", ruleIndex)
-		}
-		peers, found, err := unstructured.NestedSlice(rule, "from")
-		if err != nil {
-			return fmt.Errorf("read maas-api monitoring NetworkPolicy ingress[%d] from: %w", ruleIndex, err)
-		}
-		if !found {
-			continue
-		}
-		for peerIndex, peerValue := range peers {
-			peer, ok := peerValue.(map[string]any)
-			if !ok {
-				return fmt.Errorf("maas-api monitoring NetworkPolicy ingress[%d].from[%d] is not an object", ruleIndex, peerIndex)
-			}
-			if _, found, err := unstructured.NestedString(peer, "namespaceSelector", "matchLabels", "kubernetes.io/metadata.name"); err != nil {
-				return fmt.Errorf("read maas-api monitoring NetworkPolicy namespace selector: %w", err)
-			} else if found {
-				if err := unstructured.SetNestedField(peer, params.MonitoringNamespace,
-					"namespaceSelector", "matchLabels", "kubernetes.io/metadata.name"); err != nil {
-					return fmt.Errorf("set maas-api monitoring NetworkPolicy namespace selector: %w", err)
-				}
-				peers[peerIndex] = peer
-			}
-		}
-		if err := unstructured.SetNestedSlice(rule, peers, "from"); err != nil {
-			return fmt.Errorf("set maas-api monitoring NetworkPolicy ingress[%d] from: %w", ruleIndex, err)
-		}
-		ingress[ruleIndex] = rule
-	}
-
-	if err := unstructured.SetNestedSlice(r.Object, ingress, "spec", "ingress"); err != nil {
-		return fmt.Errorf("set maas-api monitoring NetworkPolicy ingress: %w", err)
-	}
-	return nil
 }
 
 // patchMaaSAPIGatewayNetworkPolicy restricts maas-api ingress to the exact
@@ -893,10 +844,6 @@ func patchMaaSAPIEgressRestrictNetworkPolicy(r *unstructured.Unstructured, param
 		}
 	case params.MaaSAPIPreserveEgressOnUpgrade:
 		egress = params.MaaSAPIPreservedEgressRules
-		egress, err = appendNetworkPolicyEgressRulesIfMissing(egress, params.MaaSAPILokiEgressRules)
-		if err != nil {
-			return fmt.Errorf("append maas-api Loki egress rule: %w", err)
-		}
 	default:
 		egress = removeAllowAllEgressRules(egress)
 		egress = append(egress, map[string]any{})
@@ -915,23 +862,19 @@ func patchMaaSAPIEgressRestrictNetworkPolicy(r *unstructured.Unstructured, param
 		egress = append(egress, additional...)
 	}
 
-	return unstructured.SetNestedSlice(r.Object, egress, "spec", "egress")
-}
-
-func appendNetworkPolicyEgressRulesIfMissing(egress []any, rules []netwv1.NetworkPolicyEgressRule) ([]any, error) {
-	if len(rules) == 0 {
-		return egress, nil
-	}
-	converted, err := networkPolicyEgressRulesToUnstructured(rules)
-	if err != nil {
-		return nil, err
-	}
-	for _, rule := range converted {
-		if !egressRuleInList(rule, egress) {
-			egress = append(egress, rule)
+	if params.MaaSAPILokiEgressRule != nil {
+		lokiRules, err := networkPolicyEgressRulesToUnstructured([]netwv1.NetworkPolicyEgressRule{*params.MaaSAPILokiEgressRule})
+		if err != nil {
+			return fmt.Errorf("convert maas-api Loki egress rule: %w", err)
+		}
+		for _, rule := range lokiRules {
+			if !egressRuleInList(rule, egress) {
+				egress = append(egress, rule)
+			}
 		}
 	}
-	return egress, nil
+
+	return unstructured.SetNestedSlice(r.Object, egress, "spec", "egress")
 }
 
 func networkPolicyDeclaresEgress(np *unstructured.Unstructured) bool {
@@ -1172,33 +1115,31 @@ func patchMaaSAPIDeployment(log logr.Logger, r *unstructured.Unstructured, param
 		if err := setOrAddEnvVar(r, "maas-api", "LOKI_READ_ENDPOINT", params.LokiReadEndpoint); err != nil {
 			return fmt.Errorf("patch LOKI_READ_ENDPOINT: %w", err)
 		}
-		// Secret-supplied token and CA are mounted as files (never copied into
-		// the Deployment spec) and the baked *_FILE env vars are repointed at
-		// them. Omitted keys keep the baked defaults: the projected
-		// ServiceAccount token and the service-ca bundle. Because maas-api
-		// reads the files per request, Secret rotations propagate via kubelet's
-		// secret-volume refresh without a pod restart; the SSA apply removes
-		// the volumes, mounts and env overrides when the keys disappear.
+		// The token is referenced via secretKeyRef rather than copied into the
+		// Deployment spec, so the value stays out of the manifest and rotations
+		// only need a pod restart. Omitted when the Secret has no token key;
+		// the SSA apply then removes any previously applied reference.
 		if params.LokiReadTokenFromSecret {
-			if err := addSecretVolume(r, lokiReadSecretTokenVolumeName, LokiReadSecretName, LokiReadTokenSecretKey, "token"); err != nil {
-				return fmt.Errorf("patch %s volume: %w", lokiReadSecretTokenVolumeName, err)
-			}
-			if err := addVolumeMount(r, "maas-api", lokiReadSecretTokenVolumeName, lokiReadSecretTokenMountPath); err != nil {
-				return fmt.Errorf("patch %s mount: %w", lokiReadSecretTokenVolumeName, err)
-			}
-			if err := setOrAddEnvVar(r, "maas-api", "LOKI_READ_TOKEN_FILE", lokiReadSecretTokenMountPath+"/token"); err != nil {
-				return fmt.Errorf("patch LOKI_READ_TOKEN_FILE: %w", err)
+			if err := setOrAddEnvVarFromSecret(r, "maas-api", "LOKI_READ_TOKEN", LokiReadSecretName, LokiReadTokenSecretKey); err != nil {
+				return fmt.Errorf("patch LOKI_READ_TOKEN: %w", err)
 			}
 		}
+		if params.LokiReadUseServiceAccountToken {
+			if err := setOrAddEnvVar(r, "maas-api", "LOKI_READ_USE_SERVICE_ACCOUNT_TOKEN", "true"); err != nil {
+				return fmt.Errorf("patch LOKI_READ_USE_SERVICE_ACCOUNT_TOKEN: %w", err)
+			}
+		}
+		// Always set this value when the proxy is enabled: an empty value must
+		// override maas-api's application-tenant default for custom endpoints.
+		if err := setOrAddEnvVar(r, "maas-api", "LOKI_READ_SCOPE_ORG_ID", params.LokiReadScopeOrgID); err != nil {
+			return fmt.Errorf("patch LOKI_READ_SCOPE_ORG_ID: %w", err)
+		}
+		// The CA bundle follows the same secretKeyRef pattern. Omitted when the
+		// Secret has no CA key; the SSA apply then removes any previously applied
+		// reference and maas-api uses the system trust pool alone.
 		if params.LokiReadCAFromSecret {
-			if err := addSecretVolume(r, lokiReadSecretCAVolumeName, LokiReadSecretName, LokiReadCASecretKey, "ca.pem"); err != nil {
-				return fmt.Errorf("patch %s volume: %w", lokiReadSecretCAVolumeName, err)
-			}
-			if err := addVolumeMount(r, "maas-api", lokiReadSecretCAVolumeName, lokiReadSecretCAMountPath); err != nil {
-				return fmt.Errorf("patch %s mount: %w", lokiReadSecretCAVolumeName, err)
-			}
-			if err := setOrAddEnvVar(r, "maas-api", "LOKI_READ_CA_FILE", lokiReadSecretCAMountPath+"/ca.pem"); err != nil {
-				return fmt.Errorf("patch LOKI_READ_CA_FILE: %w", err)
+			if err := setOrAddEnvVarFromSecret(r, "maas-api", "LOKI_READ_CA", LokiReadSecretName, LokiReadCASecretKey); err != nil {
+				return fmt.Errorf("patch LOKI_READ_CA: %w", err)
 			}
 		}
 		log.V(4).Info("Patched maas-api LOKI_READ_ENDPOINT")
@@ -1730,7 +1671,7 @@ func patchPayloadProcessingEnvoyFilter(log logr.Logger, r *unstructured.Unstruct
 	const (
 		wasmFilterPatchCount     = 4 // WasmPlugin pair + RHCL 1.4 wasm pair
 		routerFallbackPatchCount = 2 // router anchor when Kuadrant WASM is absent
-		routeDisablePatchCount   = 11
+		routeDisablePatchCount   = 6
 		// Trailing REMOVE + INSERT_BEFORE that move Istio's InferencePool filter in front of
 		// the router. Their anchors (Istio's fixed filter name and the router) are the same on
 		// every gateway, so no mode rewrites them.
@@ -1815,9 +1756,8 @@ func patchPayloadProcessingEnvoyFilter(log logr.Logger, r *unstructured.Unstruct
 	// Route patches disable ext_proc on all non-inference maas-api routes; the EPP reorder
 	// patches after them need no rewrite.
 	// Route name uses Istio's Gateway API convention: <namespace>.<httproute-name>.<rule-index>.
-	// Rule indices: 0=/v1/models, 1=/v1/subscriptions, 2=/v1/api-keys,
-	// 3=/maas-api/v1/model, 4-7=/maas-api/v1/{models,subscriptions,api-keys,tenants},
-	// 8=/maas-api/v1/me, 9=/maas-api/health, 10=/v1/me
+	// Rule indices: 0=/v1/models, 1=/v1/subscriptions, 2=/v1/api-keys, 3=/maas-api/v1/*,
+	// 4=/maas-api/health, 5=/v1/me
 	for i := routeDisablePatchBase; i < routeDisablePatchEnd; i++ {
 		patch, ok := configPatches[i].(map[string]any)
 		if !ok {
@@ -2001,6 +1941,42 @@ func setOrAddEnvVar(r *unstructured.Unstructured, containerName, envName, envVal
 	return fmt.Errorf("container %q not found", containerName)
 }
 
+// setOrAddEnvVarFromSecret sets or adds an env var on the named container that
+// references secretName/secretKey via valueFrom.secretKeyRef. It replaces a
+// plain value (and setOrAddEnvVar replaces a valueFrom), so the two helpers
+// never leave both fields set on the same env var.
+func setOrAddEnvVarFromSecret(r *unstructured.Unstructured, containerName, envName, secretName, secretKey string) error {
+	containers, found, err := unstructured.NestedSlice(r.Object, "spec", "template", "spec", "containers")
+	if err != nil || !found {
+		return errors.New("containers not found")
+	}
+	valueFrom := map[string]any{
+		"secretKeyRef": map[string]any{"name": secretName, "key": secretKey},
+	}
+	for i, c := range containers {
+		cm, ok := c.(map[string]any)
+		if !ok || cm["name"] != containerName {
+			continue
+		}
+		envSlice, _ := cm["env"].([]any)
+		for j, e := range envSlice {
+			if em, ok := e.(map[string]any); ok && em["name"] == envName {
+				delete(em, "value")
+				em["valueFrom"] = valueFrom
+				envSlice[j] = em
+				cm["env"] = envSlice
+				containers[i] = cm
+				return unstructured.SetNestedSlice(r.Object, containers, "spec", "template", "spec", "containers")
+			}
+		}
+		envSlice = append(envSlice, map[string]any{"name": envName, "valueFrom": valueFrom})
+		cm["env"] = envSlice
+		containers[i] = cm
+		return unstructured.SetNestedSlice(r.Object, containers, "spec", "template", "spec", "containers")
+	}
+	return fmt.Errorf("container %q not found", containerName)
+}
+
 func setCronJobContainerImage(r *unstructured.Unstructured, containerName, image string) error {
 	containers, found, err := unstructured.NestedSlice(r.Object, "spec", "jobTemplate", "spec", "template", "spec", "containers")
 	if err != nil || !found {
@@ -2012,67 +1988,6 @@ func setCronJobContainerImage(r *unstructured.Unstructured, containerName, image
 			containers[i] = cm
 			return unstructured.SetNestedSlice(r.Object, containers, "spec", "jobTemplate", "spec", "template", "spec", "containers")
 		}
-	}
-	return fmt.Errorf("container %q not found", containerName)
-}
-
-// addSecretVolume adds (or replaces) a pod template volume that mounts a
-// single key of a Secret as fileName. Secret volumes refresh in place, so
-// per-request file reads pick up rotations without a pod restart.
-func addSecretVolume(r *unstructured.Unstructured, volumeName, secretName, secretKey, fileName string) error {
-	volumes, _, err := unstructured.NestedSlice(r.Object, "spec", "template", "spec", "volumes")
-	if err != nil {
-		return fmt.Errorf("read volumes: %w", err)
-	}
-	volume := map[string]any{
-		"name": volumeName,
-		"secret": map[string]any{
-			"secretName": secretName,
-			"items":      []any{map[string]any{"key": secretKey, "path": fileName}},
-		},
-	}
-	replaced := false
-	for i, v := range volumes {
-		if vm, ok := v.(map[string]any); ok && vm["name"] == volumeName {
-			volumes[i] = volume
-			replaced = true
-			break
-		}
-	}
-	if !replaced {
-		volumes = append(volumes, volume)
-	}
-	return unstructured.SetNestedSlice(r.Object, volumes, "spec", "template", "spec", "volumes")
-}
-
-// addVolumeMount adds (or replaces) a readOnly mount of volumeName at
-// mountPath on the named container.
-func addVolumeMount(r *unstructured.Unstructured, containerName, volumeName, mountPath string) error {
-	containers, found, err := unstructured.NestedSlice(r.Object, "spec", "template", "spec", "containers")
-	if err != nil || !found {
-		return errors.New("containers not found")
-	}
-	mount := map[string]any{"name": volumeName, "mountPath": mountPath, "readOnly": true}
-	for i, c := range containers {
-		cm, ok := c.(map[string]any)
-		if !ok || cm["name"] != containerName {
-			continue
-		}
-		mounts, _ := cm["volumeMounts"].([]any)
-		replaced := false
-		for j, m := range mounts {
-			if mm, ok := m.(map[string]any); ok && mm["name"] == volumeName {
-				mounts[j] = mount
-				replaced = true
-				break
-			}
-		}
-		if !replaced {
-			mounts = append(mounts, mount)
-		}
-		cm["volumeMounts"] = mounts
-		containers[i] = cm
-		return unstructured.SetNestedSlice(r.Object, containers, "spec", "template", "spec", "containers")
 	}
 	return fmt.Errorf("container %q not found", containerName)
 }

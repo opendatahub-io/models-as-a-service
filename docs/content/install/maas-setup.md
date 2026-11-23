@@ -431,7 +431,8 @@ MaaS operand NetworkPolicies follow [ODH-ADR-Operator-0016](https://github.com/o
 | `maas-api-allow-gateway` | `maas-api` | Ingress | Gateway pods in `openshift-ingress` → `:8443` |
 | `maas-authorino-allow` | `maas-api` | Ingress | Authorino pods in Kuadrant/RHCL namespaces → `:8443` |
 | `maas-api-allow-monitoring` | `maas-api` | Ingress | `redhat-ods-monitoring` → `:9090` |
-| `maas-api-egress-restrict` | `maas-api` | Egress | OpenShift CoreDNS; Kubernetes API; allow-all by default (overridable or opt-out via `maasconfig/default`; see [PostgreSQL egress](#postgresql-egress)) |
+| `maas-api-egress-restrict` | `maas-api` | Egress | OpenShift CoreDNS; Kubernetes API; LokiStack gateway; allow-all by default (overridable or opt-out via `maasconfig/default`; see [PostgreSQL egress](#postgresql-egress)) |
+| `usage-logs-lokistack-allow-maas-api` | LokiStack gateway | Ingress | `maas-api` pods in the infrastructure namespace → `:8080` |
 | `usage-logs-collector-egress-restrict` | usage-logs collector | Egress | CoreDNS; LokiStack gateway pods (`app.kubernetes.io/name=lokistack`, `app.kubernetes.io/instance=usage`, `app.kubernetes.io/component=lokistack-gateway`) → `:8080` |
 
 ### PostgreSQL egress
@@ -448,16 +449,11 @@ from `maas-db-config`.
 
 1. DNS to OpenShift CoreDNS (ports `53` and `5353`)
 2. Kubernetes API (TCP `443` and `6443`, port-only rule — see below)
-3. **Allow-all** remaining egress (`egress: - {}`)
+3. LokiStack gateway pods in the monitoring namespace (`:8080`) when the Loki read proxy uses its default endpoint
+4. **Allow-all** remaining egress (`egress: - {}`)
 
 This works for any database topology without extra configuration. A separate companion `NetworkPolicy` **cannot**
 narrow egress while allow-all is present (NetworkPolicies are unioned).
-
-When an upgrade preserves an older restrictive policy, maas-controller also appends an egress rule for the selected
-usage-logs LokiStack gateway (TCP `8080` in the monitoring namespace). This covers both the DSCI-managed
-`data-science-usage-logs-lokistack` and deprecated `usageLogging: true` `usage` instances. If you replace the default
-egress block with `spec.networkPolicyEgressRules`, or use the `usage-logs-loki` Secret to select an external Loki
-endpoint, you remain responsible for adding the required Loki peer rule.
 
 #### Restricting egress (recommended for production)
 
@@ -466,7 +462,8 @@ For least-privilege egress, configure `maasconfig/default` (same pattern as the
 namespaces — you declare the peers explicitly.
 
 **Replace the default egress block** with `spec.networkPolicyEgressRules`. You are responsible for including DNS,
-Kubernetes API, and database destinations:
+Kubernetes API, and database destinations. MaaS appends the default LokiStack gateway rule automatically when the
+Loki read proxy uses its default endpoint; provide your own rule for an endpoint override:
 
 ```yaml
 apiVersion: maas.opendatahub.io/v1alpha1

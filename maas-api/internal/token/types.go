@@ -33,6 +33,10 @@ type UserContext struct {
 	Groups         []string `json:"groups"`
 	Tenant         string   `json:"tenant"`
 	OrganizationID string   `json:"organizationId,omitempty"`
+	// Roles are the organization roles parsed by the auth layer from the
+	// verified identity envelope's roles claim (e.g. "admins"); empty for
+	// callers authenticated without an organization.
+	Roles []string `json:"roles,omitempty"`
 	// AuthSource records which mechanism authenticated the caller
 	// ("oidc", "gateway", or "k8s"); empty for contexts created before
 	// the field existed.

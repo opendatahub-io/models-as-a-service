@@ -23,6 +23,12 @@ rules:
   resources: ["subjectaccessreviews"]
   verbs: ["create"]
 
+# Read application logs from the usage-logs LokiStack gateway
+- apiGroups: ["loki.grafana.com"]
+  resources: ["application"]
+  resourceNames: ["logs"]
+  verbs: ["get"]
+
 # MaaS CRs for the models endpoint and subscription selector
 - apiGroups: ["maas.opendatahub.io"]
   resources: ["aitenants", "maasmodelrefs", "maassubscriptions", "maastenantconfigs"]

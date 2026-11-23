@@ -3,8 +3,13 @@ package maas
 
 import (
 	"context"
+	"path/filepath"
+	goruntime "runtime"
+	"slices"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -20,157 +25,324 @@ import (
 	. "github.com/onsi/gomega"
 )
 
-const (
-	maasAPILokiDatasourceURL         = "https://maas-api.redhat-ai-gateway-infra.svc.cluster.local:8443/v1/logs"
-	maasAPILokiDatasourceOnlyUserURL = maasAPILokiDatasourceURL + "?only_user=true"
-)
-
-func datasourceURL(g *WithT, ds *unstructured.Unstructured) string {
-	url, found, err := unstructured.NestedString(ds.Object, "spec", "config", "plugin", "spec", "proxy", "spec", "url")
-	g.Expect(err).NotTo(HaveOccurred())
-	g.Expect(found).To(BeTrue())
-	return url
+func persesDatasourceFixture(name string) *unstructured.Unstructured {
+	return &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "perses.dev/v1alpha1",
+			"kind":       "PersesDatasource",
+			"metadata": map[string]any{
+				"name":      name,
+				"namespace": "opendatahub",
+			},
+			"spec": map[string]any{
+				"config": map[string]any{
+					"plugin": map[string]any{
+						"kind": "LokiDatasource",
+						"spec": map[string]any{
+							"proxy": map[string]any{
+								"kind": "HTTPProxy",
+								"spec": map[string]any{
+									"url": "https://maas-api.redhat-ai-gateway-infra.svc.cluster.local:8443/v1/logs",
+									"allowedEndpoints": []any{
+										map[string]any{"endpointPattern": "/loki/api/v1/query_range", "method": "GET"},
+									},
+								},
+							},
+						},
+					},
+				},
+				"client": map[string]any{
+					"kubernetesAuth": map[string]any{"enable": true},
+					"tls": map[string]any{
+						"enable":             true,
+						"insecureSkipVerify": false,
+						"caCert": map[string]any{
+							"type":     "configmap",
+							"name":     "usage-logs-tenancy-proxy-ca-bundle",
+							"certPath": "service-ca.crt",
+						},
+					},
+				},
+			},
+		},
+	}
 }
 
-// TestLifecycleReconciler_BakedMaaSAPILokiDatasources verifies that the
-// dsci-managed usage-log datasources point at the maas-api Loki proxy straight
-// from the rendered YAML, with no usage-logs-loki Secret and no runtime
-// patching.
-func TestLifecycleReconciler_BakedMaaSAPILokiDatasources(t *testing.T) {
-	const monNS = "opendatahub"
+func TestPatchPersesDatasourceMaaSAPILoki(t *testing.T) {
+	g := NewWithT(t)
 
-	persesGV := schema.GroupVersion{Group: "perses.dev", Version: "v1alpha1"}
+	t.Run("usage-logs-all gets the infrastructure-qualified maas-api URL", func(t *testing.T) {
+		ds := persesDatasourceFixture("usage-logs-all")
+		g.Expect(patchPersesDatasourceMaaSAPILoki(ds, "redhat-ai-gateway-infra")).To(Succeed())
 
-	newReconciler := func(t *testing.T) (*LifecycleReconciler, client.Client) {
-		t.Helper()
-		s := lifecycleTestScheme(t)
+		url, found, err := unstructured.NestedString(ds.Object, "spec", "config", "plugin", "spec", "proxy", "spec", "url")
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(found).To(BeTrue())
+		g.Expect(url).To(Equal("https://maas-api.redhat-ai-gateway-infra.svc.cluster.local:8443/v1/logs"))
+	})
 
-		cfg := &maasv1alpha1.Config{
-			ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName, UID: types.UID("cfg-uid")},
+	t.Run("usage-logs-multi-tenancy gets maas-api URL with only_user=true", func(t *testing.T) {
+		ds := persesDatasourceFixture("usage-logs-multi-tenancy")
+		g.Expect(patchPersesDatasourceMaaSAPILoki(ds, "odh-ai-gateway-infra")).To(Succeed())
+
+		url, found, err := unstructured.NestedString(ds.Object, "spec", "config", "plugin", "spec", "proxy", "spec", "url")
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(found).To(BeTrue())
+		g.Expect(url).To(Equal("https://maas-api.odh-ai-gateway-infra.svc.cluster.local:8443/v1/logs?only_user=true"))
+	})
+
+	t.Run("caCert switches to the pod service-ca file", func(t *testing.T) {
+		ds := persesDatasourceFixture("usage-logs-all")
+		g.Expect(patchPersesDatasourceMaaSAPILoki(ds, "redhat-ai-gateway-infra")).To(Succeed())
+
+		caCert, found, err := unstructured.NestedMap(ds.Object, "spec", "client", "tls", "caCert")
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(found).To(BeTrue())
+		g.Expect(caCert).To(Equal(map[string]any{
+			"type":     "file",
+			"certPath": "/var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt",
+		}))
+	})
+
+	t.Run("other datasources and kinds are untouched", func(t *testing.T) {
+		ds := persesDatasourceFixture("some-other-datasource")
+		g.Expect(patchPersesDatasourceMaaSAPILoki(ds, "redhat-ai-gateway-infra")).To(Succeed())
+		url, _, _ := unstructured.NestedString(ds.Object, "spec", "config", "plugin", "spec", "proxy", "spec", "url")
+		g.Expect(url).To(Equal("https://maas-api.redhat-ai-gateway-infra.svc.cluster.local:8443/v1/logs"))
+
+		dep := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "apps/v1", "kind": "Deployment"}}
+		g.Expect(patchPersesDatasourceMaaSAPILoki(dep, "redhat-ai-gateway-infra")).To(Succeed())
+	})
+
+	t.Run("missing infrastructure namespace fails closed", func(t *testing.T) {
+		ds := persesDatasourceFixture("usage-logs-all")
+		err := patchPersesDatasourceMaaSAPILoki(ds, "")
+		g.Expect(err).To(HaveOccurred())
+		g.Expect(err.Error()).To(ContainSubstring("infrastructure namespace is required"))
+	})
+}
+
+func TestMaaSAPILokiRBACIncludesApplicationLogsRead(t *testing.T) {
+	_, testFile, _, ok := goruntime.Caller(0)
+	require.True(t, ok, "resolve Loki RBAC test file path")
+	rbacPath := filepath.Join(filepath.Dir(testFile), "../../../../deployment/base/maas-api/rbac")
+
+	resources, err := tenantreconcile.RenderKustomize(rbacPath, "redhat-ai-gateway-infra")
+	require.NoError(t, err)
+
+	for _, roleName := range []string{"maas-api", "maas-api-supplemental"} {
+		var role *unstructured.Unstructured
+		for i := range resources {
+			if resources[i].GetKind() == "ClusterRole" && resources[i].GetName() == roleName {
+				role = &resources[i]
+				break
+			}
 		}
+		require.NotNil(t, role, "ClusterRole %s should be rendered", roleName)
 
-		builder := newSSAFakeClientBuilder(s).WithStatusSubresource(&maasv1alpha1.Config{}).WithObjects(cfg)
-		// perses.dev is an optional API group; without an explicit mapping the
-		// fake client reports NoMatch and ensureUsageLogs skips the datasources.
-		mapper := apimeta.NewDefaultRESTMapper([]schema.GroupVersion{persesGV})
-		mapper.Add(persesGV.WithKind("PersesDatasource"), apimeta.RESTScopeNamespace)
-		mapper.Add(persesGV.WithKind("PersesDashboard"), apimeta.RESTScopeNamespace)
-		cl := builder.WithRESTMapper(mapper).Build()
+		rules, found, err := unstructured.NestedSlice(role.Object, "rules")
+		require.NoError(t, err)
+		require.True(t, found, "ClusterRole %s should have rules", roleName)
+		require.True(t, hasApplicationLogsReadRule(rules), "ClusterRole %s should grant least-privilege Loki application log reads", roleName)
+	}
+}
 
-		return &LifecycleReconciler{
-			Client:                cl,
-			Scheme:                s,
-			UsageLogsManifestPath: lifecycleUsageLogsPath(t),
-			MonitoringNamespace:   monNS,
-			AppNamespace:          "redhat-ai-gateway-infra",
-		}, cl
+func hasApplicationLogsReadRule(rules []any) bool {
+	for _, ruleValue := range rules {
+		rule, ok := ruleValue.(map[string]any)
+		if !ok {
+			continue
+		}
+		apiGroups, _, _ := unstructured.NestedStringSlice(rule, "apiGroups")
+		resources, _, _ := unstructured.NestedStringSlice(rule, "resources")
+		resourceNames, _, _ := unstructured.NestedStringSlice(rule, "resourceNames")
+		verbs, _, _ := unstructured.NestedStringSlice(rule, "verbs")
+		if slices.Contains(apiGroups, "loki.grafana.com") &&
+			slices.Contains(resources, "application") &&
+			slices.Contains(resourceNames, "logs") &&
+			slices.Contains(verbs, "get") {
+			return true
+		}
+	}
+	return false
+}
+
+func TestLifecycleReconciler_MaasAPILokiDatasource(t *testing.T) {
+	const (
+		infraNS = "redhat-ai-gateway-infra"
+		monNS   = "opendatahub"
+	)
+
+	g := NewWithT(t)
+	s := lifecycleTestScheme(t)
+	cfg := &maasv1alpha1.Config{
+		ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName, UID: types.UID("cfg-uid")},
 	}
 
-	getDatasource := func(t *testing.T, cl client.Client, name string) *unstructured.Unstructured {
-		t.Helper()
-		g := NewWithT(t)
+	persesGV := schema.GroupVersion{Group: "perses.dev", Version: "v1alpha1"}
+	mapper := apimeta.NewDefaultRESTMapper([]schema.GroupVersion{persesGV})
+	mapper.Add(persesGV.WithKind("PersesDatasource"), apimeta.RESTScopeNamespace)
+	mapper.Add(persesGV.WithKind("PersesDashboard"), apimeta.RESTScopeNamespace)
+	cl := newSSAFakeClientBuilder(s).
+		WithStatusSubresource(&maasv1alpha1.Config{}).
+		WithObjects(cfg).
+		WithRESTMapper(mapper).
+		Build()
+	r := &LifecycleReconciler{
+		Client:                cl,
+		Scheme:                s,
+		UsageLogsManifestPath: lifecycleUsageLogsPath(t),
+		MonitoringNamespace:   monNS,
+		InfraNamespace:        infraNS,
+	}
+
+	g.Expect(r.ensureUsageLogs(context.Background(), ctrl.Log)).To(Succeed())
+
+	datasources := map[string]bool{
+		"usage-logs-all":           false,
+		"usage-logs-multi-tenancy": true,
+	}
+	for name, onlyUser := range datasources {
 		ds := &unstructured.Unstructured{}
 		ds.SetGroupVersionKind(persesGV.WithKind("PersesDatasource"))
 		ds.SetName(name)
 		ds.SetNamespace(monNS)
 		g.Expect(cl.Get(context.Background(), client.ObjectKeyFromObject(ds), ds)).To(Succeed())
-		return ds
+
+		expected := "https://maas-api." + infraNS + ".svc.cluster.local:8443/v1/logs"
+		if onlyUser {
+			expected += "?only_user=true"
+		}
+		url, found, err := unstructured.NestedString(ds.Object, "spec", "config", "plugin", "spec", "proxy", "spec", "url")
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(found).To(BeTrue())
+		g.Expect(url).To(Equal(expected))
+
+		dropHeaders, found, err := unstructured.NestedStringSlice(ds.Object, "spec", "config", "plugin", "spec", "proxy", "spec", "dropHeaders")
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(found).To(BeTrue())
+		g.Expect(dropHeaders).To(ConsistOf(
+			"X-MaaS-Identity",
+			"X-MaaS-Username",
+			"X-MaaS-Group",
+			"X-MaaS-Organization-Id",
+		))
+
+		caType, found, err := unstructured.NestedString(ds.Object, "spec", "client", "tls", "caCert", "type")
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(found).To(BeTrue())
+		g.Expect(caType).To(Equal("file"))
 	}
 
-	t.Run("usage-logs-all is baked with the maas-api proxy URL and file CA", func(t *testing.T) {
-		g := NewWithT(t)
-		r, cl := newReconciler(t)
+	np := &unstructured.Unstructured{}
+	np.SetGroupVersionKind(schema.GroupVersionKind{Group: "networking.k8s.io", Version: "v1", Kind: "NetworkPolicy"})
+	np.SetName("usage-logs-lokistack-allow-maas-api")
+	np.SetNamespace(monNS)
+	g.Expect(cl.Get(context.Background(), client.ObjectKeyFromObject(np), np)).To(Succeed())
 
-		g.Expect(r.ensureUsageLogs(context.Background(), ctrl.Log)).To(Succeed())
-
-		admin := getDatasource(t, cl, "usage-logs-all")
-		g.Expect(datasourceURL(g, admin)).To(Equal(maasAPILokiDatasourceURL))
-
-		caType, found, err := unstructured.NestedString(admin.Object, "spec", "client", "tls", "caCert", "type")
-		g.Expect(err).NotTo(HaveOccurred())
-		g.Expect(found).To(BeTrue())
-		g.Expect(caType).To(Equal("file"))
-	})
-
-	t.Run("usage-logs-multi-tenancy is baked with the only_user proxy URL and file CA", func(t *testing.T) {
-		g := NewWithT(t)
-		r, cl := newReconciler(t)
-
-		g.Expect(r.ensureUsageLogs(context.Background(), ctrl.Log)).To(Succeed())
-
-		multi := getDatasource(t, cl, "usage-logs-multi-tenancy")
-		g.Expect(datasourceURL(g, multi)).To(Equal(maasAPILokiDatasourceOnlyUserURL))
-
-		caType, found, err := unstructured.NestedString(multi.Object, "spec", "client", "tls", "caCert", "type")
-		g.Expect(err).NotTo(HaveOccurred())
-		g.Expect(found).To(BeTrue())
-		g.Expect(caType).To(Equal("file"))
-	})
-}
-
-// TestUsageLogsDeprecatedOverlayRendersPatchedURLs verifies the deprecated
-// usageLogging: true kustomization repoints only the admin datasource to the
-// bundle's LokiStack gateway. The user-scoped datasource keeps using maas-api,
-// which resolves the legacy usage LokiStack endpoint at runtime.
-func TestUsageLogsDeprecatedOverlayRendersPatchedURLs(t *testing.T) {
-	g := NewWithT(t)
-
-	resources, err := tenantreconcile.RenderKustomize(lifecycleUsageLogsPath(t), "opendatahub")
+	ingress, found, err := unstructured.NestedSlice(np.Object, "spec", "ingress")
 	g.Expect(err).NotTo(HaveOccurred())
-	for i := range resources {
-		if resources[i].GetKind() == "PersesDatasource" {
-			g.Expect(patchPersesDatasourceURL(&resources[i], "redhat-ai-gateway-infra")).To(Succeed())
-		}
-	}
-
-	findDatasource := func(name string) *unstructured.Unstructured {
-		for i := range resources {
-			if resources[i].GetKind() == "PersesDatasource" && resources[i].GetName() == name {
-				return &resources[i]
-			}
-		}
-		g.Fail("datasource not found: " + name)
-		return nil
-	}
-
-	admin := findDatasource("usage-logs-all")
-	g.Expect(datasourceURL(g, admin)).To(Equal("https://usage-gateway-http.opendatahub.svc.cluster.local:8080/api/logs/v1/application"))
-
-	multi := findDatasource("usage-logs-multi-tenancy")
-	g.Expect(datasourceURL(g, multi)).To(Equal(maasAPILokiDatasourceOnlyUserURL))
+	g.Expect(found).To(BeTrue())
+	g.Expect(ingress).To(HaveLen(1))
+	rule, ok := ingress[0].(map[string]any)
+	g.Expect(ok).To(BeTrue())
+	from, ok := rule["from"].([]any)
+	g.Expect(ok).To(BeTrue())
+	g.Expect(from).To(HaveLen(1))
+	peer, ok := from[0].(map[string]any)
+	g.Expect(ok).To(BeTrue())
+	namespaceSelector, ok := peer["namespaceSelector"].(map[string]any)
+	g.Expect(ok).To(BeTrue())
+	matchLabels, ok := namespaceSelector["matchLabels"].(map[string]any)
+	g.Expect(ok).To(BeTrue())
+	g.Expect(matchLabels).To(HaveKeyWithValue("kubernetes.io/metadata.name", infraNS))
 }
 
-// TestLifecycleReconciler_RemovesRetiredTenancyProxy verifies that upgrading
-// from the retired Python proxy deletes its controller-managed resources.
-func TestLifecycleReconciler_RemovesRetiredTenancyProxy(t *testing.T) {
+func TestLifecycleReconciler_RemovesLegacyTenancyProxy(t *testing.T) {
 	const monitoringNS = "opendatahub"
 
 	g := NewWithT(t)
 	s := lifecycleTestScheme(t)
-
 	cfg := &maasv1alpha1.Config{
 		ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName, UID: types.UID("cfg-uid")},
 	}
-
-	builder := newSSAFakeClientBuilder(s).WithStatusSubresource(&maasv1alpha1.Config{}).WithObjects(cfg)
-	for _, resource := range removedUsageLogsTenancyProxyResources(monitoringNS) {
-		stale := resource.DeepCopy()
-		stale.SetLabels(map[string]string{"app.kubernetes.io/managed-by": "maas-controller"})
-		builder = builder.WithObjects(stale)
+	legacy := unstructured.Unstructured{}
+	legacy.SetAPIVersion("apps/v1")
+	legacy.SetKind("Deployment")
+	legacy.SetName("usage-logs-tenancy-proxy")
+	legacy.SetNamespace(monitoringNS)
+	legacy.SetLabels(map[string]string{"app.kubernetes.io/managed-by": "maas-controller"})
+	legacySecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      usageLogsTenancyProxyTLSSecretName,
+			Namespace: monitoringNS,
+			Annotations: map[string]string{
+				serviceCAServiceNameAnnotation: usageLogsTenancyProxyServiceName,
+				serviceCAServiceUIDAnnotation:  "legacy-service-uid",
+				serviceCAComponentAnnotation:   "service-ca",
+			},
+		},
+		Type: corev1.SecretTypeTLS,
 	}
-	cl := builder.Build()
 
+	cl := newSSAFakeClientBuilder(s).
+		WithStatusSubresource(&maasv1alpha1.Config{}).
+		WithObjects(cfg, &legacy, legacySecret).
+		Build()
 	r := &LifecycleReconciler{
 		Client:                cl,
 		Scheme:                s,
-		AppNamespace:          "redhat-ai-gateway-infra",
 		UsageLogsManifestPath: lifecycleUsageLogsPath(t),
 		MonitoringNamespace:   monitoringNS,
+		InfraNamespace:        "redhat-ai-gateway-infra",
 	}
+
 	g.Expect(r.ensureUsageLogs(context.Background(), ctrl.Log)).To(Succeed())
 
-	for _, resource := range removedUsageLogsTenancyProxyResources(monitoringNS) {
-		err := cl.Get(context.Background(), client.ObjectKeyFromObject(&resource), resource.DeepCopy())
-		g.Expect(apierrors.IsNotFound(err)).To(BeTrue(), "expected %s %s to be removed", resource.GetKind(), resource.GetName())
+	got := &unstructured.Unstructured{}
+	got.SetGroupVersionKind(legacy.GroupVersionKind())
+	err := cl.Get(context.Background(), client.ObjectKeyFromObject(&legacy), got)
+	g.Expect(err).To(HaveOccurred())
+	g.Expect(apierrors.IsNotFound(err)).To(BeTrue())
+
+	err = cl.Get(context.Background(), client.ObjectKeyFromObject(legacySecret), &corev1.Secret{})
+	g.Expect(err).To(HaveOccurred())
+	g.Expect(apierrors.IsNotFound(err)).To(BeTrue())
+}
+
+func TestLifecycleReconciler_PreservesUnrelatedTenancyProxyTLSSecret(t *testing.T) {
+	const monitoringNS = "opendatahub"
+
+	g := NewWithT(t)
+	s := lifecycleTestScheme(t)
+	cfg := &maasv1alpha1.Config{
+		ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName, UID: types.UID("cfg-uid")},
 	}
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      usageLogsTenancyProxyTLSSecretName,
+			Namespace: monitoringNS,
+			Annotations: map[string]string{
+				serviceCAServiceNameAnnotation: "another-service",
+				serviceCAServiceUIDAnnotation:  "another-service-uid",
+				serviceCAComponentAnnotation:   "service-ca",
+			},
+		},
+		Type: corev1.SecretTypeTLS,
+	}
+
+	cl := newSSAFakeClientBuilder(s).
+		WithStatusSubresource(&maasv1alpha1.Config{}).
+		WithObjects(cfg, secret).
+		Build()
+	r := &LifecycleReconciler{
+		Client:                cl,
+		Scheme:                s,
+		UsageLogsManifestPath: lifecycleUsageLogsPath(t),
+		MonitoringNamespace:   monitoringNS,
+		InfraNamespace:        "redhat-ai-gateway-infra",
+	}
+
+	g.Expect(r.ensureUsageLogs(context.Background(), ctrl.Log)).To(Succeed())
+	g.Expect(cl.Get(context.Background(), client.ObjectKeyFromObject(secret), &corev1.Secret{})).To(Succeed())
 }

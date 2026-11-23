@@ -40,98 +40,26 @@ spec:
         - name: maas-api
           port: 8443
           weight: 100
-    # Rules 3-8: Public maas-api endpoints under /maas-api/v1. Each rule has
-    # exactly one PathPrefix match because ReplacePrefixMatch requires that
-    # shape. Paths are enumerated to prevent gateway exposure of /internal/*
-    # endpoints (FIND-004) and the cluster-internal Loki proxy. /v1/tenants is
-    # accepted because the handler enforces its own auth (TokenReview + SAR)
-    # and returns only non-sensitive discovery metadata. Will move to a
-    # dedicated discovery service.
+    # Rule 3: Public maas-api endpoints under /maas-api/v1 prefix.
+    # Scoped to /v1 to prevent gateway exposure of /internal/* endpoints (FIND-004).
+    # /v1/tenants is reachable via this prefix; accepted because the handler
+    # enforces its own auth (TokenReview + SAR) and returns only non-sensitive
+    # discovery metadata. Will move to a dedicated discovery service.
     - matches:
         - path:
             type: PathPrefix
-            value: /maas-api/v1/model
+            value: /maas-api/v1
       filters:
         - type: URLRewrite
           urlRewrite:
             path:
               type: ReplacePrefixMatch
-              replacePrefixMatch: /v1/model
+              replacePrefixMatch: /v1
       backendRefs:
         - name: maas-api
           port: 8443
           weight: 100
-    - matches:
-        - path:
-            type: PathPrefix
-            value: /maas-api/v1/models
-      filters:
-        - type: URLRewrite
-          urlRewrite:
-            path:
-              type: ReplacePrefixMatch
-              replacePrefixMatch: /v1/models
-      backendRefs:
-        - name: maas-api
-          port: 8443
-          weight: 100
-    - matches:
-        - path:
-            type: PathPrefix
-            value: /maas-api/v1/subscriptions
-      filters:
-        - type: URLRewrite
-          urlRewrite:
-            path:
-              type: ReplacePrefixMatch
-              replacePrefixMatch: /v1/subscriptions
-      backendRefs:
-        - name: maas-api
-          port: 8443
-          weight: 100
-    - matches:
-        - path:
-            type: PathPrefix
-            value: /maas-api/v1/api-keys
-      filters:
-        - type: URLRewrite
-          urlRewrite:
-            path:
-              type: ReplacePrefixMatch
-              replacePrefixMatch: /v1/api-keys
-      backendRefs:
-        - name: maas-api
-          port: 8443
-          weight: 100
-    - matches:
-        - path:
-            type: PathPrefix
-            value: /maas-api/v1/tenants
-      filters:
-        - type: URLRewrite
-          urlRewrite:
-            path:
-              type: ReplacePrefixMatch
-              replacePrefixMatch: /v1/tenants
-      backendRefs:
-        - name: maas-api
-          port: 8443
-          weight: 100
-    - matches:
-        - path:
-            type: Exact
-            value: /maas-api/v1/me
-      filters:
-        - type: URLRewrite
-          urlRewrite:
-            path:
-              type: ReplaceFullPath
-              replaceFullPath: /v1/me
-      backendRefs:
-        - name: maas-api
-          port: 8443
-          weight: 100
-    # Rule 9: Public process health only; the exact match keeps database
+    # Rule 4: Public process health only; the exact match keeps database
     # diagnostics cluster-internal.
     - matches:
         - path:
@@ -147,7 +75,7 @@ spec:
         - name: maas-api
           port: 8443
           weight: 100
-    # Rule 10: Verified SSO identity endpoint at top level
+    # Rule 5: Verified SSO identity endpoint at top level
     - matches:
         - path:
             type: Exact

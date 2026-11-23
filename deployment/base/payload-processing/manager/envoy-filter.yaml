@@ -201,9 +201,7 @@ spec:
     # Disable ext_proc on all non-inference maas-api routes.
     # Route name follows Istio's Gateway API naming: <namespace>.<httproute-name>.<rule-index>
     # Rule indices correspond to httproute.yaml rules:
-    #   0 = /v1/models, 1 = /v1/subscriptions, 2 = /v1/api-keys,
-    #   3 = /maas-api/v1/model, 4-7 = /maas-api/v1/{models,subscriptions,api-keys,tenants},
-    #   8 = /maas-api/v1/me, 9 = /maas-api/health, 10 = /v1/me
+    #   0 = /v1/models, 1 = /v1/subscriptions, 2 = /v1/api-keys, 3 = /maas-api/v1/*, 4 = /maas-api/health, 5 = /v1/me
     - applyTo: HTTP_ROUTE
       match:
         context: GATEWAY
@@ -211,74 +209,6 @@ spec:
           vhost:
             route:
               name: "PLACEHOLDER.maas-api-route.0"
-      patch:
-        operation: MERGE
-        value:
-          typed_per_filter_config:
-            envoy.filters.http.ext_proc.ipp-pre:
-              "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExtProcPerRoute
-              disabled: true
-            envoy.filters.http.ext_proc.ipp:
-              "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExtProcPerRoute
-              disabled: true
-    - applyTo: HTTP_ROUTE
-      match:
-        context: GATEWAY
-        routeConfiguration:
-          vhost:
-            route:
-              name: "PLACEHOLDER.maas-api-route.6"
-      patch:
-        operation: MERGE
-        value:
-          typed_per_filter_config:
-            envoy.filters.http.ext_proc.ipp-pre:
-              "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExtProcPerRoute
-              disabled: true
-            envoy.filters.http.ext_proc.ipp:
-              "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExtProcPerRoute
-              disabled: true
-    - applyTo: HTTP_ROUTE
-      match:
-        context: GATEWAY
-        routeConfiguration:
-          vhost:
-            route:
-              name: "PLACEHOLDER.maas-api-route.7"
-      patch:
-        operation: MERGE
-        value:
-          typed_per_filter_config:
-            envoy.filters.http.ext_proc.ipp-pre:
-              "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExtProcPerRoute
-              disabled: true
-            envoy.filters.http.ext_proc.ipp:
-              "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExtProcPerRoute
-              disabled: true
-    - applyTo: HTTP_ROUTE
-      match:
-        context: GATEWAY
-        routeConfiguration:
-          vhost:
-            route:
-              name: "PLACEHOLDER.maas-api-route.8"
-      patch:
-        operation: MERGE
-        value:
-          typed_per_filter_config:
-            envoy.filters.http.ext_proc.ipp-pre:
-              "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExtProcPerRoute
-              disabled: true
-            envoy.filters.http.ext_proc.ipp:
-              "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExtProcPerRoute
-              disabled: true
-    - applyTo: HTTP_ROUTE
-      match:
-        context: GATEWAY
-        routeConfiguration:
-          vhost:
-            route:
-              name: "PLACEHOLDER.maas-api-route.9"
       patch:
         operation: MERGE
         value:
@@ -364,23 +294,6 @@ spec:
           vhost:
             route:
               name: "PLACEHOLDER.maas-api-route.5"
-      patch:
-        operation: MERGE
-        value:
-          typed_per_filter_config:
-            envoy.filters.http.ext_proc.ipp-pre:
-              "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExtProcPerRoute
-              disabled: true
-            envoy.filters.http.ext_proc.ipp:
-              "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExtProcPerRoute
-              disabled: true
-    - applyTo: HTTP_ROUTE
-      match:
-        context: GATEWAY
-        routeConfiguration:
-          vhost:
-            route:
-              name: "PLACEHOLDER.maas-api-route.10"
       patch:
         operation: MERGE
         value:

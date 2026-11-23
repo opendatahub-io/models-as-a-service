@@ -15,6 +15,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
@@ -73,43 +74,6 @@ func TestPatchMaaSAPIEgressRestrict_preservesLiveEgressOnUpgrade(t *testing.T) {
 	assert.True(t, hasTo)
 }
 
-func TestPatchMaaSAPIEgressRestrict_appendsLokiRuleWhenPreserved(t *testing.T) {
-	np := sampleMaaSAPIEgressRestrictNetworkPolicy()
-	preserved := []any{
-		map[string]any{
-			"to":    []any{map[string]any{"podSelector": map[string]any{"matchLabels": map[string]any{"app": "postgres"}}}},
-			"ports": []any{map[string]any{"port": int64(5432), "protocol": "TCP"}},
-		},
-	}
-	params := PlatformParams{
-		MaaSAPIPreserveEgressOnUpgrade: true,
-		MaaSAPIPreservedEgressRules:    preserved,
-		MaaSAPILokiEgressRules: []netwv1.NetworkPolicyEgressRule{
-			lokiStackGatewayEgressRule("opendatahub", DefaultLokiStackGatewayInstance),
-		},
-	}
-	require.NoError(t, patchMaaSAPIEgressRestrictNetworkPolicy(np, params))
-
-	egress, found, err := unstructured.NestedSlice(np.Object, "spec", "egress")
-	require.NoError(t, err)
-	require.True(t, found)
-	require.Len(t, egress, 2)
-
-	lokiRule, ok := egress[1].(map[string]any)
-	require.True(t, ok)
-	peers, ok := lokiRule["to"].([]any)
-	require.True(t, ok)
-	require.Len(t, peers, 1)
-	peer, ok := peers[0].(map[string]any)
-	require.True(t, ok)
-	nsLabels, ok := peer["namespaceSelector"].(map[string]any)["matchLabels"].(map[string]any)
-	require.True(t, ok)
-	assert.Equal(t, "opendatahub", nsLabels["kubernetes.io/metadata.name"])
-	podLabels, ok := peer["podSelector"].(map[string]any)["matchLabels"].(map[string]any)
-	require.True(t, ok)
-	assert.Equal(t, DefaultLokiStackGatewayInstance, podLabels["app.kubernetes.io/instance"])
-}
-
 func TestPatchMaaSAPIEgressRestrict_addsAllowAllByDefault(t *testing.T) {
 	np := sampleMaaSAPIEgressRestrictNetworkPolicy()
 	require.NoError(t, patchMaaSAPIEgressRestrictNetworkPolicy(np, PlatformParams{}))
@@ -119,6 +83,48 @@ func TestPatchMaaSAPIEgressRestrict_addsAllowAllByDefault(t *testing.T) {
 	require.True(t, found)
 	require.Len(t, egress, 3)
 	assert.Empty(t, egress[2])
+}
+
+func TestPatchMaaSAPIEgressRestrict_addsLokiRule(t *testing.T) {
+	np := sampleMaaSAPIEgressRestrictNetworkPolicy()
+	params := PlatformParams{
+		MaaSAPILokiEgressRule: lokiReadEgressRule("redhat-ods-monitoring", false),
+		MaaSAPIEgressRules: []netwv1.NetworkPolicyEgressRule{{
+			Ports: []netwv1.NetworkPolicyPort{{
+				Protocol: ptr.To(corev1.ProtocolTCP),
+				Port:     ptr.To(intstr.FromInt32(5432)),
+			}},
+			To: []netwv1.NetworkPolicyPeer{{
+				PodSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "postgres"}},
+			}},
+		}},
+	}
+	require.NoError(t, patchMaaSAPIEgressRestrictNetworkPolicy(np, params))
+
+	egress, found, err := unstructured.NestedSlice(np.Object, "spec", "egress")
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Len(t, egress, 2)
+
+	rule, ok := egress[1].(map[string]any)
+	require.True(t, ok)
+	peers, ok := rule["to"].([]any)
+	require.True(t, ok)
+	require.Len(t, peers, 1)
+	peer, ok := peers[0].(map[string]any)
+	require.True(t, ok)
+	podSelector, ok := peer["podSelector"].(map[string]any)
+	require.True(t, ok)
+	matchLabels, ok := podSelector["matchLabels"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "data-science-usage-logs-lokistack", matchLabels["app.kubernetes.io/instance"])
+
+	ports, ok := rule["ports"].([]any)
+	require.True(t, ok)
+	require.Len(t, ports, 1)
+	networkPort, ok := ports[0].(map[string]any)
+	require.True(t, ok)
+	require.EqualValues(t, 8080, networkPort["port"])
 }
 
 func TestPatchMaaSAPIEgressRestrict_replacesWithCustomRules(t *testing.T) {
