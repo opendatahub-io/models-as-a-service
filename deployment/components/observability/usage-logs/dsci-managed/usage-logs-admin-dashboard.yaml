@@ -302,12 +302,14 @@ spec:
       kind: Panel
       spec:
         display:
-          name: "Token consumption chart"
-          # [2h] is the minimal stable step. Loki split_queries_by_interval is 30m; 1h still produces
-          # gaps at chunk boundaries. 2h is the lowest value that returns consistent results.
+          name: "Token consumption (rolling 2-hour window)"
+          # The fixed [2h] lookback was introduced to avoid gaps at Loki query-split boundaries.
+          # It is independent of the selected dashboard time range.
           description: >-
-            Tokens from successful requests (2xx) over time by model, subscription,
-            or API key. **View by** drives the chart grouping.
+            Each point includes tokens from successful requests (2xx) during the
+            preceding two hours, which may include usage before your selected time
+            range. **Total tokens** shows consumption within the selected range.
+            **View by** groups the chart by model, subscription, or API key.
         plugin:
           kind: TimeSeriesChart
           spec:
