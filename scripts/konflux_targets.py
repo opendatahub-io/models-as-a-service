@@ -269,9 +269,15 @@ def tekton_targets() -> dict[str, dict[str, Any]]:
     found: dict[str, dict[str, Any]] = {}
     for path in files:
         docs = read_yaml(path)
-        if not docs:
+        pipeline_runs = [doc for doc in docs if doc.get("kind") == "PipelineRun"]
+        if len(pipeline_runs) != 1:
+            fail(
+                f"{path.name}: expected exactly one PipelineRun document, "
+                f"found {len(pipeline_runs)}"
+            )
             continue
-        params = params_to_dict(docs[0])
+        pipeline_run = pipeline_runs[0]
+        params = params_to_dict(pipeline_run)
         output = str(params.get("output-image", ""))
         image_name = output.rsplit("/", 1)[-1].split(":", 1)[0]
         if image_name == "odh-maas-discovery":
@@ -288,7 +294,7 @@ def tekton_targets() -> dict[str, dict[str, Any]]:
             "context": str(params.get("path-context", "")),
             "output": output,
             "params": params,
-            "pipeline_ref": docs[0].get("spec", {}).get("pipelineRef", {}),
+            "pipeline_ref": pipeline_run.get("spec", {}).get("pipelineRef", {}),
         }
     return found
 
@@ -722,15 +728,37 @@ def check_external_facts(targets: dict[str, dict[str, Any]]) -> None:
 
     ai_gateway = ROOT.parent / "ai-gateway-operator"
     if ai_gateway.is_dir():
-        hits = subprocess.run(
-            ["rg", "-l", "maas-api|maas-controller|odh-maas-discovery", str(ai_gateway)],
-            text=True,
-            capture_output=True,
-        )
-        if not hits.stdout.strip():
-            warn("ai-gateway-operator checkout does not reference the MaaS images; coverage status: not shipped there")
+        try:
+            hits = subprocess.run(
+                ["rg", "-l", "maas-api|maas-controller|odh-maas-discovery", str(ai_gateway)],
+                text=True,
+                capture_output=True,
+            )
+        except FileNotFoundError:
+            warn(
+                "EXTERNAL_UNASSERTED: ripgrep is unavailable, so the ai-gateway-operator "
+                "MaaS image references could not be searched"
+            )
         else:
-            ok("ai-gateway-operator checkout references the MaaS image names; full pinning still requires its CI")
+            if hits.returncode == 1:
+                warn(
+                    "ai-gateway-operator checkout does not reference the MaaS images; "
+                    "coverage status: not shipped there"
+                )
+            elif hits.returncode != 0:
+                warn(
+                    "EXTERNAL_UNASSERTED: search of ai-gateway-operator failed "
+                    f"(exit {hits.returncode}): {hits.stderr.strip() or 'no stderr'}"
+                )
+            elif hits.stdout.strip():
+                ok(
+                    "ai-gateway-operator checkout references the MaaS image names; "
+                    "full pinning still requires its CI"
+                )
+            else:
+                warn(
+                    "EXTERNAL_UNASSERTED: search of ai-gateway-operator returned no output"
+                )
     else:
         warn(
             "EXTERNAL_UNASSERTED: ai-gateway-operator is not in this checkout; "
@@ -822,13 +850,16 @@ def check_kustomization_refs(files: list[Path]) -> None:
                         fail(f"{relative}: {generator} file {file_path!r} does not exist")
 
 
-def render_all(output_dir: Path) -> dict[str, list[dict[str, Any]]]:
+def render_all(
+    output_dir: Path,
+) -> tuple[dict[str, list[dict[str, Any]]], list[tuple[str, Path]]]:
     command = kustomize_command()
     files = kustomization_files()
     check_kustomization_refs(files)
     rendered: dict[str, list[dict[str, Any]]] = {}
+    render_outputs: list[tuple[str, Path]] = []
     output_dir.mkdir(parents=True, exist_ok=True)
-    for path in files:
+    for index, path in enumerate(files):
         docs = read_yaml(path)
         if not docs:
             continue
@@ -863,14 +894,15 @@ def render_all(output_dir: Path) -> dict[str, list[dict[str, Any]]]:
         if result.stderr.strip():
             warn(f"{relative}: kustomize warning: {result.stderr.strip()}")
         slug = relative.replace("/", "__")
-        target = output_dir / f"{slug}.yaml"
+        target = output_dir / f"{index:04d}-{slug}.yaml"
         target.write_text(result.stdout, encoding="utf-8")
         parsed = [doc for doc in yaml.safe_load_all(result.stdout) if isinstance(doc, dict)]
         rendered[relative] = parsed
-    return rendered
+        render_outputs.append((relative, target))
+    return rendered, render_outputs
 
 
-def check_kubeconform(output_dir: Path) -> None:
+def check_kubeconform(render_outputs: list[tuple[str, Path]]) -> None:
     binary = os.environ.get("KUBECONFORM_BIN")
     if not binary:
         if os.environ.get("REQUIRE_KUBECONFORM") == "1":
@@ -878,9 +910,9 @@ def check_kubeconform(output_dir: Path) -> None:
         else:
             warn("kubeconform not installed locally; CI sets KUBECONFORM_BIN and REQUIRE_KUBECONFORM=1")
         return
-    for path in sorted(output_dir.glob("*.yaml")):
+    for root, path in render_outputs:
         if path.stat().st_size == 0:
-            warn(f"{path.stem.replace('__', '/')} rendered no resources (intentionally empty)")
+            warn(f"{root} rendered no resources (intentionally empty)")
             continue
         result = subprocess.run(
             [
@@ -912,7 +944,6 @@ def check_kubeconform(output_dir: Path) -> None:
             fail(f"kubeconform report for {path.name} has an unexpected shape")
             continue
 
-        root = path.stem.replace("__", "/")
         allowed_partial = PARTIAL_SCHEMA_FRAGMENTS.get(root, set())
         allowed_seen = False
         skipped_builtins: list[str] = []
@@ -1151,15 +1182,28 @@ def effective_rules(
     for doc in all_docs:
         if doc.get("kind") not in {"RoleBinding", "ClusterRoleBinding"}:
             continue
-        subjects = doc.get("subjects", []) or []
-        if not any(
-            subject.get("kind") == "ServiceAccount"
-            and subject.get("name") == service_account
-            and subject.get("namespace") == namespace
-            for subject in subjects
-        ):
-            continue
+        binding_kind = doc.get("kind", "")
         binding_ns = doc.get("metadata", {}).get("namespace", "")
+        if binding_kind == "RoleBinding" and not binding_ns:
+            # A namespace-less RoleBinding has no resolvable scope. Never treat
+            # its grants as cluster-wide; an apply with -n would place it in one
+            # namespace, which the static render cannot infer.
+            continue
+        subjects = doc.get("subjects", []) or []
+        for subject in subjects:
+            if subject.get("kind") != "ServiceAccount":
+                continue
+            if subject.get("name") != service_account:
+                continue
+            # Kubernetes resolves an unqualified ServiceAccount subject in a
+            # RoleBinding to the binding namespace; keep explicit namespaces.
+            subject_namespace = subject.get("namespace") or (
+                binding_ns if binding_kind == "RoleBinding" else ""
+            )
+            if subject_namespace == namespace:
+                break
+        else:
+            continue
         ref = doc.get("roleRef", {})
         role_kind = ref.get("kind", "")
         role_ns = binding_ns if role_kind == "Role" else ""
@@ -1167,7 +1211,7 @@ def effective_rules(
         if role:
             # A RoleBinding limits even a ClusterRole reference to its own namespace;
             # only a ClusterRoleBinding grants the rule cluster-wide.
-            scope = "" if doc.get("kind") == "ClusterRoleBinding" else binding_ns
+            scope = "" if binding_kind == "ClusterRoleBinding" else binding_ns
             rules.extend((scope, rule) for rule in role_rules(role, all_docs))
     return rules
 
@@ -1241,6 +1285,23 @@ def rule_covers(effective: dict[str, Any], required: dict[str, Any]) -> bool:
     )
 
 
+def has_escalate_for_role(
+    rules: list[dict[str, Any]], role_kind: str, role_name: str
+) -> bool:
+    resource = "clusterroles" if role_kind == "ClusterRole" else "roles"
+    return any(
+        permission_rule_covers(
+            rule,
+            "rbac.authorization.k8s.io",
+            resource,
+            "escalate",
+            role_name,
+            "resource",
+        )
+        for rule in rules
+    )
+
+
 def describe_rule(rule: dict[str, Any]) -> str:
     groups = ",".join(rule.get("apiGroups") or [""])
     resources = ",".join(rule.get("resources") or rule.get("nonResourceURLs") or [])
@@ -1277,7 +1338,13 @@ def check_escalation_closure(rendered: dict[str, list[dict[str, Any]]]) -> None:
             fail(f"{bundle}: cannot find the deployed maas-controller Deployment")
             continue
         namespace, service_account = identity
-        effective = effective_rules(all_docs, namespace, service_account)
+        # Only RBAC installed with the controller bundle can authorize a write.
+        # Roles under APPLIED_TREES are the proposed state; crediting their rules
+        # here would let a role write satisfy its own coverage check.
+        installed_docs = [
+            doc for root in roots if root not in APPLIED_TREES for doc in rendered[root]
+        ]
+        effective = effective_rules(installed_docs, namespace, service_account)
         if not effective:
             fail(
                 f"{bundle}: maas-controller ServiceAccount "
@@ -1305,16 +1372,24 @@ def check_escalation_closure(rendered: dict[str, list[dict[str, Any]]]) -> None:
             continue
 
         checked = 0
+        escalated = 0
         for root, role in applied_roles:
-            role_name = f"{role.get('kind')}/{role.get('metadata', {}).get('name')}"
+            role_kind = str(role.get("kind", ""))
+            role_bare_name = str(role.get("metadata", {}).get("name", ""))
+            role_name = f"{role_kind}/{role_bare_name}"
             role_scope = (
                 ""
-                if role.get("kind") == "ClusterRole"
-                else role.get("metadata", {}).get("namespace", "")
+                if role_kind == "ClusterRole"
+                else str(role.get("metadata", {}).get("namespace", ""))
             )
             usable_rules = [
                 rule for scope, rule in effective if not scope or scope == role_scope
             ]
+            # A matching escalate grant lets Kubernetes accept the role write
+            # without checking each rule against the controller's own grants.
+            if has_escalate_for_role(usable_rules, role_kind, role_bare_name):
+                escalated += 1
+                continue
             if role.get("aggregationRule") and not any(
                 permission_rule_covers(
                     rule,
@@ -1350,11 +1425,12 @@ def check_escalation_closure(rendered: dict[str, list[dict[str, Any]]]) -> None:
         ok(
             f"{bundle}: RBAC escalation closure checked {checked} applied role rules "
             f"against {len(effective)} scoped effective controller rules"
+            + (f" ({escalated} role writes allowed by escalate)" if escalated else "")
         )
 
 
 def check_manifests(output_dir: Path) -> None:
-    rendered = render_all(output_dir)
+    rendered, render_outputs = render_all(output_dir)
     for root in REQUIRED_KUSTOMIZATION_ROOTS:
         if root not in rendered:
             if not (ROOT / root / "kustomization.yaml").exists():
@@ -1366,7 +1442,7 @@ def check_manifests(output_dir: Path) -> None:
         if bundle in rendered:
             check_rbac_identity(rendered[bundle], bundle)
     check_escalation_closure(rendered)
-    check_kubeconform(output_dir)
+    check_kubeconform(render_outputs)
     if ERRORS:
         raise SystemExit(1)
     print(f"Manifest contracts passed for {len(rendered)} kustomize entry points.")

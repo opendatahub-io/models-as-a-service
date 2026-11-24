@@ -98,15 +98,24 @@ For each render:
 The check is deliberately stronger than "the role names look consistent". It
 runs separately for coherent OpenShift and xKS bundles so a permission in one
 overlay cannot hide a gap in the other. Within each bundle it computes the
-effective permissions of the deployed `maas-controller` ServiceAccount from all
-rendered bindings, then walks every `Role`/`ClusterRole` that the controller
-server-side applies from the operator-rendered trees. Each applied rule must be a
-subset of the controller's own effective permissions, including API groups,
-resources, verbs, `resourceNames`, and namespace scope. Wildcards are handled
-conservatively; `resourceNames` that narrow a required rule cannot be satisfied
-by a broader applied rule. `ClusterRole/maas-api`,
+effective permissions of the deployed `maas-controller` ServiceAccount from only
+the RBAC installed with the controller bundle, before any applied-role write.
+Roles the controller applies are proposed state; counting their rules as grants
+would let a write satisfy its own coverage check. It then walks every
+`Role`/`ClusterRole` that the controller server-side applies from the
+operator-rendered trees. Each applied rule must be a subset of the controller's
+own installed permissions, including API groups, resources, verbs,
+`resourceNames`, and namespace scope. Wildcards are handled conservatively;
+`resourceNames` that narrow a required rule cannot be satisfied by a broader
+applied rule. A matching `escalate` grant on the role's kind, scope, and name
+allows that role write without the rule-coverage check, mirroring Kubernetes.
+`ClusterRole/maas-api`,
 `ClusterRole/maas-api-supplemental`, and
 `ClusterRole/payload-processing-reader` must all be present and checked.
+
+`RoleBinding` grants are scoped to the binding namespace and never count as
+cluster-wide; only `ClusterRoleBinding` grants do. An unqualified
+`ServiceAccount` subject in a `RoleBinding` resolves to that binding's namespace.
 
 Discovery RBAC is included only when the rendered
 `MAAS_DISCOVERY_ENABLED` value is true. Both platform parameter files currently
@@ -186,7 +195,7 @@ descriptions are not inferred beyond it.
   versus Unmanaged convergence, and DSC component teardown.
 - Openshift platform bootstrap, SCC enforcement, service-ca injection, cloud
   load balancers, storage classes, upgrades, and multi-arch image execution.
-- Full Kuadrant/Authorino/Istio/KServer reconciliation and real inference
+- Full Kuadrant/Authorino/Istio/KServe reconciliation and real inference
   traffic. Kind installs the pinned CRDs needed to render and apply the tenant,
   not the full platform stack.
 - `opendatahub-operator` and `ai-gateway-operator` image pinning and their

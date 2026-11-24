@@ -10,13 +10,52 @@ KUSTOMIZE_SHA256="ea375e7372f9aa029129d4b2d16c66b7750b7f1213c4f66f910d981c895818
 KUBECONFORM_VERSION="0.7.0"
 KUBECONFORM_SHA256="c31518ddd122663b3f3aa874cfe8178cb0988de944f29c74a0b9260920d115d3"
 HERMETIC_TOOLSET_IMAGE="${HERMETIC_TOOLSET_IMAGE:-registry.access.redhat.com/ubi9/go-toolset@sha256:1a755651ffe1a438f137418d183f18ebad527ec929206c17804f93490a97869e}"
-TOOLS_DIR="${TOOLS_DIR:-${RUNNER_TEMP:-/tmp}/maas-konflux-tools}"
+TOOLS_DIR="${TOOLS_DIR:-}"
+TOOLS_TEMP_DIR=""
 
 log() { printf '\n== %s ==\n' "$*"; }
 
 KIND_CONTEXT=""
+KIND_WORK=""
 CONTROLLER_POD_UID=""
+SMOKE_CONTAINER_ID=""
+PORT_FORWARD_PID=""
 kk() { command kubectl --context "$KIND_CONTEXT" "$@"; }
+
+cleanup_smoke_container() {
+  if [[ -n "$SMOKE_CONTAINER_ID" ]]; then
+    docker rm -f "$SMOKE_CONTAINER_ID" >/dev/null 2>&1 || true
+    SMOKE_CONTAINER_ID=""
+  fi
+}
+
+cleanup() {
+  if [[ -n "$PORT_FORWARD_PID" ]]; then
+    kill "$PORT_FORWARD_PID" 2>/dev/null || true
+    PORT_FORWARD_PID=""
+  fi
+  cleanup_smoke_container
+  if [[ -n "$KIND_WORK" ]]; then
+    rm -rf -- "$KIND_WORK"
+    KIND_WORK=""
+  fi
+  if [[ -n "$TOOLS_TEMP_DIR" ]]; then
+    rm -rf -- "$TOOLS_TEMP_DIR"
+    TOOLS_TEMP_DIR=""
+  fi
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+ensure_tools_dir() {
+  if [[ -z "$TOOLS_DIR" ]]; then
+    TOOLS_DIR="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/maas-konflux-tools.XXXXXXXX")"
+    TOOLS_TEMP_DIR="$TOOLS_DIR"
+  elif [[ ! -d "$TOOLS_DIR" ]]; then
+    mkdir -p "$TOOLS_DIR"
+  fi
+}
 
 ensure_kustomize() {
   if [[ -n "${KUSTOMIZE_BIN:-}" ]]; then
@@ -25,7 +64,7 @@ ensure_kustomize() {
   if [[ "$(uname -s)" != "Linux" ]]; then
     return
   fi
-  mkdir -p "$TOOLS_DIR"
+  ensure_tools_dir
   if [[ ! -x "$TOOLS_DIR/kustomize" ]]; then
     local archive="$TOOLS_DIR/kustomize.tar.gz"
     curl -fsSL --retry 3 -o "$archive" \
@@ -44,7 +83,7 @@ ensure_kubeconform() {
   if [[ "$(uname -s)" != "Linux" ]]; then
     return
   fi
-  mkdir -p "$TOOLS_DIR"
+  ensure_tools_dir
   if [[ ! -x "$TOOLS_DIR/kubeconform" ]]; then
     local archive="$TOOLS_DIR/kubeconform.tar.gz"
     curl -fsSL --retry 3 -o "$archive" \
@@ -188,19 +227,19 @@ run_smoke_image() {
         test -x /app/discovery
         echo "discovery image is non-root with an executable binary"
       '
-      local container_id local_port
-      container_id="$(docker run -d -p 127.0.0.1::8443 "$image" --self-signed --addr=:8443)"
-      local_port="$(docker port "$container_id" 8443/tcp | head -1 | sed 's/.*://')"
+      local local_port
+      SMOKE_CONTAINER_ID="$(docker run -d -p 127.0.0.1::8443 "$image" --self-signed --addr=:8443)"
+      local_port="$(docker port "$SMOKE_CONTAINER_ID" 8443/tcp | head -1 | sed 's/.*://')"
       for _ in $(seq 1 45); do
         if curl -fsSk --max-time 5 "https://127.0.0.1:${local_port}/healthz" >/dev/null 2>&1; then
           echo "discovery /healthz passed"
-          docker rm -f "$container_id" >/dev/null
+          cleanup_smoke_container
           return 0
         fi
         sleep 1
       done
-      docker logs "$container_id" >&2 || true
-      docker rm -f "$container_id" >/dev/null 2>&1 || true
+      docker logs "$SMOKE_CONTAINER_ID" >&2 || true
+      cleanup_smoke_container
       echo "discovery did not become healthy" >&2
       return 1
       ;;
@@ -307,7 +346,6 @@ run_kind() {
   local infra_ns="odh-ai-gateway-infra"
   local gateway_ns="openshift-ingress"
   KIND_WORK="$(mktemp -d)"
-  trap 'rm -rf "$KIND_WORK"' EXIT
   log "Controller Kind integration on cluster $cluster"
   ensure_kustomize
   : "${KUSTOMIZE_BIN:?KUSTOMIZE_BIN is required for Kind integration}"
@@ -578,20 +616,19 @@ PY
   log "Assert maas-api starts and serves its health endpoint"
   kk -n "$infra_ns" rollout status deployment/maas-api --timeout=240s
   kk -n "$infra_ns" port-forward --address 127.0.0.1 svc/maas-api :8443 >"$KIND_WORK/port-forward.log" 2>&1 &
-  local forward_pid=$!
-  trap 'kill "$forward_pid" 2>/dev/null || true; rm -rf "$KIND_WORK"' EXIT
+  PORT_FORWARD_PID=$!
   local forward_port=""
   for _ in $(seq 1 45); do
     forward_port="$(sed -n 's/^Forwarding from 127\.0\.0\.1:\([0-9]*\) -> 8443.*/\1/p' "$KIND_WORK/port-forward.log" | head -1)"
-    if ! kill -0 "$forward_pid" 2>/dev/null && [[ -z "$forward_port" ]]; then
+    if ! kill -0 "$PORT_FORWARD_PID" 2>/dev/null && [[ -z "$forward_port" ]]; then
       cat "$KIND_WORK/port-forward.log" >&2 || true
       echo "port-forward exited before it reported a listener" >&2
       return 1
     fi
     if [[ -n "$forward_port" ]] && curl -fsSk --max-time 5 "https://127.0.0.1:${forward_port}/health" >/dev/null 2>&1; then
       echo "maas-api /health passed"
-      kill "$forward_pid" 2>/dev/null || true
-      trap 'rm -rf "$KIND_WORK"' EXIT
+      kill "$PORT_FORWARD_PID" 2>/dev/null || true
+      PORT_FORWARD_PID=""
       return 0
     fi
     sleep 1
