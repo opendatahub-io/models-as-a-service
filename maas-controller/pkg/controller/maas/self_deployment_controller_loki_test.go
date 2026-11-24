@@ -158,7 +158,7 @@ func hasOnlyApplicationLogsReadRule(rules []any) bool {
 			continue
 		}
 		apiGroups, _, _ := unstructured.NestedStringSlice(rule, "apiGroups")
-		if !slices.Contains(apiGroups, "loki.grafana.com") {
+		if !slices.Contains(apiGroups, "loki.grafana.com") && !slices.Contains(apiGroups, "*") {
 			continue
 		}
 
@@ -177,6 +177,25 @@ func hasOnlyApplicationLogsReadRule(rules []any) bool {
 		}
 	}
 	return lokiRuleCount == 1
+}
+
+func TestHasOnlyApplicationLogsReadRuleRejectsWildcardExcessGrant(t *testing.T) {
+	rules := []any{
+		map[string]any{
+			"apiGroups":     []any{"loki.grafana.com"},
+			"resources":     []any{"application"},
+			"resourceNames": []any{"logs"},
+			"verbs":         []any{"get"},
+		},
+		map[string]any{
+			"apiGroups":     []any{"*"},
+			"resources":     []any{"application"},
+			"resourceNames": []any{"logs"},
+			"verbs":         []any{"delete"},
+		},
+	}
+
+	require.False(t, hasOnlyApplicationLogsReadRule(rules))
 }
 
 func hasApplicationLogsReadRule(rules []any) bool {

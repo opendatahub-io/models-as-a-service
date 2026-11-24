@@ -551,7 +551,7 @@ func (h *Handler) upstreamToken() (string, error) {
 	}
 	tokenValue := strings.TrimSpace(string(token))
 	if tokenValue == "" {
-		return "", fmt.Errorf("Loki service-account token %q is empty", h.tokenPath)
+		return "", fmt.Errorf("loki service-account token %q is empty", h.tokenPath)
 	}
 	return tokenValue, nil
 }
