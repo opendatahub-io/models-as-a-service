@@ -431,7 +431,7 @@ spec:
       kind: Panel
       spec:
         display:
-          name: "Usage breakdown"
+          name: "Usage summary"
           description: >-
             All user/model/subscription pairs, with organization ID and cost
             center. **View by** changes the chart; **By API key** also splits
@@ -698,7 +698,7 @@ spec:
     - kind: Grid
       spec:
         display:
-          title: "Token consumption"
+          title: "Usage breakdown"
           collapse:
             open: true
         items:
