@@ -379,10 +379,17 @@ JSON_BBR_MODEL_CANONICAL_ID = os.environ.get(
 RERANK_MODEL_REF = os.environ.get("E2E_RERANK_MODEL_REF", JSON_BBR_MODEL_REF)
 RERANK_MODEL_PATH = os.environ.get("E2E_RERANK_MODEL_PATH", JSON_BBR_MODEL_PATH)
 RERANK_MODEL_NAME = os.environ.get("E2E_RERANK_MODEL_NAME", JSON_BBR_MODEL_NAME)
-RERANK_MODEL_CANONICAL_ID = os.environ.get(
-    "E2E_RERANK_MODEL_CANONICAL_ID",
-    JSON_BBR_MODEL_CANONICAL_ID,
-)
+if os.environ.get("E2E_RERANK_MODEL_CANONICAL_ID"):
+    RERANK_MODEL_CANONICAL_ID = os.environ["E2E_RERANK_MODEL_CANONICAL_ID"]
+elif (
+    os.environ.get("E2E_RERANK_MODEL_REF") is not None
+    or os.environ.get("E2E_RERANK_MODEL_NAME") is not None
+):
+    RERANK_MODEL_CANONICAL_ID = (
+        f"publishers/{MODEL_NAMESPACE}/models/{RERANK_MODEL_NAME}"
+    )
+else:
+    RERANK_MODEL_CANONICAL_ID = JSON_BBR_MODEL_CANONICAL_ID
 
 
 # ---------------------------------------------------------------------------
@@ -1799,6 +1806,8 @@ def _json_bbr_post(api_key, path_suffix, body, bbr=True, path=None):
 def _rerank_inference(api_key, path=None, model_name=None, bbr=False):
     """POST /v1/rerank with API key (path-based or BBR at gateway root)."""
     model_name = model_name or RERANK_MODEL_NAME
+    if not bbr and path is None:
+        path = RERANK_MODEL_PATH
     body = {
         "model": model_name,
         "query": "what is a vector database?",

@@ -26,6 +26,7 @@ from test_helper import (
     _get_cr,
     _json_bbr_post,
     _ns,
+    _poll_status,
     _wait_for_maas_auth_policy_phase,
     _wait_for_subscription_inference_ready,
 )
@@ -95,6 +96,15 @@ def json_bbr_governance():
             name=f"e2e-json-bbr-{uuid.uuid4().hex[:8]}",
             subscription=SUBSCRIPTION,
         )
+        probe_body = _model_body({"query": "q", "documents": ["a", "b"]})
+        _poll_status(
+            api_key,
+            200,
+            timeout=120,
+            inference_fn=lambda key, **_: _json_bbr_post(
+                key, "v1/rerank", probe_body, bbr=True
+            ),
+        )
         yield api_key
     finally:
         _delete_governance_and_wait(
@@ -118,6 +128,6 @@ class TestJsonBBRAuthorization:
         bad["model"] = "nonexistent-json-bbr-model"
         r = _json_bbr_post(json_bbr_governance, path_suffix, bad, bbr=True)
         log.info("[json-bbr-deny] POST /%s wrong model -> %s", path_suffix, r.status_code)
-        assert r.status_code in (401, 403), (
-            f"Expected 401/403 for wrong model, got {r.status_code}: {r.text[:300]}"
+        assert r.status_code == 403, (
+            f"Expected 403 for wrong model (authZ), got {r.status_code}: {r.text[:300]}"
         )
