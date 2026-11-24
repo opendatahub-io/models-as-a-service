@@ -62,10 +62,7 @@ from test_helper import RECONCILE_WAIT, _ns
 
 log = logging.getLogger(__name__)
 
-# Serialized with tenant_ipp until the legacy IPP controllers skip
-# gatewayRefs ExternalModels (image pin pending): without that guard they
-# adopt this suite's models and flap status.httpRouteName.
-pytestmark = pytest.mark.xdist_group("tenant_ipp")
+pytestmark = pytest.mark.xdist_group("tenant_ipp_ext_compat")
 
 DEFAULT_BACKEND_SWITCH_TIMEOUT = int(os.environ.get("E2E_TENANT_BACKEND_SWITCH_TIMEOUT", "420"))
 
@@ -296,6 +293,7 @@ def attachment_status_snapshot(model: dict) -> dict:
 
 
 @pytest.mark.serial
+@pytest.mark.legacy_ipp
 class TestLegacyIppCoexistence:
     """With the default tenant on ipp, the legacy controller ignores
     new-shaped AGC models and the backend handoff works.
