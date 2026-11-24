@@ -231,6 +231,7 @@ func TestBuildTenantInfos_RouteHostFallback(t *testing.T) {
 			"status": map[string]any{
 				"ingress": []any{
 					map[string]any{
+						"host": "maas.apps.example.com",
 						"conditions": []any{
 							map[string]any{"type": "Admitted", "status": "True"},
 						},
