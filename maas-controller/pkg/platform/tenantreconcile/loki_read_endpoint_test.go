@@ -45,10 +45,10 @@ func TestResolveLokiReadEndpoint(t *testing.T) {
 		{
 			name: "secret with endpoint and token enables the proxy",
 			secret: lokiSecret(appNs, map[string][]byte{
-				LokiReadSecretKey:      []byte("https://data-science-lokistack-gateway-http.opendatahub.svc:8080/api/logs/v1/application"),
+				LokiReadSecretKey:      []byte("https://data-science-usage-logs-lokistack-gateway-http.opendatahub.svc:8080/api/logs/v1/application"),
 				LokiReadTokenSecretKey: []byte("sa-token-123"),
 			}),
-			expectedEndpoint:     "https://data-science-lokistack-gateway-http.opendatahub.svc:8080/api/logs/v1/application",
+			expectedEndpoint:     "https://data-science-usage-logs-lokistack-gateway-http.opendatahub.svc:8080/api/logs/v1/application",
 			expectedTokenFromRef: true,
 		},
 		{

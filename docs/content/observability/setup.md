@@ -22,13 +22,21 @@ kubectl get dscinitialization default-dsci -o json | jq '.status.conditions[] | 
 
 ### Loki for Access Logs
 
-If you plan to store access logs for logs-based showback or for auditing, ensure LokiStack named `usage` is ready in monitoring namespace configured in DSCI `spec.monitoring.namespace` by verifying that the status of its `Ready` condition is `True`:
+Logs-based showback and auditing use the Loki destination selected by `Config.spec.usageLogging`.
+
+When `usageLogging` is `false` or omitted, the gateway EnvoyFilter sends access logs to `data-science-usage-logs-collector`. The tenancy proxy and usage-log dashboards read LokiStack `data-science-usage-logs-lokistack` in the monitoring namespace configured in DSCI `spec.monitoring.namespace`. Verify that the status of its `Ready` condition is `True`:
+
+```bash
+kubectl get lokistack data-science-usage-logs-lokistack -n <monitoring-namespace> -o json | jq '.status.conditions[] | select(.type=="Ready") | {type, status}'
+```
+
+LokiStack `usage` is required only when `usageLogging` is `true`. The usage-logs collector then exports to that stack's gateway. Verify that the status of its `Ready` condition is `True`:
 
 ```bash
 kubectl get lokistack usage -n <monitoring-namespace> -o json | jq '.status.conditions[] | select(.type=="Ready") | {type, status}'
 ```
 
-See [Installing Loki for Access logs](../install/prerequisites.md#loki-for-access-logs)
+See [Installing Loki for Access logs](../install/prerequisites.md#loki-for-access-logs) for the `usage` LokiStack.
 
 ## Installation
 

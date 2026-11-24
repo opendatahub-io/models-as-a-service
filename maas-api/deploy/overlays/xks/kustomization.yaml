@@ -121,18 +121,23 @@ patches:
         path: /spec/jobTemplate/spec/template/spec/securityContext/runAsUser
         value: 1001
 
-  # The maas-api ClusterRoles carry an OpenShift-only rule for the cluster TLS security
-  # profile (config.openshift.io/apiservers). That API group does not exist on xKS, so
-  # the maas-controller SA can never hold the permission and the RBAC escalation guard
-  # denies the server-side apply of the ClusterRole, failing every tenant platform
-  # reconcile with "attempting to grant RBAC permissions not currently held". Strip the
-  # rule on xKS — maas-api never reads the cluster TLS profile there. The OpenShift
-  # overlay keeps it. The test ops fail the build if the base rules are reordered,
-  # instead of silently removing a different rule.
+  # The maas-api ClusterRoles carry OpenShift-only rules for the cluster TLS security
+  # profile (config.openshift.io/apiservers) and Route discovery. Those API groups do
+  # not exist on xKS, so the maas-controller SA can never hold the permissions and the
+  # RBAC escalation guard denies the server-side apply of the ClusterRole, failing
+  # every tenant platform reconcile with "attempting to grant RBAC permissions not
+  # currently held". Strip the rules on xKS — maas-api never uses those APIs there.
+  # The OpenShift overlay keeps them. The test ops fail the build if the base rules
+  # are reordered, instead of silently removing a different rule.
   - target:
       kind: ClusterRole
       name: maas-api
     patch: |
+      - op: test
+        path: /rules/9/apiGroups
+        value: ["route.openshift.io"]
+      - op: remove
+        path: /rules/9
       - op: test
         path: /rules/8/apiGroups
         value: ["config.openshift.io"]
@@ -145,6 +150,11 @@ patches:
       kind: ClusterRole
       name: maas-api-supplemental
     patch: |
+      - op: test
+        path: /rules/7/apiGroups
+        value: ["route.openshift.io"]
+      - op: remove
+        path: /rules/7
       - op: test
         path: /rules/5/apiGroups
         value: ["config.openshift.io"]
