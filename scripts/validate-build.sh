@@ -392,7 +392,16 @@ for doc in docs:
 with open(target, "w", encoding="utf-8") as handle:
     yaml.safe_dump_all(docs, handle, sort_keys=False)
 PY
-  kubectl apply --server-side --force-conflicts -f "$KIND_WORK/controller-patched.yaml" >/dev/null
+  # The generated maas-parameters ConfigMap carries no explicit namespace, so the
+  # bundle must be applied with -n or it lands in the caller's default namespace.
+  # The Deployment reads it through configMapKeyRef; when the lookup misses, the
+  # $(VAR) args stay literal and the manager exits before the logger is set,
+  # producing a silent CrashLoopBackOff.
+  kubectl -n "$namespace" apply --server-side --force-conflicts -f "$KIND_WORK/controller-patched.yaml" >/dev/null
+  if ! kubectl -n "$namespace" get configmap maas-parameters >/dev/null 2>&1; then
+    echo "maas-parameters ConfigMap is missing from namespace $namespace; the controller would exit before logging" >&2
+    return 1
+  fi
   if ! kubectl -n "$namespace" rollout status deployment/maas-controller --timeout=240s; then
     dump_controller_state
     return 1
