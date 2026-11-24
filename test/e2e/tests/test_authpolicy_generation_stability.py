@@ -35,7 +35,11 @@ from test_helper import (
 
 log = logging.getLogger(__name__)
 
-pytestmark = [pytest.mark.xdist_group("readonly"), pytest.mark.smoke]
+pytestmark = [
+    pytest.mark.xdist_group("readonly"),
+    pytest.mark.smoke,
+    pytest.mark.serial,
+]
 
 STABILITY_WINDOW = int(os.environ.get("E2E_GENERATION_STABILITY_WINDOW", "60"))
 POLL_INTERVAL = 5

@@ -855,15 +855,17 @@ func TestPostRender_ProcessingAndPreProcessingCustomization(t *testing.T) {
 }
 
 func TestApplyPlatformParamsWithRenderedOverlay_AITenant(t *testing.T) {
-	resources := renderOverlayResources(t, "ai-tenant-redteam")
+	tenantID := strings.Repeat("a", 35)
+	appNamespace := "ai-tenant-" + tenantID
+	resources := renderOverlayResources(t, appNamespace)
 	params := PlatformParams{ //nolint:gosec // APIKeyMaxExpirationDays is a duration setting, not a secret
-		AppNamespace:            "ai-tenant-redteam",
+		AppNamespace:            appNamespace,
 		ControllerNamespace:     "controller-ns",
 		GatewayNamespace:        "gateway-ns",
-		GatewayName:             "redteam-gateway",
+		GatewayName:             "tenant-gateway",
 		ClusterAudience:         "openshift-custom",
-		TenantIdentifier:        "redteam",
-		SubscriptionNamespace:   "ai-tenant-redteam",
+		TenantIdentifier:        tenantID,
+		SubscriptionNamespace:   appNamespace,
 		MaaSAPIImage:            "quay.io/example/maas-api:test",
 		PayloadProcessingImage:  "quay.io/example/payload:test",
 		MaaSAPIKeyCleanupImage:  "quay.io/example/cleanup:test",
@@ -874,31 +876,36 @@ func TestApplyPlatformParamsWithRenderedOverlay_AITenant(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Nil(t, findResource(resources, GVKDeployment, PayloadProcessingName), "base deployment name should be renamed")
-	requireResource(t, resources, GVKDeployment, "payload-processing-redteam")
-	requireResource(t, resources, GVKEnvoyFilter, "payload-processing-redteam")
+	requireResource(t, resources, GVKDeployment, PayloadProcessingDeploymentName(tenantID))
+	requireResource(t, resources, GVKEnvoyFilter, PayloadProcessingEnvoyFilterName(tenantID))
 
-	payloadDeployment := requireResource(t, resources, GVKDeployment, "payload-processing-redteam")
-	assert.Equal(t, "redteam-gateway", requireEnvVarValue(t, payloadDeployment, "payload-processing", "GATEWAY_NAME"))
-	assert.Equal(t, "ai-tenant-redteam", requireEnvVarValue(t, payloadDeployment, "payload-processing", "TENANT_NAMESPACE"))
+	payloadDeployment := requireResource(t, resources, GVKDeployment, PayloadProcessingDeploymentName(tenantID))
+	assert.Equal(t, "tenant-gateway", requireEnvVarValue(t, payloadDeployment, "payload-processing", "GATEWAY_NAME"))
+	assert.Equal(t, appNamespace, requireEnvVarValue(t, payloadDeployment, "payload-processing", "TENANT_NAMESPACE"))
 	// Non-default tenant must have DISABLE_EXTERNAL_MODEL_CONTROLLER=true
 	assert.Equal(t, "true", requireEnvVarValue(t, payloadDeployment, "payload-processing", "DISABLE_EXTERNAL_MODEL_CONTROLLER"))
-	assert.Equal(t, "payload-processing-redteam", requireDeploymentSelectorLabel(t, payloadDeployment, LabelTenantInstance))
+	assert.Equal(t, PayloadProcessingDeploymentName(tenantID), requireDeploymentSelectorLabel(t, payloadDeployment, LabelTenantInstance))
 
-	payloadBeforeDeployment := requireResource(t, resources, GVKDeployment, "payload-pre-processing-redteam")
-	assert.Equal(t, "payload-pre-processing-redteam", requireDeploymentSelectorLabel(t, payloadBeforeDeployment, LabelTenantInstance))
+	payloadBeforeDeployment := requireResource(t, resources, GVKDeployment, PayloadPreProcessingDeploymentName(tenantID))
+	assert.Equal(t, PayloadPreProcessingDeploymentName(tenantID), requireDeploymentSelectorLabel(t, payloadBeforeDeployment, LabelTenantInstance))
 	assert.Equal(t, "gateway-ns", requireEnvVarValue(t, payloadBeforeDeployment, PayloadPreProcessingName, "GATEWAY_NAMESPACE"))
-	assert.Equal(t, "redteam-gateway", requireEnvVarValue(t, payloadBeforeDeployment, PayloadPreProcessingName, "GATEWAY_NAME"))
-	assert.Equal(t, "ai-tenant-redteam", requireEnvVarValue(t, payloadBeforeDeployment, PayloadPreProcessingName, "TENANT_NAMESPACE"))
+	assert.Equal(t, "tenant-gateway", requireEnvVarValue(t, payloadBeforeDeployment, PayloadPreProcessingName, "GATEWAY_NAME"))
+	assert.Equal(t, appNamespace, requireEnvVarValue(t, payloadBeforeDeployment, PayloadPreProcessingName, "TENANT_NAMESPACE"))
 	// The pre-auth IPP of a non-default tenant must not run the cluster-wide ExternalModel controller either.
 	assert.Equal(t, "true", requireEnvVarValue(t, payloadBeforeDeployment, PayloadPreProcessingName, "DISABLE_EXTERNAL_MODEL_CONTROLLER"))
 
-	gatewayPolicy := requireResource(t, resources, GVKNetworkPolicy, MaaSAPIGatewayNetworkPolicyName("redteam"))
+	cronJob := requireResource(t, resources, GVKCronJob, MaaSAPIKeyCleanupCronJobName(tenantID))
+	assert.Equal(t, "batch/v1", cronJob.GetAPIVersion())
+	assert.Equal(t, "CronJob", cronJob.GetKind())
+	assert.LessOrEqual(t, len(cronJob.GetName()), maxCronJobNameLength)
+
+	gatewayPolicy := requireResource(t, resources, GVKNetworkPolicy, MaaSAPIGatewayNetworkPolicyName(tenantID))
 	gatewayTargetSelector, found, err := unstructured.NestedMap(gatewayPolicy.Object, "spec", "podSelector")
 	require.NoError(t, err)
 	require.True(t, found)
 	gatewayTargetLabels, ok := gatewayTargetSelector["matchLabels"].(map[string]any)
 	require.True(t, ok)
-	assert.Equal(t, "maas-api-redteam", gatewayTargetLabels[LabelTenantInstance])
+	assert.Equal(t, MaaSAPIDeploymentName(tenantID), gatewayTargetLabels[LabelTenantInstance])
 }
 
 func TestPatchMaaSAPIGatewayNetworkPolicyMissingIngressFailsClosed(t *testing.T) {

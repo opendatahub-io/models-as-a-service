@@ -4,15 +4,21 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
+	"knative.dev/pkg/network"
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/middleware"
@@ -22,22 +28,35 @@ const (
 	protocolHTTPS = "HTTPS"
 	protocolTLS   = "TLS"
 	protocolHTTP  = "HTTP"
+
+	gatewayNameLabel = "gateway.networking.k8s.io/gateway-name"
+	routeAPIGroup    = "route.openshift.io"
+	routeKindService = "Service"
+	routeAdmitted    = "Admitted"
+	conditionTrue    = "True"
 )
 
 // Handler handles /v1/tenant endpoint requests.
 type Handler struct {
 	log              *logger.Logger
 	dynamicClient    dynamic.Interface
+	routeDiscovery   discovery.ServerGroupsInterfaceWithContext
 	tenantName       string
 	gatewayName      string
 	gatewayNamespace string
 }
 
 // NewHandler creates a new tenant handler.
-func NewHandler(log *logger.Logger, dynamicClient dynamic.Interface, tenantName, gatewayName, gatewayNamespace string) *Handler {
+func NewHandler(
+	log *logger.Logger,
+	dynamicClient dynamic.Interface,
+	routeDiscovery discovery.ServerGroupsInterfaceWithContext,
+	tenantName, gatewayName, gatewayNamespace string,
+) *Handler {
 	return &Handler{
 		log:              log,
 		dynamicClient:    dynamicClient,
+		routeDiscovery:   routeDiscovery,
 		tenantName:       tenantName,
 		gatewayName:      gatewayName,
 		gatewayNamespace: gatewayNamespace,
@@ -118,7 +137,7 @@ func (h *Handler) GetTenantInfo(c *gin.Context) {
 	}
 
 	// Extract gateway metadata
-	gatewayMetadata, err := h.extractGatewayMetadata(gateway.Object)
+	gatewayMetadata, err := h.extractGatewayMetadata(ctx, gateway.Object)
 	if err != nil {
 		h.log.Error("Failed to extract gateway metadata", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{
@@ -143,7 +162,7 @@ func (h *Handler) GetTenantInfo(c *gin.Context) {
 // extractGatewayMetadata extracts connection metadata from Gateway spec and status.
 // Hostname, port, and protocol come from spec.listeners.
 // Readiness (attachedRoutes) comes from status.listeners.
-func (h *Handler) extractGatewayMetadata(gateway map[string]any) (*GatewayMetadata, error) {
+func (h *Handler) extractGatewayMetadata(ctx context.Context, gateway map[string]any) (*GatewayMetadata, error) {
 	// Extract spec
 	spec, ok := gateway["spec"].(map[string]any)
 	if !ok {
@@ -198,15 +217,28 @@ func (h *Handler) extractGatewayMetadata(gateway map[string]any) (*GatewayMetada
 		return nil, errors.New("could not determine external hostname from gateway")
 	}
 
-	// Reject internal service names - better to return error than misleading internal hostname
-	if strings.HasSuffix(externalHost, ".svc.cluster.local") {
-		h.log.Warn("Gateway has no external hostname configured",
+	// A cluster-local Gateway address can still be exposed by an OpenShift Route.
+	if isLocalHostname(externalHost) {
+		routeMetadata, found, err := h.openShiftRouteFallback(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("failed to discover an OpenShift Route for gateway %s/%s: %w",
+				h.gatewayNamespace, h.gatewayName, err)
+		}
+		if found {
+			h.log.Info("Using OpenShift Route for cluster-local Gateway",
+				"gateway", h.gatewayName,
+				"namespace", h.gatewayNamespace,
+				"externalUrl", routeMetadata.ExternalURL)
+			return routeMetadata, nil
+		}
+
+		h.log.Warn("Gateway has no external hostname or compatible OpenShift Route configured",
 			"gateway", h.gatewayName,
 			"namespace", h.gatewayNamespace,
 			"internal_address", externalHost,
-			"recommendation", "Configure Gateway with hostname in spec.listeners and LoadBalancer service type")
-		return nil, fmt.Errorf("gateway %s/%s is not configured with an external hostname (found internal service name: %s). "+
-			"Please configure the Gateway with spec.listeners[].hostname and use LoadBalancer service type",
+			"recommendation", "Configure Gateway with hostname in spec.listeners and LoadBalancer service type, or add an admitted host-only OpenShift Route to a Gateway Service")
+		return nil, fmt.Errorf("gateway %s/%s is not configured with an external hostname or compatible OpenShift Route (found internal service name: %s). "+
+			"Please configure the Gateway with spec.listeners[].hostname and use LoadBalancer service type, or add an admitted host-only OpenShift Route to a Gateway Service",
 			h.gatewayNamespace, h.gatewayName, externalHost)
 	}
 
@@ -216,7 +248,7 @@ func (h *Handler) extractGatewayMetadata(gateway map[string]any) (*GatewayMetada
 		scheme = "http"
 	}
 
-	externalURL := fmt.Sprintf("%s://%s", scheme, externalHost)
+	externalURL := fmt.Sprintf("%s://%s", scheme, bracketIPv6Literal(externalHost))
 	// Include port if non-standard
 	if (scheme == "https" && port != 443) || (scheme == "http" && port != 80) {
 		externalURL = fmt.Sprintf("%s:%d", externalURL, port)
@@ -229,6 +261,214 @@ func (h *Handler) extractGatewayMetadata(gateway map[string]any) (*GatewayMetada
 		ExternalURL: externalURL,
 		Port:        port,
 	}, nil
+}
+
+type routeEndpoint struct {
+	ExternalURL string
+	Protocol    string
+	Port        int64
+}
+
+func (h *Handler) routeAPIAvailable(ctx context.Context) (bool, error) {
+	groupList, err := h.routeDiscovery.ServerGroupsWithContext(ctx)
+	if err != nil {
+		return false, fmt.Errorf("discovering API groups: %w", err)
+	}
+
+	for _, group := range groupList.Groups {
+		if group.Name == routeAPIGroup {
+			return true, nil
+		}
+	}
+
+	return false, nil
+}
+
+func isLocalHostname(hostname string) bool {
+	hostname = strings.ToLower(strings.TrimSuffix(hostname, "."))
+	if host, _, err := net.SplitHostPort(hostname); err == nil {
+		hostname = host
+	}
+	if hostname == "localhost" {
+		return true
+	}
+
+	if ip := net.ParseIP(hostname); ip != nil {
+		return ip.IsLoopback() || ip.IsLinkLocalUnicast()
+	}
+
+	clusterDomain := "." + strings.TrimPrefix(network.GetClusterDomainName(), ".")
+	localSuffixes := []string{clusterDomain, ".svc", ".local", ".localhost", ".internal"}
+	for _, localSuffix := range localSuffixes {
+		if strings.HasSuffix(hostname, localSuffix) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func bracketIPv6Literal(host string) string {
+	if ip := net.ParseIP(host); ip != nil && strings.Contains(host, ":") {
+		return "[" + host + "]"
+	}
+
+	return host
+}
+
+// openShiftRouteFallback mirrors Kserve's Route discovery for Gateways that only
+// expose cluster-local addresses. It finds admitted, host-only Routes targeting
+// a Service whose selector identifies the Gateway.
+func (h *Handler) openShiftRouteFallback(ctx context.Context) (*GatewayMetadata, bool, error) {
+	if h.dynamicClient == nil || h.routeDiscovery == nil {
+		return nil, false, nil
+	}
+
+	routeAPIAvailable, err := h.routeAPIAvailable(ctx)
+	if err != nil {
+		return nil, false, err
+	}
+	if !routeAPIAvailable {
+		h.log.Info("OpenShift Route API unavailable; skipping Route fallback")
+		return nil, false, nil
+	}
+
+	serviceGVR := schema.GroupVersionResource{Group: "", Version: "v1", Resource: "services"}
+	services, err := h.dynamicClient.Resource(serviceGVR).Namespace(h.gatewayNamespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, false, fmt.Errorf("failed to list Services in namespace %s: %w", h.gatewayNamespace, err)
+	}
+
+	serviceNames := gatewayServiceNames(services, h.gatewayName)
+	if len(serviceNames) == 0 {
+		return nil, false, nil
+	}
+
+	routeGVR := schema.GroupVersionResource{Group: "route.openshift.io", Version: "v1", Resource: "routes"}
+	routes, err := h.dynamicClient.Resource(routeGVR).Namespace(h.gatewayNamespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		if apimeta.IsNoMatchError(err) || apierrors.IsNotFound(err) {
+			h.log.Info("OpenShift Route API unavailable; skipping Route fallback")
+			return nil, false, nil
+		}
+		return nil, false, fmt.Errorf("failed to list Routes in namespace %s: %w", h.gatewayNamespace, err)
+	}
+
+	endpoints := make([]routeEndpoint, 0)
+	for _, route := range routes.Items {
+		if endpoint, ok := admittedHostOnlyRouteEndpoint(route, serviceNames); ok {
+			endpoints = append(endpoints, endpoint)
+		}
+	}
+	if len(endpoints) == 0 {
+		return nil, false, nil
+	}
+
+	sort.SliceStable(endpoints, func(left, right int) bool {
+		if endpoints[left].Protocol != endpoints[right].Protocol {
+			return endpoints[left].Protocol == "https"
+		}
+		return endpoints[left].ExternalURL < endpoints[right].ExternalURL
+	})
+	endpoint := endpoints[0]
+
+	return &GatewayMetadata{
+		Name:        h.gatewayName,
+		Namespace:   h.gatewayNamespace,
+		Protocol:    endpoint.Protocol,
+		ExternalURL: endpoint.ExternalURL,
+		Port:        endpoint.Port,
+	}, true, nil
+}
+
+func gatewayServiceNames(services *unstructured.UnstructuredList, gatewayName string) map[string]struct{} {
+	serviceNames := make(map[string]struct{})
+	for _, service := range services.Items {
+		selectorValue, found, err := unstructured.NestedString(service.Object, "spec", "selector", gatewayNameLabel)
+		if err != nil || !found || selectorValue != gatewayName {
+			continue
+		}
+		serviceNames[service.GetName()] = struct{}{}
+	}
+	return serviceNames
+}
+
+func admittedHostOnlyRouteEndpoint(route unstructured.Unstructured, serviceNames map[string]struct{}) (routeEndpoint, bool) {
+	targetKind, _, _ := unstructured.NestedString(route.Object, "spec", "to", "kind")
+	if targetKind != "" && targetKind != routeKindService {
+		return routeEndpoint{}, false
+	}
+
+	targetName, _, _ := unstructured.NestedString(route.Object, "spec", "to", "name")
+	if _, targetsGateway := serviceNames[targetName]; !targetsGateway {
+		return routeEndpoint{}, false
+	}
+
+	targetWeight, weightFound, _ := unstructured.NestedInt64(route.Object, "spec", "to", "weight")
+	if weightFound && targetWeight == 0 {
+		return routeEndpoint{}, false
+	}
+
+	routePath, found, err := unstructured.NestedString(route.Object, "spec", "path")
+	if err != nil || found && routePath != "" {
+		return routeEndpoint{}, false
+	}
+
+	host := admittedRouteHost(route)
+	if host == "" {
+		return routeEndpoint{}, false
+	}
+
+	protocol := "http"
+	port := int64(80)
+	if _, hasTLS, _ := unstructured.NestedMap(route.Object, "spec", "tls"); hasTLS {
+		protocol = "https"
+		port = 443
+	}
+
+	return routeEndpoint{
+		ExternalURL: fmt.Sprintf("%s://%s", protocol, host),
+		Protocol:    protocol,
+		Port:        port,
+	}, true
+}
+
+func admittedRouteHost(route unstructured.Unstructured) string {
+	ingresses, found, err := unstructured.NestedSlice(route.Object, "status", "ingress")
+	if err != nil || !found {
+		return ""
+	}
+
+	for _, ingress := range ingresses {
+		ingressMap, ok := ingress.(map[string]any)
+		if !ok {
+			continue
+		}
+
+		host, ok := ingressMap["host"].(string)
+		if !ok || host == "" {
+			continue
+		}
+
+		conditions, found, _ := unstructured.NestedSlice(ingressMap, "conditions")
+		if !found {
+			continue
+		}
+		for _, condition := range conditions {
+			conditionMap, ok := condition.(map[string]any)
+			if !ok {
+				continue
+			}
+
+			conditionType, _ := conditionMap["type"].(string)
+			conditionStatus, _ := conditionMap["status"].(string)
+			if conditionType == routeAdmitted && conditionStatus == conditionTrue {
+				return host
+			}
+		}
+	}
+
+	return ""
 }
 
 // selectBestListener picks the best ready listener from a Gateway spec.
