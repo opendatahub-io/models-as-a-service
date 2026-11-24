@@ -222,8 +222,14 @@ def test_tenant_discovery_not_exposed_through_gateway(
     # A 404 is the expected answer (path not routed). Transient gateway 5xx
     # (empty/proxy 500-503 from Envoy or auth filters mid-reload) is a known
     # propagation flake — retry it rather than failing the security test.
+    # Empty 401/403 is NOT retried: for this test it means the path is routed
+    # and auth rejected the request, i.e. the exposure the test guards against.
     r = _request_with_gateway_retry(
-        requests.get, gateway_url, headers=headers, timeout=10
+        requests.get,
+        gateway_url,
+        headers=headers,
+        timeout=10,
+        auth_denial_is_transient=False,
     )
 
     log.info(f"[tenant] Gateway response: {r.status_code}")
