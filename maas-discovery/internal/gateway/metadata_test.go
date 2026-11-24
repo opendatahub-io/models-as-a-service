@@ -57,12 +57,37 @@ func readyStatus(name string, attachedRoutes int64) map[string]any {
 }
 
 func routeObj(host, svc string, tls, admitted bool) unstructured.Unstructured {
+	return routeObjWithSpecHost(host, host, svc, tls, admitted, "", nil)
+}
+
+// routeObjWithSpecHost builds a Route whose spec.host may differ from the host
+// published by the admitting status.ingress entry, with an optional path and
+// backend weight.
+func routeObjWithSpecHost(specHost, ingressHost, svc string, tls, admitted bool, path string, weight *int64) unstructured.Unstructured {
 	route := unstructured.Unstructured{Object: map[string]any{
 		"spec": map[string]any{
-			"host": host,
+			"host": specHost,
 			"to":   map[string]any{"kind": "Service", "name": svc},
 		},
 	}}
+	if path != "" {
+		spec, ok := route.Object["spec"].(map[string]any)
+		if !ok {
+			panic("route spec is not a map")
+		}
+		spec["path"] = path
+	}
+	if weight != nil {
+		spec, ok := route.Object["spec"].(map[string]any)
+		if !ok {
+			panic("route spec is not a map")
+		}
+		to, ok := spec["to"].(map[string]any)
+		if !ok {
+			panic("route to is not a map")
+		}
+		to["weight"] = *weight
+	}
 	if tls {
 		spec, ok := route.Object["spec"].(map[string]any)
 		if !ok {
@@ -77,6 +102,7 @@ func routeObj(host, svc string, tls, admitted bool) unstructured.Unstructured {
 	route.Object["status"] = map[string]any{
 		"ingress": []any{
 			map[string]any{
+				"host": ingressHost,
 				"conditions": []any{
 					map[string]any{"type": "Admitted", "status": statusValue},
 				},
@@ -371,4 +397,84 @@ func TestExtractMetadata_TLSListener(t *testing.T) {
 	meta, err := gateway.ExtractMetadata(gw, "gw", "ns")
 	require.NoError(t, err)
 	assert.Equal(t, "https", meta.Protocol)
+}
+
+func TestExtractMetadata_IPv6AddressBracketed(t *testing.T) {
+	gw := makeGateway(
+		[]any{httpsListener("", int64(8443))},
+		[]any{readyStatus("https", int64(1))},
+		[]any{map[string]any{"value": "fd00::1"}},
+	)
+
+	meta, err := gateway.ExtractMetadata(gw, "gw", "ns")
+	require.NoError(t, err)
+	assert.Equal(t, "https://[fd00::1]:8443", meta.ExternalURL)
+	assert.Equal(t, int64(8443), meta.Port)
+}
+
+func TestExtractMetadata_RouteHostFallbackForSvcSuffix(t *testing.T) {
+	gw := makeGateway(
+		[]any{httpsListener("", int64(443))},
+		[]any{readyStatus("https", int64(1))},
+		[]any{map[string]any{"value": "my-gw-svc.gw-ns.svc"}},
+	)
+
+	routeHosts := map[string]gateway.RouteHostInfo{
+		"my-gw-svc": {
+			Host:   "maas.apps.example.com",
+			Scheme: "https",
+			Port:   443,
+		},
+	}
+
+	meta, err := gateway.ExtractMetadata(gw, "my-gw", "gw-ns", routeHosts)
+	require.NoError(t, err)
+	assert.Equal(t, "https://maas.apps.example.com", meta.ExternalURL)
+}
+
+func TestBuildRouteHostMap_IgnoresPathBasedRoutes(t *testing.T) {
+	routes := []unstructured.Unstructured{
+		routeObjWithSpecHost("maas.apps.example.com", "maas.apps.example.com", "maas-gw-svc", true, true, "/foo", nil),
+		routeObjWithSpecHost("root.apps.example.com", "root.apps.example.com", "maas-gw-svc", true, true, "", nil),
+	}
+
+	m := gateway.BuildRouteHostMap(routes)
+	assert.Equal(t, "root.apps.example.com", m["maas-gw-svc"].Host)
+}
+
+func TestBuildRouteHostMap_UsesAdmittedIngressHost(t *testing.T) {
+	routes := []unstructured.Unstructured{
+		routeObjWithSpecHost("wrong.apps.example.com", "sharded.apps.example.com", "maas-gw-svc", true, true, "", nil),
+	}
+
+	m := gateway.BuildRouteHostMap(routes)
+	assert.Equal(t, "sharded.apps.example.com", m["maas-gw-svc"].Host)
+}
+
+func TestBuildRouteHostMap_SkipsDisabledBackends(t *testing.T) {
+	zero := int64(0)
+	routes := []unstructured.Unstructured{
+		routeObjWithSpecHost("disabled.apps.example.com", "disabled.apps.example.com", "maas-gw-svc", true, true, "", &zero),
+	}
+
+	m := gateway.BuildRouteHostMap(routes)
+	assert.NotContains(t, m, "maas-gw-svc")
+}
+
+func TestBuildRouteHostMap_DeterministicTieBreak(t *testing.T) {
+	// Two plain-HTTP Routes for the same Service: the lexicographically smaller
+	// host must win regardless of the order the informer delivers them in.
+	forward := []unstructured.Unstructured{
+		routeObj("zeta.apps.example.com", "shared-svc", false, true),
+		routeObj("alpha.apps.example.com", "shared-svc", false, true),
+	}
+	reverse := []unstructured.Unstructured{
+		routeObj("alpha.apps.example.com", "shared-svc", false, true),
+		routeObj("zeta.apps.example.com", "shared-svc", false, true),
+	}
+
+	forwardMap := gateway.BuildRouteHostMap(forward)
+	reverseMap := gateway.BuildRouteHostMap(reverse)
+	assert.Equal(t, "alpha.apps.example.com", forwardMap["shared-svc"].Host)
+	assert.Equal(t, forwardMap["shared-svc"], reverseMap["shared-svc"])
 }
