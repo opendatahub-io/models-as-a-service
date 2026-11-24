@@ -855,7 +855,8 @@ func TestPostRender_ProcessingAndPreProcessingCustomization(t *testing.T) {
 }
 
 func TestApplyPlatformParamsWithRenderedOverlay_AITenant(t *testing.T) {
-	tenantID := strings.Repeat("a", 35)
+	tenantID := "engineering-data-science-west-coast"
+	collidingTenantID := "engineering-data-scien-d1ba1fef"
 	appNamespace := "ai-tenant-" + tenantID
 	resources := renderOverlayResources(t, appNamespace)
 	params := PlatformParams{ //nolint:gosec // APIKeyMaxExpirationDays is a duration setting, not a secret
@@ -898,6 +899,17 @@ func TestApplyPlatformParamsWithRenderedOverlay_AITenant(t *testing.T) {
 	assert.Equal(t, "batch/v1", cronJob.GetAPIVersion())
 	assert.Equal(t, "CronJob", cronJob.GetKind())
 	assert.LessOrEqual(t, len(cronJob.GetName()), maxCronJobNameLength)
+	assert.Equal(t, "maas-api-key-cleanup--engineering-data-scie-d1ba1fef", cronJob.GetName())
+
+	// The short tenant name is the name that would have collided with the
+	// previous bounded form. Render both tenants to ensure each has its own
+	// cleanup CronJob in the shared application namespace.
+	collidingResources := renderOverlayResources(t, appNamespace)
+	collidingParams := params
+	collidingParams.TenantIdentifier = collidingTenantID
+	require.NoError(t, applyPlatformParams(logr.Discard(), collidingResources, collidingParams))
+	collidingCronJob := requireResource(t, collidingResources, GVKCronJob, "maas-api-key-cleanup-engineering-data-scien-d1ba1fef")
+	assert.NotEqual(t, cronJob.GetName(), collidingCronJob.GetName())
 
 	gatewayPolicy := requireResource(t, resources, GVKNetworkPolicy, MaaSAPIGatewayNetworkPolicyName(tenantID))
 	gatewayTargetSelector, found, err := unstructured.NestedMap(gatewayPolicy.Object, "spec", "podSelector")

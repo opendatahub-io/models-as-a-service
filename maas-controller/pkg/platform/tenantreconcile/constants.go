@@ -300,10 +300,11 @@ func MaaSAPIRouteName(tenantID string) string {
 }
 
 func MaaSAPIKeyCleanupCronJobName(tenantID string) string {
-	if tenantID == "" {
-		return baseMaaSAPIKeyCleanupCronJobName
+	name := resourceNameForTenant(baseMaaSAPIKeyCleanupCronJobName, tenantID)
+	if len(name) <= maxCronJobNameLength {
+		return name
 	}
-	return BoundedName(baseMaaSAPIKeyCleanupCronJobName+"-", tenantID, "", maxCronJobNameLength)
+	return BoundedName(baseMaaSAPIKeyCleanupCronJobName+"--", tenantID, "", maxCronJobNameLength)
 }
 
 func GatewayDestinationRuleName(tenantID string) string {
