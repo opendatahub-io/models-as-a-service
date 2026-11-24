@@ -69,6 +69,20 @@ spec:
           spec:
             description: AITenantSpec defines the tenant bootstrap contract.
             properties:
+              consumerPortal:
+                description: |-
+                  ConsumerPortal controls the consumer portal auth proxy for this tenant.
+                  ai-gateway-controller reads spec.consumerPortal.enabled to decide whether
+                  to deploy the consumer portal auth proxy, routes and AuthPolicies. When
+                  this field is unset the portal is enabled.
+                properties:
+                  enabled:
+                    description: |-
+                      Enabled controls whether ai-gateway-controller deploys the consumer
+                      portal auth proxy, routes and AuthPolicies for this tenant. Unset
+                      defaults to enabled, matching the ai-gateway-controller reconciler.
+                    type: boolean
+                type: object
               gateway:
                 description: Gateway references the network-admin-provisioned Gateway
                   API Gateway for this tenant.

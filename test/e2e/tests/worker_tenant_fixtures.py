@@ -100,8 +100,15 @@ def xdist_worker_suffix() -> str:
     return worker.replace("gw", "w")
 
 
+def _runs_in_serial_pass(item) -> bool:
+    return (
+        item.get_closest_marker("serial") is not None
+        or item.get_closest_marker("serial_exclusive") is not None
+    )
+
+
 def serial_only_selection(request) -> bool:
-    """Return whether all selected tests in this module are marked serial.
+    """Return whether all selected tests in this module run in a serial pass.
 
     Module-scoped fixtures cannot inspect a single test item's marker. Inspect
     the collected selection instead, and reject mixed serial/parallel runs so
@@ -122,13 +129,13 @@ def serial_only_selection(request) -> bool:
     ]
     if not selected:
         return False
-    serial = [item.get_closest_marker("serial") is not None for item in selected]
-    if any(serial) and not all(serial):
+    serial_pass = [_runs_in_serial_pass(item) for item in selected]
+    if any(serial_pass) and not all(serial_pass):
         raise RuntimeError(
             f"mixed serial and parallel selection for {request.node.nodeid}; "
             "run the serial and parallel E2E passes separately"
         )
-    return all(serial)
+    return all(serial_pass)
 
 
 def build_worker_tenant_case(worker_suffix: str) -> WorkerTenantContext:

@@ -87,8 +87,8 @@ type MaaSAuthPolicyReconciler struct {
 	// Applies to apiKeyValidation and subscription-info metadata evaluators.
 	MetadataCacheTTL int64
 
-	// AuthzCacheTTL is the TTL in seconds for Authorino OPA authorization caching.
-	// Applies to auth-valid, subscription-valid, and require-group-membership authorization evaluators.
+	// AuthzCacheTTL is deprecated and has no effect. Authorization results are
+	// recomputed from metadata on every request.
 	AuthzCacheTTL int64
 
 	// Recorder emits Kubernetes events for conflict detection warnings.
@@ -113,28 +113,6 @@ type oidcConfig struct {
 	AccessTokenPurposeClaim string
 	AccessTokenPurpose      string
 	TTL                     int
-}
-
-// authzCacheTTL returns the safe TTL for authorization caches that depend on metadata.
-// Authorization cache entries must not outlive their dependent metadata cache entries,
-// otherwise stale metadata can lead to incorrect authorization decisions.
-// Returns the minimum of AuthzCacheTTL and MetadataCacheTTL, clamped to non-negative values.
-func (r *MaaSAuthPolicyReconciler) authzCacheTTL() int64 {
-	metadata := r.MetadataCacheTTL
-	authz := r.AuthzCacheTTL
-
-	// Defensive: clamp negative values to 0 (should be caught at startup, but defensive)
-	if metadata < 0 {
-		metadata = 0
-	}
-	if authz < 0 {
-		authz = 0
-	}
-
-	if authz < metadata {
-		return authz
-	}
-	return metadata
 }
 
 // fetchTenantIdentifier fetches the tenant identifier from the tenant config in the given namespace.
@@ -379,7 +357,7 @@ func (r *MaaSAuthPolicyReconciler) hasLegacyModelAuthPolicy(ctx context.Context,
 	return false, nil
 }
 
-// CEL sub-expressions reused across Authorino cache-key selectors.
+// CEL sub-expressions reused across Authorino cache-key expressions.
 // These handle API keys, OIDC tokens, and Kubernetes tokens.
 const (
 	// celUserID extracts user ID from API key, OIDC, or K8s token
@@ -504,13 +482,19 @@ const maasGatewayAuthPolicyName = "maas-gateway-auth"
 // favor of maas-gateway-auth. Kept only for upgrade cleanup of stale cluster resources.
 const legacyGatewayDefaultAuthPolicyName = "gateway-default-auth"
 
-// subscriptionGatewayCacheKeySelector builds a collision-safe key for gateway-level selection.
+// subscriptionGatewayCacheKeyExpression builds a collision-safe key for gateway-level selection.
 // It length-prefixes every value so opaque group names cannot collide with separators.
-func subscriptionGatewayCacheKeySelector() string {
+//
+// The key must cover every input of the subscription-info request body. For an API key,
+// maas-api returns groups, username and subscription from the stored key row, which never
+// changes. The API-key key still carries the username and subscription, which are cheap,
+// and leaves out only the group list, which is what grows. Other identities, and API keys
+// without a key ID, use the full key.
+func subscriptionGatewayCacheKeyExpression() string {
 	//nolint:gosec // CEL expression, not a credential
 	apiKey := `(has(auth.metadata) && has(auth.metadata.apiKeyValidation))`
+	hasAPIKeyID := `(` + apiKey + ` && "keyId" in auth.metadata.apiKeyValidation && auth.metadata.apiKeyValidation.keyId != "")`
 	identitySource := `(` + apiKey + ` ? "api-key" : (has(auth.identity.iss) ? "oidc" : "token-review"))`
-	apiKeyID := `(` + apiKey + ` && "keyId" in auth.metadata.apiKeyValidation ? auth.metadata.apiKeyValidation.keyId : "")`
 	issuer := `(!` + apiKey + ` && has(auth.identity.iss) ? auth.identity.iss : "")`
 	subject := `(!` + apiKey + ` && has(auth.identity.sub) ? auth.identity.sub : "")`
 	requestedSubscription := `("x-maas-subscription" in request.headers ? request.headers["x-maas-subscription"] : "")`
@@ -518,10 +502,16 @@ func subscriptionGatewayCacheKeySelector() string {
 	groups := `string(size(` + groupList + `)) + ":" + ` +
 		groupList + `.map(g, string(size(g)) + ":" + g).join("")`
 	model := `(` + celModelIdentity + `)`
-	values := []string{
+	apiKeyCacheKey := lengthPrefixedCacheKey(
+		`"api-key-id"`,
+		`auth.metadata.apiKeyValidation.keyId`,
+		`auth.metadata.apiKeyValidation.username`,
+		`auth.metadata.apiKeyValidation.subscription`,
+		model,
+	)
+	fullCacheKey := lengthPrefixedCacheKey(
 		identitySource,
 		celUserID,
-		apiKeyID,
 		celUsername,
 		issuer,
 		subject,
@@ -530,11 +520,38 @@ func subscriptionGatewayCacheKeySelector() string {
 		celSubscription,
 		requestedSubscription,
 		model,
-	}
+	)
+	return `(` + hasAPIKeyID + ` ? ` + apiKeyCacheKey + ` : ` + fullCacheKey + `)`
+}
+
+// lengthPrefixedCacheKey joins CEL string expressions as "<length>:<value>". Each value must
+// evaluate to a string; the length prefixes then make the encoding unambiguous, so keys built
+// from different values stay distinct.
+func lengthPrefixedCacheKey(values ...string) string {
+	parts := make([]string, len(values))
 	for i, value := range values {
-		values[i] = `string(size(` + value + `)) + ":" + (` + value + `)`
+		parts[i] = `string(size(` + value + `)) + ":" + (` + value + `)`
 	}
-	return strings.Join(values, ` + `)
+	return strings.Join(parts, ` + `)
+}
+
+// withMetadataCache adds a cache block when caching is enabled. Authorino
+// replaces a TTL of zero with its default TTL, so zero must omit the block.
+//
+// The key is wrapped in a one-element list. Authorino's cache stores a string
+// key as it is but any other key as its MD5 (gocache v1.2.0 getCacheKey), so a
+// key that grows with the user's groups no longer counts against Authorino's
+// per-entry size limit, and raw API keys are never stored. Once Authorino hashes
+// keys itself (Kuadrant/authorino#706) the list is still hashed exactly once, so
+// drop the wrap when every supported RHCL ships that.
+func (r *MaaSAuthPolicyReconciler) withMetadataCache(rule map[string]any, expression string) map[string]any {
+	if r.MetadataCacheTTL > 0 {
+		rule["cache"] = map[string]any{
+			"key": map[string]any{"expression": "[" + expression + "]"},
+			"ttl": r.MetadataCacheTTL,
+		}
+	}
+	return rule
 }
 
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=maasauthpolicies,verbs=get;list;watch;create;update;patch;delete
@@ -838,7 +855,7 @@ func (r *MaaSAuthPolicyReconciler) buildGatewayAuthPolicySpec(oidc *oidcConfig, 
   "requestedModel": %s
 }`, celGroups, celUsername, celModelIdentity)
 
-	celIsAPIKey, celIsNotAPIKey, celExtractKey := apiKeyCELPredicates(xAPIKeyEnabled)
+	celIsAPIKey, celIsNotAPIKey, _ := apiKeyCELPredicates(xAPIKeyEnabled)
 
 	authenticationRules := map[string]any{
 		"api-keys": map[string]any{
@@ -911,8 +928,6 @@ func (r *MaaSAuthPolicyReconciler) buildGatewayAuthPolicySpec(oidc *oidcConfig, 
 			"priority": int64(1),
 		}
 	}
-	authValidCacheKey := `"api-key|" + (` + celExtractKey + `) + "|" + ` + celModelIdentity
-
 	requireGroupMembershipRego := `allow {
   object.get(input.auth.metadata["subscription-info"], "accessAllowed", false) == true
 }`
@@ -984,16 +999,17 @@ func (r *MaaSAuthPolicyReconciler) buildGatewayAuthPolicySpec(oidc *oidcConfig, 
 				"rego": `allow {
   object.get(input.auth.metadata, "apiKeyValidation", {})
   input.auth.metadata.apiKeyValidation.valid == true
+  unexpired
 }
 allow {
   not input.auth.metadata.apiKeyValidation
+}
+unexpired {
+  not input.auth.metadata.apiKeyValidation.expiresAt
+}
+unexpired {
+  time.now_ns() < time.parse_rfc3339_ns(input.auth.metadata.apiKeyValidation.expiresAt)
 }`,
-			},
-			"cache": map[string]any{
-				"key": map[string]any{
-					"selector": authValidCacheKey,
-				},
-				"ttl": r.authzCacheTTL(),
 			},
 		},
 		"subscription-valid": map[string]any{
@@ -1013,12 +1029,6 @@ allow {
 	object.get(input.auth.metadata["subscription-info"], "deletionTimestamp", "") == ""
 }`,
 			},
-			"cache": map[string]any{
-				"key": map[string]any{
-					"selector": subscriptionGatewayCacheKeySelector(),
-				},
-				"ttl": r.authzCacheTTL(),
-			},
 		},
 		"require-group-membership": map[string]any{
 			"when": []any{
@@ -1030,12 +1040,6 @@ allow {
 			"priority": int64(0),
 			"opa": map[string]any{
 				"rego": requireGroupMembershipRego,
-			},
-			"cache": map[string]any{
-				"key": map[string]any{
-					"selector": subscriptionGatewayCacheKeySelector(),
-				},
-				"ttl": r.authzCacheTTL(),
 			},
 		},
 	}
@@ -1187,7 +1191,7 @@ allow {
 
 	defaultsRules := map[string]any{
 		"metadata": map[string]any{
-			"apiKeyValidation": map[string]any{
+			"apiKeyValidation": r.withMetadataCache(map[string]any{
 				// Use auth.identity (set by the winning auth method) rather than a
 				// header-based CEL expression.  In Authorino's proto-map CEL context,
 				// accessing an absent header via bracket notation throws an error that
@@ -1208,16 +1212,10 @@ allow {
 						"expression": `{"key": auth.identity.replace("Bearer ", "")}`,
 					},
 				},
-				"cache": map[string]any{
-					"key": map[string]any{
-						"selector": `auth.identity.replace("Bearer ", "")`,
-					},
-					"ttl": r.MetadataCacheTTL,
-				},
 				"metrics":  false,
 				"priority": int64(0),
-			},
-			"subscription-info": map[string]any{
+			}, `auth.identity.replace("Bearer ", "")`),
+			"subscription-info": r.withMetadataCache(map[string]any{
 				"when": []any{
 					map[string]any{
 						"predicate": celModelIdentityAvailable,
@@ -1231,15 +1229,9 @@ allow {
 						"expression": subscriptionInfoBody,
 					},
 				},
-				"cache": map[string]any{
-					"key": map[string]any{
-						"selector": subscriptionGatewayCacheKeySelector(),
-					},
-					"ttl": r.MetadataCacheTTL,
-				},
 				"metrics":  false,
 				"priority": int64(1),
-			},
+			}, subscriptionGatewayCacheKeyExpression()),
 		},
 		"authentication": authenticationRules,
 		"authorization":  authorizationRules,
@@ -1592,6 +1584,24 @@ func (r *MaaSAuthPolicyReconciler) gatewayAuthPolicyReady(ctx context.Context, g
 	return ready, message, nil
 }
 
+// cachesRulesNotDesired reports whether a live policy retains a cache block
+// that the desired spec no longer emits. This is needed because
+// specMatchesDesired intentionally ignores current-only fields.
+func cachesRulesNotDesired(desired, current map[string]any) bool {
+	for _, section := range []string{"metadata", "authorization"} {
+		currentRules, _, _ := unstructured.NestedMap(current, "defaults", "rules", section)
+		for name := range currentRules {
+			if _, cached, _ := unstructured.NestedFieldNoCopy(currentRules, name, "cache"); !cached {
+				continue
+			}
+			if _, wanted, _ := unstructured.NestedFieldNoCopy(desired, "defaults", "rules", section, name, "cache"); !wanted {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // specMatchesDesired reports whether the current spec (from the API server)
 // contains all fields present in the desired spec with equal values. Fields
 // added by the API server or its controllers (e.g. Kuadrant defaults like
@@ -1841,7 +1851,7 @@ func (r *MaaSAuthPolicyReconciler) reconcileGatewayAuthPolicyWithHeaders(
 	if gateway != nil {
 		setGatewayOwnerReference(gateway, existing)
 	}
-	if specMatchesDesired(spec, currentSpec) &&
+	if specMatchesDesired(spec, currentSpec) && !cachesRulesNotDesired(spec, currentSpec) &&
 		(guardrailHeaders != nil || !basePolicyHasStaleGuardrailFields(currentSpec)) &&
 		!basePolicyHasStaleSubscriptionHeaderFields(currentSpec, subscriptionHeaders) {
 		log.Info("gateway AuthPolicy unchanged, skipping update", "name", authPolicyName)
@@ -2355,13 +2365,10 @@ func (r *MaaSAuthPolicyReconciler) updateStatus(ctx context.Context, policy *maa
 }
 
 // ValidateCacheTTLs validates that cache TTL configuration is valid.
-// Returns an error if either TTL is negative (fail-closed validation).
+// Returns an error if the metadata TTL is negative (fail-closed validation).
 func (r *MaaSAuthPolicyReconciler) ValidateCacheTTLs() error {
 	if r.MetadataCacheTTL < 0 {
 		return fmt.Errorf("metadata cache TTL must be non-negative, got %d", r.MetadataCacheTTL)
-	}
-	if r.AuthzCacheTTL < 0 {
-		return fmt.Errorf("authorization cache TTL must be non-negative, got %d", r.AuthzCacheTTL)
 	}
 	return nil
 }
@@ -2377,14 +2384,6 @@ func (r *MaaSAuthPolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	// Reject negative TTL values
 	if err := r.ValidateCacheTTLs(); err != nil {
 		return err
-	}
-
-	if r.AuthzCacheTTL > r.MetadataCacheTTL {
-		log.Info("WARNING: Authorization cache TTL exceeds metadata cache TTL. "+
-			"Authorization caches will be capped at metadata TTL to prevent stale authorization decisions.",
-			"authzCacheTTL", r.AuthzCacheTTL,
-			"metadataCacheTTL", r.MetadataCacheTTL,
-			"effectiveAuthzTTL", r.authzCacheTTL())
 	}
 
 	// Watch Tenant so we re-reconcile when OIDC configuration changes.
