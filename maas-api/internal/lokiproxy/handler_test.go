@@ -16,6 +16,10 @@ import (
 	"github.com/gin-gonic/gin"
 	logqlv2 "github.com/observatorium/api/logql/v2"
 	"github.com/stretchr/testify/require"
+	authv1 "k8s.io/api/authentication/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/constant"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
@@ -52,6 +56,32 @@ func newUpstream(t *testing.T) (*httptest.Server, *upstreamRecord) {
 	}))
 	t.Cleanup(server.Close)
 	return server, record
+}
+
+// newTLSUpstream starts a fake HTTPS Loki server and returns its CA bundle so
+// credential-bearing requests can be tested without sending tokens over HTTP.
+func newTLSUpstream(t *testing.T) (*httptest.Server, *upstreamRecord, string) {
+	t.Helper()
+
+	record := &upstreamRecord{}
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		record.method = r.Method
+		record.path = r.URL.Path
+		record.query = r.URL.Query()
+		record.authorization = r.Header.Get("Authorization")
+		record.scopeOrgID = r.Header.Get("X-Scope-Orgid")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, `{"status":"success"}`)
+	}))
+	t.Cleanup(server.Close)
+
+	certificate := server.TLS.Certificates[0]
+	caPEM := string(pem.EncodeToMemory(&pem.Block{
+		Type:  "CERTIFICATE",
+		Bytes: certificate.Certificate[0],
+	}))
+	return server, record, caPEM
 }
 
 // stubAdminChecker is a deterministic AdminChecker for tests.
@@ -103,6 +133,38 @@ func newRouterWithAdminChecker(t *testing.T, pathPrefix string, checker lokiprox
 	return router, record
 }
 
+// newK8sRouterWithAdminChecker mirrors newRouterWithAdminChecker, but enables
+// the Kubernetes TokenReview fallback so tenant-admin authorization reaches
+// the supplied AdminChecker.
+func newK8sRouterWithAdminChecker(t *testing.T, checker lokiproxy.AdminChecker) (*gin.Engine, *upstreamRecord) {
+	t.Helper()
+
+	gin.SetMode(gin.TestMode)
+	upstream, record := newUpstream(t)
+
+	client := fake.NewSimpleClientset()
+	client.PrependReactor("create", "tokenreviews", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		return true, &authv1.TokenReview{
+			Status: authv1.TokenReviewStatus{
+				Authenticated: true,
+				User: authv1.UserInfo{
+					Username: "kube-admin@example.com",
+					Groups:   []string{"system:authenticated"},
+				},
+			},
+		}, nil
+	})
+
+	tokenHandler := token.NewHandler(logger.Production(), "test-tenant").WithKubeClient(client)
+	lokiHandler, err := lokiproxy.NewHandler(logger.Production(), upstream.URL, "", "", checker)
+	require.NoError(t, err)
+
+	router := gin.New()
+	v1 := router.Group("/v1", tokenHandler.ExtractVerifiedIdentityOptional(), tokenHandler.ExtractUserInfo(token.AuthModeGatewayOrKubernetes))
+	lokiHandler.RegisterRoutes(v1)
+	return router, record
+}
+
 // lokiRequest issues a request with the trusted gateway identity envelope.
 func lokiRequest(t *testing.T, router *gin.Engine, method, target, identity string) *httptest.ResponseRecorder {
 	t.Helper()
@@ -139,7 +201,6 @@ func requireQueryEnforcement(t *testing.T, query, organizationID, username strin
 
 	selectorCount := 0
 	logQueryCount := 0
-	var selectorMatchers []string
 	filterStages := make([]string, 0, 2)
 	if organizationID != "" {
 		filterStages = append(filterStages, `organization_id = "`+organizationID+`"`)
@@ -153,9 +214,11 @@ func requireQueryEnforcement(t *testing.T, query, organizationID, username strin
 		switch le := e.(type) {
 		case *logqlv2.StreamMatcherExpr:
 			selectorCount++
+			selectorMatchers := make([]string, 0, len(le.Matchers()))
 			for _, matcher := range le.Matchers() {
 				selectorMatchers = append(selectorMatchers, matcher.String())
 			}
+			require.Contains(t, selectorMatchers, `tenant_name="test-tenant"`, "stream selector: %s", le.String())
 		case *logqlv2.LogQueryExpr:
 			logQueryCount++
 			require.Contains(t, le.String(), requiredFilter, "log query: %s", le.String())
@@ -164,7 +227,6 @@ func requireQueryEnforcement(t *testing.T, query, organizationID, username strin
 
 	require.Positive(t, selectorCount)
 	require.Equal(t, selectorCount, logQueryCount)
-	require.Contains(t, selectorMatchers, `tenant_name="test-tenant"`)
 }
 
 // noOrganizationIdentity builds a verified OIDC identity envelope without any
@@ -190,6 +252,17 @@ func TestProxyQueryRangeEnforcesOrganizationMatcher(t *testing.T) {
 
 	requireQueryEnforcement(t, record.query.Get("query"), testOrganizationID, "")
 	require.Contains(t, record.query.Get("query"), `organization_id="other-org"`)
+}
+
+func TestProxyQueryEnforcesTenantMatcherOnEveryStreamSelector(t *testing.T) {
+	router, record := newAdminRouter(t, "")
+	query := `sum(count_over_time({app="api"}[5m])) or sum(count_over_time({app="other"}[5m]))`
+
+	w := lokiRequest(t, router, http.MethodGet,
+		"/v1/logs/loki/api/v1/query?query="+url.QueryEscape(query), adminIdentity())
+
+	require.Equal(t, http.StatusOK, w.Code)
+	requireQueryEnforcement(t, record.query.Get("query"), testOrganizationID, "")
 }
 
 func TestProxyQueryInstantEnforcesOrganizationMatcher(t *testing.T) {
@@ -281,12 +354,20 @@ func TestProxyRejectsEmptyQuery(t *testing.T) {
 
 func TestProxyRejectsOversizedQuery(t *testing.T) {
 	router, record := newAdminRouter(t, "")
-	query := strings.Repeat("a", 32*1024+1)
+	selector := `{app="api"}`
+	query := selector + strings.Repeat(" ", 32*1024+1)
 
 	w := lokiRequest(t, router, http.MethodGet, "/v1/logs/loki/api/v1/query_range?query="+url.QueryEscape(query), adminIdentity())
 
 	require.Equal(t, http.StatusBadRequest, w.Code)
 	require.Empty(t, record.path, "upstream must not be called")
+
+	w = lokiRequest(t, router, http.MethodGet, "/v1/logs/loki/api/v1/query_range?query="+url.QueryEscape(selector), adminIdentity())
+
+	require.Equal(t, http.StatusOK, w.Code)
+	require.Equal(t, "/loki/api/v1/query_range", record.path)
+	require.Contains(t, record.query.Get("query"), `app="api"`)
+	require.Contains(t, record.query.Get("query"), `tenant_name="test-tenant"`)
 }
 
 func TestProxyOnlyUserAuthzMatrix(t *testing.T) {
@@ -458,19 +539,32 @@ func TestProxyRejectsNonAdminWithoutOrganization(t *testing.T) {
 }
 
 func TestProxyNilAdminCheckerFailsClosed(t *testing.T) {
-	// No admin checker configured: the tenant-admin path must deny rather
-	// than grant the unfiltered view.
-	router, record := newRouterWithAdminChecker(t, "", nil)
+	tests := []struct {
+		name     string
+		checker  lokiproxy.AdminChecker
+		expected int
+	}{
+		{name: "nil checker denies rather than grants", checker: nil, expected: http.StatusForbidden},
+		{name: "checker error is unavailable", checker: stubAdminChecker{err: errors.New("sar unavailable")}, expected: http.StatusServiceUnavailable},
+		{name: "successful checker reaches Loki", checker: stubAdminChecker{admin: true}, expected: http.StatusOK},
+	}
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/logs/loki/api/v1/query_range?query=%7B%7D", nil)
-	req.Header.Set(constant.HeaderUsername, "admin@example.com")
-	req.Header.Set(constant.HeaderGroup, `["ai-grid-users"]`)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			router, record := newK8sRouterWithAdminChecker(t, tt.checker)
+			req := httptest.NewRequest(http.MethodGet, "/v1/logs/loki/api/v1/query_range?query=%7B%7D", nil)
+			req.Header.Set("Authorization", "Bearer sha256~kube-token")
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
 
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	require.Equal(t, http.StatusForbidden, w.Code)
-	require.Empty(t, record.path, "upstream must not be called")
+			require.Equal(t, tt.expected, w.Code)
+			if tt.expected == http.StatusOK {
+				require.Contains(t, record.query.Get("query"), `tenant_name="test-tenant"`)
+			} else {
+				require.Empty(t, record.path, "upstream must not be called")
+			}
+		})
+	}
 }
 
 func TestProxyRejectsNonGetAndUnknownPaths(t *testing.T) {
@@ -535,10 +629,10 @@ func TestNewHandlerValidatesEndpoint(t *testing.T) {
 func TestProxyInjectsUpstreamBearerToken(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	upstream, record := newUpstream(t)
+	upstream, record, caPEM := newTLSUpstream(t)
 
 	tokenHandler := token.NewHandler(logger.Production(), "test-tenant")
-	lokiHandler, err := lokiproxy.NewHandler(logger.Production(), upstream.URL, "sa-token-123", "", stubAdminChecker{admin: true})
+	lokiHandler, err := lokiproxy.NewHandler(logger.Production(), upstream.URL, "sa-token-123", caPEM, stubAdminChecker{admin: true})
 	require.NoError(t, err)
 
 	router := gin.New()
@@ -596,12 +690,13 @@ func TestProxyTokenPrecedence(t *testing.T) {
 
 			tokenPath := filepath.Join(t.TempDir(), "token")
 			require.NoError(t, os.WriteFile(tokenPath, []byte(tt.pathToken), 0o600))
-			upstream, record := newUpstream(t)
+			upstream, record, caPEM := newTLSUpstream(t)
 
 			tokenHandler := token.NewHandler(logger.Production(), "test-tenant")
-			lokiHandler, err := lokiproxy.NewHandler(logger.Production(), upstream.URL, tt.explicitToken, "", stubAdminChecker{admin: true})
+			lokiHandler, err := lokiproxy.NewHandler(logger.Production(), upstream.URL, tt.explicitToken, caPEM, stubAdminChecker{admin: true})
 			require.NoError(t, err)
-			lokiHandler.WithServiceAccountTokenPath(tokenPath)
+			_, err = lokiHandler.WithServiceAccountTokenPath(tokenPath)
+			require.NoError(t, err)
 
 			router := gin.New()
 			lokiHandler.RegisterRoutes(router.Group("/v1", tokenHandler.ExtractVerifiedIdentityOptional(), tokenHandler.ExtractUserInfo(token.AuthModeGateway)))
@@ -614,11 +709,58 @@ func TestProxyTokenPrecedence(t *testing.T) {
 	}
 }
 
+func TestProxyRejectsUnreadableServiceAccountToken(t *testing.T) {
+	tests := []struct {
+		name       string
+		tokenValue string
+	}{
+		{name: "missing token file", tokenValue: ""},
+		{name: "blank token file", tokenValue: " \n\t"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gin.SetMode(gin.TestMode)
+			upstream, record, caPEM := newTLSUpstream(t)
+			tokenPath := filepath.Join(t.TempDir(), "token")
+			if tt.tokenValue != "" {
+				require.NoError(t, os.WriteFile(tokenPath, []byte(tt.tokenValue), 0o600))
+			}
+
+			tokenHandler := token.NewHandler(logger.Production(), "test-tenant")
+			lokiHandler, err := lokiproxy.NewHandler(logger.Production(), upstream.URL, "", caPEM, stubAdminChecker{admin: true})
+			require.NoError(t, err)
+			_, err = lokiHandler.WithServiceAccountTokenPath(tokenPath)
+			require.NoError(t, err)
+
+			router := gin.New()
+			lokiHandler.RegisterRoutes(router.Group("/v1", tokenHandler.ExtractVerifiedIdentityOptional(), tokenHandler.ExtractUserInfo(token.AuthModeGateway)))
+
+			w := lokiRequest(t, router, http.MethodGet, "/v1/logs/loki/api/v1/query_range?query=%7B%7D", adminIdentity())
+
+			require.Equal(t, http.StatusBadGateway, w.Code)
+			require.Empty(t, record.path, "upstream must not be called")
+		})
+	}
+}
+
+func TestNewHandlerRejectsHTTPWithBearerToken(t *testing.T) {
+	_, err := lokiproxy.NewHandler(logger.Production(), "http://loki.example", "token", "", nil)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "HTTP cannot be used with an upstream bearer token")
+
+	handler, err := lokiproxy.NewHandler(logger.Production(), "http://loki.example", "", "", nil)
+	require.NoError(t, err)
+	_, err = handler.WithServiceAccountTokenPath("/var/run/secrets/kubernetes.io/serviceaccount/token")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "HTTP cannot be used with an upstream bearer token")
+}
+
 func TestProxyCanDisableScopeOrgIDForCustomUpstream(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	upstream, record := newUpstream(t)
-	lokiHandler, err := lokiproxy.NewHandler(logger.Production(), upstream.URL, "secret-token-123", "", stubAdminChecker{admin: true})
+	upstream, record, caPEM := newTLSUpstream(t)
+	lokiHandler, err := lokiproxy.NewHandler(logger.Production(), upstream.URL, "secret-token-123", caPEM, stubAdminChecker{admin: true})
 	require.NoError(t, err)
 	lokiHandler.WithScopeOrgID("")
 

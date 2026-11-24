@@ -708,7 +708,7 @@ def _timeout_before_deadline(deadline: float | None, default_timeout: float) -> 
     remaining = deadline - time.monotonic()
     if remaining <= 0:
         raise TimeoutError("kubectl curl deadline expired")
-    return max(1, min(default_timeout, remaining))
+    return min(default_timeout, remaining)
 
 
 def _maas_api_url():

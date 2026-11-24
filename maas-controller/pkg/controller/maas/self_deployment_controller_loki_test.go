@@ -146,7 +146,37 @@ func TestMaaSAPILokiRBACIncludesApplicationLogsRead(t *testing.T) {
 		require.NoError(t, err)
 		require.True(t, found, "ClusterRole %s should have rules", roleName)
 		require.True(t, hasApplicationLogsReadRule(rules), "ClusterRole %s should grant least-privilege Loki application log reads", roleName)
+		require.True(t, hasOnlyApplicationLogsReadRule(rules), "ClusterRole %s should not grant excess Loki permissions", roleName)
 	}
+}
+
+func hasOnlyApplicationLogsReadRule(rules []any) bool {
+	lokiRuleCount := 0
+	for _, ruleValue := range rules {
+		rule, ok := ruleValue.(map[string]any)
+		if !ok {
+			continue
+		}
+		apiGroups, _, _ := unstructured.NestedStringSlice(rule, "apiGroups")
+		if !slices.Contains(apiGroups, "loki.grafana.com") {
+			continue
+		}
+
+		lokiRuleCount++
+		if lokiRuleCount > 1 {
+			return false
+		}
+		resources, _, _ := unstructured.NestedStringSlice(rule, "resources")
+		resourceNames, _, _ := unstructured.NestedStringSlice(rule, "resourceNames")
+		verbs, _, _ := unstructured.NestedStringSlice(rule, "verbs")
+		if !slices.Equal(apiGroups, []string{"loki.grafana.com"}) ||
+			!slices.Equal(resources, []string{"application"}) ||
+			!slices.Equal(resourceNames, []string{"logs"}) ||
+			!slices.Equal(verbs, []string{"get"}) {
+			return false
+		}
+	}
+	return lokiRuleCount == 1
 }
 
 func hasApplicationLogsReadRule(rules []any) bool {

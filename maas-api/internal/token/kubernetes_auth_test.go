@@ -61,7 +61,7 @@ func authenticatedReview() *authv1.TokenReviewStatus {
 
 func TestExtractUserInfo_KubernetesFallback(t *testing.T) {
 	t.Run("valid bearer token authenticates via TokenReview", func(t *testing.T) {
-		router, _ := newK8sRouter(t, nil, authenticatedReview())
+		router, client := newK8sRouter(t, nil, authenticatedReview())
 
 		req := httptest.NewRequest(http.MethodGet, "/test", nil)
 		req.Header.Set("Authorization", "Bearer sha256~oc-token")
@@ -76,6 +76,14 @@ func TestExtractUserInfo_KubernetesFallback(t *testing.T) {
 		assert.Equal(t, token.AuthSourceK8s, body.AuthSource)
 		assert.Contains(t, body.Groups, "system:authenticated")
 		assert.Empty(t, body.OrganizationID, "k8s identities carry no organization")
+
+		actions := client.Actions()
+		require.Len(t, actions, 1, "exactly one TokenReview should be created")
+		createAction, ok := actions[0].(k8stesting.CreateAction)
+		require.True(t, ok, "TokenReview action should be a create action")
+		review, ok := createAction.GetObject().(*authv1.TokenReview)
+		require.True(t, ok, "TokenReview action should carry a TokenReview object")
+		assert.Equal(t, "sha256~oc-token", review.Spec.Token)
 	})
 
 	t.Run("invalid token is a 401", func(t *testing.T) {
@@ -170,7 +178,12 @@ func TestExtractUserInfo_KubernetesFallbackDisabled(t *testing.T) {
 	// With the fallback disabled the historical behavior is preserved:
 	// missing identity headers are a configuration error, never a TokenReview.
 	gin.SetMode(gin.TestMode)
-	h := token.NewHandler(logger.Development(), "test-tenant")
+	client := fake.NewSimpleClientset()
+	client.PrependReactor("create", "tokenreviews", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		review := &authv1.TokenReview{Status: *authenticatedReview()}
+		return true, review, nil
+	})
+	h := token.NewHandler(logger.Development(), "test-tenant").WithKubeClient(client)
 	router := gin.New()
 	router.Use(h.ExtractUserInfo(token.AuthModeGateway))
 	router.GET("/test", func(c *gin.Context) { c.Status(http.StatusOK) })
@@ -181,4 +194,5 @@ func TestExtractUserInfo_KubernetesFallbackDisabled(t *testing.T) {
 	router.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusInternalServerError, w.Code)
+	assert.Empty(t, client.Actions(), "gateway-only mode must not run TokenReview")
 }

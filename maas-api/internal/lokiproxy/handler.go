@@ -106,6 +106,10 @@ func NewHandler(log *logger.Logger, endpoint, token, caPEM string, adminChecker 
 	if upstream.Host == "" {
 		return nil, fmt.Errorf("invalid Loki read endpoint %q: host is required", endpoint)
 	}
+	upstreamToken := strings.TrimSpace(token)
+	if upstream.Scheme == "http" && upstreamToken != "" {
+		return nil, errors.New("invalid Loki read endpoint: HTTP cannot be used with an upstream bearer token")
+	}
 
 	client := &http.Client{Timeout: proxyTimeout}
 	if ca := strings.TrimSpace(caPEM); ca != "" {
@@ -128,7 +132,7 @@ func NewHandler(log *logger.Logger, endpoint, token, caPEM string, adminChecker 
 	return &Handler{
 		logger:       log,
 		upstream:     upstream,
-		token:        strings.TrimSpace(token),
+		token:        upstreamToken,
 		scopeOrgID:   applicationTenant,
 		client:       client,
 		adminChecker: adminChecker,
@@ -137,9 +141,13 @@ func NewHandler(log *logger.Logger, endpoint, token, caPEM string, adminChecker 
 
 // WithServiceAccountTokenPath sends the bearer token stored at path on every
 // proxied upstream request. An explicit LOKI_READ_TOKEN still takes precedence.
-func (h *Handler) WithServiceAccountTokenPath(path string) *Handler {
-	h.tokenPath = strings.TrimSpace(path)
-	return h
+func (h *Handler) WithServiceAccountTokenPath(path string) (*Handler, error) {
+	tokenPath := strings.TrimSpace(path)
+	if h.upstream.Scheme == "http" && tokenPath != "" {
+		return nil, errors.New("invalid Loki read endpoint: HTTP cannot be used with an upstream bearer token")
+	}
+	h.tokenPath = tokenPath
+	return h, nil
 }
 
 // WithScopeOrgID overrides the upstream Loki tenant header. An empty value
@@ -496,8 +504,13 @@ func (h *Handler) proxyHandler(upstreamPath string, queryEndpoint bool) gin.Hand
 		// Authenticate against the upstream Loki with either the token from the
 		// usage-logs-loki Secret or maas-api's projected service-account token.
 		// The caller's own credentials are never forwarded upstream.
-		if token := h.upstreamToken(); token != "" {
-			req.Header.Set("Authorization", "Bearer "+token)
+		upstreamToken, err := h.upstreamToken()
+		if err != nil {
+			h.proxyError(c, err)
+			return
+		}
+		if upstreamToken != "" {
+			req.Header.Set("Authorization", "Bearer "+upstreamToken)
 		}
 		if h.scopeOrgID != "" {
 			req.Header.Set(upstreamScopeOrgIDHeader, h.scopeOrgID)
@@ -525,19 +538,22 @@ func (h *Handler) proxyHandler(upstreamPath string, queryEndpoint bool) gin.Hand
 	}
 }
 
-func (h *Handler) upstreamToken() string {
+func (h *Handler) upstreamToken() (string, error) {
 	if h.token != "" {
-		return h.token
+		return h.token, nil
 	}
 	if h.tokenPath == "" {
-		return ""
+		return "", nil
 	}
 	token, err := os.ReadFile(h.tokenPath)
 	if err != nil {
-		h.logger.Warn("Failed to read the Loki service-account token", "path", h.tokenPath, "error", err)
-		return ""
+		return "", fmt.Errorf("read Loki service-account token %q: %w", h.tokenPath, err)
 	}
-	return strings.TrimSpace(string(token))
+	tokenValue := strings.TrimSpace(string(token))
+	if tokenValue == "" {
+		return "", fmt.Errorf("Loki service-account token %q is empty", h.tokenPath)
+	}
+	return tokenValue, nil
 }
 
 func (h *Handler) proxyError(c *gin.Context, err error) {

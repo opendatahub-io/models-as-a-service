@@ -412,7 +412,10 @@ func registerHandlers(
 			return fmt.Errorf("failed to create Loki proxy handler: %w", err)
 		}
 		if cfg.LokiReadUseServiceAccountToken && strings.TrimSpace(cfg.LokiReadToken) == "" {
-			lokiHandler.WithServiceAccountTokenPath("/var/run/secrets/kubernetes.io/serviceaccount/token")
+			_, err = lokiHandler.WithServiceAccountTokenPath("/var/run/secrets/kubernetes.io/serviceaccount/token")
+			if err != nil {
+				return fmt.Errorf("failed to configure Loki proxy service-account token: %w", err)
+			}
 		}
 		lokiHandler.WithScopeOrgID(cfg.LokiReadScopeOrgID)
 		lokiAuthMiddleware := []gin.HandlerFunc{
