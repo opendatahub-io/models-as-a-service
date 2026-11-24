@@ -761,6 +761,11 @@ func TestNewHandlerWarnsAboutPlaintextHTTP(t *testing.T) {
 	require.NoError(t, err)
 
 	originalStdout := os.Stdout
+	t.Cleanup(func() {
+		os.Stdout = originalStdout
+		_ = writer.Close()
+		_ = reader.Close()
+	})
 	os.Stdout = writer
 	log := logger.Production()
 	_, err = lokiproxy.NewHandler(log, "http://loki.example", "", "", nil)
