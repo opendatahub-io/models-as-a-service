@@ -38,7 +38,7 @@ func TestEnforceQueryMatchersQueryEndpoint(t *testing.T) {
 		requiredOrganizationMatcher(),
 		requiredUserMatcher(),
 	}
-	expectedFilter := `| organization_id = "1234" and user_id = "user-abc"`
+	expectedFilter := `| tenant_name = "tenant-a" and organization_id = "1234" and user_id = "user-abc"`
 
 	tests := []struct {
 		name  string
@@ -83,10 +83,10 @@ func TestEnforceQueryMatchersQueryEndpoint(t *testing.T) {
 			t.Parallel()
 
 			query := enforcedQuery(t, test.query, required, true)
-			require.Contains(t, query, `tenant_name="tenant-a"`)
+			require.Contains(t, query, `tenant_name = "tenant-a"`)
 			require.Equal(
 				t,
-				strings.Count(query, `tenant_name="tenant-a"`),
+				strings.Count(query, `tenant_name = "tenant-a"`),
 				strings.Count(query, " "+expectedFilter),
 				"query: %s",
 				query,
@@ -293,17 +293,28 @@ func TestEnforceQueryMatchersInvalidQuery(t *testing.T) {
 func TestPartitionRequiredMatchers(t *testing.T) {
 	t.Parallel()
 
-	selector, pipeline := partitionRequiredMatchers([]*labels.Matcher{
+	querySelector, queryPipeline := partitionRequiredMatchers([]*labels.Matcher{
 		requiredTenantMatcher(),
 		requiredOrganizationMatcher(),
 		requiredUserMatcher(),
-	})
-	require.Equal(t, []*labels.Matcher{requiredTenantMatcher()}, selector)
+	}, true)
+	require.Empty(t, querySelector)
 	require.Equal(
 		t,
-		[]*labels.Matcher{requiredOrganizationMatcher(), requiredUserMatcher()},
-		pipeline,
+		[]*labels.Matcher{
+			requiredTenantMatcher(),
+			requiredOrganizationMatcher(),
+			requiredUserMatcher(),
+		},
+		queryPipeline,
 	)
+
+	labelSelector, labelPipeline := partitionRequiredMatchers([]*labels.Matcher{
+		requiredTenantMatcher(),
+		requiredOrganizationMatcher(),
+	}, false)
+	require.Equal(t, []*labels.Matcher{requiredTenantMatcher()}, labelSelector)
+	require.Equal(t, []*labels.Matcher{requiredOrganizationMatcher()}, labelPipeline)
 }
 
 func TestCombineLabelMatchersPreservesOnlySelectorRequirements(t *testing.T) {

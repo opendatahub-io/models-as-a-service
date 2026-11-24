@@ -25,19 +25,18 @@ var ErrInvalidQuery = errors.New("invalid LogQL query")
 // enforceQueryMatchers rewrites the "query" parameter in v so that every log
 // query is restricted by the required authorization matchers.
 //
-// The tenant matcher is injected into every stream selector because Loki
-// stream selectors require indexed labels. Organization and user matchers are
-// appended as post-parse label-filter stages on query endpoints, preserving
-// compatibility with collectors that emit those fields as structured metadata
-// rather than indexed stream labels. Label endpoints cannot enforce
-// post-parse filters, so requests that require them are rejected.
+// Query endpoints enforce every authorization matcher as a post-parse label
+// filter. This preserves records whose identity fields are structured
+// attributes rather than indexed stream labels. Label endpoints cannot apply
+// post-parse filters, so tenant_name remains a stream-selector matcher there
+// and requests requiring organization_id or user_id are rejected.
 func enforceQueryMatchers(v url.Values, required []*labels.Matcher, queryEndpoint bool) error {
 	paramValue := v.Get(queryParam)
 	if len(paramValue) > maxQueryLength {
 		return fmt.Errorf("%w: query too long", ErrInvalidQuery)
 	}
 
-	selectorRequired, pipelineRequired := partitionRequiredMatchers(required)
+	selectorRequired, pipelineRequired := partitionRequiredMatchers(required, queryEndpoint)
 	pipelineRequired = escapePipelineMatcherValues(pipelineRequired)
 	if paramValue == "" {
 		if queryEndpoint {
@@ -141,13 +140,13 @@ func allSelectorsCarry(expr logqlv2.Expr, required []*labels.Matcher) bool {
 
 // partitionRequiredMatchers splits authorization matchers into those that must
 // be injected as stream-selector matchers and those that are applied as
-// post-parse label filters. Only tenant_name is currently indexed on every
-// stream; organization_id and user_id remain structured metadata for
-// compatibility with existing collectors.
-func partitionRequiredMatchers(required []*labels.Matcher) ([]*labels.Matcher, []*labels.Matcher) {
+// post-parse label filters. Query endpoints can enforce tenant_name as a
+// pipeline filter, matching historical records before it is indexed. Label
+// endpoints require it as an indexed stream selector.
+func partitionRequiredMatchers(required []*labels.Matcher, queryEndpoint bool) ([]*labels.Matcher, []*labels.Matcher) {
 	var selector, pipeline []*labels.Matcher
 	for _, matcher := range required {
-		if matcher.Name == tenantLabel {
+		if matcher.Name == tenantLabel && !queryEndpoint {
 			selector = append(selector, matcher)
 			continue
 		}

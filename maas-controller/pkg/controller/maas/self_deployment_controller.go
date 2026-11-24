@@ -100,6 +100,7 @@ const (
 type LifecycleReconciler struct {
 	client.Client
 	Scheme                      *runtime.Scheme
+	APIReader                   client.Reader
 	DeploymentName              string
 	DeploymentNS                string
 	TenantSubscriptionNamespace string
@@ -898,9 +899,14 @@ func patchPersesDatasourceMaaSAPILoki(res *unstructured.Unstructured, infraNames
 }
 
 func (r *LifecycleReconciler) cleanupLegacyUsageLogsTenancyProxySecret(ctx context.Context, log logr.Logger, configUID types.UID, namespace string) error {
+	reader := r.APIReader
+	if reader == nil {
+		reader = r.Client
+	}
+
 	secret := &corev1.Secret{}
 	key := client.ObjectKey{Namespace: namespace, Name: usageLogsTenancyProxyTLSSecretName}
-	if err := r.Get(ctx, key, secret); err != nil {
+	if err := reader.Get(ctx, key, secret); err != nil {
 		if apierrors.IsNotFound(err) {
 			return nil
 		}

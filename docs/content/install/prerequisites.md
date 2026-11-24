@@ -127,15 +127,15 @@ spec:
 !!! note "Logs-based usage dashboards"
     The usage dashboards query Loki through the maas-api read-only Loki proxy,
     which is always enabled and defaults to the LokiStack gateway in the
-    monitoring namespace. Every proxy query is scoped by the required
-    `tenant_name` stream label, so it must be listed in
-    `spec.limits.global.otlp.streamLabels.resourceAttributes`.
-    `organization_id` and `user_id` do not need to be indexed: on
-    `/query` and `/query_range`, the proxy enforces them as post-parse LogQL
-    label filters, matching the retired Python proxy's compatibility model.
-    Because those filters cannot be enforced safely on `/labels` or
-    `/label/{name}/values`, those endpoints reject requests from access modes
-    that require an organization or user restriction.
+    monitoring namespace. On `/query` and `/query_range`, the proxy enforces
+    `tenant_name`, `organization_id`, and `user_id` as post-parse LogQL label
+    filters, matching the retired Python proxy's compatibility model and
+    historical records whose identity fields are structured attributes.
+    `/labels` and `/label/{name}/values` cannot enforce post-parse filters.
+    They use `tenant_name` as a stream selector and reject requests from access
+    modes that also require an organization or user restriction. Therefore,
+    `tenant_name` must be indexed for label discovery, while the identity fields
+    used by query endpoints do not need to be indexed.
     See [Logs-based usage dashboards](../observability/setup.md#logs-based-usage-dashboards)
     for identity capture settings.
 

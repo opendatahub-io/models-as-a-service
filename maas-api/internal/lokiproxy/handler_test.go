@@ -201,7 +201,8 @@ func requireQueryEnforcement(t *testing.T, query, organizationID, username strin
 
 	selectorCount := 0
 	logQueryCount := 0
-	filterStages := make([]string, 0, 2)
+	filterStages := make([]string, 0, 3)
+	filterStages = append(filterStages, `tenant_name = "test-tenant"`)
 	if organizationID != "" {
 		filterStages = append(filterStages, `organization_id = "`+organizationID+`"`)
 	}
@@ -214,11 +215,6 @@ func requireQueryEnforcement(t *testing.T, query, organizationID, username strin
 		switch le := e.(type) {
 		case *logqlv2.StreamMatcherExpr:
 			selectorCount++
-			selectorMatchers := make([]string, 0, len(le.Matchers()))
-			for _, matcher := range le.Matchers() {
-				selectorMatchers = append(selectorMatchers, matcher.String())
-			}
-			require.Contains(t, selectorMatchers, `tenant_name="test-tenant"`, "stream selector: %s", le.String())
 		case *logqlv2.LogQueryExpr:
 			logQueryCount++
 			require.Contains(t, le.String(), requiredFilter, "log query: %s", le.String())
@@ -367,7 +363,7 @@ func TestProxyRejectsOversizedQuery(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code)
 	require.Equal(t, "/loki/api/v1/query_range", record.path)
 	require.Contains(t, record.query.Get("query"), `app="api"`)
-	require.Contains(t, record.query.Get("query"), `tenant_name="test-tenant"`)
+	require.Contains(t, record.query.Get("query"), `tenant_name = "test-tenant"`)
 }
 
 func TestProxyOnlyUserAuthzMatrix(t *testing.T) {
@@ -559,7 +555,7 @@ func TestProxyNilAdminCheckerFailsClosed(t *testing.T) {
 
 			require.Equal(t, tt.expected, w.Code)
 			if tt.expected == http.StatusOK {
-				require.Contains(t, record.query.Get("query"), `tenant_name="test-tenant"`)
+				require.Contains(t, record.query.Get("query"), `tenant_name = "test-tenant"`)
 			} else {
 				require.Empty(t, record.path, "upstream must not be called")
 			}

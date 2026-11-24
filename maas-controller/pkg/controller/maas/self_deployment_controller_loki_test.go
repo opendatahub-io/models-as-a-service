@@ -369,6 +369,62 @@ func TestLifecycleReconciler_RemovesLegacyTenancyProxy(t *testing.T) {
 	g.Expect(apierrors.IsNotFound(err)).To(BeTrue())
 }
 
+func TestLifecycleReconciler_ReadsLegacyTenancyProxySecretThroughAPIReader(t *testing.T) {
+	const monitoringNS = "opendatahub"
+
+	g := NewWithT(t)
+	s := lifecycleTestScheme(t)
+	service := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      usageLogsTenancyProxyServiceName,
+			Namespace: monitoringNS,
+			UID:       types.UID("legacy-service-uid"),
+			Labels:    map[string]string{"app.kubernetes.io/managed-by": "maas-controller"},
+		},
+	}
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      usageLogsTenancyProxyTLSSecretName,
+			Namespace: monitoringNS,
+			Annotations: map[string]string{
+				serviceCAServiceNameAnnotation: usageLogsTenancyProxyServiceName,
+				serviceCAServiceUIDAnnotation:  "legacy-service-uid",
+				serviceCAComponentAnnotation:   "service-ca",
+			},
+		},
+		Type: corev1.SecretTypeTLS,
+	}
+
+	cl := newSSAFakeClientBuilder(s).WithObjects(service, secret).Build()
+	r := &LifecycleReconciler{
+		Client:    &cachedSecretReaderErrorClient{Client: cl},
+		APIReader: cl,
+	}
+
+	g.Expect(r.cleanupLegacyUsageLogsTenancyProxySecret(
+		context.Background(), ctrl.Log, "cfg-uid", monitoringNS,
+	)).To(Succeed())
+	err := cl.Get(context.Background(), client.ObjectKeyFromObject(secret), &corev1.Secret{})
+	g.Expect(err).To(HaveOccurred())
+	g.Expect(apierrors.IsNotFound(err)).To(BeTrue())
+}
+
+type cachedSecretReaderErrorClient struct {
+	client.Client
+}
+
+func (c *cachedSecretReaderErrorClient) Get(
+	ctx context.Context,
+	key client.ObjectKey,
+	obj client.Object,
+	opts ...client.GetOption,
+) error {
+	if _, ok := obj.(*corev1.Secret); ok {
+		return errors.New("cached Secret is outside the informer namespace scope")
+	}
+	return c.Client.Get(ctx, key, obj, opts...)
+}
+
 func TestLifecycleReconciler_PreservesUnrelatedTenancyProxyTLSSecret(t *testing.T) {
 	const monitoringNS = "opendatahub"
 
