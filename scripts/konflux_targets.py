@@ -1165,7 +1165,9 @@ def effective_rules(
         role_ns = binding_ns if role_kind == "Role" else ""
         role = by_identity.get((role_kind, role_ns, ref.get("name", "")))
         if role:
-            scope = "" if role_kind == "ClusterRole" else binding_ns
+            # A RoleBinding limits even a ClusterRole reference to its own namespace;
+            # only a ClusterRoleBinding grants the rule cluster-wide.
+            scope = "" if doc.get("kind") == "ClusterRoleBinding" else binding_ns
             rules.extend((scope, rule) for rule in role_rules(role, all_docs))
     return rules
 
@@ -1311,9 +1313,7 @@ def check_escalation_closure(rendered: dict[str, list[dict[str, Any]]]) -> None:
                 else role.get("metadata", {}).get("namespace", "")
             )
             usable_rules = [
-                rule
-                for scope, rule in effective
-                if not scope or not role_scope or scope == role_scope
+                rule for scope, rule in effective if not scope or scope == role_scope
             ]
             if role.get("aggregationRule") and not any(
                 permission_rule_covers(
