@@ -31,7 +31,7 @@ spec:
     - name: url
       value: https://github.com/somya-bhatnagar/odh-konflux-central.git
     - name: revision
-      value: 79b0f910ba4e8b80fdbcc1208c61bb415872fcd5
+      value: 6725b021cc32a133f5c0eab54ad6b0af57b0b1d8
     - name: pathInRepo
       value: integration-tests/models-as-a-service/pr-group-testing-pipeline.yaml
   taskRunTemplate:
