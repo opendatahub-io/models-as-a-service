@@ -3774,6 +3774,11 @@ Client-supplied <code>x-grid-*</code> headers are rejected unless their names ar
 <p>Limitador counts tokens using the <code>usage.total_tokens</code> field in the response body. OpenAI Chat Completions and Embeddings responses both include this field. Embedding requests consume <strong>prompt tokens only</strong> (no completion tokens); these count toward the same subscription token budget as chat completions. Anthropic Messages and OpenAI Responses report usage differently (<code>input_tokens</code>/<code>output_tokens</code> without <code>total_tokens</code>), so the rate limiting integration cannot extract the token count.</p>
 <p>Authentication, subscription validation, and model access controls still apply to all endpoints — only token-based rate limiting enforcement is affected.</p>
 </div>
+<div class="admonition note">
+<p class="admonition-title"><code>/v1/rerank</code> (JSON body-based routing)</p>
+<p><strong>AuthPolicy</strong> and <strong>MaaSSubscription</strong> apply to <strong><code>POST {gateway}/v1/rerank</code></strong> the same way as chat: clients send <code>Authorization</code> and a JSON <strong><code>model</code></strong> field; the gateway promotes <strong><code>model</code></strong> to <strong><code>X-Gateway-Model-Name</code></strong> internally (Praxis pre-ExtProc). <strong>TokenRateLimitPolicy does not meter rerank</strong> when responses omit <code>usage.total_tokens</code> (typical Jina/Cohere-compatible rerank shapes). Usage logs include <code>/v1/rerank</code> in OTEL path matchers; token columns may be <strong><code>0</code></strong> when the response has no usage block.</p>
+<p>Per-modality request quotas (for example rerank RPM separate from subscription token limits) are not configured here; auth and subscription enforcement apply as for other JSON BBR paths.</p>
+</div>
 <h3 id="model-server-must-include-usage-data">Model server must include usage data</h3>
 <p>Token rate limiting requires the model server to return <code>usage.total_tokens</code> in every OpenAI-format response, including streaming chat completions. Without this, the gateway sees 0 tokens consumed and rate limits are never triggered. Embedding endpoints are unaffected because they always return non-streaming JSON with <code>usage.total_tokens</code>.</p>
 <p>How to enable this depends on the model server:</p>
@@ -3829,7 +3834,7 @@ Client-supplied <code>x-grid-*</code> headers are rejected unless their names ar
 <p><strong>Check CRs and generated policies:</strong></p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>kubectl<span class="w"> </span>get<span class="w"> </span>maasmodelref<span class="w"> </span>-n<span class="w"> </span><span class="si">${</span><span class="nv">MODEL_NS</span><span class="si">}</span>
 <a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>kubectl<span class="w"> </span>get<span class="w"> </span>maasauthpolicy,maassubscription<span class="w"> </span>-n<span class="w"> </span>models-as-a-service
-<a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a>kubectl<span class="w"> </span>get<span class="w"> </span>authpolicy,tokenratelimitpolicy<span class="w"> </span>-n<span class="w"> </span><span class="si">${</span><span class="nv">MODEL_NS</span><span class="si">}</span>
+<a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a>kubectl<span class="w"> </span>get<span class="w"> </span>authpolicy,tokenratelimitpolicy,ratelimitpolicy<span class="w"> </span>-n<span class="w"> </span><span class="si">${</span><span class="nv">MODEL_NS</span><span class="si">}</span>
 </code></pre></div>
 <p><strong>Create groups and add users</strong> (OpenShift example):</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="c1"># Create groups if they do not exist</span>
@@ -3902,7 +3907,7 @@ Client-supplied <code>x-grid-*</code> headers are rejected unless their names ar
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="October 30, 2026 17:31:19 UTC">October 30, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="November 24, 2026 17:47:33 UTC">November 24, 2026</span>
   </span>
 
     
