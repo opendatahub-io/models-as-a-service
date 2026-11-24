@@ -855,6 +855,12 @@ func (in *MaaSSubscriptionStatus) DeepCopyInto(out *MaaSSubscriptionStatus) {
 			(*in)[i].DeepCopyInto(&(*out)[i])
 		}
 	}
+	if in.SubscriptionIdentityMigrationReady != nil {
+		in, out := &in.SubscriptionIdentityMigrationReady, &out.SubscriptionIdentityMigrationReady
+		*out = new(bool)
+		**out = **in
+	}
+	in.SubscriptionIdentityObservedAt.DeepCopyInto(&out.SubscriptionIdentityObservedAt)
 	if in.ModelRefStatuses != nil {
 		in, out := &in.ModelRefStatuses, &out.ModelRefStatuses
 		*out = make([]ModelRefStatus, len(*in))

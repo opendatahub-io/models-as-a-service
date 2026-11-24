@@ -193,6 +193,36 @@ func TestPatchMaaSAPIDeploymentReplicas(t *testing.T) {
 	})
 }
 
+func TestPatchMaaSAPIDeploymentSubscriptionIdentityContract(t *testing.T) {
+	deployment := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "apps/v1",
+			"kind":       "Deployment",
+			"spec": map[string]any{
+				"template": map[string]any{
+					"spec": map[string]any{
+						"containers": []any{
+							map[string]any{"name": "maas-api", "image": "test-image", "env": []any{}},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	err := patchMaaSAPIDeployment(logr.Discard(), deployment, PlatformParams{MaaSAPIImage: "test-image"})
+	require.NoError(t, err)
+
+	contract, found, err := unstructured.NestedString(
+		deployment.Object,
+		"spec", "template", "metadata", "annotations",
+		AnnotationMaaSAPISubscriptionIdentityContract,
+	)
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, MaaSAPISubscriptionIdentityContractV1, contract)
+}
+
 func TestPatchPayloadProcessingDeploymentReplicas(t *testing.T) {
 	makeDeployment := func() *unstructured.Unstructured {
 		return &unstructured.Unstructured{

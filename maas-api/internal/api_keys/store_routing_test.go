@@ -145,9 +145,9 @@ func newFakeRows(query string) *fakeRows {
 	}
 	if strings.Contains(query, "WHERE key_hash = $1") {
 		return &fakeRows{
-			columns: make([]string, 11),
+			columns: make([]string, 13),
 			rows: [][]driver.Value{{
-				"key-id", "user", "key-name", nil, "{}", "subscription", "test-tenant",
+				"key-id", "user", "key-name", nil, "{}", "subscription", nil, nil, "test-tenant",
 				StatusActive, nil, nil, false,
 			}},
 		}
@@ -155,9 +155,9 @@ func newFakeRows(query string) *fakeRows {
 	if strings.Contains(query, "WHERE id = $1") {
 		created := time.Date(2026, 10, 19, 0, 0, 0, 0, time.UTC)
 		return &fakeRows{
-			columns: make([]string, 12),
+			columns: make([]string, 14),
 			rows: [][]driver.Value{{
-				"key-id", "key-name", nil, "user", "subscription", "tenant",
+				"key-id", "key-name", nil, "user", "subscription", nil, nil, "tenant",
 				created, nil, StatusActive, nil, false, nil,
 			}},
 		}
@@ -182,7 +182,7 @@ func (r *fakeRows) Next(dest []driver.Value) error {
 	}
 	copy(dest, r.rows[r.next])
 	if r.revoked {
-		dest[7] = StatusRevoked
+		dest[9] = StatusRevoked
 	}
 	r.next++
 	return nil

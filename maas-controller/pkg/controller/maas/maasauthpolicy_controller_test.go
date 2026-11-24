@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	discv1 "k8s.io/api/discovery/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -356,6 +357,125 @@ func TestMaaSAuthPolicyReconciler_TargetMaaSAPIReadyTreatsUnknownAsReady(t *test
 	}
 	if !ready {
 		t.Fatal("an EndpointSlice endpoint with unknown readiness must be treated as ready")
+	}
+}
+
+func TestMaaSAuthPolicyReconciler_SubscriptionIdentityCallbackRolloutGate(t *testing.T) {
+	const infraNS = "redhat-ai-gateway-infra"
+
+	tests := []struct {
+		name               string
+		contractAnnotation string
+		observedGeneration int64
+		replicas           int32
+		updatedReplicas    int32
+		availableReplicas  int32
+		readyReplicas      int32
+		wantReady          bool
+		wantCanEmit        bool
+		desiredReplicas    int32
+	}{
+		{
+			name:               "missing contract is not ready",
+			observedGeneration: 1,
+			updatedReplicas:    1,
+			availableReplicas:  1,
+			readyReplicas:      1,
+		},
+		{
+			name:               "incomplete rollout is not ready",
+			contractAnnotation: tenantreconcile.MaaSAPISubscriptionIdentityContractV1,
+			observedGeneration: 0,
+			replicas:           0,
+			updatedReplicas:    0,
+			availableReplicas:  0,
+			readyReplicas:      0,
+		},
+		{
+			name:               "complete rollout with contract is ready",
+			contractAnnotation: tenantreconcile.MaaSAPISubscriptionIdentityContractV1,
+			observedGeneration: 1,
+			replicas:           1,
+			updatedReplicas:    1,
+			availableReplicas:  1,
+			readyReplicas:      1,
+			wantReady:          true,
+			wantCanEmit:        true,
+		},
+		{
+			name:               "surge rollout with old pod is not ready",
+			contractAnnotation: tenantreconcile.MaaSAPISubscriptionIdentityContractV1,
+			observedGeneration: 1,
+			replicas:           2,
+			updatedReplicas:    1,
+			availableReplicas:  1,
+			readyReplicas:      1,
+		},
+		{
+			name:               "temporary unavailability after rollout can emit identity",
+			contractAnnotation: tenantreconcile.MaaSAPISubscriptionIdentityContractV1,
+			observedGeneration: 1,
+			replicas:           1,
+			updatedReplicas:    1,
+			wantCanEmit:        true,
+		},
+		{
+			name:               "replica deficit with only updated pods can emit identity",
+			contractAnnotation: tenantreconcile.MaaSAPISubscriptionIdentityContractV1,
+			observedGeneration: 1,
+			replicas:           2,
+			updatedReplicas:    2,
+			availableReplicas:  2,
+			readyReplicas:      2,
+			desiredReplicas:    3,
+			wantCanEmit:        true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			replicas := tt.desiredReplicas
+			if replicas == 0 {
+				replicas = 1
+			}
+			deployment := &appsv1.Deployment{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:       tenantreconcile.MaaSAPIDeploymentName(""),
+					Namespace:  infraNS,
+					Generation: 1,
+				},
+				Spec: appsv1.DeploymentSpec{
+					Replicas: &replicas,
+					Template: corev1.PodTemplateSpec{
+						ObjectMeta: metav1.ObjectMeta{
+							Annotations: map[string]string{
+								tenantreconcile.AnnotationMaaSAPISubscriptionIdentityContract: tt.contractAnnotation,
+							},
+						},
+					},
+				},
+				Status: appsv1.DeploymentStatus{
+					ObservedGeneration: tt.observedGeneration,
+					Replicas:           tt.replicas,
+					UpdatedReplicas:    tt.updatedReplicas,
+					AvailableReplicas:  tt.availableReplicas,
+					ReadyReplicas:      tt.readyReplicas,
+				},
+			}
+			client := fake.NewClientBuilder().WithScheme(scheme).WithObjects(deployment).Build()
+			reconciler := &MaaSAuthPolicyReconciler{Client: client, InfraNamespace: infraNS}
+
+			status, err := reconciler.maasAPISubscriptionIdentityCallbackStatus(context.Background(), "")
+			if err != nil {
+				t.Fatalf("maasAPISubscriptionIdentityCallbackStatus: %v", err)
+			}
+			if status.Ready() != tt.wantReady {
+				t.Fatalf("ready = %v, want %v", status.Ready(), tt.wantReady)
+			}
+			if status.CanEmitIdentityCallback() != tt.wantCanEmit {
+				t.Fatalf("canEmitIdentityCallback = %v, want %v", status.CanEmitIdentityCallback(), tt.wantCanEmit)
+			}
+		})
 	}
 }
 
@@ -1226,12 +1346,20 @@ func TestMaaSAuthPolicyReconciler_CachingConfiguration(t *testing.T) {
 		maasPolicyName = "policy-a"
 	)
 
-	for caseName, metadataTTL := range map[string]int64{
-		"default 60s":         60,
-		"custom 300s":         300,
-		"zero disables cache": 0,
-	} {
-		t.Run(caseName, func(t *testing.T) {
+	tests := []struct {
+		name         string
+		metadataTTL  int64
+		identityMode string
+	}{
+		{name: "default 60s", metadataTTL: 60},
+		{name: "custom 300s", metadataTTL: 300},
+		{name: "zero disables cache", metadataTTL: 0},
+		{name: "migrate identity phase disables caches", metadataTTL: 60, identityMode: "migrate"},
+		{name: "strict identity phase disables caches", metadataTTL: 60, identityMode: "strict"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
 			model := newMaaSModelRef(modelName, namespace, "ExternalModel", modelName)
 			route := newHTTPRoute(httpRouteName, namespace)
 			maasPolicy := newMaaSAuthPolicy(maasPolicyName, namespace, "team-a", maasv1alpha1.ModelRef{Name: modelName, Namespace: namespace})
@@ -1244,12 +1372,13 @@ func TestMaaSAuthPolicyReconciler_CachingConfiguration(t *testing.T) {
 				Build()
 
 			r := &MaaSAuthPolicyReconciler{
-				Client:           c,
-				Scheme:           scheme,
-				InfraNamespace:   "maas-system",
-				GatewayName:      "maas-default-gateway",
-				GatewayNamespace: gatewayNS,
-				MetadataCacheTTL: metadataTTL,
+				Client:                   c,
+				Scheme:                   scheme,
+				InfraNamespace:           "maas-system",
+				GatewayName:              "maas-default-gateway",
+				GatewayNamespace:         gatewayNS,
+				MetadataCacheTTL:         tc.metadataTTL,
+				SubscriptionIdentityMode: tc.identityMode,
 			}
 
 			req := ctrl.Request{NamespacedName: types.NamespacedName{Name: maasPolicyName, Namespace: namespace}}
@@ -1269,7 +1398,8 @@ func TestMaaSAuthPolicyReconciler_CachingConfiguration(t *testing.T) {
 				if err != nil {
 					t.Fatalf("%s cache: %v", name, err)
 				}
-				if metadataTTL == 0 {
+				wantMetadataTTL := r.metadataCacheTTLForIdentity(r.identityValidationEnabled())
+				if wantMetadataTTL == 0 {
 					if found {
 						t.Errorf("%s must not be cached with a TTL of zero: %#v", name, cache)
 					}
@@ -1278,8 +1408,8 @@ func TestMaaSAuthPolicyReconciler_CachingConfiguration(t *testing.T) {
 				if !found {
 					t.Fatalf("%s cache block missing", name)
 				}
-				if ttl, _, _ := unstructured.NestedInt64(cache, "ttl"); ttl != metadataTTL {
-					t.Errorf("%s cache.ttl = %d, want %d", name, ttl, metadataTTL)
+				if ttl, _, _ := unstructured.NestedInt64(cache, "ttl"); ttl != wantMetadataTTL {
+					t.Errorf("%s cache.ttl = %d, want %d", name, ttl, wantMetadataTTL)
 				}
 				if expression, _, _ := unstructured.NestedString(cache, "key", "expression"); expression == "" {
 					t.Errorf("%s cache.key.expression is empty", name)
@@ -1370,6 +1500,18 @@ func TestMaaSAuthPolicyReconciler_RemovesStaleCaches(t *testing.T) {
 				t.Errorf("stale cache at %v survived reconcile", cachePath)
 			}
 		})
+	}
+}
+
+func TestMaaSAuthPolicyReconciler_SubscriptionIdentityPhaseIsControllerWide(t *testing.T) {
+	r := &MaaSAuthPolicyReconciler{SubscriptionIdentityMode: "strict"}
+	if subscriptionIdentityMode(r.SubscriptionIdentityMode) != subscriptionIdentityModeStrict {
+		t.Fatal("controller strict phase must remain strict")
+	}
+
+	r.SubscriptionIdentityMode = "off"
+	if subscriptionIdentityMode(r.SubscriptionIdentityMode) != subscriptionIdentityModeOff {
+		t.Fatal("controller off phase must remain off")
 	}
 }
 
@@ -1841,6 +1983,24 @@ func TestMaaSAuthPolicyReconciler_IdentityHeadersUpstream(t *testing.T) {
 			t.Error("filters.identity.metrics must be true for telemetry to access identity data")
 		}
 	})
+
+	t.Run("subscription authorization leaves incarnation binding to API validation", func(t *testing.T) {
+		rego, found, err := unstructured.NestedString(
+			gwPolicy.Object,
+			"spec", "defaults", "rules", "authorization", "subscription-valid", "opa", "rego",
+		)
+		if err != nil || !found {
+			t.Fatalf("subscription-valid rego missing: found=%v err=%v", found, err)
+		}
+		for _, field := range []string{
+			"subscriptionIdentityId",
+			"subscriptionNamespace",
+		} {
+			if strings.Contains(rego, field) {
+				t.Errorf("subscription-valid rego should not compare %s locally; maas-api strict validation owns that decision, got:\n%s", field, rego)
+			}
+		}
+	})
 }
 
 func assertNonEmptySubscriptionHeader(t *testing.T, headers map[string]any, header, field string) {
@@ -2122,6 +2282,73 @@ func TestBuildGatewayAuthPolicySpec_SubscriptionHeaderInjection(t *testing.T) {
 		"spec", "defaults", "rules", "metadata", "subscription-info", "cache", "key", "expression")
 	if !strings.Contains(cacheKey, wantSelection) {
 		t.Errorf("subscription-info cache key must include the client header selection, got %q", cacheKey)
+	}
+}
+
+func TestBuildGatewayAuthPolicySpec_BindsSubscriptionSelectionToAPIKeyIdentity(t *testing.T) {
+	r := &MaaSAuthPolicyReconciler{
+		InfraNamespace:           "maas-system",
+		GatewayName:              "maas-default-gateway",
+		GatewayNamespace:         "gateway-ns",
+		ClusterAudience:          "https://kubernetes.default.svc",
+		MetadataCacheTTL:         60,
+		AuthzCacheTTL:            60,
+		SubscriptionIdentityMode: "strict",
+	}
+	spec := r.buildGatewayAuthPolicySpec(nil, false, "", "models-as-a-service", "test-gateway-ns", "test-gateway", nil)
+	obj := &unstructured.Unstructured{Object: map[string]any{"spec": spec}}
+	bodyExpression := nestedStringRequired(t, obj,
+		"spec", "defaults", "rules", "metadata", "subscription-info", "http", "body", "expression",
+	)
+
+	const identityID = "0b6fe901-7b52-4a78-9cbf-e398728ef67e"
+	auth := map[string]any{
+		"identity": "sk-oai-test",
+		"metadata": map[string]any{
+			"apiKeyValidation": map[string]any{
+				"groups":                 []any{},
+				"username":               "alice",
+				"subscription":           "identity-sub",
+				"subscriptionIdentityId": identityID,
+			},
+		},
+	}
+	body := evaluateGatewayCELMap(t, bodyExpression, auth)
+	if body["requestedSubscription"] != "identity-sub" {
+		t.Fatalf("requestedSubscription = %#v, want identity-sub", body["requestedSubscription"])
+	}
+	if body["requestedSubscriptionIdentityId"] != identityID {
+		t.Fatalf("requestedSubscriptionIdentityId = %#v, want %s", body["requestedSubscriptionIdentityId"], identityID)
+	}
+
+	tokenBody := evaluateGatewayCELMap(t, bodyExpression, map[string]any{
+		"identity": map[string]any{"user": map[string]any{"username": "alice", "groups": []any{}}},
+		"groups":   []any{},
+		"username": "alice",
+	})
+	if tokenBody["requestedSubscriptionIdentityId"] != "" {
+		t.Fatalf("user-token requestedSubscriptionIdentityId = %#v, want empty", tokenBody["requestedSubscriptionIdentityId"])
+	}
+}
+
+func TestBuildGatewayAuthPolicySpec_OmitsSubscriptionIdentityFieldOutsideStrictMode(t *testing.T) {
+	r := &MaaSAuthPolicyReconciler{
+		InfraNamespace:           "maas-system",
+		GatewayName:              "maas-default-gateway",
+		GatewayNamespace:         "gateway-ns",
+		ClusterAudience:          "https://kubernetes.default.svc",
+		MetadataCacheTTL:         60,
+		AuthzCacheTTL:            60,
+		SubscriptionIdentityMode: "off",
+	}
+	spec := r.buildGatewayAuthPolicySpec(nil, false, "", "models-as-a-service", "test-gateway-ns", "test-gateway", nil)
+	obj := &unstructured.Unstructured{Object: map[string]any{"spec": spec}}
+	bodyExpression := nestedStringRequired(t, obj,
+		"spec", "defaults", "rules", "metadata", "subscription-info", "http", "body", "expression",
+	)
+
+	if strings.Contains(bodyExpression, `"requestedSubscriptionIdentityId"`) {
+		t.Fatal("subscription-info body must omit requestedSubscriptionIdentityId outside strict mode for legacy maas-api compatibility")
 	}
 }
 

@@ -532,6 +532,31 @@ spec:
                 - short
                 - legacy
                 type: string
+              subscriptionIdentityId:
+                description: |-
+                  SubscriptionIdentityID is the database-owned incarnation ID shared by
+                  projected copies of this subscription. It is a local cache written by the
+                  maas-api identity observer and is not part of desired provider state.
+                pattern: ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$
+                type: string
+              subscriptionIdentityMigrationMessage:
+                description: |-
+                  SubscriptionIdentityMigrationMessage describes the current migration
+                  result or blocker. It is empty when migration is ready.
+                maxLength: 1024
+                type: string
+              subscriptionIdentityMigrationReady:
+                description: |-
+                  SubscriptionIdentityMigrationReady reports whether the migrate-phase
+                  observer resolved the current incarnation and bound every active legacy
+                  key that can be resolved to this subscription.
+                type: boolean
+              subscriptionIdentityObservedAt:
+                description: |-
+                  SubscriptionIdentityObservedAt is the last migrate-phase evaluation time
+                  for this subscription, including a blocked evaluation.
+                format: date-time
+                type: string
               tokenRateLimitStatuses:
                 description: TokenRateLimitStatuses reports the status of each generated
                   TokenRateLimitPolicy

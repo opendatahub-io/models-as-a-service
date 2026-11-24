@@ -15,6 +15,9 @@ type PrometheusRecorder struct {
 	inFlight              *prometheus.GaugeVec
 	keyValidation         *prometheus.CounterVec
 	tokenMint             *prometheus.CounterVec
+	observerRetirements   *prometheus.CounterVec
+	observerRetiredKeys   *prometheus.CounterVec
+	observerRejoins       *prometheus.CounterVec
 	maasRequestsTotal     prometheus.Counter
 	maasRequestDuration   prometheus.Histogram
 	maasRequestRejections *prometheus.CounterVec
@@ -58,6 +61,21 @@ func NewPrometheusRecorder(reg prometheus.Registerer) (*PrometheusRecorder, erro
 		Help: "Total number of API key mints by tenant and result.",
 	}, []string{"tenant_name", "result"})
 
+	observerRetirements := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "maas_api_subscription_observer_retirement_attempts_total",
+		Help: "Total subscription observer retirement attempts by tenant and result.",
+	}, []string{"tenant_name", "result"})
+
+	observerRetiredKeys := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "maas_api_subscription_observer_retirement_revoked_api_keys_total",
+		Help: "Total API keys revoked by stale subscription observer retirement, by tenant.",
+	}, []string{"tenant_name"})
+
+	observerRejoins := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "maas_api_subscription_observer_rejoin_attempts_total",
+		Help: "Total retired subscription observer rejoin attempts by tenant and result.",
+	}, []string{"tenant_name", "result"})
+
 	// Unlabeled so a representative scrape stays under the 20-series ceiling.
 	// Histogram (not HistogramVec) materializes every bucket at Register.
 	maasRequestsTotal := prometheus.NewCounter(prometheus.CounterOpts{
@@ -76,7 +94,11 @@ func NewPrometheusRecorder(reg prometheus.Registerer) (*PrometheusRecorder, erro
 		Help: "Total number of routing rejections by reason.",
 	}, []string{"reason"})
 
-	for _, c := range []prometheus.Collector{requestsTotal, requestDuration, inFlight, keyValidation, tokenMint, maasRequestsTotal, maasRequestDuration, maasRequestRejections} {
+	for _, c := range []prometheus.Collector{
+		requestsTotal, requestDuration, inFlight, keyValidation, tokenMint,
+		observerRetirements, observerRetiredKeys, observerRejoins,
+		maasRequestsTotal, maasRequestDuration, maasRequestRejections,
+	} {
 		if err := reg.Register(c); err != nil {
 			return nil, err
 		}
@@ -94,6 +116,9 @@ func NewPrometheusRecorder(reg prometheus.Registerer) (*PrometheusRecorder, erro
 		inFlight:              inFlight,
 		keyValidation:         keyValidation,
 		tokenMint:             tokenMint,
+		observerRetirements:   observerRetirements,
+		observerRetiredKeys:   observerRetiredKeys,
+		observerRejoins:       observerRejoins,
 		maasRequestsTotal:     maasRequestsTotal,
 		maasRequestDuration:   maasRequestDuration,
 		maasRequestRejections: maasRequestRejections,
@@ -111,6 +136,17 @@ func (r *PrometheusRecorder) RecordKeyValidation(tenant, result string) {
 
 func (r *PrometheusRecorder) RecordTokenMint(tenant, result string) {
 	r.tokenMint.WithLabelValues(tenant, result).Inc()
+}
+
+func (r *PrometheusRecorder) RecordSubscriptionObserverRetirement(tenant, result string, revokedAPIKeys int) {
+	r.observerRetirements.WithLabelValues(tenant, result).Inc()
+	if revokedAPIKeys > 0 {
+		r.observerRetiredKeys.WithLabelValues(tenant).Add(float64(revokedAPIKeys))
+	}
+}
+
+func (r *PrometheusRecorder) RecordSubscriptionObserverRejoin(tenant, result string) {
+	r.observerRejoins.WithLabelValues(tenant, result).Inc()
 }
 
 func (r *PrometheusRecorder) IncrementInFlight(method string) {

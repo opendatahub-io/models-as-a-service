@@ -294,6 +294,30 @@ type MaaSSubscriptionStatus struct {
 	// +kubebuilder:validation:Enum=short;legacy
 	RateLimitIdentity string `json:"rateLimitIdentity,omitempty"`
 
+	// SubscriptionIdentityID is the database-owned incarnation ID shared by
+	// projected copies of this subscription. It is a local cache written by the
+	// maas-api identity observer and is not part of desired provider state.
+	// +optional
+	// +kubebuilder:validation:Pattern=`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`
+	SubscriptionIdentityID string `json:"subscriptionIdentityId,omitempty"`
+
+	// SubscriptionIdentityMigrationReady reports whether the migrate-phase
+	// observer resolved the current incarnation and bound every active legacy
+	// key that can be resolved to this subscription.
+	// +optional
+	SubscriptionIdentityMigrationReady *bool `json:"subscriptionIdentityMigrationReady,omitempty"`
+
+	// SubscriptionIdentityObservedAt is the last migrate-phase evaluation time
+	// for this subscription, including a blocked evaluation.
+	// +optional
+	SubscriptionIdentityObservedAt metav1.Time `json:"subscriptionIdentityObservedAt,omitempty"`
+
+	// SubscriptionIdentityMigrationMessage describes the current migration
+	// result or blocker. It is empty when migration is ready.
+	// +optional
+	// +kubebuilder:validation:MaxLength=1024
+	SubscriptionIdentityMigrationMessage string `json:"subscriptionIdentityMigrationMessage,omitempty"`
+
 	// ModelRefStatuses reports the status of each referenced MaaSModelRef
 	// +optional
 	ModelRefStatuses []ModelRefStatus `json:"modelRefStatuses,omitempty"`

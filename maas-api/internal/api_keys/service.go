@@ -26,6 +26,7 @@ var (
 type SubscriptionSelector interface {
 	Select(groups []string, username string, requestedSubscription string, requestedModel string) (*subscription.SelectResponse, error)
 	SelectHighestPriority(groups []string, username string) (*subscription.SelectResponse, error)
+	LookupSubscription(namespace, name string) (*subscription.SelectResponse, error)
 }
 
 type Service struct {
@@ -55,6 +56,13 @@ func (s *Service) GetMaxExpirationDays() int {
 	return constant.DefaultAPIKeyMaxExpirationDays
 }
 
+func (s *Service) subscriptionIdentityMode() string {
+	if s.config != nil && s.config.SubscriptionIdentityMode != "" {
+		return s.config.SubscriptionIdentityMode
+	}
+	return config.SubscriptionIdentityModeOff
+}
+
 func NewService(store MetadataStore, cfg *config.Config, sub SubscriptionSelector) *Service {
 	return NewServiceWithLogger(store, cfg, sub, logger.Production())
 }
@@ -82,15 +90,17 @@ func NewServiceWithLogger(store MetadataStore, cfg *config.Config, sub Subscript
 // CreateAPIKeyResponse is returned when creating an API key.
 // Per Feature Refinement "Keys Shown Only Once": plaintext key is ONLY returned at creation time.
 type CreateAPIKeyResponse struct {
-	Key          string            `json:"key"`       // Plaintext key - SHOWN ONCE, NEVER STORED
-	KeyPrefix    string            `json:"keyPrefix"` // Display prefix for UI
-	ID           string            `json:"id"`
-	Name         string            `json:"name"`
-	Subscription string            `json:"subscription"` // MaaSSubscription name bound to this key
-	CreatedAt    string            `json:"createdAt"`
-	ExpiresAt    *string           `json:"expiresAt,omitempty"` // RFC3339 timestamp
-	Ephemeral    bool              `json:"ephemeral"`           // Short-lived programmatic key
-	Labels       map[string]string `json:"labels,omitempty"`    // Structured key-value pairs for API key metadata
+	Key          string `json:"key"`       // Plaintext key - SHOWN ONCE, NEVER STORED
+	KeyPrefix    string `json:"keyPrefix"` // Display prefix for UI
+	ID           string `json:"id"`
+	Name         string `json:"name"`
+	Subscription string `json:"subscription"` // MaaSSubscription name bound to this key
+	// SubscriptionIdentityID is the database incarnation bound to this key.
+	SubscriptionIdentityID string            `json:"subscriptionIdentityId,omitempty"`
+	CreatedAt              string            `json:"createdAt"`
+	ExpiresAt              *string           `json:"expiresAt,omitempty"` // RFC3339 timestamp
+	Ephemeral              bool              `json:"ephemeral"`           // Short-lived programmatic key
+	Labels                 map[string]string `json:"labels,omitempty"`    // Structured key-value pairs for API key metadata
 }
 
 // CreateAPIKey creates a new API key (sk-oai-* format).
@@ -172,6 +182,15 @@ func (s *Service) CreateAPIKey(
 		return nil, selectErr
 	}
 	subscriptionName := subResp.Name
+	subscriptionIdentityID := subResp.SubscriptionIdentityID
+	bindIdentity := s.subscriptionIdentityMode() == config.SubscriptionIdentityModeStrict ||
+		s.subscriptionIdentityMode() == config.SubscriptionIdentityModeMigrate
+	if bindIdentity && subscriptionIdentityID == "" {
+		return nil, ErrSubscriptionIdentityRequired
+	}
+	if !bindIdentity {
+		subscriptionIdentityID = ""
+	}
 
 	// Generate unique ID for this key
 	keyID := uuid.New().String()
@@ -180,7 +199,19 @@ func (s *Service) CreateAPIKey(
 	// Note: prefix is NOT stored (security - reduces brute-force attack surface)
 	// userGroups stored as PostgreSQL TEXT[] array (no JSON marshaling needed)
 	// Hash is SHA-256(key_id + secret) where key_id is embedded in the API key as per-key salt
-	if err := s.store.AddKey(ctx, username, keyID, hash, name, description, userGroups, subscriptionName, tenant, &expiresAt, ephemeral, labels); err != nil {
+	if bindIdentity {
+		maxObservationAge := time.Duration(constant.DefaultSubscriptionObservationMaxAgeSeconds) * time.Second
+		if s.config != nil && s.config.SubscriptionObservationMaxAgeSeconds > 0 {
+			maxObservationAge = time.Duration(s.config.SubscriptionObservationMaxAgeSeconds) * time.Second
+		}
+		if err := s.store.AddKeyWithSubscriptionIdentity(
+			ctx, username, keyID, hash, name, description, userGroups, subscriptionName,
+			subscriptionIdentityID, subResp.Namespace, tenant, &expiresAt, ephemeral, labels,
+			maxObservationAge,
+		); err != nil {
+			return nil, fmt.Errorf("failed to store identity-bound API key: %w", err)
+		}
+	} else if err := s.store.AddKey(ctx, username, keyID, hash, name, description, userGroups, subscriptionName, tenant, &expiresAt, ephemeral, labels); err != nil {
 		return nil, fmt.Errorf("failed to store API key: %w", err)
 	}
 
@@ -189,15 +220,16 @@ func (s *Service) CreateAPIKey(
 	// Return plaintext to user - THIS IS THE ONLY TIME IT'S AVAILABLE
 	formatted := expiresAt.Format(time.RFC3339)
 	response := &CreateAPIKeyResponse{
-		Key:          plaintext, // SHOWN ONCE, NEVER AGAIN
-		KeyPrefix:    prefix,
-		ID:           keyID,
-		Name:         name,
-		Subscription: subscriptionName,
-		CreatedAt:    time.Now().UTC().Format(time.RFC3339),
-		ExpiresAt:    &formatted,
-		Ephemeral:    ephemeral,
-		Labels:       labels,
+		Key:                    plaintext, // SHOWN ONCE, NEVER AGAIN
+		KeyPrefix:              prefix,
+		ID:                     keyID,
+		Name:                   name,
+		Subscription:           subscriptionName,
+		SubscriptionIdentityID: subscriptionIdentityID,
+		CreatedAt:              time.Now().UTC().Format(time.RFC3339),
+		ExpiresAt:              &formatted,
+		Ephemeral:              ephemeral,
+		Labels:                 labels,
 	}
 
 	return response, nil
@@ -303,6 +335,42 @@ func (s *Service) ValidateAPIKey(ctx context.Context, key string) (*ValidationRe
 		}, nil
 	}
 
+	enforceBoundIdentity := s.subscriptionIdentityMode() == config.SubscriptionIdentityModeMigrate ||
+		s.subscriptionIdentityMode() == config.SubscriptionIdentityModeStrict
+	hasIdentityBinding := metadata.SubscriptionIdentityID != "" || metadata.SubscriptionNamespace != ""
+	if hasIdentityBinding && enforceBoundIdentity {
+		if strings.TrimSpace(metadata.SubscriptionIdentityID) == "" || strings.TrimSpace(metadata.SubscriptionNamespace) == "" {
+			return &ValidationResult{
+				Valid:  false,
+				Reason: "key has an incomplete subscription identity binding",
+			}, nil
+		}
+		localSubscription, lookupErr := s.subSelector.LookupSubscription(metadata.SubscriptionNamespace, metadata.Subscription)
+		if lookupErr != nil {
+			s.logger.WithContext(ctx).Warn("Failed to look up local subscription for API-key validation",
+				"key_id", metadata.ID, "error", lookupErr)
+			return nil, fmt.Errorf("lookup local subscription %s/%s: %w", metadata.SubscriptionNamespace, metadata.Subscription, lookupErr)
+		}
+		if localSubscription == nil ||
+			localSubscription.DeletionTimestamp != "" ||
+			localSubscription.Namespace != metadata.SubscriptionNamespace ||
+			localSubscription.SubscriptionIdentityID != metadata.SubscriptionIdentityID {
+			return &ValidationResult{
+				Valid:  false,
+				Reason: "key subscription identity does not match local subscription",
+			}, nil
+		}
+	}
+
+	if s.subscriptionIdentityMode() == config.SubscriptionIdentityModeStrict {
+		if !hasIdentityBinding {
+			return &ValidationResult{
+				Valid:  false,
+				Reason: "key has no subscription identity bound",
+			}, nil
+		}
+	}
+
 	// Validate metadata.ID is a syntactically valid UUID (fail-closed defense-in-depth)
 	// Database should always return valid UUIDs, but verify to prevent malformed IDs
 	// from being used in cache keys or authorization decisions
@@ -313,16 +381,18 @@ func (s *Service) ValidateAPIKey(ctx context.Context, key string) (*ValidationRe
 
 	// Success - return user identity and groups for Authorino
 	return &ValidationResult{
-		Valid:        true,
-		UserID:       metadata.ID, // Database-assigned UUID (immutable, collision-resistant)
-		Username:     metadata.Username,
-		KeyID:        metadata.ID,
-		KeyName:      metadata.Name,
-		Groups:       groups, // Original user groups for subscription-based authorization
-		GroupsJSON:   string(groupsJSON),
-		Subscription: metadata.Subscription,
-		Tenant:       metadata.Tenant,
-		ExpiresAt:    metadata.ExpirationDate,
+		Valid:                  true,
+		UserID:                 metadata.ID, // Database-assigned UUID (immutable, collision-resistant)
+		Username:               metadata.Username,
+		KeyID:                  metadata.ID,
+		KeyName:                metadata.Name,
+		Groups:                 groups, // Original user groups for subscription-based authorization
+		GroupsJSON:             string(groupsJSON),
+		Subscription:           metadata.Subscription,
+		SubscriptionIdentityID: metadata.SubscriptionIdentityID,
+		SubscriptionNamespace:  metadata.SubscriptionNamespace,
+		Tenant:                 metadata.Tenant,
+		ExpiresAt:              metadata.ExpirationDate,
 	}, nil
 }
 
@@ -381,9 +451,9 @@ func (s *Service) RevokeTenantAPIKeys(ctx context.Context, tenant string) (int, 
 	return s.store.InvalidateTenant(ctx, tenant)
 }
 
-// RevokeSubscriptionAPIKeys soft-deletes all keys bound to one subscription
-// within a tenant. The operation is intentionally separate from user-facing
-// bulk revoke so lifecycle cleanup receives retention semantics.
+// RevokeSubscriptionAPIKeys soft-deletes lifecycle-managed keys for one
+// subscription within a tenant. Identity-bound keys are excluded in migrate
+// mode and cleaned up only through identity-aware absence handling.
 func (s *Service) RevokeSubscriptionAPIKeys(ctx context.Context, tenant, subscription string) (int, error) {
 	tenant = strings.TrimSpace(tenant)
 	subscription = strings.TrimSpace(subscription)
@@ -395,6 +465,13 @@ func (s *Service) RevokeSubscriptionAPIKeys(ctx context.Context, tenant, subscri
 	}
 	if configuredTenant := s.GetTenantName(); configuredTenant != "" && tenant != configuredTenant {
 		return 0, fmt.Errorf("%w: requested tenant %q but service is scoped to %q", ErrTenantMismatch, tenant, configuredTenant)
+	}
+
+	switch s.subscriptionIdentityMode() {
+	case config.SubscriptionIdentityModeStrict:
+		return 0, ErrSubscriptionIdentityRequired
+	case config.SubscriptionIdentityModeMigrate:
+		return s.store.InvalidateSubscriptionWithoutIdentity(ctx, tenant, subscription)
 	}
 	return s.store.InvalidateSubscription(ctx, tenant, subscription)
 }

@@ -106,6 +106,52 @@ func (m *MockStore) AddKey(
 	return nil
 }
 
+func (m *MockStore) AddKeyWithSubscriptionIdentity(
+	ctx context.Context,
+	username,
+	keyID,
+	keyHash,
+	name,
+	description string,
+	userGroups []string,
+	subscription string,
+	subscriptionIdentityID,
+	subscriptionNamespace,
+	tenant string,
+	expiresAt *time.Time,
+	ephemeral bool,
+	labels map[string]string,
+	maxObservationAge time.Duration,
+) error {
+	if subscriptionIdentityID == "" || subscriptionNamespace == "" {
+		return ErrSubscriptionIdentityRequired
+	}
+	if maxObservationAge <= 0 {
+		return errors.New("max observation age must be positive")
+	}
+
+	m.mu.Lock()
+	if existing, ok := m.keys[keyID]; ok {
+		existing.metadata.SubscriptionIdentityID = subscriptionIdentityID
+		existing.metadata.SubscriptionNamespace = subscriptionNamespace
+		m.mu.Unlock()
+		return nil
+	}
+	m.mu.Unlock()
+
+	if err := m.AddKey(ctx, username, keyID, keyHash, name, description, userGroups, subscription, tenant, expiresAt, ephemeral, labels); err != nil {
+		return err
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if key, ok := m.keys[keyID]; ok {
+		key.metadata.SubscriptionIdentityID = subscriptionIdentityID
+		key.metadata.SubscriptionNamespace = subscriptionNamespace
+	}
+	return nil
+}
+
 // List returns a paginated list of API keys with optional filtering.
 // Pagination is mandatory - no unbounded queries allowed.
 // username can be empty (all users) or specific username.
@@ -621,6 +667,31 @@ func (m *MockStore) InvalidateSubscription(ctx context.Context, tenant, subscrip
 	count := 0
 	for _, k := range m.keys {
 		if k.metadata.Tenant == tenant && k.metadata.Subscription == subscription && k.deletedAt == nil {
+			now := time.Now().UTC()
+			k.deletedAt = &now
+			if k.metadata.Status == StatusActive {
+				k.metadata.Status = StatusRevoked
+			}
+			count++
+		}
+	}
+	return count, nil
+}
+
+func (m *MockStore) InvalidateSubscriptionWithoutIdentity(ctx context.Context, tenant, subscription string) (int, error) {
+	if strings.TrimSpace(subscription) == "" {
+		return 0, errors.New("subscription is required")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	count := 0
+	for _, k := range m.keys {
+		if k.metadata.Tenant == tenant &&
+			k.metadata.Subscription == subscription &&
+			k.metadata.SubscriptionIdentityID == "" &&
+			k.metadata.SubscriptionNamespace == "" &&
+			k.deletedAt == nil {
 			now := time.Now().UTC()
 			k.deletedAt = &now
 			if k.metadata.Status == StatusActive {

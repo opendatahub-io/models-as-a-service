@@ -78,12 +78,16 @@ type TenantReconciler struct {
 	cleanupCompleted bool
 	// ClusterAudience is the OIDC audience resolved at startup (auto-detected issuer or default).
 	ClusterAudience string
+	// ClusterID is the kube-system namespace UID used to namespace shared-database state.
+	ClusterID string
 	// TenantNamespaceDiscoveryEnabled allows reconciling MaasTenantConfig CRs across all namespaces
 	// instead of only TenantNamespace (enables AITenant multi-tenancy).
 	TenantNamespaceDiscoveryEnabled bool
 	// MetadataCacheTTL is the TTL in seconds for Authorino metadata HTTP caching.
 	// Applies to apiKeyValidation and subscription-info metadata evaluators.
 	MetadataCacheTTL int64
+	// SubscriptionIdentityMode controls strict-phase cache safety for gateway policies.
+	SubscriptionIdentityMode string
 	// MonitoringNamespace is the namespace where the platform monitoring stack is deployed.
 	MonitoringNamespace string
 	// UsageLogsManifestPath is the directory containing usage-logs kustomize manifests
