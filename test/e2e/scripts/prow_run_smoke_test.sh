@@ -33,11 +33,9 @@
 #                                quay.io/opendatahub/odh-ai-gateway-controller:odh-stable.
 #                                Set to empty to skip companion install.
 #   AIGC_GIT_URL / AIGC_GIT_REF - Optional overrides for deploy-aigc-companion.sh (defaults live in that script)
-#   E2E_RUN_GUARDRAILS - Install the NeMo Guardrails controller and run the guardrail
-#                        tests (default: true). One switch for both, so the tests
-#                        never run against a cluster that lacks their platform.
-#   TRUSTYAI_GIT_URL / TRUSTYAI_GIT_REF / TRUSTYAI_OPERATOR_IMAGE - Optional overrides
-#                        for deploy-trustyai-guardrails.sh (defaults live in that script)
+#   E2E_RUN_GUARDRAILS - Install the NemoGuardrails CRD and run the guardrail tests
+#                        (default: true). One switch for both, so the tests never
+#                        run against a cluster that lacks their platform.
 #   DEPLOY_MODE - MaaS ownership mode (default: kustomize for presubmits)
 #   POLICY_ENGINE - Rate-limiting policy engine (default: rhcl)
 #   RHCL_STARTING_CSV - Optional RHCL operator startingCSV pin
@@ -114,8 +112,8 @@ if [[ -z "${AI_GATEWAY_CONTROLLER_IMAGE+x}" ]]; then
 else
     export AI_GATEWAY_CONTROLLER_IMAGE
 fi
-# Gates both the guardrail platform install and the guardrail tests, which read
-# it as their opt-in. Set to false to drop the TrustyAI install and skip them.
+# Gates both the NemoGuardrails CRD install and the guardrail tests, which read
+# it as their opt-in. Set to false to drop the CRD install and skip them.
 # Lowercased so the shell gate below accepts exactly what the tests accept.
 E2E_RUN_GUARDRAILS="$(printf '%s' "${E2E_RUN_GUARDRAILS:-true}" | tr '[:upper:]' '[:lower:]')"
 export E2E_RUN_GUARDRAILS
@@ -584,14 +582,19 @@ else
     source "${SCRIPT_DIR}/deploy-platform.sh"
     phase_mark deploy_platform end
 
-    # Before the companion: AIGC registers its NemoGuardrails watch only when
-    # that CRD already resolves at controller startup, so installing TrustyAI
-    # afterwards leaves provider edits on the resync cadence.
+    # Only the CRD, not the TrustyAI controller: the guardrail tests stand a
+    # stub NeMo server in for its workload, so MaaS CI does not depend on
+    # TrustyAI's images. Before the companion: AIGC registers its
+    # NemoGuardrails watch only when that CRD already resolves at controller
+    # startup, so installing it afterwards leaves provider edits on the
+    # resync cadence. Server-side: the schema is past the client-side
+    # annotation size limit.
     if [[ "${E2E_RUN_GUARDRAILS}" =~ ^(1|true|yes)$ ]]; then
-        print_header "Installing the NeMo Guardrails controller"
-        phase_mark deploy_trustyai_guardrails start
-        DEPLOYMENT_NAMESPACE="$DEPLOYMENT_NAMESPACE" bash "${SCRIPT_DIR}/deploy-trustyai-guardrails.sh"
-        phase_mark deploy_trustyai_guardrails end
+        print_header "Installing the NemoGuardrails CRD"
+        phase_mark deploy_nemoguardrails_crd start
+        oc apply --server-side -f "${PROJECT_ROOT}/test/e2e/fixtures/nemoguardrails-crd/nemoguardrails-crd.yaml"
+        oc wait --for=condition=Established crd/nemoguardrails.trustyai.opendatahub.io --timeout=120s
+        phase_mark deploy_nemoguardrails_crd end
     fi
 
     if [[ -n "${AI_GATEWAY_CONTROLLER_IMAGE:-}" ]]; then

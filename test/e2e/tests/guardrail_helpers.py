@@ -1,13 +1,15 @@
-"""Helpers for the AIGuardrail provider binding e2e.
+"""Helpers for the guardrail e2e.
 
-Self-contained on purpose: the guardrail tests are the only consumer, they need
-a NeMo Guardrails install that the rest of the suite does not, and nothing here
-belongs in the shared conftest until something else wants it.
+Self-contained on purpose: the guardrail tests are the only consumer, and
+nothing here belongs in the shared conftest until something else wants it.
 
-The binding verdicts themselves are also covered by envtest in
-ai-gateway-controller. What only a cluster can show is the part envtest fakes:
-NemoGuardrails publishing status.endpoint off the enable-auth annotation, and
-the controller discovering the provider CRD through real RBAC.
+The provider is a stub, not the TrustyAI controller. The binding verdicts are
+ai-gateway-controller's and its envtest covers them; what these tests own is
+the MaaS chain around a provider: subscription selection, the AuthPolicy
+header, AGC compiling the check, and the gateway enforcing the verdict. So the
+cluster gets the NemoGuardrails CRD only (prow_run_smoke_test.sh applies the
+vendored copy), and each provider is a CR whose status the test writes itself,
+pointing at a small /v1/checks server that answers the way NeMo does.
 """
 import json
 import os
@@ -15,9 +17,9 @@ import subprocess
 import time
 
 import pytest
+from test_helper import MAAS_API_DEPLOYMENT_NAMESPACE
 
-# Opt-in gate. The suite installs the NeMo Guardrails controller through
-# test/e2e/scripts/deploy-trustyai-guardrails.sh, which most runs do not do.
+# Opt-in gate, set by prow_run_smoke_test.sh alongside the CRD install.
 RUN_GUARDRAILS = os.environ.get("E2E_RUN_GUARDRAILS", "").lower() in {"1", "true", "yes"}
 
 NEMO_CRD = "nemoguardrails.trustyai.opendatahub.io"
@@ -25,23 +27,68 @@ NEMO_API_VERSION = "trustyai.opendatahub.io/v1alpha1"
 AIGUARDRAIL_CRD = "aiguardrails.aigateway.opendatahub.io"
 AIGUARDRAIL_API_VERSION = "aigateway.opendatahub.io/v1alpha1"
 
-# status.endpoint is published only for an auth-protected server, and
-# status.endpoint is the only field the binding controller reads for readiness.
-ENABLE_AUTH_ANNOTATION = "security.opendatahub.io/enable-auth"
-
-# The operator ships its default configurations into its own namespace. A
-# provider's nemoConfigs[].configMaps must resolve in the provider namespace,
-# so one is copied across per test namespace.
-OPERATOR_NAMESPACE = os.environ.get("DEPLOYMENT_NAMESPACE", "opendatahub")
 DEFAULT_CONFIG_ID = "default-all"
+# AGC reads configuration names off the provider CR and never fetches the
+# ConfigMaps, so the name only has to be stable, not to exist.
+STUB_CONFIGMAP = "nemo-guardrails-default-all"
 
-# The mcp-guardrails overlay applies namePrefix: trustyai-service-operator-, so
-# the shipped default installs under a prefixed name. The copy drops the prefix.
-SOURCE_CONFIGMAP = os.environ.get(
-    "E2E_GUARDRAIL_SOURCE_CONFIGMAP",
-    "trustyai-service-operator-nemo-guardrails-default-all",
+# AGC accepts a NeMo Service only in an AI Gateway infrastructure namespace,
+# which is where maas-api runs.
+INFRA_NAMESPACE = MAAS_API_DEPLOYMENT_NAMESPACE
+
+# Pinned rather than a moving tag, so a base-image push cannot change a run.
+STUB_IMAGE = os.environ.get(
+    "E2E_GUARDRAIL_STUB_IMAGE",
+    "registry.access.redhat.com/ubi9/python-312:1-1795522683",
 )
-DEFAULT_CONFIGMAP = "nemo-guardrails-default-all"
+# The pod port AGC opens egress to for a provider without kube-rbac-proxy.
+STUB_PORT = 8000
+# A prompt containing BLOCK_MARKER is blocked, anything else passes. Praxis
+# answers a request-phase block with a 403 whose body is the rail name, so
+# STUB_RAIL in a refusal proves the verdict came back from the callout.
+BLOCK_MARKER = "e2e-guardrail-block"
+STUB_RAIL = "e2e-stub-rail"
+
+STUB_SERVER = """\
+import json
+import os
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+MARKER = os.environ["BLOCK_MARKER"].encode()
+RAIL = os.environ["STUB_RAIL"]
+
+
+class Checks(BaseHTTPRequestHandler):
+    def _body(self):
+        if self.headers.get("Transfer-Encoding", "").lower() == "chunked":
+            body = b""
+            while True:
+                size = int(self.rfile.readline().strip(), 16)
+                if size == 0:
+                    self.rfile.readline()
+                    return body
+                body += self.rfile.read(size)
+                self.rfile.readline()
+        return self.rfile.read(int(self.headers.get("Content-Length") or 0))
+
+    def do_POST(self):
+        if self.path.rstrip("/") != "/v1/checks":
+            self.send_error(404)
+            return
+        if MARKER in self._body():
+            verdict = {"status": "blocked", "content": "", "rail": RAIL}
+        else:
+            verdict = {"status": "passed", "content": ""}
+        payload = json.dumps(verdict).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+
+HTTPServer(("", 8000), Checks).serve_forever()
+"""
 
 PROVIDER_READY_TIMEOUT = int(os.environ.get("E2E_GUARDRAIL_PROVIDER_TIMEOUT", "300"))
 VERDICT_TIMEOUT = int(os.environ.get("E2E_GUARDRAIL_VERDICT_TIMEOUT", "120"))
@@ -53,7 +100,7 @@ POLL_INTERVAL = 3
 OC_TIMEOUT = int(os.environ.get("E2E_GUARDRAIL_OC_TIMEOUT", "30"))
 
 
-def oc(*args, check=True, input_text=None):
+def oc(*args, check=True, input_text=None, timeout=OC_TIMEOUT):
     """Run an oc command, capturing output."""
     return subprocess.run(
         ["oc", *args],
@@ -61,7 +108,7 @@ def oc(*args, check=True, input_text=None):
         text=True,
         check=check,
         input=input_text,
-        timeout=OC_TIMEOUT,
+        timeout=timeout,
     )
 
 
@@ -103,8 +150,8 @@ def require_opt_in():
     """Skip unless the run declares the guardrail platform is installed."""
     if not RUN_GUARDRAILS:
         pytest.skip(
-            "guardrail e2e is opt-in: run "
-            "test/e2e/scripts/deploy-trustyai-guardrails.sh and set "
+            "guardrail e2e is opt-in: apply "
+            "test/e2e/fixtures/nemoguardrails-crd before the AGC companion and set "
             "E2E_RUN_GUARDRAILS=true"
         )
 
@@ -116,30 +163,6 @@ def require_guardrail_platform():
         pytest.skip(f"{NEMO_CRD} is not installed")
     if not crd_installed(AIGUARDRAIL_CRD):
         pytest.skip(f"{AIGUARDRAIL_CRD} is not installed")
-
-
-def allowed_consumers_supported() -> bool:
-    """Report whether the installed NemoGuardrails CRD accepts allowedConsumers.
-
-    Against a build that predates the field the API server prunes it, the
-    controller reads nothing, and every provider behaves as from: Same — so the
-    scenarios that drive it would assert a rule that was never stored.
-    """
-    result = oc("get", "crd", NEMO_CRD, "-o", "json", check=False)
-    if result.returncode != 0:
-        # The caller turns a False into a skip, so a denial or an API error
-        # read as "unsupported" drops these scenarios on a cluster that does
-        # support them.
-        if "NotFound" in result.stderr or "not found" in result.stderr:
-            return False
-        raise AssertionError(f"cannot read CRD {NEMO_CRD}: {result.stderr.strip()}")
-    crd = json.loads(result.stdout)
-    for version in crd.get("spec", {}).get("versions", []):
-        schema = version.get("schema", {}).get("openAPIV3Schema", {})
-        spec = schema.get("properties", {}).get("spec", {})
-        if "allowedConsumers" in spec.get("properties", {}):
-            return True
-    return False
 
 
 def create_namespace(name: str):
@@ -176,61 +199,116 @@ def delete_namespace(name: str):
     oc("delete", "namespace", name, "--ignore-not-found=true", "--wait=false")
 
 
-def label_namespace(name: str, key: str, value: str | None):
-    """Set a namespace label, or remove it when value is None."""
-    label = f"{key}-" if value is None else f"{key}={value}"
-    oc("label", "namespace", name, label, "--overwrite")
+def stub_service_name(namespace: str, name: str) -> str:
+    """The NeMo Service AGC derives for provider namespace/name.
 
-
-def copy_default_configmap(namespace: str, name: str = DEFAULT_CONFIGMAP) -> str:
-    """Copy the operator's default NeMo configuration into namespace.
-
-    The default name is safe only in a namespace the caller created. Writing it
-    into a namespace that already holds one overwrites the configuration some
-    other provider is serving, so a caller working in a namespace it does not
-    own passes a name of its own. Returns the name written.
+    Mirrors ai-gateway-controller's guardrail.NemoServiceFor: the provider name
+    when the CR lives in the infrastructure namespace itself, and
+    <namespace>-<name> otherwise.
     """
-    source = get("configmap", SOURCE_CONFIGMAP, OPERATOR_NAMESPACE)
+    return name if namespace == INFRA_NAMESPACE else f"{namespace}-{name}"
+
+
+def _stub_workload(service: str) -> list[dict]:
+    """The stub's script, Deployment and Service in the infrastructure namespace."""
+    labels = {"app.kubernetes.io/name": "e2e-nemo-stub", "e2e-nemo-stub": service}
+    return [
+        {
+            "apiVersion": "v1",
+            "kind": "ConfigMap",
+            "metadata": {"name": f"{service}-server", "namespace": INFRA_NAMESPACE},
+            "data": {"server.py": STUB_SERVER},
+        },
+        {
+            "apiVersion": "apps/v1",
+            "kind": "Deployment",
+            "metadata": {"name": service, "namespace": INFRA_NAMESPACE, "labels": labels},
+            "spec": {
+                "replicas": 1,
+                "selector": {"matchLabels": labels},
+                "template": {
+                    "metadata": {"labels": labels},
+                    "spec": {
+                        "containers": [{
+                            "name": "checks",
+                            "image": STUB_IMAGE,
+                            "command": ["python3", "/stub/server.py"],
+                            "env": [
+                                {"name": "BLOCK_MARKER", "value": BLOCK_MARKER},
+                                {"name": "STUB_RAIL", "value": STUB_RAIL},
+                            ],
+                            "ports": [{"name": "http", "containerPort": STUB_PORT}],
+                            "readinessProbe": {"tcpSocket": {"port": STUB_PORT}},
+                            "volumeMounts": [{"name": "server", "mountPath": "/stub"}],
+                            "securityContext": {
+                                "allowPrivilegeEscalation": False,
+                                "capabilities": {"drop": ["ALL"]},
+                                "runAsNonRoot": True,
+                                "seccompProfile": {"type": "RuntimeDefault"},
+                            },
+                        }],
+                        "volumes": [{
+                            "name": "server",
+                            "configMap": {"name": f"{service}-server"},
+                        }],
+                    },
+                },
+            },
+        },
+        {
+            "apiVersion": "v1",
+            "kind": "Service",
+            "metadata": {"name": service, "namespace": INFRA_NAMESPACE, "labels": labels},
+            "spec": {
+                "selector": labels,
+                "ports": [{"name": "http", "port": 80, "targetPort": STUB_PORT}],
+            },
+        },
+    ]
+
+
+def deploy_stub_provider(namespace: str, name: str, config_id: str = DEFAULT_CONFIG_ID):
+    """Stand up a NemoGuardrails provider backed by the stub server.
+
+    The workload comes first: AGC reads the Service's selector to open egress,
+    so it has to exist before a policy binds the provider. The status is then
+    written the way TrustyAI publishes it. Without the enable-auth annotation
+    AGC calls the Service over plain http, which is all the stub serves.
+    """
+    service = stub_service_name(namespace, name)
+    for manifest in _stub_workload(service):
+        apply(manifest)
+    oc(
+        "rollout", "status", f"deployment/{service}", "-n", INFRA_NAMESPACE,
+        f"--timeout={PROVIDER_READY_TIMEOUT}s",
+        timeout=PROVIDER_READY_TIMEOUT + OC_TIMEOUT,
+    )
     apply({
-        "apiVersion": "v1",
-        "kind": "ConfigMap",
-        "metadata": {"name": name, "namespace": namespace},
-        "data": source.get("data", {}),
-    })
-    return name
-
-
-def provider_manifest(
-    namespace: str,
-    name: str = "nemo",
-    config_id: str = DEFAULT_CONFIG_ID,
-    config_maps=None,
-    enable_auth: bool = True,
-    allowed_consumers: dict | None = None,
-) -> dict:
-    """Build a NemoGuardrails provider.
-
-    allowed_consumers is written verbatim so a scenario can plant a rule the
-    binding controller must refuse.
-    """
-    metadata = {"name": name, "namespace": namespace}
-    if enable_auth:
-        metadata["annotations"] = {ENABLE_AUTH_ANNOTATION: "true"}
-    spec = {
-        "nemoConfigs": [{
-            "name": config_id,
-            "default": True,
-            "configMaps": config_maps or [DEFAULT_CONFIGMAP],
-        }],
-    }
-    if allowed_consumers is not None:
-        spec["allowedConsumers"] = allowed_consumers
-    return {
         "apiVersion": NEMO_API_VERSION,
         "kind": "NemoGuardrails",
-        "metadata": metadata,
-        "spec": spec,
-    }
+        "metadata": {"name": name, "namespace": namespace},
+        "spec": {
+            "nemoConfigs": [{
+                "name": config_id,
+                "default": True,
+                "configMaps": [STUB_CONFIGMAP],
+            }],
+        },
+    })
+    oc(
+        "patch", "nemoguardrails", name, "-n", namespace,
+        "--subresource=status", "--type=merge",
+        "-p", json.dumps({"status": {"workloadNamespace": INFRA_NAMESPACE}}),
+    )
+
+
+def delete_stub_provider(namespace: str, name: str):
+    """Remove the provider CR and its stub workload."""
+    delete("nemoguardrails", name, namespace)
+    service = stub_service_name(namespace, name)
+    delete("service", service, INFRA_NAMESPACE)
+    delete("deployment", service, INFRA_NAMESPACE)
+    delete("configmap", f"{service}-server", INFRA_NAMESPACE)
 
 
 def policy_manifest(
@@ -261,24 +339,6 @@ def policy_manifest(
             }],
         },
     }
-
-
-def wait_for_provider_endpoint(namespace: str, name: str = "nemo", timeout=None) -> str:
-    """Wait for the NeMo server to publish status.endpoint, and return it."""
-    timeout = timeout or PROVIDER_READY_TIMEOUT
-    deadline = time.time() + timeout
-    last = None
-    while time.time() < deadline:
-        provider = get("nemoguardrails", name, namespace)
-        endpoint = provider.get("status", {}).get("endpoint")
-        if endpoint:
-            return endpoint
-        last = provider.get("status")
-        time.sleep(POLL_INTERVAL)
-    raise AssertionError(
-        f"NemoGuardrails {namespace}/{name} published no status.endpoint "
-        f"within {timeout}s; last status: {last}"
-    )
 
 
 def condition(policy: dict, condition_type: str) -> dict | None:
@@ -324,11 +384,3 @@ def assert_binding_published(status: dict):
         f"an accepted binding must publish the endpoint it accepted: {status}"
     assert status.get("bindingRevision"), \
         f"an accepted binding must publish its revision: {status}"
-
-
-def assert_binding_withdrawn(status: dict):
-    """A refusal must leave nothing for a consumer to keep gating on."""
-    assert not status.get("providerEndpoint"), \
-        f"a refused policy must not publish an endpoint: {status}"
-    assert not status.get("bindingRevision"), \
-        f"a refused policy must not publish a revision: {status}"
