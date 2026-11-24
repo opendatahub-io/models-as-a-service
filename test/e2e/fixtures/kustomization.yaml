@@ -15,6 +15,7 @@ resources:
   - distinct-2    # Second distinct model ID (validates multiple distinct models)
   - trlp-test     # TRLP test model (validates TRLP validation behavior)
   - embedding     # Embedding model (validates /v1/embeddings, TRLP, default-deny)
+  - rerank        # Rerank mock (validates /v1/rerank BBR, request RLP, default-deny)
   - echo-sim      # Echo-mode sim (validates large mirrored I/O and credential leaks)
   - external-token-limit # LLMIS-only backend for ExternalModel token-rate enforcement
   - slow-stream   # Paced sim (validates SSE is streamed, not buffered, through the gateway)
