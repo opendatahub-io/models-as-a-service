@@ -46,8 +46,11 @@ import logging
 import re
 import time
 import uuid
+from dataclasses import dataclass
+from pathlib import Path
 
 import pytest
+import requests
 from multitenancy_helpers import (
     delete_namespace_best_effort,
     get_json_or_none,
@@ -60,6 +63,7 @@ from tenant_external_model_helpers import (
     apply_maas_model_ref_for_external,
     assert_returns_usage,
     assert_served_by_provider,
+    external_chat_url,
     external_model_reports_maas_route,
     gateway_ref,
     gateway_status_entry,
@@ -72,7 +76,9 @@ from tenant_external_model_helpers import (
     wait_for_gateway_attachment_ready,
 )
 from test_helper import (
+    E2E_PYTHON_IMAGE,
     LLM_D_INFERENCE_SIM_IMAGE,
+    TLS_VERIFY,
     _apply_cr,
     _is_transient_gateway_response,
 )
@@ -95,6 +101,11 @@ UNLIMITED_TOKEN_LIMIT = 100
 # spec.config["tls.caCertificates"] — see _usage_provider.
 SA_SERVICE_CA = "/var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt"
 SERVING_CERT_ANNOTATION = "service.beta.openshift.io/serving-cert-secret-name"
+
+# The simulator never compresses, so a second provider covers what the gateway
+# does with a compressed response: it gzips whenever it is asked to and reports
+# two tokens on every response.
+GZIP_USAGE_PROVIDER = Path(__file__).with_name("gzip_usage_provider.py")
 
 
 @pytest.fixture(scope="module")
@@ -482,7 +493,11 @@ class TestSharedModelAmbiguousModelRef:
 
 
 def _usage_provider(
-    resources: TenantExternalModelResources, namespace: str, client_model_name: str
+    resources: TenantExternalModelResources,
+    namespace: str,
+    client_model_name: str,
+    *,
+    compressing: bool = False,
 ) -> dict:
     """Deploy the usage-returning provider the quota model binds to.
 
@@ -501,9 +516,12 @@ def _usage_provider(
     through a tenant gateway can only be that tenant's own budget.
 
     An echo endpoint cannot stand in even with a synthetic usage field: the
-    telemetry pipeline drops reports whose body does not name the model and
-    cannot read gzip-compressed responses (which httpbingo serves) — the
-    simulator's plain OpenAI-shaped bodies satisfy all of it.
+    telemetry pipeline drops reports whose body does not name the model —
+    the simulator's OpenAI-shaped bodies do.
+
+    ``compressing`` swaps the simulator for ``gzip_usage_provider.py``, which
+    gzips its responses whenever it is asked to; the Service, certificate and
+    provider config stay the same.
     """
     suffix = uuid.uuid4().hex[:6]
     sim = f"e2e-usage-sim-{suffix}"
@@ -535,6 +553,52 @@ def _usage_provider(
 
     wait_until(_cert_injected, 120, f"service-ca cert secret {namespace}/{cert_secret}")
 
+    container = {
+        "name": "sim",
+        "ports": [{"containerPort": 8000, "name": "https", "protocol": "TCP"}],
+        "readinessProbe": {"httpGet": {"path": "/ready", "port": "https", "scheme": "HTTPS"}},
+        "volumeMounts": [{"name": "tls", "mountPath": "/etc/sim/tls", "readOnly": True}],
+    }
+    volumes = [{"name": "tls", "secret": {"secretName": cert_secret}}]
+    if compressing:
+        script = f"{sim}-script"
+        _apply_cr(
+            {
+                "apiVersion": "v1",
+                "kind": "ConfigMap",
+                "metadata": {"name": script, "namespace": namespace},
+                "data": {"provider.py": GZIP_USAGE_PROVIDER.read_text()},
+            }
+        )
+        resources.track("configmap", script, namespace)
+        container.update(
+            {
+                "image": E2E_PYTHON_IMAGE,
+                "command": ["python3", "/opt/provider/provider.py"],
+                "env": [
+                    {"name": "TLS_CERT", "value": "/etc/sim/tls/tls.crt"},
+                    {"name": "TLS_KEY", "value": "/etc/sim/tls/tls.key"},
+                ],
+            }
+        )
+        container["volumeMounts"].append({"name": "script", "mountPath": "/opt/provider", "readOnly": True})
+        volumes.append({"name": "script", "configMap": {"name": script}})
+    else:
+        container.update(
+            {
+                "image": LLM_D_INFERENCE_SIM_IMAGE,
+                "command": ["/app/llm-d-inference-sim"],
+                "args": [
+                    "--port", "8000",
+                    "--model", client_model_name,
+                    "--mode", "random",
+                    "--no-mm-encoder-only",
+                    "--ssl-certfile", "/etc/sim/tls/tls.crt",
+                    "--ssl-keyfile", "/etc/sim/tls/tls.key",
+                ],
+            }
+        )
+
     _apply_cr(
         {
             "apiVersion": "apps/v1",
@@ -545,37 +609,7 @@ def _usage_provider(
                 "selector": {"matchLabels": {"app": sim}},
                 "template": {
                     "metadata": {"labels": {"app": sim}},
-                    "spec": {
-                        "containers": [
-                            {
-                                "name": "sim",
-                                "image": LLM_D_INFERENCE_SIM_IMAGE,
-                                "command": ["/app/llm-d-inference-sim"],
-                                "args": [
-                                    "--port", "8000",
-                                    "--model", client_model_name,
-                                    "--mode", "random",
-                                    "--no-mm-encoder-only",
-                                    "--ssl-certfile", "/etc/sim/tls/tls.crt",
-                                    "--ssl-keyfile", "/etc/sim/tls/tls.key",
-                                ],
-                                "ports": [
-                                    {"containerPort": 8000, "name": "https", "protocol": "TCP"}
-                                ],
-                                "readinessProbe": {
-                                    "httpGet": {
-                                        "path": "/ready",
-                                        "port": "https",
-                                        "scheme": "HTTPS",
-                                    }
-                                },
-                                "volumeMounts": [
-                                    {"name": "tls", "mountPath": "/etc/sim/tls", "readOnly": True}
-                                ],
-                            }
-                        ],
-                        "volumes": [{"name": "tls", "secret": {"secretName": cert_secret}}],
-                    },
+                    "spec": {"containers": [container], "volumes": volumes},
                 },
             },
         }
@@ -594,6 +628,79 @@ def _usage_provider(
         "credential": f"sk-usage-{suffix}",
         "provider_config": {"tls.caCertificates": SA_SERVICE_CA},
     }
+
+
+@dataclass
+class _Stream:
+    """A streamed inference, read to its end: its JSON events and when each arrived."""
+
+    status_code: int
+    text: str
+    events: list[tuple[float, dict]]
+
+
+def _stream_external_chat(
+    gateway_url: str, model_namespace: str, client_model_name: str, api_key: str, *, provider_path: str
+) -> _Stream:
+    """infer_external_chat for a streamed completion, without the retries: the
+    events are read as they arrive, and a stream that has started cannot be
+    replayed."""
+    with requests.post(
+        external_chat_url(gateway_url, model_namespace, client_model_name, provider_path=provider_path),
+        headers={"Authorization": f"Bearer {api_key}"},
+        json={
+            "model": client_model_name,
+            "messages": [{"role": "user", "content": "multi-tenant external model e2e"}],
+            "stream": True,
+        },
+        timeout=45,
+        verify=TLS_VERIFY,
+        stream=True,
+    ) as response:
+        if response.status_code != 200:
+            return _Stream(response.status_code, response.text, [])
+        # One byte at a time: a larger read may wait for bytes of a later event.
+        events = [
+            (time.monotonic(), json.loads(line[len(b"data: ") :]))
+            for line in response.iter_lines(chunk_size=1)
+            if line.startswith(b"data: {")
+        ]
+        return _Stream(200, "", events)
+
+
+def _exhaust_budget(
+    case: dict, model: dict, api_key: str, provider_path: str, *, infer=infer_external_chat
+) -> tuple[list, object]:
+    """Infer through a tenant's gateway until a 429 follows at least one 200.
+
+    Returns the 200 responses and the last response, which is not a 429 if
+    the budget was never exhausted. A fresh budget always admits the first
+    request (see test_tenant_rate_limit_isolation._exhaust_until_429), so a
+    429 with nothing served means the limits are not live yet.
+    """
+    served = []
+    last = None
+    deadline = time.time() + 90
+    while time.time() < deadline:
+        last = infer(
+            case["gateway_url"],
+            model["namespace"],
+            model["client_name"],
+            api_key,
+            provider_path=provider_path,
+        )
+        if last.status_code == 200:
+            served.append(last)
+        elif last.status_code == 429:
+            if served:
+                break
+        elif not _is_transient_gateway_response(last):
+            raise AssertionError(
+                f"unexpected inference response through {case['gateway_name']} "
+                f"({last.status_code}): {redact_sensitive(last.text)}"
+            )
+        time.sleep(1.0)
+    return served, last
 
 
 class TestTenantQuotaIsolation:
@@ -647,39 +754,15 @@ class TestTenantQuotaIsolation:
         provider_path = quota_model["usage"]["provider_path"]
         _require_client_name_alias(model, env["tenant_a"])
 
-        # Drive tenant A past its budget: at least one 200 must precede the
-        # 429 (a fresh budget always admits the first request — see
-        # test_tenant_rate_limit_isolation._exhaust_until_429).
-        successes = 0
-        limited = None
-        deadline = time.time() + 90
-        while time.time() < deadline:
-            limited = infer_external_chat(
-                env["tenant_a"]["gateway_url"],
-                model["namespace"],
-                model["client_name"],
-                quota_model["access_a"]["api_key"],
-                provider_path=provider_path,
-            )
-            if limited.status_code == 200:
-                successes += 1
-            elif limited.status_code == 429:
-                if successes:
-                    break
-            elif _is_transient_gateway_response(limited):
-                time.sleep(1.0)
-                continue
-            else:
-                raise AssertionError(
-                    f"unexpected inference response on tenant A "
-                    f"({limited.status_code}): {redact_sensitive(limited.text)}"
-                )
-            time.sleep(1.0)
+        # Drive tenant A past its budget: at least one 200 must precede the 429.
+        served, limited = _exhaust_budget(
+            env["tenant_a"], model, quota_model["access_a"]["api_key"], provider_path
+        )
         assert limited is not None and limited.status_code == 429, (
-            f"tenant A did not hit its token budget after {successes} successes: "
+            f"tenant A did not hit its token budget after {len(served)} successes: "
             f"{redact_sensitive(limited.text if limited is not None else 'no response')}"
         )
-        assert successes > 0, "tenant A hit 429 before any successful inference (limits not live?)"
+        assert served, "tenant A hit 429 before any successful inference (limits not live?)"
 
         # Tenant B's budget is independent and still serves — with usage,
         # which is what keeps its own budget accountable.
@@ -713,3 +796,105 @@ class TestTenantQuotaIsolation:
             provider_path=provider_path,
         )
         assert_returns_usage(again_b)
+
+
+@pytest.mark.full_suite
+class TestCompressedResponsesAreCounted:
+    """A provider response that is compressed on the wire still counts against
+    the token budget.
+
+    The token counter reads ``usage.total_tokens`` from the response body and
+    cannot read a compressed one, so the gateway asks the provider for gzip
+    only and decodes the reply before the counter sees it (RHAI-48855). Before
+    that, a client sending ``Accept-Encoding: gzip`` (what ``requests``, httpx
+    and the OpenAI and Anthropic SDKs do by default) was never rate limited.
+
+    The simulator never compresses, so the model is served by
+    ``gzip_usage_provider.py``, which gzips whenever it is asked to and says in
+    its answer what it was asked for and what it sent. Both tests spend the
+    same one-minute budget, so the second one may first wait for it to reset.
+    """
+
+    @pytest.fixture(scope="class")
+    def compressed_model(self, shared_env):
+        env = shared_env
+        case = env["tenant_a"]
+        name = f"e2e-shr-gzip-{uuid.uuid4().hex[:6]}"
+        client_name = f"{name}-client"
+        usage = _usage_provider(env["resources"], env["user_ns"], client_name, compressing=True)
+        model = provision_external_model_stack(
+            env["resources"],
+            name=name,
+            namespace=env["user_ns"],
+            gateway_refs=[gateway_ref(case["gateway_name"])],
+            model_name=client_name,
+            tenant_refs=[case["tenant_label_name"]],
+            endpoint=usage["endpoint"],
+            provider_path=usage["provider_path"],
+            credential=usage["credential"],
+            provider_config=usage["provider_config"],
+        )
+        wait_for_gateway_attachment_ready(model["name"], model["namespace"], case["gateway_name"])
+        _require_maas_route(model)
+        access = _serve_in_tenant(env, case, model, token_limit=LIMITED_TOKEN_LIMIT, window="1m")
+        return {"model": model, "access": access, "usage": usage}
+
+    def test_compressed_responses_exhaust_the_budget(self, shared_env, compressed_model):
+        case = shared_env["tenant_a"]
+        model = compressed_model["model"]
+        _require_client_name_alias(model, case)
+
+        # requests asks for "gzip, deflate" unless told otherwise: the header
+        # is left at the client's default on purpose.
+        served, limited = _exhaust_budget(
+            case,
+            model,
+            compressed_model["access"]["api_key"],
+            compressed_model["usage"]["provider_path"],
+        )
+        provider_saw = {r.json()["choices"][0]["message"]["content"] for r in served}
+        assert limited is not None and limited.status_code == 429, (
+            f"{len(served)} responses of two tokens each never exhausted a {LIMITED_TOKEN_LIMIT}-token "
+            f"budget: compressed responses are not counted. Provider reported: {sorted(provider_saw)}"
+        )
+        assert served, "hit 429 before any successful inference (limits not live?)"
+        # The 429 only proves the point if the provider did compress: it was
+        # asked for gzip and nothing else, whatever the client accepts.
+        assert provider_saw == {"accept-encoding=gzip content-encoding=gzip"}, (
+            f"the provider must be asked for gzip only and answer in it, it reported: {sorted(provider_saw)}"
+        )
+        # And the client still gets the compression it asked for.
+        client_got = {r.headers.get("Content-Encoding") for r in served}
+        assert client_got == {"gzip"}, f"client asked for gzip, got Content-Encoding: {client_got}"
+
+    def test_compressed_streams_are_counted_as_they_arrive(self, shared_env, compressed_model):
+        case = shared_env["tenant_a"]
+        model = compressed_model["model"]
+        api_key = compressed_model["access"]["api_key"]
+        provider_path = compressed_model["usage"]["provider_path"]
+        _require_client_name_alias(model, case)
+
+        # A stream is not retried, so a plain request rides out route propagation
+        # first. Served or limited, either answer shows the route is programmed.
+        infer_external_chat(
+            case["gateway_url"], model["namespace"], model["client_name"], api_key, provider_path=provider_path
+        )
+
+        streams, limited = _exhaust_budget(case, model, api_key, provider_path, infer=_stream_external_chat)
+        assert limited is not None and limited.status_code == 429, (
+            f"{len(streams)} streams of two tokens each never exhausted a {LIMITED_TOKEN_LIMIT}-token "
+            "budget: compressed streams are not counted"
+        )
+        assert streams, "hit 429 before any stream was served (limits not live?)"
+        for stream in streams:
+            said = "".join(
+                choice["delta"].get("content", "") for _, event in stream.events for choice in event["choices"]
+            )
+            assert said == "accept-encoding=gzip content-encoding=gzip", (
+                f"the provider must be asked for gzip only and stream in it, it reported: {said!r}"
+            )
+            # The provider waits a second after its first event. A gateway that
+            # held the stream back until all of it was decoded would deliver
+            # the events together.
+            spread = stream.events[-1][0] - stream.events[0][0]
+            assert spread >= 0.5, f"events arrived {spread:.2f}s apart: the gateway buffered the stream"

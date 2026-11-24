@@ -332,6 +332,13 @@ LLM_D_INFERENCE_SIM_IMAGE = (
     "ghcr.io/llm-d/llm-d-inference-sim@"
     "sha256:c6838d8616c9818f4cdb0e9ef7597e483a71c081b869d34c7eafac1481d76c60"
 )
+# Runs the standard-library provider the compressed-response quota test deploys
+# (tests/gzip_usage_provider.py). Pinned to the multi-arch digest of ubi9/python-312.
+E2E_PYTHON_IMAGE = os.environ.get(
+    "E2E_PYTHON_IMAGE",
+    "registry.access.redhat.com/ubi9/python-312@"
+    "sha256:2efa5e6b314025805f2add5ec53922f98872dfa545d5ec330d3e86dd52df63c2",
+)
 E2E_CURL_CA_CONFIGMAP = os.environ.get("E2E_CURL_CA_CONFIGMAP", "")
 E2E_CURL_CA_CONFIGMAP_KEY = os.environ.get("E2E_CURL_CA_CONFIGMAP_KEY", "service-ca.crt")
 SIMULATOR_SUBSCRIPTION = os.environ.get("E2E_SIMULATOR_SUBSCRIPTION", "simulator-subscription")

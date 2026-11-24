@@ -587,6 +587,9 @@ func patchResource(log logr.Logger, r *unstructured.Unstructured, params Platfor
 	case gvk == GVKEnvoyFilter && name == GatewayBodyBufferLimitEnvoyFilterBaseName:
 		r.SetName(GatewayBodyBufferLimitEnvoyFilterName(tenantID))
 		return patchGatewayBodyBufferLimit(r, params)
+	case gvk == GVKEnvoyFilter && name == GatewayContentEncodingEnvoyFilterBaseName:
+		r.SetName(GatewayContentEncodingEnvoyFilterName(tenantID))
+		return patchGatewayContentEncoding(r, params)
 	case gvk == GVKDeployment && name == PayloadPreProcessingName:
 		r.SetName(PayloadPreProcessingDeploymentName(tenantID))
 		return patchPreProcessingDeployment(log, r, params)
@@ -653,6 +656,22 @@ func patchGatewayBodyBufferLimit(r *unstructured.Unstructured, params PlatformPa
 	patch["patch"] = patchBody
 	patches[0] = patch
 	return unstructured.SetNestedSlice(r.Object, patches, "spec", "configPatches")
+}
+
+// patchGatewayContentEncoding points the compressor/decompressor EnvoyFilter at the
+// tenant's Gateway. The priority is written from the constant rather than trusted from
+// the manifest: it is what puts the decompressor behind every other filter.
+func patchGatewayContentEncoding(r *unstructured.Unstructured, params PlatformParams) error {
+	r.SetNamespace(params.GatewayNamespace)
+	if err := unstructured.SetNestedField(r.Object, GatewayContentEncodingEnvoyFilterPriority, "spec", "priority"); err != nil {
+		return fmt.Errorf("write gateway content-encoding priority: %w", err)
+	}
+	if err := unstructured.SetNestedStringMap(r.Object,
+		map[string]string{"gateway.networking.k8s.io/gateway-name": params.GatewayName},
+		"spec", "workloadSelector", "labels"); err != nil {
+		return fmt.Errorf("write gateway content-encoding workloadSelector: %w", err)
+	}
+	return nil
 }
 
 func patchNetworkPolicyResource(
