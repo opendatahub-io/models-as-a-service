@@ -40,7 +40,7 @@ So enforcement is: **subscription resolved in AuthPolicy → the same identity t
 
 ## Identity metadata: groups, `groups_str`, and telemetry
 
-Behavior is split between **`filters.identity`** (what gets serialized onto **`auth.identity`** for downstream consumers) and **`celGroups`** (what the controller uses for subscription selection and cache keys). Both are defined in **`maasauthpolicy_controller.go`**.
+Behavior is split between **`filters.identity`** (what gets serialized onto **`auth.identity`** for downstream consumers) and **`celGroups`** (what the controller uses for subscription selection and, for token identities, the `subscription-info` cache key). Both are defined in **`maasauthpolicy_controller.go`**.
 
 ### API key validation path
 
@@ -73,7 +73,7 @@ TRLP **`when`** predicates match **`auth.identity.selected_subscription_id`** fo
 |--------|----------------|---------------------------|------|
 | Raw groups after auth | **`auth.metadata.apiKeyValidation.groups`** | **`auth.identity.user.groups`** (from TokenReview **`status.user.groups`**) | **`auth.identity.groups`** if present, else **`auth.identity.user.groups`** |
 | Serialized **`groups_str` in `filters.identity`** | From **`apiKeyValidation.groups.join(",")`** | Not populated from TokenReview (still tied to apiKeyValidation expression) | Same—only apiKeyValidation drives that JSON property |
-| Subscription selection + Authorino cache inputs | **`celGroups`**, **`celUsername`**, **`celSubscription`** + **`auth.metadata["subscription-info"]`** after select | Same **`celGroups`** branch → **`auth.identity.user.groups`** | **`celGroups`** → **`auth.identity.groups`** when set |
+| Subscription selection + Authorino cache inputs | **`celGroups`**, **`celUsername`**, **`celSubscription`** + **`auth.metadata["subscription-info"]`** after select; the cache key is the key ID, username, bound subscription and model, without groups | Same **`celGroups`** branch → **`auth.identity.user.groups`** | **`celGroups`** → **`auth.identity.groups`** when set |
 | Rate limiting | **`auth.identity.selected_subscription_id`** (new CRs) or **`selected_subscription_key`** (pre-upgrade CRs) after successful select | Same | Same |
 | Telemetry / debug subscription@model | **`auth.identity.selected_subscription_key`** | Same | Same |
 

@@ -422,7 +422,14 @@ func registerHandlers(
 	v1Routes.POST("/api-keys/search", append(optionalAuthMiddleware, apiKeyHandler.SearchAPIKeys)...)
 
 	// Tenant/Gateway discovery route - authenticated via TokenReview + SubjectAccessReview (system:authenticated)
-	tenantHandler := tenant.NewHandler(log, cluster.DynamicClient, cfg.TenantName, cfg.GatewayName, cfg.GatewayNamespace)
+	tenantHandler := tenant.NewHandler(
+		log,
+		cluster.DynamicClient,
+		cluster.ClientSet.Discovery(),
+		cfg.TenantName,
+		cfg.GatewayName,
+		cfg.GatewayNamespace,
+	)
 	v1Routes.GET("/tenants",
 		tokenHandler.RejectTrustedIdentityHeaders(),
 		auth.TenantAuthMiddleware(log, cluster.ClientSet), //nolint:contextcheck // gin middleware uses c.Request.Context()

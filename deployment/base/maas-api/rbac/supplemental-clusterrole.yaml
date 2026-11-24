@@ -47,3 +47,8 @@ rules:
 - apiGroups: ["gateway.networking.k8s.io"]
   resources: ["gateways"]
   verbs: ["get"]
+
+# OpenShift Routes for the /v1/tenants Gateway fallback
+- apiGroups: ["route.openshift.io"]
+  resources: ["routes"]
+  verbs: ["list"]

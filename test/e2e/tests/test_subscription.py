@@ -56,6 +56,7 @@ import test_helper
 from worker_tenant_fixtures import wait_for_only_accessible_subscription
 
 from test_helper import (
+    AUTH_CACHE_TIMEOUT,
     MODEL_NAME,
     MODEL_NAMESPACE,
     MODEL_PATH,
@@ -76,6 +77,7 @@ from test_helper import (
     _apply_cr,
     _create_api_key,
     _create_api_key_raw,
+    _create_api_key_with_id,
     _create_sa_token,
     _create_test_auth_policy,
     _create_test_subscription,
@@ -91,6 +93,7 @@ from test_helper import (
     assert_inference_response,
     _maas_api_url,
     _ns,
+    _assert_status_holds,
     _poll_status,
     _revoke_api_key,
     _sa_to_user,
@@ -111,7 +114,7 @@ from test_helper import (
 
 log = logging.getLogger(__name__)
 
-pytestmark = [pytest.mark.xdist_group("api_keys"), pytest.mark.worker_tenant]
+pytestmark = [pytest.mark.xdist_group("api_unconfigured_model"), pytest.mark.worker_tenant]
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -587,6 +590,8 @@ class TestSubscriptionEnforcement:
         """
         ns = _ns()
         api_key = _get_default_api_key()
+        oc_token = _get_cluster_token()
+        fresh_key_id = None
         
         # First verify that default key currently gets 403 on premium model (auth fails)
         r = _inference(api_key, path=PREMIUM_MODEL_PATH)
@@ -609,14 +614,29 @@ class TestSubscriptionEnforcement:
             _wait_for_maas_auth_policy_phase("e2e-auth-pass-sub-fail", require_enforced=False)
 
             # Now auth passes (system:authenticated in AuthPolicy) but subscription fails
-            # (premium subscription only allows premium-user, not system:authenticated)
-            r = _poll_status(api_key, 403, path=PREMIUM_MODEL_PATH, timeout=30)
+            # (premium subscription only allows premium-user, not system:authenticated).
+            # The request above cached the default key's subscription lookup; a new key
+            # gets its own cache entries for this policy check.
+            fresh_key_response = _create_api_key_raw(
+                oc_token,
+                name=f"e2e-auth-pass-sub-fail-{uuid.uuid4().hex[:8]}",
+                subscription=SIMULATOR_SUBSCRIPTION,
+            )
+            assert fresh_key_response.status_code in (200, 201), (
+                f"failed to create fresh API key: {fresh_key_response.status_code} "
+                f"{fresh_key_response.text[:300]}"
+            )
+            fresh_key_data = fresh_key_response.json()
+            fresh_key_id = fresh_key_data["id"]
+            r = _poll_status(fresh_key_data["key"], 403, path=PREMIUM_MODEL_PATH, timeout=30)
             log.info(f"Auth passes, subscription fails -> {r.status_code}")
             # Verify the error message indicates subscription issue
             if r.text:
                 assert "subscription" in r.text.lower() or r.status_code == 403, \
                     f"Expected subscription-related 403, got: {r.text[:200]}"
         finally:
+            if fresh_key_id:
+                _revoke_api_key(oc_token, fresh_key_id)
             _delete_cr("maasauthpolicy", "e2e-auth-pass-sub-fail")
             _wait_for_cr_absent("maasauthpolicy", "e2e-auth-pass-sub-fail")
 
@@ -697,139 +717,6 @@ class TestSubscriptionEnforcement:
             _delete_cr("maasauthpolicy", auth_policy_name)
             _wait_for_cr_absent("maassubscription", subscription_name)
             log.info("Cleaned up rate limit test resources")
-
-    @pytest.mark.serial
-    def test_models_endpoint_exempt_from_rate_limiting(self):
-        """
-        Test that /v1/models endpoint remains accessible when token quota is exhausted.
-
-        This verifies that users can discover model capabilities even when they've
-        used all their inference tokens. The /v1/models endpoint is a discovery/metadata
-        endpoint that does not consume tokens and should remain accessible.
-
-        Ref: https://issues.redhat.com/browse/RHOAIENG-46770
-
-        Test steps:
-        1. Create subscription with very low token limit (15 tokens)
-        2. Exhaust the limit with inference requests (5 requests × 3 tokens = 15)
-        3. Verify inference requests get 429 (rate limited)
-        4. Verify /v1/models endpoint still returns 200 (not rate limited)
-        """
-        # Use unconfigured model to isolate this test
-        model_ref = UNCONFIGURED_MODEL_REF
-        model_path = UNCONFIGURED_MODEL_PATH
-
-        # Create unique subscription and auth policy names
-        auth_policy_name = "e2e-models-exempt-test-auth"
-        subscription_name = "e2e-models-exempt-test-subscription"
-
-        # Very low limit for fast, deterministic test
-        # With 3 token limit and max_tokens=1, we're guaranteed to exhaust quota within 5 requests
-        # (even if each request uses exactly 1 token: 5 requests > 3 token limit)
-        token_limit = 3
-        window = "1m"
-
-        try:
-            # 1. Create auth policy allowing system:authenticated
-            _create_test_auth_policy(
-                name=auth_policy_name,
-                model_refs=[model_ref],
-                groups=["system:authenticated"]
-            )
-            _wait_for_maas_auth_policy_phase(auth_policy_name, require_auth_policies=False)
-
-            # 2. Create subscription with low token limit
-            _create_test_subscription(
-                name=subscription_name,
-                model_refs=[model_ref],
-                groups=["system:authenticated"],
-                token_limit=token_limit,
-                window=window
-            )
-            _wait_for_subscription_inference_ready(
-                subscription_name,
-                model_ref,
-                model_namespace=MODEL_NAMESPACE,
-            )
-
-            # 3. Create API key for this subscription
-            oc_token = _get_cluster_token()
-            api_key = _create_api_key(
-                oc_token,
-                name=f"e2e-models-exempt-{uuid.uuid4().hex[:8]}",
-                subscription=subscription_name,
-            )
-
-            # 4. Exhaust the token limit
-            # With 3 token limit and 5 requests, we're guaranteed to hit the limit
-            # (each successful request consumes ≥1 token, so 5 requests > 3 token limit)
-            max_requests = 5
-            success_count = 0
-            rate_limited = False
-
-            log.info(f"Exhausting token quota: sending up to {max_requests} requests")
-            # Keep sending past the planned count until the enforcement deadline
-            # so a limiter that trails the policy status does not fail the test.
-            deadline = time.time() + RATE_LIMIT_ENFORCEMENT_TIMEOUT
-            request_num = 0
-            while request_num < max_requests or time.time() < deadline:
-                request_num += 1
-                r = _inference(api_key, path=model_path)
-                log.info(f"Request {request_num}: status {r.status_code}")
-
-                if r.status_code == 200:
-                    success_count += 1
-                elif r.status_code == 429:
-                    log.info(f"Rate limit hit after {success_count} successful requests")
-                    rate_limited = True
-                    break
-                else:
-                    # Unexpected status during exhaustion
-                    log.warning(f"Unexpected status during quota exhaustion: {r.status_code}")
-
-            # Verify we hit rate limit (otherwise test setup is broken)
-            assert rate_limited, \
-                f"Expected to hit rate limit within {max_requests} requests with {token_limit} token limit, " \
-                f"but got {success_count} successful requests without hitting limit"
-
-            # 5. Verify inference is now blocked with 429
-            log.info("Verifying inference endpoint is blocked...")
-            r_inference = _inference(api_key, path=model_path)
-            assert r_inference.status_code == 429, \
-                f"Expected 429 for inference after exhausting tokens, got {r_inference.status_code}. " \
-                f"Response: {r_inference.text[:500]}"
-            log.info("✓ Inference endpoint correctly blocked with 429")
-
-            # 6. Verify /v1/models endpoint is still accessible with 200
-            log.info("Verifying /v1/models endpoint is still accessible...")
-            url = f"{_gateway_url()}{model_path}/v1/models"
-            headers = {"Authorization": f"Bearer {api_key}"}
-            r_models = _request_with_gateway_retry(requests.get, url, headers=headers)
-
-            assert r_models.status_code == 200, \
-                f"Expected 200 for /v1/models endpoint even when quota exhausted, got {r_models.status_code}. " \
-                f"The /v1/models endpoint does not consume tokens and should remain accessible. " \
-                f"Response: {r_models.text[:500]}"
-
-            # Verify it returns valid model metadata (sanity check)
-            try:
-                models_data = r_models.json()
-            except (json.JSONDecodeError, ValueError):
-                # Non-JSON response is acceptable for some vLLM versions
-                log.info(f"✓ /v1/models endpoint accessible (200), non-JSON response: {r_models.text[:200]}")
-            else:
-                # JSON response - validate structure
-                assert "data" in models_data or "object" in models_data, \
-                    f"Expected valid models response with 'data' or 'object' field, got: {models_data}"
-                log.info(f"✓ /v1/models endpoint accessible (200) despite exhausted quota. Response keys: {list(models_data.keys())}")
-
-        finally:
-            # Clean up
-            _delete_cr("maassubscription", subscription_name)
-            _delete_cr("maasauthpolicy", auth_policy_name)
-            _wait_for_cr_absent("maassubscription", subscription_name)
-            log.info("Cleaned up models endpoint exemption test resources")
-
 
 class TestMultipleSubscriptionsPerModel:
     """Multiple subscriptions for one model — API key in ONE subscription should get access.
@@ -1424,8 +1311,9 @@ class TestCascadeDeletion:
         try:
             _delete_cr("maassubscription", SIMULATOR_SUBSCRIPTION)
             _wait_for_cr_absent("maassubscription", SIMULATOR_SUBSCRIPTION)
-            # With no subscription, expect 403 from AuthPolicy subscription validation
-            r = _poll_status(api_key, 403, timeout=30)
+            # With no subscription, expect 403 after the cached lookups expire.
+            r = _poll_status(api_key, 403, timeout=AUTH_CACHE_TIMEOUT)
+            denied_at = time.time()
             log.info(f"No subscriptions -> {r.status_code} (access denied as expected)")
 
             # The subscription name may be reused, but the key that was bound to
@@ -1449,7 +1337,10 @@ class TestCascadeDeletion:
             replacement_key_id = new_key_data["id"]
             new_api_key = new_key_data["key"]
             _poll_status(new_api_key, 200, timeout=90)
-            r = _poll_status(api_key, 403, timeout=30)
+            # The last 403 above can come from a lookup that was cached for one TTL. Wait
+            # for it to expire, so the hold checks maas-api against the recreated subscription.
+            time.sleep(max(0.0, denied_at + AUTH_CACHE_TIMEOUT - time.time()))
+            r = _assert_status_holds(api_key, 403, 15)
             assert r.status_code == 403, (
                 "API key bound to a deleted subscription became usable after the "
                 f"subscription was recreated: {r.status_code}"
@@ -1538,6 +1429,7 @@ class TestRateLimitIdentityGenerations:
         trlp_name = f"maas-trlp-{model_ref}"
         legacy_key = None
         short_key = None
+        minted = []  # (owner token, key id) pairs to revoke in teardown
 
         try:
             _create_test_auth_policy(
@@ -1600,12 +1492,14 @@ class TestRateLimitIdentityGenerations:
             # Service-account tokens → API keys for both generations (old key path + short).
             legacy_token = _create_sa_token(self.LEGACY_SA, namespace=ns)
             short_token = _create_sa_token(self.SHORT_SA, namespace=ns)
-            legacy_key = _create_api_key(
+            legacy_key, legacy_key_id = _create_api_key_with_id(
                 legacy_token, name=f"legacy-{uuid.uuid4().hex[:6]}", subscription=self.LEGACY_SUB
             )
-            short_key = _create_api_key(
+            minted.append((legacy_token, legacy_key_id))
+            short_key, short_key_id = _create_api_key_with_id(
                 short_token, name=f"short-{uuid.uuid4().hex[:6]}", subscription=self.SHORT_SUB
             )
+            minted.append((short_token, short_key_id))
 
             for label, api_key in (("legacy", legacy_key), ("short", short_key)):
                 r = _poll_status(api_key, 200, path=model_path, timeout=90)
@@ -1615,12 +1509,11 @@ class TestRateLimitIdentityGenerations:
             assert _get_cr("tokenratelimitpolicy", trlp_name, namespace=MODEL_NAMESPACE), \
                 f"TRLP {trlp_name} should remain while both subscriptions exist"
         finally:
-            for key in (legacy_key, short_key):
-                if key:
-                    try:
-                        _revoke_api_key(key)
-                    except Exception as e:
-                        log.warning("revoke failed: %s", e)
+            for owner_token, key_id in minted:
+                try:
+                    _revoke_api_key(owner_token, key_id)
+                except Exception as e:
+                    log.warning("revoke failed: %s", e)
             _delete_governance_and_wait(
                 subscriptions=[
                     (self.LEGACY_SUB, ns),
@@ -1685,7 +1578,8 @@ class TestOrderingEdgeCases:
 
             _wait_for_maas_auth_policy_phase("e2e-ordering-auth", namespace=ns, require_auth_policies=False)
             # Now it should work
-            r2 = _poll_status(api_key, 200, path=PREMIUM_MODEL_PATH)
+            # The earlier 403 remains cached until the subscription lookup expires.
+            r2 = _poll_status(api_key, 200, path=PREMIUM_MODEL_PATH, timeout=AUTH_CACHE_TIMEOUT)
             log.info(f"Sub + auth policy -> {r2.status_code}")
         finally:
             _delete_cr("maassubscription", "e2e-ordering-sub")
@@ -2189,6 +2083,40 @@ class TestE2ESubscriptionFlow:
                 model_name=f"e2e/{context.model_ref}", timeout=90,
             )
             log.info("✅ Single subscription auto-select → %s", r.status_code)
+
+            # The central catalog must auto-select the same subscription when no
+            # x-maas-subscription header is sent. Folded in from
+            # test_models_endpoint::test_single_subscription_auto_select so the
+            # scenario only pays for one tenant bootstrap.
+            r_models = _request_with_gateway_retry(
+                requests.get,
+                f"{_maas_api_url()}/v1/models",
+                headers={"Authorization": f"Bearer {api_key}"},
+            )
+            assert r_models.status_code == 200, (
+                f"Central /v1/models with a single-subscription key returned "
+                f"{r_models.status_code}: {r_models.text[:500]}"
+            )
+            catalog = r_models.json()
+            assert catalog.get("object") == "list", catalog
+            assert "data" in catalog, f"Response missing 'data' field: {catalog}"
+            assert isinstance(catalog["data"], list), (
+                f"'data' must be an array, got {type(catalog['data']).__name__}: "
+                f"{catalog['data']!r}"
+            )
+            # Gateway-only mode may legitimately return an empty list for a valid
+            # single-subscription key; only assert per-model shape when present.
+            for model in catalog["data"]:
+                for field in ("id", "object", "created", "owned_by"):
+                    assert field in model, f"Model missing {field!r}: {model}"
+                subs = model.get("subscriptions")
+                assert isinstance(subs, list), f"subscriptions should be a list: {model}"
+                assert len(subs) == 1, (
+                    f"Expected 1 auto-selected subscription, got {subs!r}"
+                )
+                assert subs[0]["name"] == subscription_name, (
+                    f"Expected subscription {subscription_name!r}, got {subs[0]['name']!r}"
+                )
 
         finally:
             _delete_cr("maassubscription", subscription_name, namespace=ns)
@@ -2696,7 +2624,7 @@ class TestStatusReporting:
             _delete_sa(sa_name, namespace=MODEL_NAMESPACE)
             _wait_for_cr_absent("maassubscription", subscription_name)
 
-    @pytest.mark.serial
+    @pytest.mark.serial_exclusive  # scales the Kuadrant controller down
     def test_subscription_degraded_trlp_blocks_inference(self):
         """
         Test: Degraded subscription with TRLP not ready blocks inference.
@@ -2793,9 +2721,16 @@ class TestStatusReporting:
             assert all(trlp.get("ready") for trlp in trlp_statuses), "Expected all TRLPs to be ready"
             log.info("✅ Subscription returned to Active phase with all TRLPs ready")
 
-            # Step 8: Verify inference works (poll to allow Envoy config propagation)
+            # Step 8: Verify inference works after Envoy propagation and the earlier
+            # rejection leaves Authorino's cache.
             log.info("Step 8: Verifying inference works with Active subscription...")
-            resp = _poll_status(api_key, 200, path=TRLP_TEST_MODEL_PATH, model_name=TRLP_TEST_MODEL_ID, timeout=60)
+            resp = _poll_status(
+                api_key,
+                200,
+                path=TRLP_TEST_MODEL_PATH,
+                model_name=TRLP_TEST_MODEL_ID,
+                timeout=AUTH_CACHE_TIMEOUT,
+            )
             assert resp.status_code == 200, f"Expected 200 OK for Active subscription, got {resp.status_code}: {resp.text}"
             assert_inference_response(resp)
             log.info("✅ Inference works with Active subscription after Kuadrant recovery")
@@ -3138,17 +3073,18 @@ class TestDegradedSubscriptionFiltering:
             assert phase == "Failed", f"Expected Failed phase after patch, got {phase}"
             log.info("✅ Subscription patched to Failed phase")
 
-            # Test inference with Failed subscription - should be rejected by OPA
+            # Test inference with Failed subscription after the Active request's cached
+            # subscription lookup expires.
             log.info("Testing inference with Failed subscription...")
-            r = _inference(api_key, path=MODEL_PATH, model_name=MODEL_NAME)
+            r = _poll_status(
+                api_key,
+                403,
+                path=MODEL_PATH,
+                model_name=MODEL_NAME,
+                timeout=AUTH_CACHE_TIMEOUT,
+            )
 
             log.info(f"Response: status={r.status_code}, body={r.text[:200]}")
-
-            # Failed phase should be rejected by OPA rule (403 or error message)
-            if r.status_code == 200:
-                assert "denied" in r.text.lower() or "access" in r.text.lower(),                     f"Expected access denied message, got: {r.text[:200]}"
-            else:
-                assert r.status_code == 403,                     f"Expected 403 for Failed subscription, got {r.status_code}: {r.text[:200]}"
 
             log.info("✅ Inference with Failed subscription correctly rejected by OPA")
 

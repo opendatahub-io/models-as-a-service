@@ -50,7 +50,7 @@ log = logging.getLogger(__name__)
 LARGE_EMBEDDING_BATCH = 1024
 MIN_LARGE_RESPONSE_BYTES = 1024 * 1024
 
-pytestmark = [pytest.mark.xdist_group("api_keys"), pytest.mark.worker_tenant]
+pytestmark = [pytest.mark.xdist_group("api_embedding"), pytest.mark.worker_tenant]
 
 
 @pytest.fixture(scope="module", autouse=True)

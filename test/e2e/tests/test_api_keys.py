@@ -43,6 +43,7 @@ import requests
 from conftest import TLS_VERIFY
 from governance_scenarios import GovernedModelCase, assert_key_works, wait_for_key_denied
 from test_helper import (
+    AUTH_CACHE_TIMEOUT,
     MODEL_NAME,
     MODEL_NAMESPACE,
     MODEL_REF,
@@ -74,7 +75,7 @@ from test_helper import (
 
 log = logging.getLogger(__name__)
 
-pytestmark = [pytest.mark.xdist_group("api_keys"), pytest.mark.worker_tenant]
+pytestmark = [pytest.mark.xdist_group("api_keys_core"), pytest.mark.worker_tenant]
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -237,6 +238,23 @@ def inference_model_name(_worker_api_keys_context) -> str:
     if _worker_api_keys_context is not None:
         return f"e2e/{_worker_api_keys_context.model_ref}"
     return os.environ.get("INFERENCE_MODEL_NAME", MODEL_NAME)
+
+
+def _poll_until_rejected(completions_url: str, key: str, model: str, max_wait: int) -> requests.Response:
+    """Poll completions until rejection or timeout and return the last response."""
+    deadline = time.monotonic() + max_wait
+    while True:
+        remaining = deadline - time.monotonic()
+        response = requests.post(
+            completions_url,
+            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+            json={"model": model, "prompt": "Test", "max_tokens": 5},
+            timeout=max(min(remaining, 10), 1),
+            verify=TLS_VERIFY,
+        )
+        if response.status_code == 403 or remaining <= 0:
+            return response
+        time.sleep(0.5)
 
 
 @pytest.mark.smoke
@@ -1194,27 +1212,13 @@ class TestAPIKeyRevocationE2E:
             r = requests.delete(f"{api_keys_base_url}/{k['id']}", headers=headers, timeout=30, verify=TLS_VERIFY)
             assert r.status_code == 200, f"Failed to revoke key {k['id']}: {r.text}"
 
-        # Poll until all revoked keys are rejected at the gateway
-        max_wait = 30
-        poll_interval = 0.5
+        # Poll until all revoked keys are rejected. keys[0] was already used, so
+        # its cached validation can survive until the metadata TTL expires.
         for i, k in enumerate(keys):
-            deadline = time.monotonic() + max_wait
-            while True:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    break
-                r_inf = requests.post(
-                    model_completions_url,
-                    headers={"Authorization": f"Bearer {k['key']}", "Content-Type": "application/json"},
-                    json={"model": inference_model_name, "prompt": "Test", "max_tokens": 5},
-                    timeout=min(remaining, 10),
-                    verify=TLS_VERIFY,
-                )
-                if r_inf.status_code == 403:
-                    break
-                time.sleep(poll_interval)
+            r_inf = _poll_until_rejected(model_completions_url, k["key"], inference_model_name, AUTH_CACHE_TIMEOUT)
             assert r_inf.status_code == 403, (
-                f"Key {i} should be rejected within {max_wait}s after revoke, got {r_inf.status_code}: {r_inf.text}"
+                f"Key {i} should be rejected within {AUTH_CACHE_TIMEOUT}s after revoke, "
+                f"got {r_inf.status_code}: {r_inf.text}"
             )
         print("[revoke] All 3 keys correctly rejected at gateway after individual revocation")
 
@@ -1622,7 +1626,7 @@ class TestAPIKeySubscriptionPhases:
             _wait_for_cr_absent("maassubscription", subscription_name, namespace=ns)
             _wait_for_cr_absent("maasauthpolicy", auth_name, namespace=ns)
 
-    @pytest.mark.serial
+    @pytest.mark.serial_exclusive  # scales maas-controller to 0/1
     def test_create_key_for_pending_subscription(self):
         """API key creation succeeds for Pending subscription."""
         ns = _ns()
@@ -1692,7 +1696,7 @@ class TestAPIKeySubscriptionPhases:
             _wait_for_cr_absent("maassubscription", subscription_name, namespace=ns)
             _wait_for_cr_absent("maasauthpolicy", auth_name, namespace=ns)
 
-    @pytest.mark.serial
+    @pytest.mark.serial_exclusive  # scales maas-controller to 0/1
     def test_reject_key_for_unreconciled_subscription(self):
         """
         API key creation is rejected for unreconciled subscription (empty phase).

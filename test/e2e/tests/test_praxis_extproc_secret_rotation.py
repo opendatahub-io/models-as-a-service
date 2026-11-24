@@ -149,7 +149,7 @@ pytestmark = [
         not _check_external_endpoint_reachable(),
         reason=f"External endpoint {EXTERNAL_ENDPOINT} is not reachable (disconnected environment?)",
     ),
-    pytest.mark.xdist_group("tenant_ipp"),
+    pytest.mark.xdist_group("tenant_ipp_extproc_rotation"),
 ]
 
 

@@ -57,8 +57,11 @@ type ValidationResult struct {
 	// incarnation to the local subscription-selection callback.
 	SubscriptionIdentityID string `json:"subscriptionIdentityId,omitempty"`
 	SubscriptionNamespace  string `json:"subscriptionNamespace,omitempty"`
-	Tenant                 string `json:"tenant"`           // Tenant bound at key creation (always present, empty string for legacy keys)
-	Reason                 string `json:"reason,omitempty"` // If invalid: "key not found", "revoked", etc.
+	Tenant                 string `json:"tenant"` // Tenant bound at key creation (always present, empty string for legacy keys)
+	// ExpiresAt is RFC3339 and empty for keys that never expire. Authorino caches
+	// the validation response, so the gateway checks it on every request.
+	ExpiresAt string `json:"expiresAt,omitempty"`
+	Reason    string `json:"reason,omitempty"` // If invalid: "key not found", "revoked", etc.
 }
 
 // PaginationParams holds pagination parameters.

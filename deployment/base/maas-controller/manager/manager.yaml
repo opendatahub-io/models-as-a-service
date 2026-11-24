@@ -40,7 +40,6 @@ spec:
           - --monitoring-namespace=$(MONITORING_NAMESPACE)
           - --enable-tenant-namespace-discovery
           - --metadata-cache-ttl=60
-          - --authz-cache-ttl=60
           - --subscription-identity-mode=$(SUBSCRIPTION_IDENTITY_MODE)
           - --enable-subscription-identity-cleanup=$(ENABLE_SUBSCRIPTION_IDENTITY_CLEANUP)
           - --log-format=otel-json
