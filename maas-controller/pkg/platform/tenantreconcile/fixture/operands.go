@@ -39,6 +39,20 @@ func InNamespaces(app, gateway string) RenderOption {
 	}
 }
 
+// WithTenantIdentifier sets the identifier used to render tenant-scoped names.
+//
+// The identifier is placed in the platform parameters consumed by post-rendering.
+//
+// Parameters:
+//   - identifier: tenant identifier used for generated resource names.
+//
+// Returns an option that applies the identifier to the render configuration.
+func WithTenantIdentifier(identifier string) RenderOption {
+	return func(cfg *renderConfig) {
+		cfg.params.TenantIdentifier = identifier
+	}
+}
+
 // DefaultTenantConfig returns the default tenant's MaasTenantConfig.
 func DefaultTenantConfig() *maasv1alpha1.MaasTenantConfig {
 	return &maasv1alpha1.MaasTenantConfig{
@@ -57,6 +71,21 @@ func ConfigAnchor() *maasv1alpha1.Config {
 // RenderDefaultTenant renders the platform overlay and post-renders it the way the
 // default tenant reconcile does, with placeholder images.
 func RenderDefaultTenant(ctx context.Context, opts ...RenderOption) []unstructured.Unstructured {
+	return RenderTenant(ctx, DefaultTenantConfig(), opts...)
+}
+
+// RenderTenant renders the selected overlay and post-renders it for a tenant config.
+//
+// The tenant supplies metadata used by post-rendering. Options select the overlay and
+// platform parameters. The returned objects are ready for the apply pathway.
+//
+// Parameters:
+//   - ctx: context for rendering and post-rendering.
+//   - tenant: tenant configuration represented by the rendered operands.
+//   - opts: optional overlay and platform parameter customizations.
+//
+// Returns the post-rendered platform operands, failing the current Gomega spec on error.
+func RenderTenant(ctx context.Context, tenant *maasv1alpha1.MaasTenantConfig, opts ...RenderOption) []unstructured.Unstructured {
 	cfg := &renderConfig{
 		overlay: "odh",
 		params: tenantreconcile.PlatformParams{ //nolint:gosec // APIKeyMaxExpirationDays is a duration setting, not a secret
@@ -80,7 +109,7 @@ func RenderDefaultTenant(ctx context.Context, opts ...RenderOption) []unstructur
 	rendered, err := tenantreconcile.RenderKustomize(overlayDir, cfg.params.AppNamespace)
 	gomega.Expect(err).NotTo(gomega.HaveOccurred())
 
-	operands, err := tenantreconcile.PostRender(ctx, logr.Discard(), DefaultTenantConfig(), rendered, cfg.params)
+	operands, err := tenantreconcile.PostRender(ctx, logr.Discard(), tenant, rendered, cfg.params)
 	gomega.Expect(err).NotTo(gomega.HaveOccurred())
 	gomega.Expect(operands).NotTo(gomega.BeEmpty())
 	return operands

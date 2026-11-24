@@ -1,0 +1,52 @@
+apiVersion: serving.kserve.io/v1alpha1
+kind: LLMInferenceService
+metadata:
+  name: e2e-rerank-simulated
+spec:
+  model:
+    uri: hf://placeholder/no-model
+    name: test/e2e-rerank-model
+  storageInitializer:
+    enabled: false
+  replicas: 1
+  router:
+    route: {}
+    gateway:
+      refs:
+        - name: maas-default-gateway
+          namespace: openshift-ingress
+  template:
+    containers:
+      - name: main
+        image: python:3.12-alpine
+        command: ["python3", "/opt/server.py"]
+        volumeMounts:
+          - name: mock-script
+            mountPath: /opt/server.py
+            subPath: server.py
+        ports:
+          - name: https
+            containerPort: 8000
+            protocol: TCP
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: https
+            scheme: HTTPS
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: https
+            scheme: HTTPS
+        resources:
+          requests:
+            cpu: 50m
+            memory: 128Mi
+          limits:
+            cpu: 200m
+            memory: 256Mi
+    volumes:
+      - name: mock-script
+        configMap:
+          name: e2e-rerank-mock-script
+          defaultMode: 0555

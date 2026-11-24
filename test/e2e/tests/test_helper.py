@@ -288,6 +288,9 @@ REQUIRE_TRLP_ENFORCED = os.environ.get("E2E_REQUIRE_TRLP_ENFORCED", "").lower() 
 # refuses a request, and only then call it a failure. Covers Limitador lagging
 # the policy status by a few seconds.
 RATE_LIMIT_ENFORCEMENT_TIMEOUT = int(os.environ.get("E2E_RATE_LIMIT_ENFORCEMENT_TIMEOUT", "60"))
+# Authorino caches maas-api lookups for --metadata-cache-ttl (60s by default),
+# so access changes can lag for a credential that already passed.
+AUTH_CACHE_TIMEOUT = int(os.environ.get("E2E_AUTH_CACHE_TIMEOUT", "90"))
 OC_TIMEOUT = int(os.environ.get("E2E_OC_TIMEOUT", "60"))
 # An API server blip (TLS handshake timeout, admission webhook unreachable while
 # maas-controller restarts) must not fail a test or skip a teardown delete.
@@ -327,7 +330,7 @@ E2E_CURL_IMAGE = os.environ.get("E2E_CURL_IMAGE", "registry.access.redhat.com/ub
 # responses carry usage.total_tokens; --mode echo responses do not.
 LLM_D_INFERENCE_SIM_IMAGE = (
     "ghcr.io/llm-d/llm-d-inference-sim@"
-    "sha256:c3ba435081a4d032676b218ea34eb3a1c54507da0fade2f6297f9c37894fe0d1"
+    "sha256:c6838d8616c9818f4cdb0e9ef7597e483a71c081b869d34c7eafac1481d76c60"
 )
 E2E_CURL_CA_CONFIGMAP = os.environ.get("E2E_CURL_CA_CONFIGMAP", "")
 E2E_CURL_CA_CONFIGMAP_KEY = os.environ.get("E2E_CURL_CA_CONFIGMAP_KEY", "service-ca.crt")
@@ -366,6 +369,27 @@ EMBEDDING_MODEL_CANONICAL_ID = os.environ.get(
     "E2E_EMBEDDING_MODEL_CANONICAL_ID",
     f"publishers/{MODEL_NAMESPACE}/models/{EMBEDDING_MODEL_NAME}",
 )
+JSON_BBR_MODEL_REF = os.environ.get("E2E_JSON_BBR_MODEL_REF", "e2e-rerank-simulated")
+JSON_BBR_MODEL_PATH = os.environ.get("E2E_JSON_BBR_MODEL_PATH", "/llm/e2e-rerank-simulated")
+JSON_BBR_MODEL_NAME = os.environ.get("E2E_JSON_BBR_MODEL_NAME", "test/e2e-rerank-model")
+JSON_BBR_MODEL_CANONICAL_ID = os.environ.get(
+    "E2E_JSON_BBR_MODEL_CANONICAL_ID",
+    f"publishers/{MODEL_NAMESPACE}/models/{JSON_BBR_MODEL_NAME}",
+)
+RERANK_MODEL_REF = os.environ.get("E2E_RERANK_MODEL_REF", JSON_BBR_MODEL_REF)
+RERANK_MODEL_PATH = os.environ.get("E2E_RERANK_MODEL_PATH", JSON_BBR_MODEL_PATH)
+RERANK_MODEL_NAME = os.environ.get("E2E_RERANK_MODEL_NAME", JSON_BBR_MODEL_NAME)
+if os.environ.get("E2E_RERANK_MODEL_CANONICAL_ID"):
+    RERANK_MODEL_CANONICAL_ID = os.environ["E2E_RERANK_MODEL_CANONICAL_ID"]
+elif (
+    os.environ.get("E2E_RERANK_MODEL_REF") is not None
+    or os.environ.get("E2E_RERANK_MODEL_NAME") is not None
+):
+    RERANK_MODEL_CANONICAL_ID = (
+        f"publishers/{MODEL_NAMESPACE}/models/{RERANK_MODEL_NAME}"
+    )
+else:
+    RERANK_MODEL_CANONICAL_ID = JSON_BBR_MODEL_CANONICAL_ID
 
 
 # ---------------------------------------------------------------------------
@@ -1626,6 +1650,20 @@ def _poll_status(api_key, expected, path=None, extra_headers=None, model_name=No
     raise AssertionError(err_msg)
 
 
+def _assert_status_holds(api_key, expected, duration, poll_interval=5, **kwargs):
+    """Fail unless every inference request answers expected for duration seconds."""
+    deadline = time.time() + duration
+    while True:
+        response = _inference(api_key, **kwargs)
+        assert response.status_code == expected, (
+            f"Expected {expected} to hold for {duration}s, got {response.status_code}: "
+            f"{(response.text or '')[:200]}"
+        )
+        if time.time() >= deadline:
+            return response
+        time.sleep(poll_interval)
+
+
 # ---------------------------------------------------------------------------
 # HTTP helpers (used by test_smoke.py)
 # ---------------------------------------------------------------------------
@@ -1751,6 +1789,31 @@ def _embedding_inference(api_key, path=None, extra_headers=None, model_name=None
         json={"model": model_name, "input": "Hello world"},
         timeout=TIMEOUT, verify=TLS_VERIFY,
     )
+
+
+def _json_bbr_post(api_key, path_suffix, body, bbr=True, path=None):
+    """POST a JSON BBR path with API key at {gateway}/v1/{suffix} or path-prefixed URL."""
+    path_suffix = path_suffix.lstrip("/")
+    if bbr:
+        url = f"{_gateway_url()}/{path_suffix}"
+    else:
+        path = path or JSON_BBR_MODEL_PATH
+        url = f"{_gateway_url()}{path}/{path_suffix}"
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    return requests.post(url, headers=headers, json=body, timeout=TIMEOUT, verify=TLS_VERIFY)
+
+
+def _rerank_inference(api_key, path=None, model_name=None, bbr=False):
+    """POST /v1/rerank with API key (path-based or BBR at gateway root)."""
+    model_name = model_name or RERANK_MODEL_NAME
+    if not bbr and path is None:
+        path = RERANK_MODEL_PATH
+    body = {
+        "model": model_name,
+        "query": "what is a vector database?",
+        "documents": ["A vector DB stores embeddings.", "Unrelated text."],
+    }
+    return _json_bbr_post(api_key, "v1/rerank", body, bbr=bbr, path=path)
 
 
 # ---------------------------------------------------------------------------
@@ -2694,7 +2757,7 @@ def _create_llmis(
                         },
                         "readinessProbe": {
                             "httpGet": {
-                                "path": "/ready",
+                                "path": "/health/ready",
                                 "port": "https",
                                 "scheme": "HTTPS",
                             }
