@@ -60,6 +60,7 @@ func enforceQueryMatchers(v url.Values, required []*labels.Matcher, queryEndpoin
 		if err != nil {
 			return fmt.Errorf("%w: %w", ErrInvalidQuery, err)
 		}
+		selectorsBefore := countSelectorNodes(expr)
 		expr.Walk(func(e any) {
 			switch le := e.(type) {
 			case *logqlv2.LogQueryExpr:
@@ -74,8 +75,13 @@ func enforceQueryMatchers(v url.Values, required []*labels.Matcher, queryEndpoin
 		// Reparse the AST-rendered query. This also rejects raw-log binary
 		// expressions whose operands would need parentheses; the retired
 		// Python proxy rejected the same shape after injecting its user filter.
-		if _, err := logqlv2.ParseExpr(rewritten); err != nil {
+		reparsed, err := logqlv2.ParseExpr(rewritten)
+		if err != nil {
 			return fmt.Errorf("%w: rewritten query does not parse: %w", ErrInvalidQuery, err)
+		}
+		if countSelectorNodes(reparsed) != selectorsBefore ||
+			!allSelectorsCarry(reparsed, selectorRequired) {
+			return fmt.Errorf("%w: rewritten query failed selector enforcement", ErrInvalidQuery)
 		}
 		v.Set(queryParam, rewritten)
 		return nil
@@ -90,6 +96,47 @@ func enforceQueryMatchers(v url.Values, required []*labels.Matcher, queryEndpoin
 	}
 	v.Set(queryParam, rewritten)
 	return nil
+}
+
+func countSelectorNodes(expr logqlv2.Expr) int {
+	count := 0
+	expr.Walk(func(e any) {
+		switch e.(type) {
+		case *logqlv2.LogQueryExpr, *logqlv2.StreamMatcherExpr:
+			count++
+		}
+	})
+	return count
+}
+
+func allSelectorsCarry(expr logqlv2.Expr, required []*labels.Matcher) bool {
+	ok := true
+	expr.Walk(func(e any) {
+		var matchers []*labels.Matcher
+		switch le := e.(type) {
+		case *logqlv2.LogQueryExpr:
+			matchers = le.Matchers()
+		case *logqlv2.StreamMatcherExpr:
+			matchers = le.Matchers()
+		default:
+			return
+		}
+		for _, requiredMatcher := range required {
+			found := false
+			for _, matcher := range matchers {
+				if matcher.Name == requiredMatcher.Name &&
+					matcher.Type == requiredMatcher.Type &&
+					matcher.Value == requiredMatcher.Value {
+					found = true
+					break
+				}
+			}
+			if !found {
+				ok = false
+			}
+		}
+	})
+	return ok
 }
 
 // partitionRequiredMatchers splits authorization matchers into those that must

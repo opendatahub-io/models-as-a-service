@@ -534,6 +534,36 @@ def test_internal_loki_proxy_requires_tokenreview(
     )
 
 
+def test_internal_loki_proxy_rejects_logql_renderer_injection(
+    maas_api_internal_url: str, token: str
+):
+    queries = {
+        "raw string breakout": (
+            'sum(count_over_time({service_name="models-as-a-service"} | x = `'
+            'a") [1h])) or count by (tenant_name, line) (count_over_time('
+            '{service_name=~".+"} | label_format line="{{__line__}}" [1h])) #@` [1h]))'
+        ),
+        "label_replace parameter breakout": (
+            'label_replace(sum(count_over_time({service_name="models-as-a-service"}[1h])), '
+            '"destination", "$1", "source", ".*\\") or count by (tenant_name) '
+            '(count_over_time({service_name=~\\".+\\"}[1h])) #")'
+        ),
+    }
+    for name, query in queries.items():
+        url = (
+            f"{maas_api_internal_url}/v1/logs/loki/api/v1/query?"
+            f"{urlencode({'only_user': 'true', 'query': query})}"
+        )
+        status, body = kubectl_curl(
+            url,
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert status == 400, (
+            f"TokenReview-authenticated Loki query with {name} must be rejected before "
+            f"forwarding; got {status}: {body[:500]}"
+        )
+
+
 def test_internal_loki_proxy_queries_when_lokistack_exists(
     maas_api_internal_url: str,
     token: str,
@@ -553,33 +583,36 @@ def test_internal_loki_proxy_queries_when_lokistack_exists(
     if not _loki_service_has_ready_endpoint(service_name, service_namespace):
         pytest.fail("Selected usage-logs LokiStack has no ready gateway endpoints")
 
-    query = urlencode(
-        {
-            "only_user": "true",
-            "query": 'sum(count_over_time({service_name="models-as-a-service"}[5m]))',
-        }
-    )
-    for endpoint in ("query", "query_range"):
-        url = f"{maas_api_internal_url}/v1/logs/loki/api/v1/{endpoint}?{query}"
-        status, body = 0, ""
-        query_deadline = time.monotonic() + 120
-        while time.monotonic() < query_deadline:
-            status, body = kubectl_curl(
-                url,
-                headers={"Authorization": f"Bearer {token}"},
-                attempts=1,
-                max_duration=max(1, int(query_deadline - time.monotonic())),
+    queries = {
+        "metric": 'sum(count_over_time({service_name="models-as-a-service"}[5m]))',
+        "raw string": (
+            r'{app="api"} | line_format '
+            r'`{{ if eq .level "info" }}{{ .message }}{{ end }}`'
+        ),
+    }
+    for query_name, query in queries.items():
+        encoded_query = urlencode({"only_user": "true", "query": query})
+        for endpoint in ("query", "query_range"):
+            url = f"{maas_api_internal_url}/v1/logs/loki/api/v1/{endpoint}?{encoded_query}"
+            status, body = 0, ""
+            query_deadline = time.monotonic() + 120
+            while time.monotonic() < query_deadline:
+                status, body = kubectl_curl(
+                    url,
+                    headers={"Authorization": f"Bearer {token}"},
+                    attempts=1,
+                    max_duration=max(1, int(query_deadline - time.monotonic())),
+                )
+                if status == 200 or status not in (0, 502, 503):
+                    break
+                remaining = query_deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                time.sleep(min(5, remaining))
+            assert status == 200, (
+                f"TokenReview-authenticated self-scoped Loki {endpoint} query "
+                f"{query_name} should return 200, got {status}: {body[:500]}"
             )
-            if status == 200 or status not in (0, 502, 503):
-                break
-            remaining = query_deadline - time.monotonic()
-            if remaining <= 0:
-                break
-            time.sleep(min(5, remaining))
-        assert status == 200, (
-            f"TokenReview-authenticated self-scoped Loki {endpoint} should return "
-            f"200, got {status}: {body[:500]}"
-        )
 
 
 def test_internal_loki_proxy_labels_reject_post_parse_identity_filters(

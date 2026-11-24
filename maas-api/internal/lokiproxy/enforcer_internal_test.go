@@ -112,6 +112,58 @@ func TestEnforceQueryMatchersRejectsRawLogBinaryExpression(t *testing.T) {
 	require.ErrorContains(t, err, "rewritten query does not parse")
 }
 
+func TestEnforceQueryMatchersRejectsRendererInjection(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		query string
+		valid bool
+	}{
+		{
+			name:  "raw string breakout",
+			valid: false,
+			query: `sum(count_over_time({service_name="models-as-a-service"} | x = ` + "`" +
+				`a") [1h])) or count by (tenant_name, line) (count_over_time({service_name=~".+"} ` +
+				`| label_format line="{{__line__}}" [1h])) #@` + "`" + ` [1h]))`,
+		},
+		{
+			name:  "label_replace parameter breakout",
+			valid: false,
+			query: `label_replace(sum(count_over_time({service_name="models-as-a-service"}[1h])), ` +
+				`"destination", "$1", "source", ".*\") or count by (tenant_name) ` +
+				`(count_over_time({service_name=~\".+\"}[1h])) #")`,
+		},
+		{
+			name:  "benign raw string containing a double quote",
+			valid: true,
+			query: `{app="api"} | line_format ` + "`" + `{{ if eq .level \"info\" }}{{ .message }}{{ end }}` + "`",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			values := url.Values{queryParam: []string{test.query}}
+			err := enforceQueryMatchers(values, []*labels.Matcher{
+				requiredTenantMatcher(),
+				requiredOrganizationMatcher(),
+				requiredUserMatcher(),
+			}, true)
+			if test.valid {
+				require.NoError(t, err)
+				_, parseErr := logqlv2.ParseExpr(values.Get(queryParam))
+				require.NoError(t, parseErr, "query: %s", values.Get(queryParam))
+				return
+			}
+
+			require.ErrorIs(t, err, ErrInvalidQuery)
+			require.ErrorContains(t, err, "rewritten query failed selector enforcement")
+		})
+	}
+}
+
 func TestEnforceQueryMatchersEscapesPipelineMatcherValues(t *testing.T) {
 	t.Parallel()
 
