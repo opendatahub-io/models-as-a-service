@@ -296,8 +296,6 @@ pytestmark = [
     pytest.mark.xdist_group("legacy_ipp_external_models"),
 ]
 
-_LEGACY_IPP = pytest.mark.legacy_ipp
-
 
 @pytest.fixture(scope="module")
 def external_endpoint_reachable():
@@ -714,8 +712,6 @@ class TestExternalModelGovernance:
 @pytest.mark.legacy_ipp
 @pytest.mark.usefixtures("external_endpoint_reachable")
 class TestExternalModelDiscovery:
-    pytestmark = _LEGACY_IPP
-
     """Verify ExternalModel reconciler creates the expected Istio resources."""
 
     def test_maasmodelref_created(self, external_models_setup):
@@ -739,8 +735,6 @@ class TestExternalModelDiscovery:
 @pytest.mark.legacy_ipp
 @pytest.mark.usefixtures("external_endpoint_reachable")
 class TestExternalModelAuth:
-    pytestmark = _LEGACY_IPP
-
     """Verify auth enforcement for external model routes."""
 
     @pytest.mark.parametrize(
@@ -765,8 +759,6 @@ class TestExternalModelAuth:
 @pytest.mark.legacy_ipp
 @pytest.mark.usefixtures("external_endpoint_reachable")
 class TestExternalModelEgress:
-    pytestmark = _LEGACY_IPP
-
     """Verify requests are forwarded to the external endpoint."""
 
     def test_request_forwarded_returns_200(self, external_models_setup):
@@ -798,8 +790,6 @@ class TestExternalModelEgress:
 @pytest.mark.legacy_ipp
 @pytest.mark.usefixtures("external_endpoint_reachable")
 class TestExternalModelCleanup:
-    pytestmark = _LEGACY_IPP
-
     """Verify resource cleanup when external models are deleted."""
 
     def test_delete_removes_httproute(self, external_models_setup):
@@ -851,8 +841,6 @@ class TestExternalModelCleanup:
 @pytest.mark.legacy_ipp
 @pytest.mark.usefixtures("external_endpoint_reachable")
 class TestExternalModelPathRouting:
-    pytestmark = _LEGACY_IPP
-
     """Verify path-based routing for external model endpoints.
 
     The URL path ``/{namespace}/{model}/v1/...`` determines which model
@@ -889,8 +877,6 @@ requires_ipp = pytest.mark.skipif(
 @pytest.mark.usefixtures("external_endpoint_reachable")
 @requires_ipp
 class TestLegacyExternalModelMigration:
-    pytestmark = _LEGACY_IPP
-
     """Verify IPP migration is reflected on the retained legacy CR."""
 
     def test_migration_sets_legacy_status_and_removes_networking(self):
@@ -975,8 +961,6 @@ class TestLegacyExternalModelMigration:
 @pytest.mark.usefixtures("external_endpoint_reachable")
 @requires_ipp
 class TestExternalModelBodyRouting:
-    pytestmark = _LEGACY_IPP
-
     """Verify body-based routing for external models.
 
     IPP pre-processing extracts the ``model`` field from the JSON body and
@@ -1235,7 +1219,11 @@ class TestSharedProviderMultiModel:
 
     @pytest.fixture(scope="class")
     def shared_provider_setup(self, gateway_url, headers, api_keys_base_url):
-        """Use the already bootstrapped default tenant and its Praxis dataplane."""
+        """Provision two Praxis external models in the bootstrapped tenant (_ns()).
+
+        Requires ``default-tenant`` MaasTenantConfig and ai-gateway-controller
+        HTTPRoutes (not the IPP-only ``llm`` namespace path from legacy external tests).
+        """
         namespace = _ns()
         suffix = uuid.uuid4().hex[:8]
         setup = {
@@ -1370,7 +1358,7 @@ class TestSharedProviderMultiModel:
                         f"HTTPRoute {namespace}/{route_name} is managed by {managed_by!r}, "
                         "not ai-gateway-controller; the test did not exercise the Praxis route"
                     )
-                _wait_for_model_ready(model_name, namespace=namespace, timeout=180)
+                _wait_for_model_ready(model_name, namespace=namespace)
 
             first_model_cr = _get_cr(EXTERNAL_MODEL_KIND, setup["first_model"], namespace)
             second_model_cr = _get_cr(EXTERNAL_MODEL_KIND, setup["second_model"], namespace)
