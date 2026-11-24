@@ -122,7 +122,7 @@ func RunPlatformWithReader(
 		log.Info(bufferWarning)
 	}
 	applyMaaSAPIEgressConfig(&params, mcfg)
-	if err := resolveLokiReadEndpoint(ctx, c, appNs, &params, log); err != nil {
+	if err := resolveLokiReadEndpoint(ctx, c, appNs, mcfg, &params, log); err != nil {
 		return nil, fmt.Errorf("resolve loki read endpoint: %w", err)
 	}
 
@@ -239,7 +239,19 @@ func RunPlatformWithReader(
 // upstream may not require it. A missing LOKI_READ_CA key is not a warning:
 // maas-api then trusts only the system pool, which is correct when the
 // upstream certificate is publicly trusted.
-func resolveLokiReadEndpoint(ctx context.Context, c client.Client, appNs string, params *PlatformParams, log logr.Logger) error {
+func resolveLokiReadEndpoint(ctx context.Context, c client.Client, appNs string, mcfg *maasv1alpha1.Config, params *PlatformParams, log logr.Logger) error {
+	mode, valid := ParseUsageLogsProxyMode(mcfg)
+	if !valid {
+		params.Warnings = append(params.Warnings, fmt.Sprintf(
+			"invalid %s annotation value %q on Config/default; using the legacy usage-logs proxy",
+			UsageLogsProxyAnnotation, mcfg.Annotations[UsageLogsProxyAnnotation]))
+		return nil
+	}
+	if mode != UsageLogsProxyMaaSAPI {
+		log.V(1).Info("usage-logs proxy selector is legacy; maas-api Loki proxy disabled")
+		return nil
+	}
+
 	secret := &corev1.Secret{}
 	err := c.Get(ctx, types.NamespacedName{Namespace: appNs, Name: LokiReadSecretName}, secret)
 	if err != nil {

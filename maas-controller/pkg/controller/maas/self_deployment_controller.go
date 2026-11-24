@@ -40,6 +40,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/events"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
@@ -107,9 +108,8 @@ type LifecycleReconciler struct {
 	ObservabilityManifestsPath  string
 	MonitoringNamespace         string
 	UsageLogsManifestPath       string
-	// InfraNamespace is where maas-api runs; the usage-logs-loki Secret is
-	// looked up there to switch the Perses datasources to the maas-api Loki
-	// proxy (see ensureUsageLogs / patchPersesDatasourceMaaSAPILoki).
+	// InfraNamespace is where the usage-logs-loki Secret is looked up as an
+	// additional gate before switching Perses datasources to maas-api.
 	InfraNamespace        string
 	DiscoveryEnabled      bool
 	DiscoveryManifestPath string
@@ -117,6 +117,8 @@ type LifecycleReconciler struct {
 	DiscoveryLogLevel     string
 	DiscoveryNamespace    string
 	DiscoveryReplicas     *int32
+	// Recorder emits Kubernetes events for experimental Config annotation errors.
+	Recorder events.EventRecorder
 
 	staleResourcesCleanupMu        sync.Mutex
 	staleResourcesCleanupCompleted bool
@@ -634,10 +636,7 @@ func (r *LifecycleReconciler) ensureUsageLogs(ctx context.Context, log logr.Logg
 		return fmt.Errorf("render inactive usage logs: %w", err)
 	}
 
-	// The usage-logs-loki Secret in the infra namespace switches the Perses
-	// datasources from the LokiStack gateway / tenancy proxy to the maas-api
-	// Loki proxy. Absent secret keeps the rendered defaults.
-	maasAPILoki, err := r.maasAPILokiEnabled(ctx, log)
+	maasAPILoki, err := r.maasAPILokiEnabled(ctx, &cfg, log)
 	if err != nil {
 		return err
 	}
@@ -848,28 +847,8 @@ func patchPersesDatasourceURL(res *unstructured.Unstructured) error {
 	return nil
 }
 
-// maasAPILokiEnabled reports whether the usage-logs-loki Secret exists in the
-// infra namespace, which switches the Perses datasources to the maas-api Loki
-// proxy. A missing InfraNamespace leaves the feature off.
-func (r *LifecycleReconciler) maasAPILokiEnabled(ctx context.Context, log logr.Logger) (bool, error) {
-	if r.InfraNamespace == "" {
-		return false, nil
-	}
-	secret := &corev1.Secret{}
-	if err := r.Get(ctx, client.ObjectKey{Namespace: r.InfraNamespace, Name: tenantreconcile.LokiReadSecretName}, secret); err != nil {
-		if apierrors.IsNotFound(err) {
-			log.V(1).Info("usage-logs-loki Secret not found; Perses datasources keep rendered defaults",
-				"name", tenantreconcile.LokiReadSecretName, "namespace", r.InfraNamespace)
-			return false, nil
-		}
-		return false, fmt.Errorf("get Secret %s/%s: %w", r.InfraNamespace, tenantreconcile.LokiReadSecretName, err)
-	}
-	log.Info("usage-logs-loki Secret present; switching Perses datasources to the maas-api Loki proxy")
-	return true, nil
-}
-
 // patchPersesDatasourceMaaSAPILoki repoints the usage-log Perses datasources at
-// the maas-api read-only Loki proxy when the usage-logs-loki Secret exists.
+// the maas-api read-only Loki proxy when Config and the Loki Secret select it.
 // usage-logs-all keeps the organization-wide (admin) view; usage-logs-multi-tenancy
 // appends only_user=true for the caller-scoped view. The CA switches from a
 // ConfigMap bundle to the service-ca.crt file mounted in every pod, which
@@ -911,6 +890,39 @@ func patchPersesDatasourceMaaSAPILoki(res *unstructured.Unstructured) error {
 	unstructured.RemoveNestedField(res.Object, "spec", "client", "tls", "insecureSkipVerify")
 
 	return nil
+}
+
+// maasAPILokiEnabled reports whether Config selects maas-api and the
+// usage-logs-loki Secret exists in the infra namespace.
+func (r *LifecycleReconciler) maasAPILokiEnabled(ctx context.Context, cfg *maasv1alpha1.Config, log logr.Logger) (bool, error) {
+	mode, valid := tenantreconcile.ParseUsageLogsProxyMode(cfg)
+	if !valid {
+		message := fmt.Sprintf("invalid %s annotation value %q on Config/default; using the legacy usage-logs proxy",
+			tenantreconcile.UsageLogsProxyAnnotation, cfg.Annotations[tenantreconcile.UsageLogsProxyAnnotation])
+		log.Info(message)
+		if r.Recorder != nil {
+			r.Recorder.Eventf(cfg, nil, corev1.EventTypeWarning, "InvalidUsageLogsProxy", "EnsureUsageLogs", message)
+		}
+		return false, nil
+	}
+	if mode != tenantreconcile.UsageLogsProxyMaaSAPI {
+		return false, nil
+	}
+
+	if r.InfraNamespace == "" {
+		return false, nil
+	}
+	secret := &corev1.Secret{}
+	if err := r.Get(ctx, client.ObjectKey{Namespace: r.InfraNamespace, Name: tenantreconcile.LokiReadSecretName}, secret); err != nil {
+		if apierrors.IsNotFound(err) {
+			log.V(1).Info("usage-logs-loki Secret not found; Perses datasources keep rendered defaults",
+				"name", tenantreconcile.LokiReadSecretName, "namespace", r.InfraNamespace)
+			return false, nil
+		}
+		return false, fmt.Errorf("get Secret %s/%s: %w", r.InfraNamespace, tenantreconcile.LokiReadSecretName, err)
+	}
+	log.Info("usage-logs-loki Secret present; Config can switch Perses datasources to the maas-api Loki proxy")
+	return true, nil
 }
 
 // patchTenancyProxyImage sets the tenancy-proxy container image to RELATED_IMAGE_ODH_PYTHON_312_IMAGE
@@ -1160,7 +1172,7 @@ func formatTenantList(tenants []string, maxItems int) string {
 }
 
 // enqueueLokiReadSecret schedules the lifecycle reconcile when the Secret that
-// switches the shared Perses datasources changes in the infrastructure namespace.
+// gates the shared Perses datasource switch changes in the infrastructure namespace.
 func (r *LifecycleReconciler) enqueueLokiReadSecret(_ context.Context, obj client.Object) []reconcile.Request {
 	if r.InfraNamespace == "" || obj.GetNamespace() != r.InfraNamespace || obj.GetName() != tenantreconcile.LokiReadSecretName {
 		return nil
@@ -1173,6 +1185,9 @@ func (r *LifecycleReconciler) enqueueLokiReadSecret(_ context.Context, obj clien
 
 // SetupWithManager registers the lifecycle controller and its platform resource watches.
 func (r *LifecycleReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	if r.Recorder == nil {
+		r.Recorder = mgr.GetEventRecorder("maas-lifecycle-controller")
+	}
 	selfOnly := predicate.NewPredicateFuncs(func(o client.Object) bool {
 		return o.GetName() == r.DeploymentName && o.GetNamespace() == r.DeploymentNS
 	})

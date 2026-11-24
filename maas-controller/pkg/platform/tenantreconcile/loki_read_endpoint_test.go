@@ -11,6 +11,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 )
 
 func lokiSecret(appNs string, data map[string][]byte) *corev1.Secret {
@@ -26,6 +28,7 @@ func TestResolveLokiReadEndpoint(t *testing.T) {
 	tests := []struct {
 		name                 string
 		secret               *corev1.Secret
+		proxyMode            string
 		expectedEndpoint     string
 		expectedTokenFromRef bool
 		expectedCAFromRef    bool
@@ -38,7 +41,8 @@ func TestResolveLokiReadEndpoint(t *testing.T) {
 			expectedTokenFromRef: false,
 		},
 		{
-			name: "secret with endpoint and token enables the proxy",
+			name:      "secret with endpoint and token enables the proxy",
+			proxyMode: string(UsageLogsProxyMaaSAPI),
 			secret: lokiSecret(appNs, map[string][]byte{
 				LokiReadSecretKey:      []byte("https://data-science-usage-logs-lokistack-gateway-http.opendatahub.svc:8080/api/logs/v1/application"),
 				LokiReadTokenSecretKey: []byte("sa-token-123"),
@@ -47,7 +51,8 @@ func TestResolveLokiReadEndpoint(t *testing.T) {
 			expectedTokenFromRef: true,
 		},
 		{
-			name: "CA key injects the CA secretKeyRef without a warning",
+			name:      "CA key injects the CA secretKeyRef without a warning",
+			proxyMode: string(UsageLogsProxyMaaSAPI),
 			secret: lokiSecret(appNs, map[string][]byte{
 				LokiReadSecretKey:   []byte("https://loki.example.svc:8080/api/logs/v1/application"),
 				LokiReadCASecretKey: []byte("-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----\n"),
@@ -57,7 +62,8 @@ func TestResolveLokiReadEndpoint(t *testing.T) {
 			expectWarning:     true, // the missing token key still warns
 		},
 		{
-			name: "missing CA key keeps the proxy enabled on the system pool without a warning",
+			name:      "missing CA key keeps the proxy enabled on the system pool without a warning",
+			proxyMode: string(UsageLogsProxyMaaSAPI),
 			secret: lokiSecret(appNs, map[string][]byte{
 				LokiReadSecretKey:      []byte("https://loki.example.svc:8080/api/logs/v1/application"),
 				LokiReadTokenSecretKey: []byte("sa-token-123"),
@@ -66,7 +72,8 @@ func TestResolveLokiReadEndpoint(t *testing.T) {
 			expectedTokenFromRef: true,
 		},
 		{
-			name: "empty CA key keeps the proxy enabled on the system pool without a warning",
+			name:      "empty CA key keeps the proxy enabled on the system pool without a warning",
+			proxyMode: string(UsageLogsProxyMaaSAPI),
 			secret: lokiSecret(appNs, map[string][]byte{
 				LokiReadSecretKey:      []byte("https://loki.example.svc:8080/api/logs/v1/application"),
 				LokiReadTokenSecretKey: []byte("sa-token-123"),
@@ -76,7 +83,8 @@ func TestResolveLokiReadEndpoint(t *testing.T) {
 			expectedTokenFromRef: true,
 		},
 		{
-			name: "missing token key keeps the proxy enabled without upstream auth and warns",
+			name:      "missing token key keeps the proxy enabled without upstream auth and warns",
+			proxyMode: string(UsageLogsProxyMaaSAPI),
 			secret: lokiSecret(appNs, map[string][]byte{
 				LokiReadSecretKey: []byte("https://loki.example.svc:8080/api/logs/v1/application"),
 			}),
@@ -85,7 +93,8 @@ func TestResolveLokiReadEndpoint(t *testing.T) {
 			expectWarning:        true,
 		},
 		{
-			name: "empty token key keeps the proxy enabled without upstream auth and warns",
+			name:      "empty token key keeps the proxy enabled without upstream auth and warns",
+			proxyMode: string(UsageLogsProxyMaaSAPI),
 			secret: lokiSecret(appNs, map[string][]byte{
 				LokiReadSecretKey:      []byte("https://loki.example.svc:8080/api/logs/v1/application"),
 				LokiReadTokenSecretKey: []byte("   "),
@@ -95,7 +104,8 @@ func TestResolveLokiReadEndpoint(t *testing.T) {
 			expectWarning:        true,
 		},
 		{
-			name: "surrounding whitespace is trimmed",
+			name:      "surrounding whitespace is trimmed",
+			proxyMode: string(UsageLogsProxyMaaSAPI),
 			secret: lokiSecret(appNs, map[string][]byte{
 				LokiReadSecretKey:      []byte("  https://loki.example.svc:8080/api/logs/v1/application \n"),
 				LokiReadTokenSecretKey: []byte("sa-token-123"),
@@ -105,31 +115,49 @@ func TestResolveLokiReadEndpoint(t *testing.T) {
 		},
 		{
 			name:             "missing key disables the proxy with a warning",
+			proxyMode:        string(UsageLogsProxyMaaSAPI),
 			secret:           lokiSecret(appNs, map[string][]byte{"OTHER_KEY": []byte("https://loki.example.svc")}),
 			expectedEndpoint: "",
 			expectWarning:    true,
 		},
 		{
 			name:             "empty key value disables the proxy with a warning",
+			proxyMode:        string(UsageLogsProxyMaaSAPI),
 			secret:           lokiSecret(appNs, map[string][]byte{LokiReadSecretKey: []byte("   ")}),
 			expectedEndpoint: "",
 			expectWarning:    true,
 		},
 		{
 			name:             "non-URL value disables the proxy with a warning",
+			proxyMode:        string(UsageLogsProxyMaaSAPI),
 			secret:           lokiSecret(appNs, map[string][]byte{LokiReadSecretKey: []byte("not-a-url")}),
 			expectedEndpoint: "",
 			expectWarning:    true,
 		},
 		{
 			name:             "unsupported scheme disables the proxy with a warning",
+			proxyMode:        string(UsageLogsProxyMaaSAPI),
 			secret:           lokiSecret(appNs, map[string][]byte{LokiReadSecretKey: []byte("ftp://loki.example.svc")}),
 			expectedEndpoint: "",
 			expectWarning:    true,
 		},
 		{
 			name:             "missing host disables the proxy with a warning",
+			proxyMode:        string(UsageLogsProxyMaaSAPI),
 			secret:           lokiSecret(appNs, map[string][]byte{LokiReadSecretKey: []byte("https://")}),
+			expectedEndpoint: "",
+			expectWarning:    true,
+		},
+		{
+			name:             "legacy selector ignores the Secret",
+			proxyMode:        string(UsageLogsProxyLegacy),
+			secret:           lokiSecret(appNs, map[string][]byte{LokiReadSecretKey: []byte("https://loki.example.svc")}),
+			expectedEndpoint: "",
+		},
+		{
+			name:             "invalid selector fails closed and ignores the Secret",
+			proxyMode:        "invalid",
+			secret:           lokiSecret(appNs, map[string][]byte{LokiReadSecretKey: []byte("https://loki.example.svc")}),
 			expectedEndpoint: "",
 			expectWarning:    true,
 		},
@@ -144,7 +172,12 @@ func TestResolveLokiReadEndpoint(t *testing.T) {
 			c := builder.Build()
 
 			params := PlatformParams{}
-			require.NoError(t, resolveLokiReadEndpoint(context.Background(), c, appNs, &params, logr.Discard()))
+			mode := tt.proxyMode
+			if mode == "" {
+				mode = string(UsageLogsProxyMaaSAPI)
+			}
+			cfg := usageLogsProxyConfig(t, mode)
+			require.NoError(t, resolveLokiReadEndpoint(context.Background(), c, appNs, cfg, &params, logr.Discard()))
 
 			require.Equal(t, tt.expectedEndpoint, params.LokiReadEndpoint)
 			require.Equal(t, tt.expectedTokenFromRef, params.LokiReadTokenFromSecret)
@@ -161,10 +194,19 @@ func TestResolveLokiReadEndpoint(t *testing.T) {
 func TestResolveLokiReadEndpoint_APIClientError(t *testing.T) {
 	c := failingGetClient{err: errors.New("cluster unavailable")}
 	params := PlatformParams{}
-	err := resolveLokiReadEndpoint(context.Background(), c, "opendatahub", &params, logr.Discard())
+	err := resolveLokiReadEndpoint(context.Background(), c, "opendatahub", usageLogsProxyConfig(t, string(UsageLogsProxyMaaSAPI)), &params, logr.Discard())
 	require.ErrorContains(t, err, "cluster unavailable")
 	require.ErrorContains(t, err, LokiReadSecretName)
 	require.Empty(t, params.LokiReadEndpoint)
+}
+
+func usageLogsProxyConfig(t *testing.T, mode string) *maasv1alpha1.Config {
+	t.Helper()
+	cfg := &maasv1alpha1.Config{}
+	if mode != "" {
+		cfg.Annotations = map[string]string{UsageLogsProxyAnnotation: mode}
+	}
+	return cfg
 }
 
 type failingGetClient struct {

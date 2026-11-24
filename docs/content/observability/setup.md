@@ -38,6 +38,27 @@ kubectl get lokistack usage -n <monitoring-namespace> -o json | jq '.status.cond
 
 See [Installing Loki for Access logs](../install/prerequisites.md#loki-for-access-logs) for the `usage` LokiStack.
 
+### Experimental Usage-Logs Proxy Selection
+
+By default, usage-log dashboards use the legacy tenancy proxy. To switch the
+whole installation to the maas-api Loki proxy during the 3.6 migration window,
+annotate `Config/default`. The switch takes effect only when the existing
+Loki configuration Secret is also present:
+
+```yaml
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: Config
+metadata:
+  name: default
+  annotations:
+    experimental.maas.opendatahub.io/usage-logs-proxy: maas-api
+```
+
+Valid values are `legacy` (the default when the annotation is unset) and
+`maas-api`. Invalid values are rejected with a warning and fall back to
+`legacy`. A missing Loki configuration Secret also keeps the installation on
+the legacy proxy.
+
 ## Installation
 
 ### Option 1: Operator-Managed (Recommended)
