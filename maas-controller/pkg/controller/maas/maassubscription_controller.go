@@ -1315,7 +1315,7 @@ func subscriptionAPIKeyRevocationJob(subscription *maasv1alpha1.MaaSSubscription
 
 func subscriptionAPIKeyRevocationJobName(subscription *maasv1alpha1.MaaSSubscription) string {
 	const maxJobNameForGeneratedPods = 57
-	return aitenantBoundedName("maas-api-revoke-sub-", subscription.Namespace+"-"+subscription.Name, string(subscription.UID), maxJobNameForGeneratedPods)
+	return tenantreconcile.BoundedName("maas-api-revoke-sub-", subscription.Namespace+"-"+subscription.Name, string(subscription.UID), maxJobNameForGeneratedPods)
 }
 
 // updateStatus returns the status write error so Reconcile can hand it to controller-runtime.

@@ -167,6 +167,7 @@ const (
 	baseMaaSAPIAuthPolicyName                      = "maas-api-auth-policy"
 	baseMaaSAPIRouteName                           = "maas-api-route"
 	baseMaaSAPIKeyCleanupCronJobName               = "maas-api-key-cleanup" //nolint:gosec // Kubernetes resource name, not a credential
+	maxCronJobNameLength                           = 52
 	baseGatewayDestinationRuleName                 = "maas-api-backend-tls"
 	baseTelemetryPolicyName                        = "maas-telemetry"
 	baseIstioTelemetryName                         = "latency-per-subscription"
@@ -265,7 +266,7 @@ var (
 // - AITenant tenant (tenantID="redteam"): Returns "{base}-{tenantID}" (e.g., "maas-api-redteam")
 //
 // Name length constraints:
-// - Kubernetes resources (Service, ConfigMap, etc.) have a 63-character limit
+// - Most Kubernetes resources (Service, ConfigMap, etc.) have a 63-character limit
 // - Longest base name is "maas-api-auth-policy" (21 chars)
 // - Max tenant name: 63 - 21 - 1 (separator) = 41 chars
 // - AITenant CRD enforces this 41-char limit via XValidation
@@ -299,7 +300,10 @@ func MaaSAPIRouteName(tenantID string) string {
 }
 
 func MaaSAPIKeyCleanupCronJobName(tenantID string) string {
-	return resourceNameForTenant(baseMaaSAPIKeyCleanupCronJobName, tenantID)
+	if tenantID == "" {
+		return baseMaaSAPIKeyCleanupCronJobName
+	}
+	return BoundedName(baseMaaSAPIKeyCleanupCronJobName+"-", tenantID, "", maxCronJobNameLength)
 }
 
 func GatewayDestinationRuleName(tenantID string) string {
