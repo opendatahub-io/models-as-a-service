@@ -84,11 +84,6 @@ type TenantReconciler struct {
 	// MetadataCacheTTL is the TTL in seconds for Authorino metadata HTTP caching.
 	// Applies to apiKeyValidation and subscription-info metadata evaluators.
 	MetadataCacheTTL int64
-	// AuthzCacheTTL is the TTL in seconds for Authorino OPA authorization caching
-	// (auth-valid, subscription-valid, require-group-membership). Must match the
-	// MaaSAuthPolicy reconciler's flag so the gateway AuthPolicy reconcilers
-	// converge on the same desired state instead of flapping the cache TTL.
-	AuthzCacheTTL int64
 	// MonitoringNamespace is the namespace where the platform monitoring stack is deployed.
 	MonitoringNamespace string
 	// UsageLogsManifestPath is the directory containing usage-logs kustomize manifests

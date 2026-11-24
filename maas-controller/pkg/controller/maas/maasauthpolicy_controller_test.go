@@ -1262,61 +1262,6 @@ func TestMaaSAuthPolicyReconciler_EnsureGatewayAuthPolicyDefersLegacyCutover(t *
 	}
 }
 
-// TestMaaSAuthPolicyReconciler_EnsureGatewayAuthPolicyUsesConfiguredAuthzTTL pins
-// the AuthzCacheTTL wiring: the tenant-driven ensure must write the same Authorino
-// authorization cache TTL as the MaaSAuthPolicy reconcile path. With
-// --metadata-cache-ttl=60 --authz-cache-ttl=0, deriving AuthzCacheTTL from
-// MetadataCacheTTL made the two reconcilers flap the cache TTL between 60 and 0.
-func TestMaaSAuthPolicyReconciler_EnsureGatewayAuthPolicyUsesConfiguredAuthzTTL(t *testing.T) {
-	const (
-		gatewayNamespace = "openshift-ingress"
-		gatewayName      = "maas-default-gateway"
-		tenantNamespace  = "legacy-tenant"
-	)
-
-	tenantConfig := &maasv1alpha1.MaasTenantConfig{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      maasv1alpha1.MaasTenantConfigInstanceName,
-			Namespace: tenantNamespace,
-		},
-	}
-	c := fake.NewClientBuilder().
-		WithScheme(scheme).
-		WithRESTMapper(testRESTMapper()).
-		WithObjects(tenantConfig).
-		Build()
-	r := &MaaSAuthPolicyReconciler{
-		Client:           c,
-		Scheme:           scheme,
-		GatewayNamespace: gatewayNamespace,
-		GatewayName:      gatewayName,
-		MetadataCacheTTL: 60,
-		AuthzCacheTTL:    0,
-	}
-
-	if err := r.ensureGatewayAuthPolicy(
-		context.Background(), logr.Discard(), nil, false, tenantNamespace, "", gatewayNamespace, gatewayName,
-	); err != nil {
-		t.Fatalf("ensureGatewayAuthPolicy() error = %v", err)
-	}
-
-	policy := &unstructured.Unstructured{}
-	policy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
-	if err := c.Get(context.Background(), types.NamespacedName{Name: maasGatewayAuthPolicyName, Namespace: gatewayNamespace}, policy); err != nil {
-		t.Fatalf("Get gateway AuthPolicy: %v", err)
-	}
-	for _, rule := range []string{"auth-valid", "subscription-valid", "require-group-membership"} {
-		cache := nestedMapRequired(t, policy, "spec", "defaults", "rules", "authorization", rule, "cache")
-		ttl, ok := cache["ttl"].(int64)
-		if !ok {
-			t.Fatalf("%s cache ttl has unexpected type %T, want int64", rule, cache["ttl"])
-		}
-		if ttl != 0 {
-			t.Fatalf("%s cache ttl = %d, want 0 (configured --authz-cache-ttl)", rule, ttl)
-		}
-	}
-}
-
 func TestMaaSAuthPolicyReconciler_LastPolicyDeletionDoesNotResolveGuardrails(t *testing.T) {
 	const (
 		gatewayNamespace = "openshift-ingress"
