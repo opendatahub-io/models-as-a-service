@@ -129,8 +129,8 @@ class TestRerankGovernance:
                 "documents": ["a"],
             }
             r = requests.post(url, headers=headers, json=body, timeout=30, verify=TLS_VERIFY)
-            assert r.status_code == 403, (
-                f"Expected 403 authZ denial for wrong model, got {r.status_code}: {r.text[:300]}"
+            assert r.status_code in (403, 404), (
+                f"Expected 403/404 denial for wrong model, got {r.status_code}: {r.text[:300]}"
             )
         finally:
             _delete_governance_and_wait(

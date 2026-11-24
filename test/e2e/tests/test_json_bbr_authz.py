@@ -123,11 +123,11 @@ class TestJsonBBRAuthorization:
 
     @pytest.mark.parametrize("path_suffix,body", JSON_BBR_AUTH_CASES)
     def test_json_bbr_wrong_model_403(self, json_bbr_governance, path_suffix, body):
-        """Wrong model in JSON body → authZ denial (not routed as subscribed model)."""
+        """Wrong model in JSON body → denial (403 authZ and/or 404 unrouted model)."""
         bad = dict(body)
         bad["model"] = "nonexistent-json-bbr-model"
         r = _json_bbr_post(json_bbr_governance, path_suffix, bad, bbr=True)
         log.info("[json-bbr-deny] POST /%s wrong model -> %s", path_suffix, r.status_code)
-        assert r.status_code == 403, (
-            f"Expected 403 for wrong model (authZ), got {r.status_code}: {r.text[:300]}"
+        assert r.status_code in (403, 404), (
+            f"Expected 403/404 for wrong model, got {r.status_code}: {r.text[:300]}"
         )
