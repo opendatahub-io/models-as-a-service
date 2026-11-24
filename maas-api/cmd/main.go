@@ -401,11 +401,9 @@ func registerHandlers(
 		subscriptionHandler.SelectSubscription)
 
 	// Read-only Loki proxy (GET /v1/logs*). Only registered when
-	// LOKI_READ_ENDPOINT is configured. Dual-auth: gateway/OIDC identity as on
-	// every other route, plus a Kubernetes TokenReview fallback so
-	// OpenShift-authenticated users without gateway-injected identity headers
-	// can reach their usage logs. Inference API keys never authenticate these
-	// routes.
+	// LOKI_READ_ENDPOINT is configured. The internal route is TokenReview-only;
+	// trusted gateway identity headers are rejected so direct callers cannot
+	// spoof them. Inference API keys never authenticate these routes.
 	if cfg.LokiReadEndpoint != "" {
 		lokiHandler, err := lokiproxy.NewHandler(log, cfg.LokiReadEndpoint, cfg.LokiReadToken, cfg.LokiReadCA, cluster.AdminChecker)
 		if err != nil {
@@ -419,7 +417,7 @@ func registerHandlers(
 		}
 		lokiHandler.WithScopeOrgID(cfg.LokiReadScopeOrgID)
 		lokiAuthMiddleware := []gin.HandlerFunc{
-			tokenHandler.ExtractVerifiedIdentityOptional(),                  //nolint:contextcheck // gin middleware uses c.Request.Context()
+			tokenHandler.RejectGatewayIdentityHeaders(),                     //nolint:contextcheck // gin middleware uses c.Request.Context()
 			tokenHandler.ExtractUserInfo(token.AuthModeGatewayOrKubernetes), //nolint:contextcheck // gin middleware uses c.Request.Context()
 			middleware.TenantLogger(log, tenantLogCfg),
 		}

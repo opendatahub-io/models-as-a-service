@@ -175,6 +175,7 @@ const (
 	baseMaaSAPIKeyCleanupScriptConfigMapName       = "maas-api-key-cleanup-script" //nolint:gosec // Kubernetes resource name, not a credential
 	baseMaaSAPIDeploymentNSNetworkPolicyName       = "maas-api-allow-deployment-ns"
 	baseMaaSAPIGatewayNetworkPolicyName            = "maas-api-allow-gateway"
+	baseMaaSAPIMonitoringNetworkPolicyName         = "maas-api-allow-monitoring"
 	baseMaaSAPIEgressRestrictNetworkPolicyName     = "maas-api-egress-restrict"
 	baseMaaSAPIServingCertName                     = "maas-api-serving-cert"
 	baseUsageLogsEnvoyFilterName                   = "maas-model-access-logs"

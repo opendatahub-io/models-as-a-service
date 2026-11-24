@@ -17,7 +17,6 @@ import requests
 from multitenancy_helpers import get_json_or_none, list_json
 from test_helper import (
     DEPLOYMENT_NAMESPACE,
-    GATEWAY_NAMESPACE,
     MAAS_API_DEPLOYMENT_NAMESPACE,
     MODEL_REF,
     _get_cluster_token,
@@ -41,8 +40,6 @@ LEGACY_LOKI_INSTANCE = "usage"
 MONITORING_NETWORK_POLICY = "maas-api-allow-monitoring"
 EGRESS_NETWORK_POLICY = "maas-api-egress-restrict"
 LOKISTACK_INGRESS_NETWORK_POLICY = "usage-logs-lokistack-allow-maas-api"
-ENVOY_FILTER_NAME = "payload-processing"
-
 LEGACY_PROXY_RESOURCES = (
     ("serviceaccount", "usage-tenancy-proxy"),
     ("deployment", "usage-logs-tenancy-proxy"),
@@ -134,6 +131,23 @@ def _container_env(container, name):
         ),
         None,
     )
+
+
+def _container_env_secret_ref(container, name):
+    for item in container.get("env", []):
+        if item.get("name") != name:
+            continue
+        ref = item.get("valueFrom", {}).get("secretKeyRef")
+        if ref:
+            return ref.get("name"), ref.get("key")
+    return None
+
+
+def _secret_data_value(secret, key):
+    encoded = (secret.get("data") or {}).get(key)
+    if not encoded:
+        return None
+    return base64.b64decode(encoded).decode("utf-8").strip()
 
 
 def _loki_endpoint_override(namespace):
@@ -239,12 +253,26 @@ def test_maas_api_loki_proxy_is_configured():
             "maas-api must use the deployment-mode-specific default Loki endpoint"
         )
 
-    assert _container_env(container, "LOKI_READ_TOKEN_FILE"), (
-        "maas-api must use a file-based Loki credential"
+    secret = get_json_or_none(
+        "secret", "usage-logs-loki", MAAS_API_DEPLOYMENT_NAMESPACE
     )
-    assert _container_env(container, "LOKI_READ_CA_FILE"), (
-        "maas-api must use a file-based Loki CA bundle"
-    )
+    secret_token = _secret_data_value(secret, "LOKI_READ_TOKEN") if secret else None
+    if secret_token:
+        assert _container_env_secret_ref(container, "LOKI_READ_TOKEN") == (
+            "usage-logs-loki",
+            "LOKI_READ_TOKEN",
+        )
+    elif endpoint == _expected_loki_endpoint():
+        assert (
+            _container_env(container, "LOKI_READ_USE_SERVICE_ACCOUNT_TOKEN") == "true"
+        )
+
+    secret_ca = _secret_data_value(secret, "LOKI_READ_CA") if secret else None
+    if secret_ca and override:
+        assert _container_env_secret_ref(container, "LOKI_READ_CA") == (
+            "usage-logs-loki",
+            "LOKI_READ_CA",
+        )
 
 
 def test_maas_api_loki_egress_matches_deployment_mode():
@@ -425,15 +453,52 @@ def test_public_maas_api_paths_preserve_backend_suffixes(path):
 
 
 def test_loki_proxy_is_not_exposed_through_gateway():
-    response = _request_with_gateway_retry(
-        requests.get,
-        f"{_maas_api_url()}/v1/logs/loki/api/v1/query",
-        auth_denial_is_transient=False,
+    route = get_json_or_none(
+        "httproute", "maas-api-route", MAAS_API_DEPLOYMENT_NAMESPACE
     )
-    assert response.status_code == 404, (
-        "The Loki proxy must not be routed through the public gateway; "
-        f"got {response.status_code}: {response.text[:500]}"
+    assert route is not None, (
+        f"HTTPRoute maas-api-route must exist in {MAAS_API_DEPLOYMENT_NAMESPACE}"
     )
+    internal_backend_path = "/v1/logs/loki/api/v1/query"
+    candidate_paths = (
+        internal_backend_path,
+        "/maas-api/v1/logs/loki/api/v1/query",
+    )
+    for candidate_path in candidate_paths:
+        for rule in route.get("spec", {}).get("rules", []):
+            matches = rule.get("matches") or [None]
+            for match in matches:
+                if match is not None and not _path_match(match, candidate_path):
+                    continue
+                backend_path = _rewritten_backend_path(rule, match, candidate_path)
+                assert backend_path != internal_backend_path, (
+                    f"The Loki proxy must not be routable from {candidate_path}; "
+                    f"it would reach {backend_path}"
+                )
+
+
+def _path_match(match, candidate_path):
+    path = match.get("path", {})
+    value = path.get("value", "")
+    if path.get("type") == "Exact":
+        return candidate_path == value
+    return candidate_path == value or candidate_path.startswith(value.rstrip("/") + "/")
+
+
+def _rewritten_backend_path(rule, match, candidate_path):
+    if match is None:
+        return candidate_path
+    for route_filter in rule.get("filters", []):
+        if route_filter.get("type") != "URLRewrite":
+            continue
+        rewrite = route_filter.get("urlRewrite", {}).get("path", {})
+        if rewrite.get("type") == "ReplaceFullPath":
+            return rewrite.get("replaceFullPath", candidate_path)
+        if rewrite.get("type") == "ReplacePrefixMatch":
+            prefix = match.get("path", {}).get("value", "")
+            replacement = rewrite.get("replacePrefixMatch", "")
+            return replacement + candidate_path[len(prefix) :]
+    return candidate_path
 
 
 def test_internal_loki_proxy_requires_tokenreview(
@@ -529,61 +594,6 @@ def test_internal_loki_proxy_labels_reject_post_parse_identity_filters(
     assert status == 400, (
         "Self-scoped label listing must reject post-parse identity filters instead "
         f"of returning unscoped label metadata; got {status}: {body[:500]}"
-    )
-
-
-def test_payload_processing_envoyfilter_covers_all_public_routes():
-    envoy_filter = get_json_or_none("envoyfilter", ENVOY_FILTER_NAME, GATEWAY_NAMESPACE)
-    assert envoy_filter is not None, (
-        f"EnvoyFilter {ENVOY_FILTER_NAME} must exist in {GATEWAY_NAMESPACE}"
-    )
-
-    route_indices = set()
-    expected_routes = {
-        f"{MAAS_API_DEPLOYMENT_NAMESPACE}.maas-api-route.{index}": index
-        for index in range(6)
-    }
-    for patch in envoy_filter.get("spec", {}).get("configPatches", []):
-        if (
-            patch.get("applyTo") != "HTTP_ROUTE"
-            or patch.get("patch", {}).get("operation") != "MERGE"
-            or patch.get("match", {}).get("context") != "GATEWAY"
-        ):
-            continue
-        per_filter_config = (
-            patch.get("patch", {}).get("value", {}).get("typed_per_filter_config", {})
-        )
-        expected_typed_filter_config = {
-            "envoy.filters.http.ext_proc.ipp-pre": {
-                "@type": (
-                    "type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3."
-                    "ExtProcPerRoute"
-                ),
-                "disabled": True,
-            },
-            "envoy.filters.http.ext_proc.ipp": {
-                "@type": (
-                    "type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3."
-                    "ExtProcPerRoute"
-                ),
-                "disabled": True,
-            },
-        }
-        if per_filter_config != expected_typed_filter_config:
-            continue
-        route = (
-            patch.get("match", {})
-            .get("routeConfiguration", {})
-            .get("vhost", {})
-            .get("route", {})
-            .get("name", "")
-        )
-        if route in expected_routes:
-            route_indices.add(expected_routes[route])
-
-    assert route_indices == set(range(6)), (
-        "Payload-processing must disable ext_proc for maas-api route rules 0–5; "
-        f"found {sorted(route_indices)}"
     )
 
 

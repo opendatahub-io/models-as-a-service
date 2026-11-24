@@ -196,3 +196,45 @@ func TestExtractUserInfo_KubernetesFallbackDisabled(t *testing.T) {
 	assert.Equal(t, http.StatusInternalServerError, w.Code)
 	assert.Empty(t, client.Actions(), "gateway-only mode must not run TokenReview")
 }
+
+func TestLokiRouteRejectsGatewayIdentityHeaders(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	client := fake.NewSimpleClientset()
+	client.PrependReactor("create", "tokenreviews", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		review := &authv1.TokenReview{Status: *authenticatedReview()}
+		return true, review, nil
+	})
+	h := token.NewHandler(logger.Development(), "test-tenant").WithKubeClient(client)
+	router := gin.New()
+	router.Use(h.RejectGatewayIdentityHeaders(), h.ExtractUserInfo(token.AuthModeGatewayOrKubernetes))
+	router.GET("/test", func(c *gin.Context) { c.Status(http.StatusOK) })
+
+	headers := map[string]string{
+		constant.HeaderIdentity:       `{"source":"oidc"}`,
+		constant.HeaderUsername:       "spoofed-user",
+		constant.HeaderGroup:          `["spoofed-group"]`,
+		constant.HeaderOrganizationID: "spoofed-org",
+	}
+	for name, value := range headers {
+		t.Run(name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/test", nil)
+			req.Header.Set("Authorization", "Bearer sha256~oc-token")
+			req.Header.Set(name, value)
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+
+			assert.Equal(t, http.StatusUnauthorized, w.Code)
+		})
+	}
+	assert.Empty(t, client.Actions(), "gateway identity headers must be rejected before TokenReview")
+
+	t.Run("bearer-only request authenticates", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/test", nil)
+		req.Header.Set("Authorization", "Bearer sha256~oc-token")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+	})
+	assert.Len(t, client.Actions(), 1, "bearer-only request should authenticate once via TokenReview")
+}

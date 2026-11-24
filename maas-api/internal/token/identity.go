@@ -501,6 +501,22 @@ func (h *Handler) RejectTrustedIdentityHeaders() gin.HandlerFunc {
 	}
 }
 
+// RejectGatewayIdentityHeaders keeps internal Loki routes on Kubernetes
+// TokenReview authentication. Direct callers cannot select the trusted gateway
+// transport by injecting identity headers.
+func (h *Handler) RejectGatewayIdentityHeaders() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if len(c.Request.Header.Values(constant.HeaderIdentity)) > 0 ||
+			len(c.Request.Header.Values(constant.HeaderUsername)) > 0 ||
+			len(c.Request.Header.Values(constant.HeaderGroup)) > 0 ||
+			len(c.Request.Header.Values(constant.HeaderOrganizationID)) > 0 {
+			h.rejectIdentity(c, errors.New("gateway identity headers are not accepted"))
+			return
+		}
+		c.Next()
+	}
+}
+
 func validateOptionalIdentityHeaders(header http.Header) error {
 	// HTTP permits repeated headers. Accepting more than one copy would make
 	// the effective identity depend on proxy header-ordering behavior.
