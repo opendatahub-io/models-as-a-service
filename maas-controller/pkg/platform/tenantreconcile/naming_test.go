@@ -1,6 +1,8 @@
 package tenantreconcile
 
 import (
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/go-logr/logr"
@@ -74,6 +76,20 @@ func TestTenantIdentifierFor(t *testing.T) {
 				},
 			},
 			expected: "engineering",
+		},
+		{
+			name: "legacy tenant adopted by long-name AITenant keeps its complete identifier",
+			tenant: &maasv1alpha1.Tenant{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "default-tenant",
+					Namespace: "ai-tenant-" + strings.Repeat("a", 35),
+					Labels: map[string]string{
+						LabelManagedByAITenant: "true",
+						LabelTenantName:        strings.Repeat("a", 35),
+					},
+				},
+			},
+			expected: strings.Repeat("a", 35),
 		},
 	}
 
@@ -197,9 +213,7 @@ func TestResourceNamingFunctions(t *testing.T) {
 }
 
 func TestResourceNameLength(t *testing.T) {
-	// Verify that even with max-length tenant name (41 chars),
-	// resource names stay within Kubernetes 63-char limit
-	maxLengthTenantName := "engineering-data-science-west-coast-t" // 41 chars (max allowed by AITenant CRD)
+	maxLengthTenantName := strings.Repeat("a", 41)
 
 	tests := []struct {
 		name         string
@@ -210,10 +224,9 @@ func TestResourceNameLength(t *testing.T) {
 		{"Service", MaaSAPIServiceName(maxLengthTenantName), 63},
 		{"HTTPRoute", MaaSAPIRouteName(maxLengthTenantName), 63},
 		{"AuthPolicy", MaaSAPIAuthPolicyName(maxLengthTenantName), 63},
-		{"CronJob", MaaSAPIKeyCleanupCronJobName(maxLengthTenantName), 63},
 		{"DestinationRule", GatewayDestinationRuleName(maxLengthTenantName), 63},
 		{"TelemetryPolicy", TelemetryPolicyName(maxLengthTenantName), 63},
-		{"IstioTelemetry", IstioTelemetryName(maxLengthTenantName), 63},
+		{"IstioTelemetry", IstioTelemetryName(maxLengthTenantName), 253},
 	}
 
 	for _, tt := range tests {
@@ -223,6 +236,43 @@ func TestResourceNameLength(t *testing.T) {
 				"Resource name %q exceeds %d char limit (length: %d)", tt.resourceName, tt.maxLength, length)
 		})
 	}
+}
+
+func TestMaaSAPIKeyCleanupCronJobName(t *testing.T) {
+	const baseName = "maas-api-key-cleanup"
+
+	for _, tenantIDLength := range []int{0, 31, 32, 35, 41} {
+		t.Run("tenant ID length "+strconv.Itoa(tenantIDLength), func(t *testing.T) {
+			tenantID := strings.Repeat("a", tenantIDLength)
+			name := MaaSAPIKeyCleanupCronJobName(tenantID)
+			assert.LessOrEqual(t, len(name), maxCronJobNameLength)
+
+			if tenantIDLength <= 31 {
+				assert.Equal(t, resourceNameForTenant(baseName, tenantID), name)
+				return
+			}
+			// A stable name makes repeated reconciliations select and update the same CronJob.
+			assert.Equal(t, name, MaaSAPIKeyCleanupCronJobName(tenantID))
+		})
+	}
+
+	sharedPrefix := strings.Repeat("a", 22)
+	first := sharedPrefix + strings.Repeat("b", 19)
+	second := sharedPrefix + strings.Repeat("c", 19)
+	assert.NotEqual(t, MaaSAPIKeyCleanupCronJobName(first), MaaSAPIKeyCleanupCronJobName(second))
+}
+
+func TestBoundedName(t *testing.T) {
+	assert.Equal(t, "prefix-value-suffix", BoundedName("prefix-", "value", "-suffix", 63))
+
+	name := BoundedName("prefix-", strings.Repeat("a", 63), "-suffix", 30)
+	assert.LessOrEqual(t, len(name), 30)
+	assert.Regexp(t, `^prefix-a+-suffix-[a-f0-9]{8}$`, name)
+
+	// A tight budget cannot retain a value byte, so the helper falls back to a digest-only name.
+	fallback := BoundedName("p-", "long-value", "-s", 11)
+	assert.Regexp(t, `^p-[a-f0-9]{8}$`, fallback)
+	assert.LessOrEqual(t, len(fallback), 11)
 }
 
 func TestBuildPlatformParamsIncludesTenantIdentifier(t *testing.T) {

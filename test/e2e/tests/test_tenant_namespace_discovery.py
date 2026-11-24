@@ -192,25 +192,29 @@ class TestTenantNamespaceDiscovery:
             pytest.skip("OIDC_ISSUER_URL not set; per-tenant OIDC E2E requires external OIDC deploy")
 
         issuer = os.environ["OIDC_ISSUER_URL"]
-        case = new_discovery_case(use_default_gateway=True)
+        config_aitenant = os.environ.get("CONFIG_AITENANT_NAME", "models-as-a-service")
+        config_tenant_ns = os.environ.get("MAAS_SUBSCRIPTION_NAMESPACE", "models-as-a-service")
 
-        try:
-            bootstrap_aitenant_tenant(case, use_default_gateway=True)
-            apply_maas_auth_policy(case["policy_name"], case["tenant_ns"])
-            # Fresh AITenant + gateway AuthPolicy merge under OIDC can exceed the 120s
-            # default phase wait before Kuadrant reports Active.
-            _wait_for_maas_auth_policy_phase(case["policy_name"], namespace=case["tenant_ns"], timeout=180)
+        doc = get_json_or_none("aitenant", config_aitenant, AITENANT_NAMESPACE)
+        assert doc is not None, (
+            f"AITenant {config_aitenant} must exist on shared nightly pools "
+            "(Konflux OIDC parity patches the config tenant, not a second default-gateway AITenant)"
+        )
+        tenant_oidc = (doc.get("spec") or {}).get("oidc") or {}
+        assert tenant_oidc.get("issuerUrl"), (
+            f"AITenant {config_aitenant} must carry spec.oidc.issuerUrl when EXTERNAL_OIDC=true"
+        )
 
-            gw_auth = get_gateway_authpolicy()
-            assert gw_auth is not None, f"{GATEWAY_AUTH_POLICY_NAME} should exist in {GATEWAY_NAMESPACE}"
-            assert_no_per_model_authpolicy(MODEL_REF, MODEL_NAMESPACE)
+        gw_auth = get_gateway_authpolicy()
+        assert gw_auth is not None, f"{GATEWAY_AUTH_POLICY_NAME} should exist in {GATEWAY_NAMESPACE}"
+        assert_no_per_model_authpolicy(MODEL_REF, MODEL_NAMESPACE)
 
-            live_issuer = get_gateway_authpolicy_issuer()
-            assert live_issuer.rstrip("/") == issuer.rstrip("/"), (
-                f"expected gateway AuthPolicy issuer {issuer}, got {live_issuer!r}"
-            )
-        finally:
-            cleanup_discovery_case(case, delete_gateway=False)
+        live_issuer = get_gateway_authpolicy_issuer()
+        expected = tenant_oidc.get("issuerUrl", issuer)
+        assert live_issuer.rstrip("/") == expected.rstrip("/"), (
+            f"expected gateway AuthPolicy issuer {expected!r}, got {live_issuer!r} "
+            f"(config tenant {config_aitenant} ns={config_tenant_ns})"
+        )
 
     def test_namespace_qualified_collision_prevention(self):
         """1.5: Same-named CRs in two tenant namespaces use namespace-qualified TRLP tracking."""
