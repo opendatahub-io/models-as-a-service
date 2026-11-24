@@ -1,0 +1,377 @@
+name: PR build validation
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited, labeled, unlabeled]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event.action == 'synchronize' }}
+
+permissions: {}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  check-skip:
+    name: Check skip gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      should-skip: ${{ steps.gate.outputs.should-skip }}
+      reason: ${{ steps.gate.outputs.reason }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Evaluate the single skip gate
+        id: gate
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_LABELS_JSON: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          should_skip=false
+          reason="pull request changes build-relevant files"
+
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            reason="manual dispatch"
+          else
+            case "$PR_TITLE" in
+              *"[skip konflux-sim]"*) should_skip=true; reason="PR title contains [skip konflux-sim]" ;;
+            esac
+            if [[ "$PR_LABELS_JSON" == *'"skip-konflux-sim"'* ]]; then
+              should_skip=true
+              reason="PR has the skip-konflux-sim label"
+            fi
+          fi
+
+          if [[ "$EVENT_NAME" != "workflow_dispatch" && "$should_skip" != "true" ]]; then
+            merge_base="$(git merge-base "$BASE_SHA" "$HEAD_SHA")"
+            [[ -n "$merge_base" ]] || { echo "::error::cannot determine the PR merge base"; exit 1; }
+            git diff --no-renames --name-only "$merge_base" "$HEAD_SHA" > "$RUNNER_TEMP/changed-files.txt"
+            patterns=(
+              '^\.tekton/'
+              '^\.github/workflows/pr-build-validation\.yml$'
+              '^(maas-api|maas-controller|maas-common|maas-discovery)/(go\.mod|go\.sum|Dockerfile(\.konflux)?)$'
+              '^(maas-api|maas-controller|maas-common|maas-discovery)/.*\.go$'
+              '^deployment/'
+              '^maas-api/deploy/'
+              '^scripts/(validate-build\.sh|konflux_targets\.py)$'
+              '^docs/pr-build-validation\.md$'
+            )
+            relevant=false
+            while IFS= read -r changed_file; do
+              [[ -n "$changed_file" ]] || continue
+              for pattern in "${patterns[@]}"; do
+                if [[ "$changed_file" =~ $pattern ]]; then
+                  relevant=true
+                  break 2
+                fi
+              done
+            done < "$RUNNER_TEMP/changed-files.txt"
+            if [[ "$relevant" != "true" ]]; then
+              should_skip=true
+              reason="no Konflux build-relevant files changed"
+            fi
+          fi
+
+          echo "should-skip=$should_skip" >> "$GITHUB_OUTPUT"
+          echo "reason=$reason" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Konflux build validation"
+            echo "- Skip: \`$should_skip\`"
+            echo "- Reason: $reason"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  static-contracts:
+    name: Static contracts
+    needs: check-skip
+    if: needs.check-skip.result == 'success' && needs.check-skip.outputs.should-skip != 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Install PyYAML
+        run: python3 -m pip install --break-system-packages --disable-pip-version-check pyyaml==6.0.3
+      - name: Validate Tekton, Dockerfile, embedded-tree and RELATED_IMAGE contracts
+        run: ./scripts/validate-build.sh static
+
+  go-hermetic:
+    name: Go hermetic preflight (${{ matrix.module }})
+    needs: check-skip
+    if: needs.check-skip.result == 'success' && needs.check-skip.outputs.should-skip != 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        module: [maas-api, maas-controller, maas-common, maas-discovery]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Prove the module builds in the pinned Red Hat toolset with GOPROXY=off
+        run: ./scripts/validate-build.sh hermetic "${{ matrix.module }}"
+
+  maas-api-image:
+    name: Build maas-api image
+    needs: check-skip
+    if: needs.check-skip.result == 'success' && needs.check-skip.outputs.should-skip != 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    env:
+      IMAGE_NAME: maas-api
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Install PyYAML
+        run: python3 -m pip install --break-system-packages --disable-pip-version-check pyyaml==6.0.3
+      - name: Build the Tekton image
+        run: |
+          set -euo pipefail
+          ./scripts/validate-build.sh image "$IMAGE_NAME"
+          ./scripts/validate-build.sh smoke-image "$IMAGE_NAME"
+      - name: Save the image for Kind
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/maas-images
+          image="$(python3 scripts/konflux_targets.py target "$IMAGE_NAME" | cut -f3)"
+          docker save "$image" | gzip > "/tmp/maas-images/${IMAGE_NAME}-image.tar.gz"
+          ls -lh "/tmp/maas-images/${IMAGE_NAME}-image.tar.gz"
+      - name: Upload the image
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: maas-api-image
+          path: /tmp/maas-images/maas-api-image.tar.gz
+          retention-days: 1
+          if-no-files-found: error
+
+  maas-controller-image:
+    name: Build maas-controller image
+    needs: check-skip
+    if: needs.check-skip.result == 'success' && needs.check-skip.outputs.should-skip != 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    env:
+      IMAGE_NAME: maas-controller
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Install PyYAML
+        run: python3 -m pip install --break-system-packages --disable-pip-version-check pyyaml==6.0.3
+      - name: Build the Tekton image
+        run: |
+          set -euo pipefail
+          ./scripts/validate-build.sh image "$IMAGE_NAME"
+          ./scripts/validate-build.sh smoke-image "$IMAGE_NAME"
+      - name: Save the image for Kind
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/maas-images
+          image="$(python3 scripts/konflux_targets.py target "$IMAGE_NAME" | cut -f3)"
+          docker save "$image" | gzip > "/tmp/maas-images/${IMAGE_NAME}-image.tar.gz"
+          ls -lh "/tmp/maas-images/${IMAGE_NAME}-image.tar.gz"
+      - name: Upload the image
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: maas-controller-image
+          path: /tmp/maas-images/maas-controller-image.tar.gz
+          retention-days: 1
+          if-no-files-found: error
+
+  maas-discovery-image:
+    name: Build maas-discovery image
+    needs: check-skip
+    if: needs.check-skip.result == 'success' && needs.check-skip.outputs.should-skip != 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    env:
+      IMAGE_NAME: maas-discovery
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Install PyYAML
+        run: python3 -m pip install --break-system-packages --disable-pip-version-check pyyaml==6.0.3
+      - name: Build the Tekton image
+        run: |
+          set -euo pipefail
+          ./scripts/validate-build.sh image "$IMAGE_NAME"
+          ./scripts/validate-build.sh smoke-image "$IMAGE_NAME"
+      - name: Save the image for evidence
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/maas-images
+          image="$(python3 scripts/konflux_targets.py target "$IMAGE_NAME" | cut -f3)"
+          docker save "$image" | gzip > "/tmp/maas-images/${IMAGE_NAME}-image.tar.gz"
+          ls -lh "/tmp/maas-images/${IMAGE_NAME}-image.tar.gz"
+      - name: Upload the image
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: maas-discovery-image
+          path: /tmp/maas-images/maas-discovery-image.tar.gz
+          retention-days: 1
+          if-no-files-found: error
+
+  manifest-contracts:
+    name: Manifest contracts
+    needs: check-skip
+    if: needs.check-skip.result == 'success' && needs.check-skip.outputs.should-skip != 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Install PyYAML
+        run: python3 -m pip install --break-system-packages --disable-pip-version-check pyyaml==6.0.3
+      - name: Render entry points, validate schemas and prove RBAC closure
+        run: ./scripts/validate-build.sh manifests
+
+  controller-kind:
+    name: Controller integration (Kind)
+    needs: [check-skip, maas-controller-image, maas-api-image]
+    if: needs.check-skip.result == 'success' && needs.check-skip.outputs.should-skip != 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    permissions:
+      actions: read
+      contents: read
+    env:
+      CONTROLLER_IMAGE: quay.io/opendatahub/maas-controller:odh-pr
+      MAAS_API_IMAGE: quay.io/opendatahub/maas-api:odh-pr
+      KIND_CLUSTER_NAME: maas-konflux-${{ github.run_id }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Install PyYAML
+        run: python3 -m pip install --break-system-packages --disable-pip-version-check pyyaml==6.0.3
+      - name: Download the controller image
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: maas-controller-image
+          path: /tmp/maas-controller-image
+      - name: Download the maas-api image
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: maas-api-image
+          path: /tmp/maas-api-image
+      - name: Load the PR images
+        run: |
+          set -euo pipefail
+          docker load -i /tmp/maas-controller-image/maas-controller-image.tar.gz
+          docker load -i /tmp/maas-api-image/maas-api-image.tar.gz
+          docker image inspect "$CONTROLLER_IMAGE" "$MAAS_API_IMAGE" >/dev/null
+      - name: Create Kind cluster
+        uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376 # v1.15.2
+        with:
+          node_image: kindest/node:v1.33.7@sha256:d26ef333bdb2cbe9862a0f7c3803ecc7b4303d8cea8e814b481b09949d353040
+          cluster_name: ${{ env.KIND_CLUSTER_NAME }}
+      - name: Deploy the controller and assert the Tenant image contract
+        run: ./scripts/validate-build.sh kind
+
+  summary:
+    name: Build validation summary
+    if: always()
+    needs:
+      - check-skip
+      - static-contracts
+      - go-hermetic
+      - maas-api-image
+      - maas-controller-image
+      - maas-discovery-image
+      - manifest-contracts
+      - controller-kind
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Enforce job outcomes
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+          SHOULD_SKIP: ${{ needs.check-skip.outputs.should-skip }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          import sys
+
+          needs = json.loads(os.environ["NEEDS_JSON"])
+          should_skip = os.environ.get("SHOULD_SKIP", "")
+          validation_jobs = (
+              "static-contracts",
+              "go-hermetic",
+              "maas-api-image",
+              "maas-controller-image",
+              "maas-discovery-image",
+              "manifest-contracts",
+              "controller-kind",
+          )
+          problems = []
+          gate_result = needs.get("check-skip", {}).get("result", "missing")
+          if gate_result != "success":
+              problems.append(f"check-skip did not succeed (result={gate_result})")
+          if should_skip not in {"true", "false"}:
+              problems.append(f"check-skip returned an invalid should-skip value: {should_skip!r}")
+          for job in validation_jobs:
+              result = needs.get(job, {}).get("result", "missing")
+              expected = "skipped" if should_skip == "true" else "success"
+              if result != expected:
+                  problems.append(f"{job}: expected {expected}, got {result}")
+
+          print("### Konflux build validation summary")
+          print()
+          print("| Job | Result |")
+          print("| --- | --- |")
+          print(f"| check-skip | {gate_result} |")
+          for job in validation_jobs:
+              print(f"| {job} | {needs.get(job, {}).get('result', 'missing')} |")
+          print()
+          if should_skip == "true":
+              print("Validation was skipped by the single skip gate.")
+          else:
+              print("Validation was required for this run.")
+          print()
+          if problems:
+              for problem in problems:
+                  print(f"::error::{problem}")
+              raise SystemExit(1)
+          print("All required Konflux build validation jobs completed as expected.")
+          PY
