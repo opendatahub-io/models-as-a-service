@@ -343,8 +343,8 @@ def create_server_ssl_context(tls_cert_file, tls_key_file):
     context.minimum_version = ssl.TLSVersion.TLSv1_3
     context.load_cert_chain(tls_cert_file, tls_key_file)
     # Disable client cert verification - authentication is via bearer tokens
-    context.check_hostname = False
-    context.verify_mode = ssl.CERT_NONE
+    context.check_hostname = False  # tls-lint:ignore:check-hostname-false
+    context.verify_mode = ssl.CERT_NONE  # tls-lint:ignore:cert-none
     return context
 
 
