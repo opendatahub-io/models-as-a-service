@@ -249,7 +249,6 @@ func TestMaaSAPIKeyCleanupCronJobName(t *testing.T) {
 
 			if tenantIDLength <= 31 {
 				assert.Equal(t, resourceNameForTenant(baseName, tenantID), name)
-				return
 			}
 		})
 	}
