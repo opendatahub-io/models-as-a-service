@@ -14,6 +14,10 @@ TOOLS_DIR="${TOOLS_DIR:-${RUNNER_TEMP:-/tmp}/maas-konflux-tools}"
 
 log() { printf '\n== %s ==\n' "$*"; }
 
+KIND_CONTEXT=""
+CONTROLLER_POD_UID=""
+kk() { command kubectl --context "$KIND_CONTEXT" "$@"; }
+
 ensure_kustomize() {
   if [[ -n "${KUSTOMIZE_BIN:-}" ]]; then
     return
@@ -120,8 +124,12 @@ target_fields() {
 
 run_image() {
   local name="${1:?image name required}"
-  local context dockerfile output
-  IFS=$'\t' read -r context dockerfile output < <(target_fields "$name")
+  local context dockerfile output row
+  row="$(target_fields "$name")" || {
+    echo "failed to resolve the Tekton target for $name" >&2
+    return 1
+  }
+  IFS=$'\t' read -r context dockerfile output <<<"$row"
   log "Build Tekton image $name: $output"
   docker build --pull=false -f "$ROOT/$dockerfile" -t "$output" "$ROOT/$context"
   docker image inspect "$output" >/dev/null
@@ -130,8 +138,12 @@ run_image() {
 
 image_tag() {
   local name="$1"
-  local context dockerfile output
-  IFS=$'\t' read -r context dockerfile output < <(target_fields "$name")
+  local context dockerfile output row
+  row="$(target_fields "$name")" || {
+    echo "failed to resolve the Tekton target for $name" >&2
+    return 1
+  }
+  IFS=$'\t' read -r context dockerfile output <<<"$row"
   echo "$output"
 }
 
@@ -176,18 +188,19 @@ run_smoke_image() {
         test -x /app/discovery
         echo "discovery image is non-root with an executable binary"
       '
-      docker rm -f maas-discovery-smoke >/dev/null 2>&1 || true
-      docker run -d --name maas-discovery-smoke -p 18443:8443 "$image" --self-signed --addr=:8443 >/dev/null
+      local container_id local_port
+      container_id="$(docker run -d -p 127.0.0.1::8443 "$image" --self-signed --addr=:8443)"
+      local_port="$(docker port "$container_id" 8443/tcp | head -1 | sed 's/.*://')"
       for _ in $(seq 1 45); do
-        if curl -fsSk https://127.0.0.1:18443/healthz >/dev/null 2>&1; then
+        if curl -fsSk --max-time 5 "https://127.0.0.1:${local_port}/healthz" >/dev/null 2>&1; then
           echo "discovery /healthz passed"
-          docker rm -f maas-discovery-smoke >/dev/null
+          docker rm -f "$container_id" >/dev/null
           return 0
         fi
         sleep 1
       done
-      docker logs maas-discovery-smoke >&2 || true
-      docker rm -f maas-discovery-smoke >/dev/null 2>&1 || true
+      docker logs "$container_id" >&2 || true
+      docker rm -f "$container_id" >/dev/null 2>&1 || true
       echo "discovery did not become healthy" >&2
       return 1
       ;;
@@ -212,7 +225,7 @@ run_manifests() {
 }
 
 create_namespace() {
-  kubectl create namespace "$1" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+  kk create namespace "$1" --dry-run=client -o yaml | kk apply -f - >/dev/null
 }
 
 download_crds() {
@@ -230,34 +243,41 @@ with open(target, "w", encoding="utf-8") as h:
     yaml.safe_dump_all(crds, h, sort_keys=False)
 print(f"installing {len(crds)} CRDs from {target}")
 PY
-  kubectl apply --server-side --force-conflicts -f "$crds" >/dev/null
+  kk apply --server-side --force-conflicts -f "$crds" >/dev/null
 }
 
 dump_controller_state() {
   echo "--- controller pods ---" >&2
-  kubectl -n opendatahub get pods -l control-plane=maas-controller -o wide >&2 || true
+  kk -n opendatahub get pods -l control-plane=maas-controller -o wide >&2 || true
   echo "--- controller pod description ---" >&2
-  kubectl -n opendatahub describe pod -l control-plane=maas-controller >&2 || true
+  kk -n opendatahub describe pod -l control-plane=maas-controller >&2 || true
   echo "--- controller deployment ---" >&2
-  kubectl -n opendatahub describe deployment maas-controller >&2 || true
+  kk -n opendatahub describe deployment maas-controller >&2 || true
   echo "--- controller termination ---" >&2
-  kubectl -n opendatahub get pods -l control-plane=maas-controller -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{range .status.containerStatuses[*]}{.name}{": exit="}{.lastState.terminated.exitCode}{" reason="}{.lastState.terminated.reason}{" message="}{.lastState.terminated.message}{"\n"}{end}{end}' >&2 || true
+  kk -n opendatahub get pods -l control-plane=maas-controller -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{range .status.containerStatuses[*]}{.name}{": exit="}{.lastState.terminated.exitCode}{" reason="}{.lastState.terminated.reason}{" message="}{.lastState.terminated.message}{"\n"}{end}{end}' >&2 || true
   echo "--- controller logs ---" >&2
-  kubectl -n opendatahub logs -l control-plane=maas-controller --all-containers --tail=200 --prefix >&2 || true
+  kk -n opendatahub logs -l control-plane=maas-controller --all-containers --tail=200 --prefix >&2 || true
   echo "--- previous controller logs ---" >&2
-  kubectl -n opendatahub logs -l control-plane=maas-controller --all-containers --tail=200 --previous --prefix >&2 || true
+  kk -n opendatahub logs -l control-plane=maas-controller --all-containers --tail=200 --previous --prefix >&2 || true
 }
 
 assert_controller_stable() {
-  local phase="$1"
-  kubectl -n opendatahub wait --for=condition=Available deployment/maas-controller --timeout=120s >/dev/null
-  kubectl -n opendatahub wait --for=condition=Ready pod -l control-plane=maas-controller --timeout=120s >/dev/null
-  "$PYTHON" - "$phase" <<'PY'
+  local phase="$1" pod_uid
+  kk -n opendatahub wait --for=condition=Available deployment/maas-controller --timeout=120s >/dev/null
+  kk -n opendatahub wait --for=condition=Ready pod -l control-plane=maas-controller --timeout=120s >/dev/null
+  pod_uid="$(kk -n opendatahub get pods -l control-plane=maas-controller \
+    --sort-by=.metadata.creationTimestamp -o jsonpath='{.items[-1:].metadata.uid}')"
+  if [[ -n "$CONTROLLER_POD_UID" && "$pod_uid" != "$CONTROLLER_POD_UID" ]]; then
+    echo "controller pod was replaced $phase (${CONTROLLER_POD_UID} -> ${pod_uid}); a replacement is not a restart-free run" >&2
+    return 1
+  fi
+  CONTROLLER_POD_UID="$pod_uid"
+  "$PYTHON" - "$phase" "$KIND_CONTEXT" <<'PY'
 import json, subprocess, sys
 
-phase = sys.argv[1]
+phase, context = sys.argv[1:3]
 pods = json.loads(subprocess.check_output([
-    "kubectl", "-n", "opendatahub", "get", "pods",
+    "kubectl", "--context", context, "-n", "opendatahub", "get", "pods",
     "-l", "control-plane=maas-controller", "-o", "json",
 ], text=True))
 problems = []
@@ -291,15 +311,15 @@ run_kind() {
   log "Controller Kind integration on cluster $cluster"
   ensure_kustomize
   : "${KUSTOMIZE_BIN:?KUSTOMIZE_BIN is required for Kind integration}"
-  kubectl config use-context "kind-$cluster" >/dev/null
+  KIND_CONTEXT="kind-$cluster"
 
   for ns in "$namespace" "$tenant_ns" "$infra_ns" "$gateway_ns" ai-tenants; do
     create_namespace "$ns"
   done
 
   log "Install repository CRDs"
-  kubectl apply --server-side --force-conflicts -k "$ROOT/deployment/base/maas-controller/crd" >/dev/null
-  kubectl wait --for=condition=Established --timeout=180s \
+  kk apply --server-side --force-conflicts -k "$ROOT/deployment/base/maas-controller/crd" >/dev/null
+  kk wait --for=condition=Established --timeout=180s \
     crd/aitenants.maas.opendatahub.io \
     crd/configs.maas.opendatahub.io \
     crd/maasauthpolicies.maas.opendatahub.io \
@@ -339,9 +359,9 @@ run_kind() {
     -subj "/CN=maas-controller-webhook-service.$namespace.svc" \
     -addext "subjectAltName=DNS:maas-controller-webhook-service.$namespace.svc,DNS:maas-controller-webhook-service.$namespace.svc.cluster.local" \
     >/dev/null 2>&1
-  kubectl -n "$namespace" create secret tls maas-controller-webhook-cert \
+  kk -n "$namespace" create secret tls maas-controller-webhook-cert \
     --cert="$KIND_WORK/tls.crt" --key="$KIND_WORK/tls.key" --dry-run=client -o yaml \
-    | kubectl apply -f - >/dev/null
+    | kk apply -f - >/dev/null
 
   log "Render and patch the production controller bundle"
   "$KUSTOMIZE_BIN" build --load-restrictor LoadRestrictionsNone "$ROOT/deployment/base/maas-controller/default" > "$KIND_WORK/controller.yaml"
@@ -395,24 +415,24 @@ PY
   # The Deployment reads it through configMapKeyRef; when the lookup misses, the
   # $(VAR) args stay literal and the manager exits before the logger is set,
   # producing a silent CrashLoopBackOff.
-  kubectl -n "$namespace" apply --server-side --force-conflicts -f "$KIND_WORK/controller-patched.yaml" >/dev/null
-  if ! kubectl -n "$namespace" get configmap maas-parameters >/dev/null 2>&1; then
+  kk -n "$namespace" apply --server-side --force-conflicts -f "$KIND_WORK/controller-patched.yaml" >/dev/null
+  if ! kk -n "$namespace" get configmap maas-parameters >/dev/null 2>&1; then
     echo "maas-parameters ConfigMap is missing from namespace $namespace; the controller would exit before logging" >&2
     return 1
   fi
-  if ! kubectl -n "$namespace" rollout status deployment/maas-controller --timeout=240s; then
+  if ! kk -n "$namespace" rollout status deployment/maas-controller --timeout=240s; then
     dump_controller_state
     return 1
   fi
 
   log "Wait for Config/default created by the controller"
   for _ in $(seq 1 60); do
-    if kubectl get configs.maas.opendatahub.io/default >/dev/null 2>&1; then
+    if kk get configs.maas.opendatahub.io/default >/dev/null 2>&1; then
       break
     fi
     sleep 2
   done
-  if ! kubectl get configs.maas.opendatahub.io/default >/dev/null 2>&1; then
+  if ! kk get configs.maas.opendatahub.io/default >/dev/null 2>&1; then
     dump_controller_state
     echo "controller did not create Config/default" >&2
     return 1
@@ -420,7 +440,7 @@ PY
   assert_controller_stable "after Config/default bootstrap"
 
   log "Deploy a test PostgreSQL instance and the database secret"
-  kubectl -n "$infra_ns" apply -f - >/dev/null <<'YAML'
+  kk -n "$infra_ns" apply -f - >/dev/null <<'YAML'
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -462,24 +482,24 @@ spec:
   ports:
     - {port: 5432, targetPort: 5432}
 YAML
-  kubectl -n "$infra_ns" rollout status deployment/postgres --timeout=180s
-  kubectl -n "$infra_ns" create secret generic maas-db-config \
+  kk -n "$infra_ns" rollout status deployment/postgres --timeout=180s
+  kk -n "$infra_ns" create secret generic maas-db-config \
     --from-literal=DB_CONNECTION_URL="postgresql://maas:maas@postgres.$infra_ns.svc.cluster.local:5432/maas?sslmode=disable" \
-    --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+    --dry-run=client -o yaml | kk apply -f - >/dev/null
 
   log "Create test-only TLS material normally supplied by OpenShift service-ca"
-  kubectl -n "$infra_ns" create secret tls maas-api-serving-cert \
+  kk -n "$infra_ns" create secret tls maas-api-serving-cert \
     --cert="$KIND_WORK/tls.crt" --key="$KIND_WORK/tls.key" --dry-run=client -o yaml \
-    | kubectl apply -f - >/dev/null
-  kubectl -n "$infra_ns" create secret tls maas-api-metrics-tls \
+    | kk apply -f - >/dev/null
+  kk -n "$infra_ns" create secret tls maas-api-metrics-tls \
     --cert="$KIND_WORK/tls.crt" --key="$KIND_WORK/tls.key" --dry-run=client -o yaml \
-    | kubectl apply -f - >/dev/null
-  kubectl -n "$infra_ns" create configmap openshift-service-ca.crt \
+    | kk apply -f - >/dev/null
+  kk -n "$infra_ns" create configmap openshift-service-ca.crt \
     --from-file=service-ca.crt="$KIND_WORK/tls.crt" --dry-run=client -o yaml \
-    | kubectl apply -f - >/dev/null
+    | kk apply -f - >/dev/null
 
   log "Create the Gateway and its Service, then wait for the default tenant render"
-  kubectl -n "$gateway_ns" apply -f - >/dev/null <<'YAML'
+  kk -n "$gateway_ns" apply -f - >/dev/null <<'YAML'
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:
@@ -492,7 +512,7 @@ spec:
       protocol: HTTP
 YAML
   local gateway_uid
-  gateway_uid="$(kubectl -n "$gateway_ns" get gateway maas-default-gateway -o jsonpath='{.metadata.uid}')"
+  gateway_uid="$(kk -n "$gateway_ns" get gateway maas-default-gateway -o jsonpath='{.metadata.uid}')"
   GATEWAY_UID="$gateway_uid" "$PYTHON" - "$KIND_WORK/gateway-service.yaml" <<'PY'
 import os, sys, yaml
 doc = {
@@ -516,16 +536,16 @@ doc = {
 }
 yaml.safe_dump(doc, open(sys.argv[1], "w", encoding="utf-8"))
 PY
-  kubectl apply -f "$KIND_WORK/gateway-service.yaml" >/dev/null
+  kk apply -f "$KIND_WORK/gateway-service.yaml" >/dev/null
 
   log "Wait for the bootstrap default tenant config"
   for _ in $(seq 1 60); do
-    if kubectl -n "$tenant_ns" get maastenantconfigs.maas.opendatahub.io default-tenant >/dev/null 2>&1; then
+    if kk -n "$tenant_ns" get maastenantconfigs.maas.opendatahub.io default-tenant >/dev/null 2>&1; then
       break
     fi
     sleep 2
   done
-  if ! kubectl -n "$tenant_ns" get maastenantconfigs.maas.opendatahub.io default-tenant >/dev/null 2>&1; then
+  if ! kk -n "$tenant_ns" get maastenantconfigs.maas.opendatahub.io default-tenant >/dev/null 2>&1; then
     dump_controller_state
     echo "controller did not bootstrap MaasTenantConfig/default-tenant" >&2
     return 1
@@ -533,7 +553,7 @@ PY
 
   log "Assert the default tenant render uses the PR-built maas-api image"
   for _ in $(seq 1 90); do
-    rendered_image="$(kubectl -n "$infra_ns" get deployment maas-api -o jsonpath='{.spec.template.spec.containers[?(@.name=="maas-api")].image}' 2>/dev/null || true)"
+    rendered_image="$(kk -n "$infra_ns" get deployment maas-api -o jsonpath='{.spec.template.spec.containers[?(@.name=="maas-api")].image}' 2>/dev/null || true)"
     if [[ "$rendered_image" == "$maas_api_image" ]]; then
       break
     fi
@@ -543,8 +563,8 @@ PY
     echo "tenant did not render the PR maas-api image" >&2
     echo "expected: $maas_api_image" >&2
     echo "actual:   ${rendered_image:-<deployment not found>}" >&2
-    kubectl -n "$tenant_ns" get maastenantconfigs.maas.opendatahub.io default-tenant -o yaml >&2 || true
-    kubectl -n "$infra_ns" describe deployment maas-api >&2 || true
+    kk -n "$tenant_ns" get maastenantconfigs.maas.opendatahub.io default-tenant -o yaml >&2 || true
+    kk -n "$infra_ns" describe deployment maas-api >&2 || true
     dump_controller_state
     return 1
   fi
@@ -556,12 +576,19 @@ PY
   assert_controller_stable "after Tenant reconciliation"
 
   log "Assert maas-api starts and serves its health endpoint"
-  kubectl -n "$infra_ns" rollout status deployment/maas-api --timeout=240s
-  kubectl -n "$infra_ns" port-forward svc/maas-api 18444:8443 >"$KIND_WORK/port-forward.log" 2>&1 &
+  kk -n "$infra_ns" rollout status deployment/maas-api --timeout=240s
+  kk -n "$infra_ns" port-forward --address 127.0.0.1 svc/maas-api :8443 >"$KIND_WORK/port-forward.log" 2>&1 &
   local forward_pid=$!
   trap 'kill "$forward_pid" 2>/dev/null || true; rm -rf "$KIND_WORK"' EXIT
+  local forward_port=""
   for _ in $(seq 1 45); do
-    if curl -fsSk https://127.0.0.1:18444/health >/dev/null 2>&1; then
+    forward_port="$(sed -n 's/^Forwarding from 127\.0\.0\.1:\([0-9]*\) -> 8443.*/\1/p' "$KIND_WORK/port-forward.log" | head -1)"
+    if ! kill -0 "$forward_pid" 2>/dev/null && [[ -z "$forward_port" ]]; then
+      cat "$KIND_WORK/port-forward.log" >&2 || true
+      echo "port-forward exited before it reported a listener" >&2
+      return 1
+    fi
+    if [[ -n "$forward_port" ]] && curl -fsSk --max-time 5 "https://127.0.0.1:${forward_port}/health" >/dev/null 2>&1; then
       echo "maas-api /health passed"
       kill "$forward_pid" 2>/dev/null || true
       trap 'rm -rf "$KIND_WORK"' EXIT
@@ -570,7 +597,7 @@ PY
     sleep 1
   done
   cat "$KIND_WORK/port-forward.log" >&2 || true
-  kubectl -n "$infra_ns" logs deployment/maas-api --tail=200 >&2 || true
+  kk -n "$infra_ns" logs deployment/maas-api --tail=200 >&2 || true
   echo "maas-api did not become healthy" >&2
   return 1
 }
