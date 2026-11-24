@@ -86,6 +86,7 @@ TOKEN_BUDGET = 10_000_000
 pytestmark = [
     pytest.mark.serial,
     pytest.mark.xdist_group("large_io"),
+    pytest.mark.nightly,
     pytest.mark.skipif(
         not LARGE_IO_ENABLED,
         reason="Large I/O streaming tests require E2E_LARGE_IO=1 (CI time budget)",
