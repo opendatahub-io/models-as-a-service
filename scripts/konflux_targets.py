@@ -238,6 +238,15 @@ def ok(message: str) -> None:
     print(f"OK: {message}")
 
 
+def resolve_inside_root(path: Path) -> Path | None:
+    resolved = path.resolve()
+    try:
+        resolved.relative_to(ROOT)
+    except ValueError:
+        return None
+    return resolved
+
+
 def read_yaml(path: Path) -> list[dict[str, Any]]:
     try:
         with path.open(encoding="utf-8") as handle:
@@ -267,6 +276,12 @@ def tekton_targets() -> dict[str, dict[str, Any]]:
         image_name = output.rsplit("/", 1)[-1].split(":", 1)[0]
         if image_name == "odh-maas-discovery":
             image_name = "maas-discovery"
+        if image_name in found:
+            fail(
+                f"duplicate Tekton PR target {image_name!r}: "
+                f"{found[image_name]['tekton']} and {path.name}"
+            )
+            continue
         found[image_name] = {
             "tekton": path.name,
             "dockerfile": str(params.get("dockerfile", "")),
@@ -426,8 +441,8 @@ def validate_dockerfile(name: str, dockerfile: Path, context: Path, konflux: boo
                 warn(f"{dockerfile.relative_to(ROOT)}: floating base image tag {stage['image']!r}")
 
     final = stages[-1]
-    if not any(value.strip() == "1001" for value in final["user"]):
-        fail(f"{dockerfile.relative_to(ROOT)}: final stage must run as USER 1001")
+    if not final["user"] or final["user"][-1].strip() != "1001":
+        fail(f"{dockerfile.relative_to(ROOT)}: final stage must end with USER 1001")
 
     run_text = "\n".join(final["run"])
     if name == "maas-controller":
@@ -615,17 +630,44 @@ def check_manager_contract() -> None:
         warn("DefaultMaaSDiscoveryImage is not digest-pinned")
 
 
+def workflow_working_directory(job: dict[str, Any], step: dict[str, Any]) -> str:
+    step_value = step.get("working-directory")
+    if step_value is not None:
+        return str(step_value).rstrip("/")
+    job_defaults = (job.get("defaults", {}) or {}).get("run", {}) or {}
+    return str(job_defaults.get("working-directory", "")).rstrip("/")
+
+
 def check_existing_codegen_contract() -> None:
     makefile = (ROOT / "maas-controller/Makefile").read_text(encoding="utf-8")
     if not re.search(r"^verify-codegen:", makefile, re.MULTILINE):
         fail("maas-controller/Makefile no longer exposes verify-codegen")
     if "generate manifests" not in makefile.split("verify-codegen:", 1)[1].splitlines()[0]:
         fail("verify-codegen no longer regenerates CRD/RBAC/deepcopy artifacts")
-    workflow = (ROOT / ".github/workflows/build-test.yml").read_text(encoding="utf-8")
-    if "make verify-codegen" not in workflow:
-        fail("build-test.yml no longer runs make verify-codegen; generated drift would be unguarded")
-    if "working-directory: maas-controller" not in workflow:
-        fail("build-test.yml verify-codegen lost its maas-controller working directory")
+
+    workflow_path = ROOT / ".github/workflows/build-test.yml"
+    docs = read_yaml(workflow_path)
+    if not docs:
+        fail("build-test.yml could not be parsed")
+        return
+    active_step = False
+    for job in (docs[0].get("jobs", {}) or {}).values():
+        if job.get("if"):
+            continue
+        for step in job.get("steps", []) or []:
+            run = step.get("run", "")
+            if "make verify-codegen" not in str(run):
+                continue
+            if step.get("if"):
+                continue
+            if workflow_working_directory(job, step) != "maas-controller":
+                continue
+            active_step = True
+    if not active_step:
+        fail(
+            "build-test.yml no longer runs make verify-codegen in an active maas-controller "
+            "step; generated drift would be unguarded"
+        )
     ok("generated CRD/RBAC/code drift remains owned by the existing build-test verify-codegen job")
 
 
@@ -748,12 +790,36 @@ def check_kustomization_refs(files: list[Path]) -> None:
                 ):
                     continue
                 target = resolve_ref(path.parent, ref)
+                if resolve_inside_root(target) is None:
+                    fail(f"{relative}: {field} entry {ref!r} resolves outside the repository")
+                    continue
                 if not target.exists():
                     fail(f"{relative}: {field} entry {ref!r} does not exist")
-        for ref in doc.get("configMapGenerator", []) or []:
-            for env_file in ref.get("envs", []) or []:
-                if not (path.parent / env_file).exists():
-                    fail(f"{relative}: generated ConfigMap env file {env_file!r} does not exist")
+        for generator in ("configMapGenerator", "secretGenerator"):
+            for ref in doc.get(generator, []) or []:
+                for env_file in ref.get("envs", []) or []:
+                    target = (path.parent / env_file).resolve()
+                    if resolve_inside_root(target) is None:
+                        fail(
+                            f"{relative}: {generator} env file {env_file!r} resolves "
+                            "outside the repository"
+                        )
+                        continue
+                    if not target.exists():
+                        fail(
+                            f"{relative}: {generator} env file {env_file!r} does not exist"
+                        )
+                for file_ref in ref.get("files", []) or []:
+                    file_path = str(file_ref).split("=", 1)[-1]
+                    target = (path.parent / file_path).resolve()
+                    if resolve_inside_root(target) is None:
+                        fail(
+                            f"{relative}: {generator} file {file_path!r} resolves "
+                            "outside the repository"
+                        )
+                        continue
+                    if not target.exists():
+                        fail(f"{relative}: {generator} file {file_path!r} does not exist")
 
 
 def render_all(output_dir: Path) -> dict[str, list[dict[str, Any]]]:
@@ -1079,9 +1145,9 @@ def controller_env(all_docs: list[dict[str, Any]]) -> dict[str, str]:
 
 def effective_rules(
     all_docs: list[dict[str, Any]], namespace: str, service_account: str
-) -> list[dict[str, Any]]:
+) -> list[tuple[str, dict[str, Any]]]:
     by_identity = {object_identity(doc): doc for doc in all_docs}
-    rules: list[dict[str, Any]] = []
+    rules: list[tuple[str, dict[str, Any]]] = []
     for doc in all_docs:
         if doc.get("kind") not in {"RoleBinding", "ClusterRoleBinding"}:
             continue
@@ -1099,7 +1165,8 @@ def effective_rules(
         role_ns = binding_ns if role_kind == "Role" else ""
         role = by_identity.get((role_kind, role_ns, ref.get("name", "")))
         if role:
-            rules.extend(role_rules(role, all_docs))
+            scope = "" if role_kind == "ClusterRole" else binding_ns
+            rules.extend((scope, rule) for rule in role_rules(role, all_docs))
     return rules
 
 
@@ -1113,18 +1180,32 @@ def values_match(allowed: list[str] | None, required: list[str] | None) -> bool:
     return all(value in allowed_values for value in required_values)
 
 
+def non_resource_url_covered(allowed: list[str] | None, required: str) -> bool:
+    for pattern in allowed or []:
+        if pattern == required:
+            return True
+        if pattern.endswith("*") and required.startswith(pattern[:-1]):
+            return True
+    return False
+
+
 def permission_rule_covers(
     effective: dict[str, Any],
     group: str,
     resource: str,
     verb: str,
     resource_name: str | None,
+    permission_kind: str,
 ) -> bool:
+    if not values_match(effective.get("verbs") or [], [verb]):
+        return False
+    if permission_kind == "url":
+        return non_resource_url_covered(effective.get("nonResourceURLs"), resource)
+    if effective.get("nonResourceURLs"):
+        return False
     if not values_match(effective.get("apiGroups") or [""], [group]):
         return False
     if not values_match(effective.get("resources") or [], [resource]):
-        return False
-    if not values_match(effective.get("verbs") or [], [verb]):
         return False
     allowed_names = effective.get("resourceNames") or []
     if resource_name is None:
@@ -1132,13 +1213,13 @@ def permission_rule_covers(
     return not allowed_names or resource_name in allowed_names
 
 
-def rule_permissions(rule: dict[str, Any]) -> list[tuple[str, str, str, str | None]]:
+def rule_permissions(rule: dict[str, Any]) -> list[tuple[str, str, str, str | None, str]]:
     verbs = rule.get("verbs") or []
-    permissions: list[tuple[str, str, str, str | None]] = []
+    permissions: list[tuple[str, str, str, str | None, str]] = []
     if rule.get("nonResourceURLs"):
         for url in rule["nonResourceURLs"]:
             for verb in verbs:
-                permissions.append(("", url, verb, None))
+                permissions.append(("", url, verb, None, "url"))
         return permissions
     groups = rule.get("apiGroups") or [""]
     resources = rule.get("resources") or []
@@ -1147,14 +1228,14 @@ def rule_permissions(rule: dict[str, Any]) -> list[tuple[str, str, str, str | No
         for resource in resources:
             for verb in verbs:
                 for name in names:
-                    permissions.append((group, resource, verb, name))
+                    permissions.append((group, resource, verb, name, "resource"))
     return permissions
 
 
 def rule_covers(effective: dict[str, Any], required: dict[str, Any]) -> bool:
     return all(
-        permission_rule_covers(effective, group, resource, verb, name)
-        for group, resource, verb, name in rule_permissions(required)
+        permission_rule_covers(effective, group, resource, verb, name, kind)
+        for group, resource, verb, name, kind in rule_permissions(required)
     )
 
 
@@ -1224,23 +1305,51 @@ def check_escalation_closure(rendered: dict[str, list[dict[str, Any]]]) -> None:
         checked = 0
         for root, role in applied_roles:
             role_name = f"{role.get('kind')}/{role.get('metadata', {}).get('name')}"
+            role_scope = (
+                ""
+                if role.get("kind") == "ClusterRole"
+                else role.get("metadata", {}).get("namespace", "")
+            )
+            usable_rules = [
+                rule
+                for scope, rule in effective
+                if not scope or not role_scope or scope == role_scope
+            ]
+            if role.get("aggregationRule") and not any(
+                permission_rule_covers(
+                    rule,
+                    "rbac.authorization.k8s.io",
+                    "clusterroles",
+                    "escalate",
+                    None,
+                    "resource",
+                )
+                for rule in usable_rules
+            ):
+                fail(
+                    f"{bundle}: RBAC escalation closure: maas-controller "
+                    f"({namespace}/{service_account}) server-side-applies aggregate {role_name} "
+                    f"from {root} without escalate on clusterroles"
+                )
             for required_rule in role_rules(role, all_docs):
                 checked += 1
                 missing = [
                     permission
                     for permission in rule_permissions(required_rule)
-                    if not any(permission_rule_covers(rule, *permission) for rule in effective)
+                    if not any(
+                        permission_rule_covers(rule, *permission) for rule in usable_rules
+                    )
                 ]
                 if missing:
                     fail(
                         f"{bundle}: RBAC escalation closure: maas-controller "
                         f"({namespace}/{service_account}) server-side-applies {role_name} "
                         f"from {root}, but does not hold rule {describe_rule(required_rule)} "
-                        f"(missing {missing})"
+                        f"in scope {role_scope or 'cluster'} (missing {missing})"
                     )
         ok(
             f"{bundle}: RBAC escalation closure checked {checked} applied role rules "
-            f"against {len(effective)} effective controller rules"
+            f"against {len(effective)} scoped effective controller rules"
         )
 
 

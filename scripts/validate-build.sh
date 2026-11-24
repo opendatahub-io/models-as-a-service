@@ -143,6 +143,7 @@ run_smoke_image() {
   case "$name" in
     maas-controller)
       docker run --rm --entrypoint /bin/sh "$image" -c '
+        set -eu
         test "$(id -u)" = "1001"
         for path in /maas-api/deploy /deployment/base/maas-api /deployment/base/maas-controller/policies \
                     /deployment/base/payload-processing /deployment/base/maas-discovery /deployment/components; do
@@ -152,11 +153,17 @@ run_smoke_image() {
         test -r /deployment/components/observability/usage-logs/dsci-managed/envoy-otel-access-log.yaml
         echo "controller image is non-root and embedded trees are readable"
       '
-      docker run --rm --entrypoint /manager "$image" --help 2>&1 | tee /tmp/maas-controller-help.txt
-      grep -q -- '--health-probe-bind-address' /tmp/maas-controller-help.txt
+      local help_output
+      help_output=$(docker run --rm --entrypoint /manager "$image" --help 2>&1 || true)
+      grep -q -- '-health-probe-bind-address' <<<"$help_output" || {
+        printf '%s\n' "$help_output" >&2
+        echo "controller /manager --help does not expose the health probe flag" >&2
+        return 1
+      }
       ;;
     maas-api)
       docker run --rm --entrypoint /bin/sh "$image" -c '
+        set -eu
         test "$(id -u)" = "1001"
         test -x /app/maas-api
         echo "maas-api image is non-root with an executable binary; /health is exercised in Kind"
@@ -164,6 +171,7 @@ run_smoke_image() {
       ;;
     maas-discovery)
       docker run --rm --entrypoint /bin/sh "$image" -c '
+        set -eu
         test "$(id -u)" = "1001"
         test -x /app/discovery
         echo "discovery image is non-root with an executable binary"
@@ -228,10 +236,16 @@ PY
 dump_controller_state() {
   echo "--- controller pods ---" >&2
   kubectl -n opendatahub get pods -l control-plane=maas-controller -o wide >&2 || true
+  echo "--- controller pod description ---" >&2
+  kubectl -n opendatahub describe pod -l control-plane=maas-controller >&2 || true
   echo "--- controller deployment ---" >&2
   kubectl -n opendatahub describe deployment maas-controller >&2 || true
+  echo "--- controller termination ---" >&2
+  kubectl -n opendatahub get pods -l control-plane=maas-controller -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{range .status.containerStatuses[*]}{.name}{": exit="}{.lastState.terminated.exitCode}{" reason="}{.lastState.terminated.reason}{" message="}{.lastState.terminated.message}{"\n"}{end}{end}' >&2 || true
   echo "--- controller logs ---" >&2
-  kubectl -n opendatahub logs deployment/maas-controller --all-containers --tail=200 >&2 || true
+  kubectl -n opendatahub logs -l control-plane=maas-controller --all-containers --tail=200 --prefix >&2 || true
+  echo "--- previous controller logs ---" >&2
+  kubectl -n opendatahub logs -l control-plane=maas-controller --all-containers --tail=200 --previous --prefix >&2 || true
 }
 
 assert_controller_stable() {
@@ -286,7 +300,7 @@ run_kind() {
   done
 
   log "Install repository CRDs"
-  kubectl apply --server-side --force-conflicts -f "$ROOT/deployment/base/maas-controller/crd" >/dev/null
+  kubectl apply --server-side --force-conflicts -k "$ROOT/deployment/base/maas-controller/crd" >/dev/null
   kubectl wait --for=condition=Established --timeout=180s \
     crd/aitenants.maas.opendatahub.io \
     crd/configs.maas.opendatahub.io \
@@ -300,9 +314,26 @@ run_kind() {
   log "Install the exact upstream CRDs the controller renders against"
   download_crds "https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.5.1/standard-install.yaml" gateway-api
   download_crds "https://github.com/cert-manager/cert-manager/releases/download/v1.18.2/cert-manager.crds.yaml" cert-manager
-  download_crds "https://github.com/Kuadrant/authorino/releases/download/v0.22.0/authorino.yaml" authorino
-  download_crds "https://github.com/Kuadrant/kuadrant-operator/releases/download/v1.3.1/kuadrant-operator.yaml" kuadrant
-  download_crds "https://github.com/istio/istio/releases/download/1.26.3/crd-all.gen.yaml" istio
+  download_crds "https://raw.githubusercontent.com/Kuadrant/authorino/v0.22.0/install/crd/authorino.kuadrant.io_authconfigs.yaml" authorino
+  # The Kuadrant v1.3.1 release publishes only a Helm chart, so the CRDs come
+  # from the bundle at the tag. The controller watches both the kuadrant.io and
+  # extensions.kuadrant.io groups.
+  for crd in \
+    extensions.kuadrant.io_oidcpolicies.yaml \
+    extensions.kuadrant.io_planpolicies.yaml \
+    extensions.kuadrant.io_telemetrypolicies.yaml \
+    kuadrant.io_authpolicies.yaml \
+    kuadrant.io_dnspolicies.yaml \
+    kuadrant.io_kuadrants.yaml \
+    kuadrant.io_ratelimitpolicies.yaml \
+    kuadrant.io_tlspolicies.yaml \
+    kuadrant.io_tokenratelimitpolicies.yaml; do
+    download_crds "https://raw.githubusercontent.com/Kuadrant/kuadrant-operator/v1.3.1/bundle/manifests/${crd}" "kuadrant-${crd%.yaml}"
+  done
+  download_crds "https://raw.githubusercontent.com/istio/istio/1.26.3/manifests/charts/base/files/crd-all.gen.yaml" istio
+  # The production bundle renders a ServiceMonitor, and a vanilla Kind cluster
+  # has no Prometheus operator CRDs to accept it.
+  download_crds "https://raw.githubusercontent.com/prometheus-operator/prometheus-operator/v0.89.0/example/prometheus-operator-crd/monitoring.coreos.com_servicemonitors.yaml" prometheus
 
   log "Create the webhook serving certificate"
   openssl req -x509 -newkey rsa:2048 -nodes -days 2 \

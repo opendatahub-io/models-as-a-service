@@ -60,7 +60,7 @@ jobs:
           if [[ "$EVENT_NAME" != "workflow_dispatch" && "$should_skip" != "true" ]]; then
             merge_base="$(git merge-base "$BASE_SHA" "$HEAD_SHA")"
             [[ -n "$merge_base" ]] || { echo "::error::cannot determine the PR merge base"; exit 1; }
-            git diff --no-renames --name-only "$merge_base" "$HEAD_SHA" > "$RUNNER_TEMP/changed-files.txt"
+            git diff --no-renames --name-only -z "$merge_base" "$HEAD_SHA" > "$RUNNER_TEMP/changed-files.txt"
             patterns=(
               '^\.tekton/'
               '^\.github/workflows/pr-build-validation\.yml$'
@@ -70,9 +70,12 @@ jobs:
               '^maas-api/deploy/'
               '^scripts/(validate-build\.sh|konflux_targets\.py)$'
               '^docs/pr-build-validation\.md$'
+              '^(go\.mod|go\.sum|Makefile)$'
+              '^maas-controller/Makefile$'
+              '^\.github/workflows/build-test\.yml$'
             )
             relevant=false
-            while IFS= read -r changed_file; do
+            while IFS= read -r -d '' changed_file; do
               [[ -n "$changed_file" ]] || continue
               for pattern in "${patterns[@]}"; do
                 if [[ "$changed_file" =~ $pattern ]]; then
@@ -303,6 +306,11 @@ jobs:
         with:
           node_image: kindest/node:v1.33.7@sha256:d26ef333bdb2cbe9862a0f7c3803ecc7b4303d8cea8e814b481b09949d353040
           cluster_name: ${{ env.KIND_CLUSTER_NAME }}
+      - name: Load the PR images into the Kind cluster
+        run: |
+          set -euo pipefail
+          kind load docker-image --name "$KIND_CLUSTER_NAME" \
+            "$CONTROLLER_IMAGE" "$MAAS_API_IMAGE"
       - name: Deploy the controller and assert the Tenant image contract
         run: ./scripts/validate-build.sh kind
 
@@ -320,7 +328,6 @@ jobs:
       - controller-kind
     runs-on: ubuntu-24.04
     timeout-minutes: 5
-    permissions: {}
     steps:
       - name: Enforce job outcomes
         env:
@@ -350,9 +357,30 @@ jobs:
               problems.append(f"check-skip did not succeed (result={gate_result})")
           if should_skip not in {"true", "false"}:
               problems.append(f"check-skip returned an invalid should-skip value: {should_skip!r}")
+          dependencies = {
+              "static-contracts": ("check-skip",),
+              "go-hermetic": ("check-skip",),
+              "maas-api-image": ("check-skip",),
+              "maas-controller-image": ("check-skip",),
+              "maas-discovery-image": ("check-skip",),
+              "manifest-contracts": ("check-skip",),
+              "controller-kind": (
+                  "check-skip",
+                  "maas-controller-image",
+                  "maas-api-image",
+              ),
+          }
           for job in validation_jobs:
               result = needs.get(job, {}).get("result", "missing")
-              expected = "skipped" if should_skip == "true" else "success"
+              if should_skip == "true":
+                  expected = "skipped"
+              elif all(
+                  needs.get(dependency, {}).get("result") == "success"
+                  for dependency in dependencies[job]
+              ):
+                  expected = "success"
+              else:
+                  expected = "skipped"
               if result != expected:
                   problems.append(f"{job}: expected {expected}, got {result}")
 
