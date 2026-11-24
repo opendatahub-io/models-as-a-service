@@ -6,11 +6,6 @@ on:
       - 'maas-api/openapi3.yaml'
       - '.spectral.yml'
       - '.github/workflows/openapi-validation.yml'
-  push:
-    branches: [main, master]
-    paths:
-      - 'maas-api/openapi3.yaml'
-
 permissions:
   contents: read
 

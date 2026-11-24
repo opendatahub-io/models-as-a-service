@@ -6,6 +6,7 @@ Tests cover:
 - Authenticated access with valid service account token
 - Response structure validation
 - Gateway metadata accuracy
+- OpenShift Route fallback for ClusterIP Gateways
 
 These tests use kubectl exec with curl to access the internal maas-api Service,
 since /v1/tenants is not exposed through the Gateway and CI runs outside the cluster.
@@ -14,6 +15,7 @@ since /v1/tenants is not exposed through the Gateway and CI runs outside the clu
 import json
 import logging
 import os
+from urllib.parse import urlsplit
 
 import pytest
 import requests
@@ -73,16 +75,6 @@ def test_tenant_discovery_authenticated(maas_api_internal_url: str, headers: dic
     This test uses the standard auth headers (service account token) that other E2E tests use.
     The endpoint uses system:authenticated authorization, so any authenticated user can access it.
     """
-    # Skip test when Gateway is deployed in unsupported ClusterIP + Route mode (ocproute)
-    ingress_mode = os.environ.get("INGRESS_MODE", "loadbalancer")
-    if ingress_mode == "ocproute":
-        pytest.skip(
-            "Skipping when Gateway uses ClusterIP + OpenShift Route (unsupported configuration). "
-            "This mixes incompatible routing paradigms. "
-            "Gateway has no external hostname in spec.listeners, so /v1/tenants returns an error. "
-            "Supported configuration: LoadBalancer service with hostname in spec.listeners."
-        )
-
     url = maas_api_internal_url + "/v1/tenants"
 
     status_code, body = _kubectl_curl(url, headers=headers)
@@ -91,8 +83,9 @@ def test_tenant_discovery_authenticated(maas_api_internal_url: str, headers: dic
     print(f"[tenant] GET /v1/tenants authenticated: HTTP {status_code}")
 
     # The endpoint should return 200 with system:authenticated authorization
-    assert status_code == 200, \
+    assert status_code == 200, (
         f"Expected 200 with auth, got {status_code}: {body[:400]}"
+    )
 
     # Validate the response structure
     data = json.loads(body)
@@ -124,18 +117,53 @@ def test_tenant_discovery_authenticated(maas_api_internal_url: str, headers: dic
     assert isinstance(gateway["port"], int), "Port should be an integer"
 
     # Validate protocol value
-    assert gateway["protocol"] in ("http", "https"), f"Protocol should be http or https, got {gateway['protocol']}"
+    assert gateway["protocol"] in ("http", "https"), (
+        f"Protocol should be http or https, got {gateway['protocol']}"
+    )
 
     # Validate externalUrl format
-    assert gateway["externalUrl"].startswith(gateway["protocol"] + "://"), \
+    assert gateway["externalUrl"].startswith(gateway["protocol"] + "://"), (
         "externalUrl should start with protocol://"
+    )
 
     print(f"[tenant] Gateway: {gateway['name']} in {gateway['namespace']}")
     print(f"[tenant] External URL: {gateway['externalUrl']}")
-    print(f"[tenant] Test passed - tenant discovery working correctly")
+    print("[tenant] Test passed - tenant discovery working correctly")
 
 
-def test_tenant_discovery_gateway_matches_deployment(maas_api_internal_url: str, headers: dict, gateway_host: str):
+def test_tenant_discovery_openshift_route_fallback(
+    maas_api_internal_url: str, headers: dict, gateway_host: str
+):
+    """
+    Verify /v1/tenants resolves a cluster-local Gateway through its OpenShift Route.
+    """
+    if os.environ.get("INGRESS_MODE", "loadbalancer") != "ocproute":
+        pytest.skip(
+            "OpenShift Route fallback is exercised only in INGRESS_MODE=ocproute"
+        )
+
+    status_code, body = _kubectl_curl(
+        maas_api_internal_url + "/v1/tenants", headers=headers
+    )
+
+    assert status_code == 200, (
+        f"Expected 200 from tenant discovery, got {status_code}: {body[:400]}"
+    )
+
+    gateway = json.loads(body)["tenants"][0]["gateway"]
+    external_host = urlsplit(gateway["externalUrl"]).hostname
+
+    assert external_host == gateway_host, (
+        f"Expected OpenShift Route host {gateway_host!r}, got {external_host!r}"
+    )
+    assert gateway["protocol"] == "https"
+    assert gateway["port"] == 443
+    assert not external_host.endswith(".svc.cluster.local")
+
+
+def test_tenant_discovery_gateway_matches_deployment(
+    maas_api_internal_url: str, headers: dict, gateway_host: str
+):
     """
     Verify the gateway URL returned by /v1/tenants matches the actual gateway host
     being used by the E2E tests.
@@ -143,22 +171,10 @@ def test_tenant_discovery_gateway_matches_deployment(maas_api_internal_url: str,
     This is a regression test for the original problem: Dashboard assuming cluster domain
     instead of using the actual gateway hostname.
 
-    Note: This test is skipped when the Gateway is deployed with ClusterIP service
-    and OpenShift Route (ocproute mode). This configuration is not supported - it mixes incompatible
-    routing paradigms (OpenShift Routes with Gateway API). In this mode, the Gateway
-    has no external hostname configured in spec.listeners, so /v1/tenants returns an
-    error. The supported configuration is LoadBalancer service with hostname in spec.listeners.
+    In ocproute mode, the Gateway has no external hostname in spec.listeners; tenant
+    discovery must fall back to the admitted OpenShift Route that fronts the Gateway
+    Service.
     """
-    # Skip test when Gateway is deployed in unsupported ClusterIP + Route mode (ocproute)
-    ingress_mode = os.environ.get("INGRESS_MODE", "loadbalancer")
-    if ingress_mode == "ocproute":
-        pytest.skip(
-            "Skipping when Gateway uses ClusterIP + OpenShift Route (unsupported configuration). "
-            "This mixes incompatible routing paradigms. "
-            "Gateway has no external hostname in spec.listeners, so /v1/tenants returns an error. "
-            "Supported configuration: LoadBalancer service with hostname in spec.listeners."
-        )
-
     url = maas_api_internal_url + "/v1/tenants"
 
     status_code, body = _kubectl_curl(url, headers=headers)
@@ -176,13 +192,18 @@ def test_tenant_discovery_gateway_matches_deployment(maas_api_internal_url: str,
     log.info(f"[tenant] E2E gateway host: {gateway_host}")
 
     # Extract hostname from externalUrl and compare with gateway_host
-    assert gateway_host in external_url, \
+    assert gateway_host in external_url, (
         f"Gateway external URL '{external_url}' doesn't contain E2E gateway host '{gateway_host}'"
+    )
 
-    print(f"[tenant] Gateway host validation passed: {external_url} contains {gateway_host}")
+    print(
+        f"[tenant] Gateway host validation passed: {external_url} contains {gateway_host}"
+    )
 
 
-def test_tenant_discovery_not_exposed_through_gateway(gateway_host: str, is_https: bool, headers: dict):
+def test_tenant_discovery_not_exposed_through_gateway(
+    gateway_host: str, is_https: bool, headers: dict
+):
     """
     Verify /v1/tenants endpoint is NOT exposed through the Gateway.
 
@@ -204,9 +225,10 @@ def test_tenant_discovery_not_exposed_through_gateway(gateway_host: str, is_http
 
     # Should get 404 (not found) because the route doesn't exist in HTTPRoute
     # NOT 401/403 (which would mean it's routed but auth failed)
-    assert r.status_code == 404, \
-        f"Expected 404 (not routed), got {r.status_code}. " \
+    assert r.status_code == 404, (
+        f"Expected 404 (not routed), got {r.status_code}. "
         f"Endpoint may be exposed through Gateway! Response: {r.text[:200]}"
+    )
 
-    print(f"[tenant] ✓ /v1/tenants correctly returns 404 through Gateway (not exposed)")
-    print(f"[tenant] ✓ Endpoint is internal-only as designed")
+    print("[tenant] ✓ /v1/tenants correctly returns 404 through Gateway (not exposed)")
+    print("[tenant] ✓ Endpoint is internal-only as designed")
