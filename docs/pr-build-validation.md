@@ -142,11 +142,18 @@ and Istio. It then:
 1. waits for the controller to become Available, create `Config/default`, and
    prove zero restarts after bootstrap;
 2. creates a Gateway, its Service, a PostgreSQL instance, and `maas-db-config`;
-3. creates an AITenant-backed `MaasTenantConfig` whose gateway context is ready;
-4. asserts the rendered `maas-api-<tenant>` Deployment uses the PR-built
-   `maas-api` image from `RELATED_IMAGE_ODH_MAAS_API_IMAGE`, not `:latest`, and
-   proves the controller still has zero restarts; and
+3. waits for the controller's own default tenant, `MaasTenantConfig/default-tenant`,
+   to reconcile against that Gateway and database;
+4. asserts the rendered `maas-api` Deployment uses the PR-built `maas-api` image
+   from `RELATED_IMAGE_ODH_MAAS_API_IMAGE`, not `:latest`, and proves the
+   controller still has zero restarts; and
 5. waits for that Deployment and calls `/health` through a port-forward.
+
+The job drives the default tenant rather than creating a second one because the
+API enforces the singleton name `default-tenant`, and the AITenant admission
+webhook requires a dedicated Gateway per tenant. A hand-built tenant would need
+a second Gateway and its own AITenant to prove nothing more than the default
+tenant does about the image contract.
 
 Missing CRDs or missing controller permissions fail the job. There is no
 `continue-on-error` and no ignored resource list. If an upstream CRD release

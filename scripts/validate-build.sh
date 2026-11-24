@@ -286,8 +286,6 @@ run_kind() {
   local tenant_ns="models-as-a-service"
   local infra_ns="odh-ai-gateway-infra"
   local gateway_ns="openshift-ingress"
-  local tenant="ci-tenant"
-  local tenant_source="ci-source"
   KIND_WORK="$(mktemp -d)"
   trap 'rm -rf "$KIND_WORK"' EXIT
   log "Controller Kind integration on cluster $cluster"
@@ -468,12 +466,9 @@ YAML
   kubectl -n "$infra_ns" create secret generic maas-db-config \
     --from-literal=DB_CONNECTION_URL="postgresql://maas:maas@postgres.$infra_ns.svc.cluster.local:5432/maas?sslmode=disable" \
     --dry-run=client -o yaml | kubectl apply -f - >/dev/null
-  kubectl -n "$tenant_ns" create secret generic maas-db-config \
-    --from-literal=DB_CONNECTION_URL="postgresql://maas:maas@postgres.$infra_ns.svc.cluster.local:5432/maas?sslmode=disable" \
-    --dry-run=client -o yaml | kubectl apply -f - >/dev/null
 
   log "Create test-only TLS material normally supplied by OpenShift service-ca"
-  kubectl -n "$infra_ns" create secret tls "maas-api-$tenant-serving-cert" \
+  kubectl -n "$infra_ns" create secret tls maas-api-serving-cert \
     --cert="$KIND_WORK/tls.crt" --key="$KIND_WORK/tls.key" --dry-run=client -o yaml \
     | kubectl apply -f - >/dev/null
   kubectl -n "$infra_ns" create secret tls maas-api-metrics-tls \
@@ -483,7 +478,7 @@ YAML
     --from-file=service-ca.crt="$KIND_WORK/tls.crt" --dry-run=client -o yaml \
     | kubectl apply -f - >/dev/null
 
-  log "Create the Gateway and its Service, then the AITenant-backed tenant config"
+  log "Create the Gateway and its Service, then wait for the default tenant render"
   kubectl -n "$gateway_ns" apply -f - >/dev/null <<'YAML'
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
@@ -522,34 +517,23 @@ doc = {
 yaml.safe_dump(doc, open(sys.argv[1], "w", encoding="utf-8"))
 PY
   kubectl apply -f "$KIND_WORK/gateway-service.yaml" >/dev/null
-  kubectl -n ai-tenants apply -f - >/dev/null <<YAML
-apiVersion: maas.opendatahub.io/v1alpha1
-kind: AITenant
-metadata:
-  name: $tenant_source
-spec:
-  gateway:
-    name: maas-default-gateway
-YAML
-  kubectl -n ai-tenants patch aitenant "$tenant_source" --subresource=status --type=merge \
-    -p '{"status":{"gatewayRef":{"name":"maas-default-gateway","namespace":"openshift-ingress"}}}' >/dev/null
-  kubectl -n "$tenant_ns" apply -f - >/dev/null <<YAML
-apiVersion: maas.opendatahub.io/v1alpha1
-kind: MaasTenantConfig
-metadata:
-  name: $tenant
-  labels:
-    maas.opendatahub.io/managed-by-aitenant: "true"
-    maas.opendatahub.io/tenant-name: $tenant
-  annotations:
-    maas.opendatahub.io/aitenant-name: $tenant_source
-    maas.opendatahub.io/aitenant-namespace: ai-tenants
-spec: {}
-YAML
 
-  log "Assert the tenant render uses the PR-built maas-api image"
+  log "Wait for the bootstrap default tenant config"
+  for _ in $(seq 1 60); do
+    if kubectl -n "$tenant_ns" get maastenantconfigs.maas.opendatahub.io default-tenant >/dev/null 2>&1; then
+      break
+    fi
+    sleep 2
+  done
+  if ! kubectl -n "$tenant_ns" get maastenantconfigs.maas.opendatahub.io default-tenant >/dev/null 2>&1; then
+    dump_controller_state
+    echo "controller did not bootstrap MaasTenantConfig/default-tenant" >&2
+    return 1
+  fi
+
+  log "Assert the default tenant render uses the PR-built maas-api image"
   for _ in $(seq 1 90); do
-    rendered_image="$(kubectl -n "$infra_ns" get deployment "maas-api-$tenant" -o jsonpath='{.spec.template.spec.containers[?(@.name=="maas-api")].image}' 2>/dev/null || true)"
+    rendered_image="$(kubectl -n "$infra_ns" get deployment maas-api -o jsonpath='{.spec.template.spec.containers[?(@.name=="maas-api")].image}' 2>/dev/null || true)"
     if [[ "$rendered_image" == "$maas_api_image" ]]; then
       break
     fi
@@ -559,8 +543,8 @@ YAML
     echo "tenant did not render the PR maas-api image" >&2
     echo "expected: $maas_api_image" >&2
     echo "actual:   ${rendered_image:-<deployment not found>}" >&2
-    kubectl -n "$tenant_ns" get maastenantconfigs.maas.opendatahub.io "$tenant" -o yaml >&2 || true
-    kubectl -n "$infra_ns" describe deployment "maas-api-$tenant" >&2 || true
+    kubectl -n "$tenant_ns" get maastenantconfigs.maas.opendatahub.io default-tenant -o yaml >&2 || true
+    kubectl -n "$infra_ns" describe deployment maas-api >&2 || true
     dump_controller_state
     return 1
   fi
@@ -572,8 +556,8 @@ YAML
   assert_controller_stable "after Tenant reconciliation"
 
   log "Assert maas-api starts and serves its health endpoint"
-  kubectl -n "$infra_ns" rollout status deployment/"maas-api-$tenant" --timeout=240s
-  kubectl -n "$infra_ns" port-forward svc/"maas-api-$tenant" 18444:8443 >"$KIND_WORK/port-forward.log" 2>&1 &
+  kubectl -n "$infra_ns" rollout status deployment/maas-api --timeout=240s
+  kubectl -n "$infra_ns" port-forward svc/maas-api 18444:8443 >"$KIND_WORK/port-forward.log" 2>&1 &
   local forward_pid=$!
   trap 'kill "$forward_pid" 2>/dev/null || true; rm -rf "$KIND_WORK"' EXIT
   for _ in $(seq 1 45); do
@@ -586,7 +570,7 @@ YAML
     sleep 1
   done
   cat "$KIND_WORK/port-forward.log" >&2 || true
-  kubectl -n "$infra_ns" logs deployment/"maas-api-$tenant" --tail=200 >&2 || true
+  kubectl -n "$infra_ns" logs deployment/maas-api --tail=200 >&2 || true
   echo "maas-api did not become healthy" >&2
   return 1
 }
