@@ -671,6 +671,9 @@ func (s *PostgresStore) GetByHash(ctx context.Context, keyHash string) (*ApiKey,
 		if lastUsedAt.Valid {
 			k.LastUsedAt = lastUsedAt.Time.UTC().Format(time.RFC3339)
 		}
+		if expiresAt.Valid {
+			k.ExpirationDate = expiresAt.Time.UTC().Format(time.RFC3339)
+		}
 
 		// Check expiration and auto-update status if expired
 		if expiresAt.Valid && time.Now().UTC().After(expiresAt.Time) {

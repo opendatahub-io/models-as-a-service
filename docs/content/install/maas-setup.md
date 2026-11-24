@@ -434,7 +434,7 @@ MaaS operand NetworkPolicies follow [ODH-ADR-Operator-0016](https://github.com/o
 | `maas-api-egress-restrict` | `maas-api` | Egress | OpenShift CoreDNS; Kubernetes API; allow-all by default (overridable or opt-out via `maasconfig/default`; see [PostgreSQL egress](#postgresql-egress)) |
 | `usage-logs-collector-egress-restrict` | usage-logs collector | Egress | CoreDNS; LokiStack gateway pods (`app.kubernetes.io/name=lokistack`, `app.kubernetes.io/instance=usage`, `app.kubernetes.io/component=lokistack-gateway`) → `:8080` |
 | `usage-tenancy-proxy-allow-perses` | tenancy proxy | Ingress | Perses pods and kubelet probes (`host-network`) → `:8443` |
-| `usage-tenancy-proxy-egress-restrict` | tenancy proxy | Egress | CoreDNS; Kubernetes API; LokiStack gateway pods (`app.kubernetes.io/name=lokistack`, `app.kubernetes.io/component=lokistack-gateway`, `app.kubernetes.io/instance=data-science-lokistack`; `usage` when `usageLogging` is true) → `:8080` |
+| `usage-tenancy-proxy-egress-restrict` | tenancy proxy | Egress | CoreDNS; Kubernetes API; LokiStack gateway pods (`app.kubernetes.io/name=lokistack`, `app.kubernetes.io/component=lokistack-gateway`, `app.kubernetes.io/instance=data-science-usage-logs-lokistack`; `usage` when `usageLogging` is true) → `:8080` |
 
 ### PostgreSQL egress
 

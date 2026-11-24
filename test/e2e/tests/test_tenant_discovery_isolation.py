@@ -11,12 +11,15 @@ These tests use kubectl exec with curl to access internal Service URLs.
 
 import json
 import logging
-import os
 
 import pytest
 
 from conftest import TLS_VERIFY  # noqa: F401 - used by conftest integration
-from test_helper import MAAS_API_DEPLOYMENT_NAMESPACE, _get_cluster_token, kubectl_curl as _kubectl_curl
+from test_helper import (
+    MAAS_API_DEPLOYMENT_NAMESPACE,
+    _get_cluster_token,
+    kubectl_curl as _kubectl_curl,
+)
 
 log = logging.getLogger(__name__)
 
@@ -87,16 +90,6 @@ def test_tenant_discovery_same_tenant_access(tenant_service_urls, tenant_tokens)
 
     This is the positive case - tenant A's token should work for tenant A's endpoint.
     """
-    # Skip test when Gateway is deployed in unsupported ClusterIP + Route mode (ocproute)
-    ingress_mode = os.environ.get("INGRESS_MODE", "loadbalancer")
-    if ingress_mode == "ocproute":
-        pytest.skip(
-            "Skipping when Gateway uses ClusterIP + OpenShift Route (unsupported configuration). "
-            "This mixes incompatible routing paradigms. "
-            "Gateway has no external hostname in spec.listeners, so /v1/tenants returns an error. "
-            "Supported configuration: LoadBalancer service with hostname in spec.listeners."
-        )
-
     for tenant_key in ["tenant_a", "tenant_b"]:
         tenant = tenant_service_urls[tenant_key]
         token = tenant_tokens["cluster"]  # Using cluster token (has access)
@@ -109,15 +102,21 @@ def test_tenant_discovery_same_tenant_access(tenant_service_urls, tenant_tokens)
         status_code, body = _kubectl_curl(url, headers=headers)
 
         # Should succeed (200) with system:authenticated authorization
-        assert status_code == 200, \
+        assert status_code == 200, (
             f"{tenant['name']} should access endpoint with system:authenticated, got {status_code}: {body[:400]}"
+        )
 
         data = json.loads(body)
-        assert "tenants" in data and len(data["tenants"]) == 1, "Should return single tenant in array"
+        assert "tenants" in data and len(data["tenants"]) == 1, (
+            "Should return single tenant in array"
+        )
         tenant_data = data["tenants"][0]
-        assert tenant_data["name"] == tenant["aitenant_name"], \
+        assert tenant_data["name"] == tenant["aitenant_name"], (
             f"Expected tenant name {tenant['aitenant_name']}, got {tenant_data['name']}"
-        print(f"[isolation] ✓ {tenant['name']} can access /v1/tenants endpoint (system:authenticated)")
+        )
+        print(
+            f"[isolation] ✓ {tenant['name']} can access /v1/tenants endpoint (system:authenticated)"
+        )
 
 
 def test_tenant_discovery_cross_tenant_isolation(tenant_service_urls, tenant_tokens):
@@ -135,16 +134,6 @@ def test_tenant_discovery_cross_tenant_isolation(tenant_service_urls, tenant_tok
     different data (proving each instance is correctly configured and not
     leaking data from other tenants).
     """
-    # Skip test when Gateway is deployed in unsupported ClusterIP + Route mode (ocproute)
-    ingress_mode = os.environ.get("INGRESS_MODE", "loadbalancer")
-    if ingress_mode == "ocproute":
-        pytest.skip(
-            "Skipping when Gateway uses ClusterIP + OpenShift Route (unsupported configuration). "
-            "This mixes incompatible routing paradigms. "
-            "Gateway has no external hostname in spec.listeners, so /v1/tenants returns an error. "
-            "Supported configuration: LoadBalancer service with hostname in spec.listeners."
-        )
-
     tenant_a = tenant_service_urls["tenant_a"]
     tenant_b = tenant_service_urls["tenant_b"]
     cluster_token = tenant_tokens["cluster"]
@@ -155,7 +144,9 @@ def test_tenant_discovery_cross_tenant_isolation(tenant_service_urls, tenant_tok
 
     status_a, body_a = _kubectl_curl(url_a, headers=headers)
 
-    assert status_a == 200, f"Tenant A endpoint should return 200 (system:authenticated), got {status_a}"
+    assert status_a == 200, (
+        f"Tenant A endpoint should return 200 (system:authenticated), got {status_a}"
+    )
     data_a = json.loads(body_a)
     tenant_a_data = data_a["tenants"][0]
 
@@ -164,31 +155,43 @@ def test_tenant_discovery_cross_tenant_isolation(tenant_service_urls, tenant_tok
 
     status_b, body_b = _kubectl_curl(url_b, headers=headers)
 
-    assert status_b == 200, f"Tenant B endpoint should return 200 (system:authenticated), got {status_b}"
+    assert status_b == 200, (
+        f"Tenant B endpoint should return 200 (system:authenticated), got {status_b}"
+    )
     data_b = json.loads(body_b)
     tenant_b_data = data_b["tenants"][0]
 
     # Critical: Verify no data leakage
     # Each endpoint should return its OWN tenant data, not the other's
-    assert tenant_a_data["name"] == tenant_a["aitenant_name"], \
+    assert tenant_a_data["name"] == tenant_a["aitenant_name"], (
         f"Tenant A endpoint should return tenant A data, got {tenant_a_data['name']}"
+    )
 
-    assert tenant_b_data["name"] == tenant_b["aitenant_name"], \
+    assert tenant_b_data["name"] == tenant_b["aitenant_name"], (
         f"Tenant B endpoint should return tenant B data, got {tenant_b_data['name']}"
+    )
 
-    assert tenant_a_data["name"] != tenant_b_data["name"], \
+    assert tenant_a_data["name"] != tenant_b_data["name"], (
         "Tenant A and B should return different tenant names"
+    )
 
     # Verify gateway isolation
-    assert tenant_a_data["gateway"]["name"] != tenant_b_data["gateway"]["name"], \
+    assert tenant_a_data["gateway"]["name"] != tenant_b_data["gateway"]["name"], (
         "Each tenant should have its own gateway"
+    )
 
-    assert tenant_a_data["gateway"]["externalUrl"] != tenant_b_data["gateway"]["externalUrl"], \
-        "Each tenant should have its own gateway URL"
+    assert (
+        tenant_a_data["gateway"]["externalUrl"]
+        != tenant_b_data["gateway"]["externalUrl"]
+    ), "Each tenant should have its own gateway URL"
 
-    print(f"[isolation] ✓ Tenant A: {tenant_a_data['name']} / Gateway: {tenant_a_data['gateway']['name']}")
-    print(f"[isolation] ✓ Tenant B: {tenant_b_data['name']} / Gateway: {tenant_b_data['gateway']['name']}")
-    print(f"[isolation] ✓ No data leakage - each tenant returns own data")
+    print(
+        f"[isolation] ✓ Tenant A: {tenant_a_data['name']} / Gateway: {tenant_a_data['gateway']['name']}"
+    )
+    print(
+        f"[isolation] ✓ Tenant B: {tenant_b_data['name']} / Gateway: {tenant_b_data['gateway']['name']}"
+    )
+    print("[isolation] ✓ No data leakage - each tenant returns own data")
 
 
 def test_tenant_discovery_unauthorized_access(tenant_service_urls):
@@ -203,35 +206,29 @@ def test_tenant_discovery_unauthorized_access(tenant_service_urls):
 
         # Test 1: No auth header
         status_code, _ = _kubectl_curl(url)
-        assert status_code == 401, \
+        assert status_code == 401, (
             f"{tenant['name']} should reject no-auth request with 401, got {status_code}"
+        )
 
         # Test 2: Invalid token
         headers = {"Authorization": "Bearer invalid-token-12345"}
         status_code, _ = _kubectl_curl(url, headers=headers)
-        assert status_code == 401, \
+        assert status_code == 401, (
             f"{tenant['name']} should reject invalid token with 401, got {status_code}"
+        )
 
     print("[isolation] ✓ Both tenants properly reject unauthorized access")
 
 
-def test_tenant_discovery_each_tenant_returns_own_gateway(tenant_service_urls, tenant_tokens):
+def test_tenant_discovery_each_tenant_returns_own_gateway(
+    tenant_service_urls, tenant_tokens
+):
     """
     Verify each tenant's endpoint returns metadata for its own configured gateway.
 
     This validates that the implementation uses instance configuration (GATEWAY_NAME env var)
     rather than hardcoding a specific gateway name.
     """
-    # Skip test when Gateway is deployed in unsupported ClusterIP + Route mode (ocproute)
-    ingress_mode = os.environ.get("INGRESS_MODE", "loadbalancer")
-    if ingress_mode == "ocproute":
-        pytest.skip(
-            "Skipping when Gateway uses ClusterIP + OpenShift Route (unsupported configuration). "
-            "This mixes incompatible routing paradigms. "
-            "Gateway has no external hostname in spec.listeners, so /v1/tenants returns an error. "
-            "Supported configuration: LoadBalancer service with hostname in spec.listeners."
-        )
-
     cluster_token = tenant_tokens["cluster"]
 
     for tenant_key in ["tenant_a", "tenant_b"]:
@@ -242,8 +239,9 @@ def test_tenant_discovery_each_tenant_returns_own_gateway(tenant_service_urls, t
         status_code, body = _kubectl_curl(url, headers=headers)
 
         # With system:authenticated authorization, 403 indicates auth/RBAC regression
-        assert status_code == 200, \
+        assert status_code == 200, (
             f"Expected 200 (system:authenticated), got {status_code}: {body[:400]}"
+        )
 
         data = json.loads(body)
         tenant_data = data["tenants"][0]
@@ -254,7 +252,8 @@ def test_tenant_discovery_each_tenant_returns_own_gateway(tenant_service_urls, t
 
         # Each tenant's gateway name should contain their tenant name or suffix
         # to prove it's NOT using a hardcoded default
-        assert tenant["name"] in gateway_name or "default" not in gateway_name, \
+        assert tenant["name"] in gateway_name or "default" not in gateway_name, (
             f"Gateway name '{gateway_name}' should be tenant-specific, not default"
+        )
 
         print(f"[isolation] ✓ {tenant['name']} returns own gateway: {gateway_name}")
