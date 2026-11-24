@@ -110,6 +110,9 @@ func NewHandler(log *logger.Logger, endpoint, token, caPEM string, adminChecker 
 	if upstream.Scheme == "http" && upstreamToken != "" {
 		return nil, errors.New("invalid Loki read endpoint: HTTP cannot be used with an upstream bearer token")
 	}
+	if upstream.Scheme == "http" {
+		log.Warn("Loki read endpoint uses plaintext HTTP; use only a trusted development or test network")
+	}
 
 	client := &http.Client{Timeout: proxyTimeout}
 	if ca := strings.TrimSpace(caPEM); ca != "" {

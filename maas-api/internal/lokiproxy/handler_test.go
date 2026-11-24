@@ -756,6 +756,23 @@ func TestNewHandlerRejectsHTTPWithBearerToken(t *testing.T) {
 	require.Contains(t, err.Error(), "HTTP cannot be used with an upstream bearer token")
 }
 
+func TestNewHandlerWarnsAboutPlaintextHTTP(t *testing.T) {
+	reader, writer, err := os.Pipe()
+	require.NoError(t, err)
+
+	originalStdout := os.Stdout
+	os.Stdout = writer
+	log := logger.Production()
+	_, err = lokiproxy.NewHandler(log, "http://loki.example", "", "", nil)
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+	os.Stdout = originalStdout
+
+	output, readErr := io.ReadAll(reader)
+	require.NoError(t, readErr)
+	require.Contains(t, string(output), "Loki read endpoint uses plaintext HTTP")
+}
+
 func TestProxyCanDisableScopeOrgIDForCustomUpstream(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

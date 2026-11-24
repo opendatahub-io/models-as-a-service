@@ -609,12 +609,7 @@ def test_perses_datasources_use_maas_api_when_installed():
     )
     expected = {
         "usage-logs-multi-tenancy": f"{maas_api_url}?only_user=true",
-        "usage-logs-all": (
-            f"https://{LEGACY_LOKI_SERVICE}.{namespace}.svc.cluster.local:8080"
-            "/api/logs/v1/application"
-            if _usage_logging_enabled()
-            else maas_api_url
-        ),
+        "usage-logs-all": maas_api_url,
     }
     for name, url in expected.items():
         datasource = _perses_datasource(name, namespace)

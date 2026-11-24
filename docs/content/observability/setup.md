@@ -111,6 +111,8 @@ When tenant telemetry is enabled and `usageLogging` is `false` or omitted, `Maas
 - **Perses Dashboard** (`dashboard-4-maas-usage-logs-admin`) - usage dashboard for administrators (shows information on all users)
 - **Perses Dashboard** (`dashboard-5-maas-usage-logs`) - user-scoped usage dashboard
 
+To override the proxy's upstream, create a `usage-logs-loki` Secret in the maas-api namespace with `LOKI_READ_ENDPOINT`, and optionally `LOKI_READ_TOKEN` or `LOKI_READ_CA`. Use HTTPS in production. An HTTP endpoint is accepted only without a bearer token and is intended solely for trusted development or test networks.
+
 !!! warning "Privacy"
     Structured access logs record request attributes.
     User identity (`user_id`) is included only when `MaasTenantConfig.spec.telemetry.logs.captureUser` is `true`.
