@@ -302,10 +302,14 @@ func MaaSAPIRouteName(tenantID string) string {
 }
 
 func MaaSAPIKeyCleanupCronJobName(tenantID string) string {
-	if tenantID == "" {
-		return baseMaaSAPIKeyCleanupCronJobName
+	name := resourceNameForTenant(baseMaaSAPIKeyCleanupCronJobName, tenantID)
+	if len(name) <= maxCronJobNameLength {
+		return name
 	}
-	return BoundedName(baseMaaSAPIKeyCleanupCronJobName+"-", tenantID, "", maxCronJobNameLength)
+	// AITenant names cannot start with a "-". Using a double minus ("--")
+	// prevents name collisions between resourceNameForTenant() (invoked above)
+	// and BoundedName().
+	return BoundedName(baseMaaSAPIKeyCleanupCronJobName+"--", tenantID, "", maxCronJobNameLength)
 }
 
 func GatewayDestinationRuleName(tenantID string) string {
