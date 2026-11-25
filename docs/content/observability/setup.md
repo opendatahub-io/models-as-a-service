@@ -154,7 +154,7 @@ On a cluster with a local LokiStack, the Secret alone does not make the maas-api
         namespace: <loki-reader-service-account-namespace>
     ```
 
-3. Verify network access from maas-api to the LokiStack gateway. The controller applies `usage-logs-lokistack-allow-maas-api` for the default `redhat-ai-gateway-infra` maas-api namespace. If maas-api runs in another namespace, create a separately named NetworkPolicy for that namespace instead of editing the controller-managed policy; Kubernetes combines applicable ingress rules.
+3. Verify network access from maas-api to the LokiStack gateway. The controller applies `usage-logs-lokistack-allow-maas-api` for the default `redhat-ai-gateway-infra` maas-api namespace. If maas-api runs in another namespace, create a separately named NetworkPolicy in the LokiStack gateway's namespace, selecting the gateway pods and allowing the custom maas-api namespace. Do not edit the controller-managed policy; Kubernetes combines applicable ingress rules.
 
 !!! warning "Privacy"
     Structured access logs record request attributes.

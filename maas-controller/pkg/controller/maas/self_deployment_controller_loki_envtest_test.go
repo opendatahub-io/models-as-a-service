@@ -14,6 +14,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	k8sruntime "k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/utils/ptr"
@@ -149,6 +150,7 @@ func TestLifecycleReconciler_PortalCopyReplacementEnvtest(t *testing.T) {
 		"stale SSA should be rejected: %v", err)
 	g.Expect(applyClient.appliedResourceVersion).To(Equal(applyClient.observedResourceVersion))
 	g.Expect(applyClient.appliedResourceVersion).NotTo(BeEmpty())
+	g.Expect(applyClient.appliedUID).To(Equal(applyClient.observedUID))
 
 	reconciler.Client = cl
 	g.Expect(reconciler.ensureUsageLogs(ctx, ctrl.Log)).To(Succeed())
@@ -222,6 +224,8 @@ type replaceOnApplyClient struct {
 	replaced                bool
 	appliedResourceVersion  string
 	observedResourceVersion string
+	observedUID             types.UID
+	appliedUID              types.UID
 }
 
 func (c *replaceOnApplyClient) Apply(ctx context.Context, config k8sruntime.ApplyConfiguration, opts ...client.ApplyOption) error {
@@ -237,16 +241,16 @@ func (c *replaceOnApplyClient) Apply(ctx context.Context, config k8sruntime.Appl
 			return err
 		}
 		c.observedResourceVersion = existing.GetResourceVersion()
+		c.observedUID = existing.GetUID()
 		c.appliedResourceVersion = obj.GetResourceVersion()
-		if err := c.Delete(ctx, existing); err != nil {
-			return err
-		}
+		c.appliedUID = obj.GetUID()
 
-		foreign := &unstructured.Unstructured{Object: map[string]any{"spec": map[string]any{"foreign": true}}}
-		foreign.SetGroupVersionKind(obj.GetObjectKind().GroupVersionKind())
-		foreign.SetName(obj.GetName())
-		foreign.SetNamespace(obj.GetNamespace())
-		if err := c.Create(ctx, foreign); err != nil {
+		existing.Object["spec"] = map[string]any{"foreign": true}
+		existing.SetOwnerReferences(nil)
+		labels := existing.GetLabels()
+		delete(labels, "app.kubernetes.io/managed-by")
+		existing.SetLabels(labels)
+		if err := c.Update(ctx, existing); err != nil {
 			return err
 		}
 	}
