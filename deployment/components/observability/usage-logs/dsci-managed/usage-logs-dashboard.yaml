@@ -635,6 +635,10 @@ spec:
           spec:
             secret: usage-logs-multi-tenancy-secret
             url: https://maas-api.redhat-ai-gateway-infra.svc.cluster.local:8443/v1/logs?only_user=true
+            # Perses is a trusted proxy: it forwards the gateway-overwritten
+            # X-MaaS-Identity but drops client-controlled legacy identity
+            # headers. A compromised Perses workload can forge the envelope and
+            # read usage logs; NetworkPolicy must not admit untrusted proxies.
             dropHeaders:
               - X-MaaS-Username
               - X-MaaS-Group
