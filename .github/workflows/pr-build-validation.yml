@@ -267,7 +267,7 @@ jobs:
 
   controller-kind:
     name: Controller integration (Kind)
-    needs: [check-skip, maas-controller-image, maas-api-image]
+    needs: [check-skip, manifest-contracts, maas-controller-image, maas-api-image]
     if: needs.check-skip.result == 'success' && needs.check-skip.outputs.should-skip != 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 40
@@ -366,6 +366,7 @@ jobs:
               "manifest-contracts": ("check-skip",),
               "controller-kind": (
                   "check-skip",
+                  "manifest-contracts",
                   "maas-controller-image",
                   "maas-api-image",
               ),

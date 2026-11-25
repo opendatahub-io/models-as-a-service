@@ -79,10 +79,16 @@ For each render:
   paths, configurations, CRDs, transformers, OpenAPI, and Helm values/chart
   paths. Symlink escapes outside the checkout are rejected. A containment error
   aborts the job before any Kustomize invocation and writes no render output.
+- Remote Kustomize content is never fetched. If a root or any local
+  resource/component/base in its transitive local graph references remote
+  content, the root is skipped with the consuming-operator warning; that
+  dependency must be asserted upstream.
 - Each entry point renders from an isolated temporary copy of `deployment/` and
   `maas-api/deploy/` with `--load-restrictor LoadRestrictionsRootOnly`, so the
-  renderer cannot read host files. The pre-existing `vars` deprecation warning
-  from the controller xks overlay is reported as a warning.
+  renderer cannot read host files. Staging resolves and validates every source
+  before reading it, including entries reached through directory symlinks, and
+  rejects directory cycles. The pre-existing `vars` deprecation warning from the
+  controller xks overlay is reported as a warning.
 - `kubeconform -strict -ignore-missing-schemas -verbose` must pass. The JSON
   report is then checked against an explicit built-in API-group allow-list; a
   `Deploymnet` typo cannot hide as "schema not found", and Gateway API is not

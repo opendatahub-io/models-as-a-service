@@ -16,6 +16,7 @@ import os
 import re
 import shlex
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -807,6 +808,10 @@ def is_remote_ref(ref: str) -> bool:
     )
 
 
+def is_inline_kustomize_yaml(ref: str) -> bool:
+    return "\n" in ref
+
+
 def check_local_ref(
     kustomization: Path,
     relative: Path,
@@ -836,6 +841,37 @@ def child_kustomization(target: Path) -> Path | None:
         if candidate.is_file():
             return candidate
     return None
+
+
+def transitive_remote_refs(kustomization: Path) -> list[str]:
+    remote_refs: list[str] = []
+    queue = [kustomization]
+    seen: set[Path] = set()
+    while queue:
+        path = queue.pop()
+        resolved = path.resolve()
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        docs = read_yaml(path)
+        if not docs:
+            continue
+        doc = docs[0]
+        for field in ("resources", "components", "bases"):
+            for ref in doc.get(field, []) or []:
+                if not isinstance(ref, str):
+                    continue
+                if is_remote_ref(ref):
+                    if ref not in remote_refs:
+                        remote_refs.append(ref)
+                    continue
+                target = (path.parent / ref).resolve()
+                if resolve_inside_root(target) is None or not target.exists():
+                    continue
+                child = child_kustomization(target)
+                if child:
+                    queue.append(child)
+    return sorted(remote_refs)
 
 
 def check_kustomization_refs(files: list[Path]) -> None:
@@ -895,10 +931,18 @@ def check_kustomization_refs(files: list[Path]) -> None:
                 if isinstance(ref, dict) and isinstance(ref.get("path"), str):
                     check_local_ref(path, relative, f"{field} path", ref["path"])
 
-        for field in ("configurations", "crds", "generators", "transformers"):
+        for field in ("configurations", "crds"):
             for ref in doc.get(field, []) or []:
                 if isinstance(ref, str) and not is_remote_ref(ref):
                     check_local_ref(path, relative, f"{field} entry", ref)
+
+        for field in ("generators", "transformers"):
+            for ref in doc.get(field, []) or []:
+                if not isinstance(ref, str) or is_remote_ref(ref):
+                    continue
+                if is_inline_kustomize_yaml(ref):
+                    continue
+                check_local_ref(path, relative, f"{field} entry", ref)
 
         openapi = doc.get("openapi")
         if isinstance(openapi, dict) and isinstance(openapi.get("path"), str):
@@ -934,11 +978,85 @@ def check_kustomization_refs(files: list[Path]) -> None:
             )
 
 
-def check_render_tree_symlinks() -> None:
+def display_path(path: Path) -> Path:
+    try:
+        return path.relative_to(ROOT)
+    except ValueError:
+        return path
+
+
+def walk_render_tree(
+    source: Path,
+    destination: Path | None,
+    active_dirs: set[tuple[int, int]],
+) -> None:
+    label = display_path(source)
+    try:
+        resolved = source.resolve()
+    except (OSError, RuntimeError) as exc:
+        fail(f"{label}: cannot resolve source: {exc}")
+        return
+    if resolve_inside_root(resolved) is None:
+        fail(f"{label}: source resolves outside the repository")
+        return
+    try:
+        source_stat = resolved.stat()
+    except OSError as exc:
+        fail(f"{label}: cannot stat source: {exc}")
+        return
+    if not stat.S_ISDIR(source_stat.st_mode):
+        fail(f"{label}: render tree entry is not a directory")
+        return
+    identity = (source_stat.st_dev, source_stat.st_ino)
+    if identity in active_dirs:
+        fail(f"{label}: directory symlink cycle detected")
+        return
+    active_dirs.add(identity)
+    try:
+        if destination is not None:
+            destination.mkdir(parents=True, exist_ok=True)
+        try:
+            entries = sorted(resolved.iterdir(), key=lambda entry: entry.name)
+        except OSError as exc:
+            fail(f"{label}: cannot list source directory: {exc}")
+            return
+        for entry in entries:
+            entry_label = display_path(entry)
+            try:
+                target = entry.resolve()
+            except (OSError, RuntimeError) as exc:
+                fail(f"{entry_label}: cannot resolve source: {exc}")
+                continue
+            if resolve_inside_root(target) is None:
+                fail(f"{entry_label}: source resolves outside the repository")
+                continue
+            try:
+                entry_stat = target.stat()
+            except OSError as exc:
+                fail(f"{entry_label}: cannot stat source: {exc}")
+                continue
+            if stat.S_ISDIR(entry_stat.st_mode):
+                walk_render_tree(
+                    entry,
+                    destination / entry.name if destination is not None else None,
+                    active_dirs,
+                )
+            elif stat.S_ISREG(entry_stat.st_mode):
+                if destination is None:
+                    continue
+                try:
+                    shutil.copy2(target, destination / entry.name)
+                except OSError as exc:
+                    fail(f"{entry_label}: cannot copy source: {exc}")
+            else:
+                fail(f"{entry_label}: unsupported file type in render tree")
+    finally:
+        active_dirs.remove(identity)
+
+
+def check_render_tree_sources() -> None:
     for tree in RENDER_TREES:
-        for path in (ROOT / tree).rglob("*"):
-            if path.is_symlink() and resolve_inside_root(path.resolve()) is None:
-                fail(f"{path.relative_to(ROOT)}: symlink resolves outside the repository")
+        walk_render_tree(ROOT / tree, None, set())
 
 
 def render_all(
@@ -946,7 +1064,7 @@ def render_all(
 ) -> tuple[dict[str, list[dict[str, Any]]], list[tuple[str, Path]]]:
     command = kustomize_command()
     files = kustomization_files()
-    check_render_tree_symlinks()
+    check_render_tree_sources()
     check_kustomization_refs(files)
     if ERRORS:
         print("Aborting before any kustomize invocation; no render output was written.")
@@ -961,12 +1079,7 @@ def render_all(
                 continue
             if docs[0].get("kind") == "Component":
                 continue
-            remote_refs = [
-                ref
-                for field in ("resources", "components")
-                for ref in docs[0].get(field, []) or []
-                if isinstance(ref, str) and is_remote_ref(ref)
-            ]
+            remote_refs = transitive_remote_refs(path)
             if remote_refs:
                 warn(
                     f"{path.parent.relative_to(ROOT)}: skipped render because it references external kustomize "
@@ -976,10 +1089,12 @@ def render_all(
             relative = path.parent.relative_to(ROOT).as_posix()
             sandbox = temp_root / f"{index:04d}"
             sandbox.mkdir()
+            stage_errors = len(ERRORS)
             for tree in RENDER_TREES:
                 destination = sandbox / tree
-                destination.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copytree(ROOT / tree, destination, symlinks=False)
+                walk_render_tree(ROOT / tree, destination, set())
+            if len(ERRORS) > stage_errors:
+                return rendered, render_outputs
             (sandbox / "kustomization.yaml").write_text(
                 yaml.safe_dump({"resources": [relative]}, sort_keys=False),
                 encoding="utf-8",
