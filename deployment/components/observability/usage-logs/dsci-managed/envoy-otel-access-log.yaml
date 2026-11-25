@@ -7,6 +7,9 @@
 #            X-MaaS-Cost-Center (still present on Limitador 429 local
 #            replies) or from header_to_metadata captured before
 #            payload-processing ext_proc strips the headers.
+#            key_id uses post-auth metadata from X-MaaS-Key-Id. On an early
+#            Limitador 429, it reads the request header only when a pre-auth
+#            filter recorded that the client did not supply that header.
 #            user_id (X-MaaS-Username) is NOT captured by default; it is
 #            injected at runtime by the tenant reconciler when
 #            MaasTenantConfig.spec.telemetry.logs.captureUser is true.
@@ -100,10 +103,63 @@ spec:
                     address: data-science-usage-logs-collector-headless.opendatahub.svc.cluster.local
                     port_value: 4317
 
+  # ── API key header provenance: header_to_metadata ─────────────────────────
+  #
+  # Kuadrant's WASM filter runs auth and rate limiting in one filter. A
+  # Limitador 429 skips the post-auth header_to_metadata filter below, but the
+  # AuthPolicy-injected X-MaaS-Key-Id is still in request headers. Record its
+  # absence BEFORE WASM so the access log can distinguish that trusted header
+  # from a client-supplied value. AuthPolicy also rejects client-supplied
+  # X-MaaS-Key-Id; this marker protects attribution even on rejected requests.
+  # Use a separate namespace so the post-auth filter cannot replace the marker.
+  - applyTo: HTTP_FILTER
+    match:
+      context: GATEWAY
+      listener:
+        filterChain:
+          filter:
+            name: envoy.filters.network.http_connection_manager
+            subFilter:
+              name: envoy.filters.http.wasm
+    patch:
+      operation: INSERT_BEFORE
+      value:
+        name: envoy.filters.http.header_to_metadata.key_id_provenance
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.filters.http.header_to_metadata.v3.Config
+          request_rules:
+          - header: X-MaaS-Key-Id
+            on_header_missing:
+              metadata_namespace: maas.usage_logs
+              key: key_id_header_absent
+              value: "true"
+  # ODH/community Kuadrant uses a WasmPlugin rather than envoy.filters.http.wasm.
+  - applyTo: HTTP_FILTER
+    match:
+      context: GATEWAY
+      listener:
+        filterChain:
+          filter:
+            name: envoy.filters.network.http_connection_manager
+            subFilter:
+              name: extensions.istio.io/wasmplugin/openshift-ingress.kuadrant-maas-default-gateway
+    patch:
+      operation: INSERT_BEFORE
+      value:
+        name: envoy.filters.http.header_to_metadata.key_id_provenance
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.filters.http.header_to_metadata.v3.Config
+          request_rules:
+          - header: X-MaaS-Key-Id
+            on_header_missing:
+              metadata_namespace: maas.usage_logs
+              key: key_id_header_absent
+              value: "true"
+
   # ── Identity header capture: header_to_metadata ───────────────────────────
   #
   # Captures X-MaaS-Username, X-MaaS-Subscription, X-MaaS-Group,
-  # X-MaaS-KeyName, X-MaaS-Organization-Id, and X-MaaS-Cost-Center into
+  # X-MaaS-KeyName, X-MaaS-Key-Id, X-MaaS-Organization-Id, and X-MaaS-Cost-Center into
   # dynamic metadata BEFORE payload-processing ext_proc drops them.
   # Username is injected at apply time when logs.captureUser is true.
   # Organization-Id is injected by default; omitted when
@@ -121,9 +177,9 @@ spec:
   # which would fail if ext_proc.ipp doesn't exist).
   #
   # Filter order when payload-processing is enabled:
-  #   ext_proc.ipp-pre → wasm-auth → header_to_metadata → ext_proc.ipp
+  #   ext_proc.ipp-pre → key_id_provenance → wasm-auth → header_to_metadata → ext_proc.ipp
   # Filter order when payload-processing is disabled:
-  #   ext_proc.ipp-pre → wasm-auth → header_to_metadata
+  #   ext_proc.ipp-pre → key_id_provenance → wasm-auth → header_to_metadata
   #
   # Metadata namespace: envoy.filters.http.header_to_metadata
   - applyTo: HTTP_FILTER
@@ -156,6 +212,11 @@ spec:
             on_header_present:
               metadata_namespace: envoy.filters.http.header_to_metadata
               key: key_name
+              type: STRING
+          - header: X-MaaS-Key-Id
+            on_header_present:
+              metadata_namespace: envoy.filters.http.header_to_metadata
+              key: key_id
               type: STRING
           - header: X-MaaS-Cost-Center
             on_header_present:
@@ -194,6 +255,11 @@ spec:
             on_header_present:
               metadata_namespace: envoy.filters.http.header_to_metadata
               key: key_name
+              type: STRING
+          - header: X-MaaS-Key-Id
+            on_header_present:
+              metadata_namespace: envoy.filters.http.header_to_metadata
+              key: key_id
               type: STRING
           - header: X-MaaS-Cost-Center
             on_header_present:
@@ -536,6 +602,14 @@ spec:
                 - key: key_name
                   value:
                     string_value: '%CEL("envoy.filters.http.header_to_metadata" in metadata.filter_metadata ? metadata.filter_metadata["envoy.filters.http.header_to_metadata"]["key_name"] : request.headers["x-maas-keyname"])%'
+                # Post-auth metadata covers normal requests. On an early
+                # Limitador 429, the pre-auth marker proves this header was
+                # absent in the client request, so its current value can only
+                # come from the successful AuthPolicy response. Never use the
+                # header on auth rejection or without that marker.
+                - key: key_id
+                  value:
+                    string_value: '%CEL("envoy.filters.http.header_to_metadata" in metadata.filter_metadata && "key_id" in metadata.filter_metadata["envoy.filters.http.header_to_metadata"] ? metadata.filter_metadata["envoy.filters.http.header_to_metadata"]["key_id"] : (response.code == 429 && "maas.usage_logs" in metadata.filter_metadata && metadata.filter_metadata["maas.usage_logs"]["key_id_header_absent"] == "true" && "x-maas-key-id" in request.headers ? request.headers["x-maas-key-id"] : ""))%'
                 # organization_id is injected here by the tenant reconciler unless logs.captureOrganization=false.
                 - key: cost_center
                   value:

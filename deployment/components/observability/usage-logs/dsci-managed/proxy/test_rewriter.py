@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Tests for rewriting the personal usage-dashboard LogQL queries."""
 import unittest
+from pathlib import Path
 
 from dashboard_logql import (
     PERSONAL_DASHBOARD,
@@ -22,6 +23,27 @@ class InjectUserFilterTest(unittest.TestCase):
                     rewritten.count("| user_id="), query.count("{service_name=")
                 )
                 assert_no_top_level_raw_strings(self, query)
+
+    def test_api_key_identity_is_consistent_across_personal_queries(self):
+        queries = queries_from_dashboard(PERSONAL_DASHBOARD)
+        identity = 'label_format api_key="{{.key_name}} [{{.key_id}}]"'
+        selector = next(q for q in queries if "count by (api_key)" in q)
+        self.assertIn(identity, selector)
+        self.assertIn('key_id!=""', selector)
+        self.assertIn("keep api_key", selector)
+        for query in queries:
+            if "${api_key:regexliteral}" in query:
+                with self.subTest(query=query[:80]):
+                    self.assertIn(identity, query)
+                    self.assertIn(".api_key)", query)
+                    self.assertIn('label_format __ak_sel="${api_key:regexliteral}"', query)
+                    self.assertNotIn('key_id!=""', query)  # All includes older logs.
+                    self.assertIn('| __ak_keep="true"', query)
+
+        dashboard = Path(PERSONAL_DASHBOARD).read_text()
+        self.assertIn('customAllValue: ".*"', dashboard)
+        self.assertIn('sum by (model, subscription, api_key)', dashboard)
+        self.assertIn('- value: "api_key"\n                label: By API key', dashboard)
 
     def test_comment_hiding_selector_is_rejected(self):
         query = """# {fake="x"}

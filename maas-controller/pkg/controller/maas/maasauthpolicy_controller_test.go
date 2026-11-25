@@ -1945,7 +1945,7 @@ func TestMaaSAuthPolicyReconciler_CacheKeyModelIsolation(t *testing.T) {
 }
 
 // TestMaaSAuthPolicyReconciler_IdentityHeadersUpstream verifies that identity headers
-// (X-MaaS-Username, X-MaaS-Group, X-MaaS-Subscription, X-MaaS-KeyName,
+// (X-MaaS-Username, X-MaaS-Group, X-MaaS-Subscription, X-MaaS-KeyName, X-MaaS-Key-Id,
 // X-MaaS-Organization-Id, X-MaaS-Cost-Center, X-MaaS-Identity) are injected into
 // requests forwarded to upstream workloads for the consolidated gateway-level auth policy.
 // All identity information is also available to TRLP and telemetry via filters.identity.
@@ -2003,7 +2003,7 @@ func TestMaaSAuthPolicyReconciler_IdentityHeadersUpstream(t *testing.T) {
 			"X-MaaS-Username", "X-MaaS-Username-Token",
 			"X-MaaS-Group", "X-MaaS-Group-Token",
 			"X-MaaS-Subscription",
-			"X-MaaS-KeyName",
+			"X-MaaS-KeyName", "X-MaaS-Key-Id",
 			"x-maas-organization-id",
 			"X-MaaS-Cost-Center",
 			"X-MaaS-Identity",
@@ -2028,6 +2028,14 @@ func TestMaaSAuthPolicyReconciler_IdentityHeadersUpstream(t *testing.T) {
 			t.Errorf("Authorization header should NOT be stripped (needed by FilterModelsByAccess)")
 		}
 		assertNonEmptySubscriptionHeader(t, headers, "X-MaaS-Cost-Center", "costCenter")
+		keyIDHeader, ok := headers["X-MaaS-Key-Id"].(map[string]any)
+		if !ok {
+			t.Fatalf("X-MaaS-Key-Id response is not a map: %#v", headers["X-MaaS-Key-Id"])
+		}
+		plain, ok := keyIDHeader["plain"].(map[string]any)
+		if !ok || plain["expression"] != `auth.metadata.apiKeyValidation.keyId` || keyIDHeader["key"] != "x-maas-key-id" {
+			t.Fatalf("X-MaaS-Key-Id must use the validated key ID: %#v", keyIDHeader)
+		}
 		orgHeader, ok := headers["x-maas-organization-id"].(map[string]any)
 		if !ok {
 			t.Fatalf("x-maas-organization-id response is not a map: %#v", headers["x-maas-organization-id"])
@@ -2319,7 +2327,7 @@ func TestBuildGatewayAuthPolicySpec_DenyClientIdentityHeaders(t *testing.T) {
 		"spec", "defaults", "rules", "authorization", "deny-client-identity-headers", "patternMatching", "patterns",
 	)
 
-	if err != nil || !found || len(patterns) != 10 {
+	if err != nil || !found || len(patterns) != 11 {
 		t.Fatalf("deny-client-identity-headers patterns missing: found=%v len=%d err=%v", found, len(patterns), err)
 	}
 
@@ -2341,6 +2349,7 @@ func TestBuildGatewayAuthPolicySpec_DenyClientIdentityHeaders(t *testing.T) {
 		`!("x-maas-group" in request.headers)`,
 		`!("x-maas-exact-groups" in request.headers)`,
 		`!("x-maas-keyname" in request.headers)`,
+		`!("x-maas-key-id" in request.headers)`,
 		`!("x-maas-subscription-rate-limit-id" in request.headers)`,
 		`!("x-maas-organization-id" in request.headers)`,
 		`!("x-maas-cost-center" in request.headers)`,
