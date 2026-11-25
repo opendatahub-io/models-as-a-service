@@ -249,10 +249,7 @@ func TestMaaSAPIKeyCleanupCronJobName(t *testing.T) {
 
 			if tenantIDLength <= 31 {
 				assert.Equal(t, resourceNameForTenant(baseName, tenantID), name)
-				return
 			}
-			// A stable name makes repeated reconciliations select and update the same CronJob.
-			assert.Equal(t, name, MaaSAPIKeyCleanupCronJobName(tenantID))
 		})
 	}
 
@@ -260,6 +257,31 @@ func TestMaaSAPIKeyCleanupCronJobName(t *testing.T) {
 	first := sharedPrefix + strings.Repeat("b", 19)
 	second := sharedPrefix + strings.Repeat("c", 19)
 	assert.NotEqual(t, MaaSAPIKeyCleanupCronJobName(first), MaaSAPIKeyCleanupCronJobName(second))
+}
+
+func TestMaaSAPIKeyCleanupCronJobNameLongNameCompatibility(t *testing.T) {
+	tests := []struct {
+		name     string
+		tenantID string
+		expected string
+	}{
+		{
+			name:     "32 character tenant ID",
+			tenantID: strings.Repeat("a", 32),
+			expected: "maas-api-key-cleanup--aaaaaaaaaaaaaaaaaaaaa-3ba3f5f4",
+		},
+		{
+			name:     "41 character tenant ID",
+			tenantID: strings.Repeat("a", 41),
+			expected: "maas-api-key-cleanup--aaaaaaaaaaaaaaaaaaaaa-c0f8bd4d",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, MaaSAPIKeyCleanupCronJobName(tt.tenantID))
+		})
+	}
 }
 
 func TestBoundedName(t *testing.T) {

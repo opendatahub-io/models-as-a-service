@@ -250,6 +250,8 @@ var (
 	GVKPersesDatasource     = schema.GroupVersionKind{Group: "perses.dev", Version: "v1alpha1", Kind: "PersesDatasource"}
 	GVKCertificate          = schema.GroupVersionKind{Group: "cert-manager.io", Version: "v1", Kind: "Certificate"}
 	GVKHPA                  = schema.GroupVersionKind{Group: "autoscaling", Version: "v2", Kind: "HorizontalPodAutoscaler"}
+	GVKServiceMonitor       = schema.GroupVersionKind{Group: "monitoring.coreos.com", Version: "v1", Kind: "ServiceMonitor"}
+	GVKPodMonitor           = schema.GroupVersionKind{Group: "monitoring.coreos.com", Version: "v1", Kind: "PodMonitor"}
 )
 
 // Resource naming functions for multi-tenant deployment.
@@ -300,10 +302,14 @@ func MaaSAPIRouteName(tenantID string) string {
 }
 
 func MaaSAPIKeyCleanupCronJobName(tenantID string) string {
-	if tenantID == "" {
-		return baseMaaSAPIKeyCleanupCronJobName
+	name := resourceNameForTenant(baseMaaSAPIKeyCleanupCronJobName, tenantID)
+	if len(name) <= maxCronJobNameLength {
+		return name
 	}
-	return BoundedName(baseMaaSAPIKeyCleanupCronJobName+"-", tenantID, "", maxCronJobNameLength)
+	// AITenant names cannot start with a "-". Using a double minus ("--")
+	// prevents name collisions between resourceNameForTenant() (invoked above)
+	// and BoundedName().
+	return BoundedName(baseMaaSAPIKeyCleanupCronJobName+"--", tenantID, "", maxCronJobNameLength)
 }
 
 func GatewayDestinationRuleName(tenantID string) string {
