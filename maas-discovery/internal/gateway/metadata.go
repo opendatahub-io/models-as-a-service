@@ -19,6 +19,10 @@ const (
 	protocolHTTP  = "HTTP"
 	schemeHTTPS   = "https"
 	schemeHTTP    = "http"
+
+	// gatewayNameLabel is the selector label Gateway API implementations put
+	// on Services that select a Gateway's pods.
+	gatewayNameLabel = "gateway.networking.k8s.io/gateway-name"
 )
 
 // RouteHostInfo stores externally reachable Route endpoint metadata for a
@@ -33,7 +37,13 @@ type RouteHostInfo struct {
 // On success it returns a fully populated GatewayMetadata. If the gateway is missing
 // status, listeners, or an external hostname, it returns an error. Callers should
 // degrade gracefully by keeping name/namespace and omitting externalUrl.
-func ExtractMetadata(gateway map[string]any, name, namespace string, routeHosts ...map[string]RouteHostInfo) (*types.GatewayMetadata, error) {
+//
+// routeHosts maps Service names to admitted external Route endpoints (see
+// BuildRouteHostMap). serviceNames is the set of Services that select this
+// Gateway (see GatewayServiceNames); when the Gateway only publishes a
+// cluster-local address, the Route fallback looks up endpoints for any of
+// those Services.
+func ExtractMetadata(gateway map[string]any, name, namespace string, routeHosts map[string]RouteHostInfo, serviceNames map[string]struct{}) (*types.GatewayMetadata, error) {
 	spec, ok := gateway["spec"].(map[string]any)
 	if !ok {
 		return nil, errors.New("gateway spec not found")
@@ -84,41 +94,30 @@ func ExtractMetadata(gateway map[string]any, name, namespace string, routeHosts 
 	}
 
 	if isLocalHostname(externalHost) {
-		svcName, _, _ := strings.Cut(externalHost, ".")
 		effectiveScheme, effectivePort := listenerSchemeAndPort(protocol, port)
-		for _, rh := range routeHosts {
-			if routeInfo, ok := rh[svcName]; ok {
-				externalHost = routeInfo.Host
-				if routeInfo.Scheme != "" {
-					effectiveScheme = routeInfo.Scheme
-				}
-				if routeInfo.Port != 0 {
-					effectivePort = routeInfo.Port
-				}
-				scheme := effectiveScheme
-				externalURL := fmt.Sprintf("%s://%s", scheme, bracketIPv6Literal(externalHost))
-				if (scheme == schemeHTTPS && effectivePort != 443) || (scheme == schemeHTTP && effectivePort != 80) {
-					externalURL = fmt.Sprintf("%s:%d", externalURL, effectivePort)
-				}
-
-				return &types.GatewayMetadata{
-					Name:        name,
-					Namespace:   namespace,
-					Protocol:    scheme,
-					ExternalURL: externalURL,
-					Port:        effectivePort,
-				}, nil
+		if routeInfo, ok := bestRouteEndpoint(routeHosts, serviceNames); ok {
+			if routeInfo.Scheme != "" {
+				effectiveScheme = routeInfo.Scheme
 			}
+			if routeInfo.Port != 0 {
+				effectivePort = routeInfo.Port
+			}
+			return buildMetadata(name, namespace, effectiveScheme, routeInfo.Host, effectivePort), nil
 		}
 		return nil, fmt.Errorf("gateway %s/%s has internal service name %s instead of external hostname",
 			namespace, name, externalHost)
 	}
 
 	scheme, effectivePort := listenerSchemeAndPort(protocol, port)
+	return buildMetadata(name, namespace, scheme, externalHost, effectivePort), nil
+}
 
-	externalURL := fmt.Sprintf("%s://%s", scheme, bracketIPv6Literal(externalHost))
-	if (scheme == schemeHTTPS && effectivePort != 443) || (scheme == schemeHTTP && effectivePort != 80) {
-		externalURL = fmt.Sprintf("%s:%d", externalURL, effectivePort)
+// buildMetadata assembles GatewayMetadata, bracketing IPv6 literals and
+// appending a non-standard port to the external URL.
+func buildMetadata(name, namespace, scheme, host string, port int64) *types.GatewayMetadata {
+	externalURL := fmt.Sprintf("%s://%s", scheme, bracketIPv6Literal(host))
+	if (scheme == schemeHTTPS && port != 443) || (scheme == schemeHTTP && port != 80) {
+		externalURL = fmt.Sprintf("%s:%d", externalURL, port)
 	}
 
 	return &types.GatewayMetadata{
@@ -126,8 +125,8 @@ func ExtractMetadata(gateway map[string]any, name, namespace string, routeHosts 
 		Namespace:   namespace,
 		Protocol:    scheme,
 		ExternalURL: externalURL,
-		Port:        effectivePort,
-	}, nil
+		Port:        port,
+	}
 }
 
 // BuildRouteHostMap builds a map from Kubernetes Service name to admitted external
@@ -147,15 +146,55 @@ func BuildRouteHostMap(routes []unstructured.Unstructured) map[string]RouteHostI
 
 	m := make(map[string]RouteHostInfo, len(endpointsByService))
 	for svcName, endpoints := range endpointsByService {
-		sort.SliceStable(endpoints, func(left, right int) bool {
-			if endpoints[left].Scheme != endpoints[right].Scheme {
-				return endpoints[left].Scheme == schemeHTTPS
-			}
-			return endpoints[left].Host < endpoints[right].Host
-		})
-		m[svcName] = endpoints[0]
+		m[svcName] = bestEndpoint(endpoints)
 	}
 	return m
+}
+
+// GatewayServiceNames returns the names of the Services that select the given
+// Gateway's pods, i.e. those carrying the gateway.networking.k8s.io/gateway-name
+// selector label. It mirrors the hardened maas-api implementation (PR #1888):
+// Route→Gateway matching is done via Service selector labels rather than by
+// parsing the Gateway's internal hostname, so Routes targeting any Service
+// that selects the Gateway are matched.
+func GatewayServiceNames(services []unstructured.Unstructured, gatewayName string) map[string]struct{} {
+	names := make(map[string]struct{})
+	for i := range services {
+		selectorValue, found, err := unstructured.NestedString(services[i].Object, "spec", "selector", gatewayNameLabel)
+		if err != nil || !found || selectorValue != gatewayName {
+			continue
+		}
+		names[services[i].GetName()] = struct{}{}
+	}
+	return names
+}
+
+// bestRouteEndpoint picks the best Route endpoint among those targeting any
+// Service in serviceNames, deterministically: HTTPS preferred, then
+// lexicographically by host. Returns false when no endpoint matches.
+func bestRouteEndpoint(routeHosts map[string]RouteHostInfo, serviceNames map[string]struct{}) (RouteHostInfo, bool) {
+	endpoints := make([]RouteHostInfo, 0, len(serviceNames))
+	for svcName, info := range routeHosts {
+		if _, ok := serviceNames[svcName]; ok {
+			endpoints = append(endpoints, info)
+		}
+	}
+	if len(endpoints) == 0 {
+		return RouteHostInfo{}, false
+	}
+	return bestEndpoint(endpoints), true
+}
+
+// bestEndpoint returns the deterministically best endpoint: HTTPS preferred,
+// then lexicographically by host.
+func bestEndpoint(endpoints []RouteHostInfo) RouteHostInfo {
+	sort.SliceStable(endpoints, func(left, right int) bool {
+		if endpoints[left].Scheme != endpoints[right].Scheme {
+			return endpoints[left].Scheme == schemeHTTPS
+		}
+		return endpoints[left].Host < endpoints[right].Host
+	})
+	return endpoints[0]
 }
 
 // isLocalHostname reports whether a hostname resolves only inside the cluster:

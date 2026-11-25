@@ -43,6 +43,11 @@ var (
 		Version:  "v1",
 		Resource: "gateways",
 	}
+	serviceGVR = schema.GroupVersionResource{
+		Group:    "",
+		Version:  "v1",
+		Resource: "services",
+	}
 	routeGVR = schema.GroupVersionResource{
 		Group:    "route.openshift.io",
 		Version:  "v1",
@@ -134,6 +139,10 @@ func (ic *InformerCache) Start(ctx context.Context) error {
 
 	tenantInformer := tenantFactory.ForResource(aiTenantGVR).Informer()
 	gatewayInformer := gatewayFactory.ForResource(gatewayGVR).Informer()
+	// Services informer in the gateway namespace — provides the Service
+	// selector labels used to match Routes to Gateways (core API, always
+	// available, so no availability gating is needed).
+	serviceInformer := gatewayFactory.ForResource(serviceGVR).Informer()
 	entitlementFactory := dynamicinformer.NewFilteredDynamicSharedInformerFactory(
 		dynamicClient, 0, "", nil,
 	)
@@ -181,6 +190,9 @@ func (ic *InformerCache) Start(ctx context.Context) error {
 	}
 	if _, err := gatewayInformer.AddEventHandler(handler); err != nil {
 		return fmt.Errorf("adding Gateway event handler: %w", err)
+	}
+	if _, err := serviceInformer.AddEventHandler(handler); err != nil {
+		return fmt.Errorf("adding Service event handler: %w", err)
 	}
 	if routeInformer != nil {
 		if _, err := routeInformer.AddEventHandler(handler); err != nil {
@@ -256,7 +268,7 @@ func (ic *InformerCache) Start(ctx context.Context) error {
 	drainChannel(rebuildCh)
 	drainChannel(entitlementRebuildCh)
 
-	ic.rebuildFromInformers(tenantInformer, gatewayInformer, routeInformer)
+	ic.rebuildFromInformers(tenantInformer, gatewayInformer, serviceInformer, routeInformer)
 	ic.markAllTenantsDirty()
 	ic.rebuildDirtyEntitlements(tenantInformer, authPolicyInformer)
 	ic.synced.Store(true)
@@ -269,7 +281,7 @@ func (ic *InformerCache) Start(ctx context.Context) error {
 			case <-rebuildCh:
 				t := time.NewTimer(rebuildDebounce)
 				drainLoop(ctx, rebuildCh, t, rebuildMaxWait)
-				ic.rebuildFromInformers(tenantInformer, gatewayInformer, routeInformer)
+				ic.rebuildFromInformers(tenantInformer, gatewayInformer, serviceInformer, routeInformer)
 				ic.markAllTenantsDirty()
 				triggerEntitlementRebuild()
 			case <-ctx.Done():
@@ -384,7 +396,7 @@ func (ic *InformerCache) Synced() bool {
 // rebuildFromInformers reads the current state from the informer stores and rebuilds
 // the in-memory tenant list. Serialized by rebuildMu to prevent stale data from a
 // slower concurrent rebuild overwriting a newer one.
-func (ic *InformerCache) rebuildFromInformers(tenantInformer, gatewayInformer, routeInformer k8scache.SharedIndexInformer) {
+func (ic *InformerCache) rebuildFromInformers(tenantInformer, gatewayInformer, serviceInformer, routeInformer k8scache.SharedIndexInformer) {
 	ic.metadataRebuildMu.Lock()
 	defer ic.metadataRebuildMu.Unlock()
 
@@ -414,7 +426,14 @@ func (ic *InformerCache) rebuildFromInformers(tenantInformer, gatewayInformer, r
 		}
 	}
 
-	result := BuildTenantInfos(tenants, gateways, routes, ic.gatewayNamespace, ic.log)
+	var services []unstructured.Unstructured
+	for _, obj := range serviceInformer.GetStore().List() {
+		if u, ok := obj.(*unstructured.Unstructured); ok {
+			services = append(services, *u)
+		}
+	}
+
+	result := BuildTenantInfos(tenants, gateways, routes, services, ic.gatewayNamespace, ic.log)
 
 	ic.mu.Lock()
 	ic.tenants = result
@@ -755,12 +774,13 @@ func groupSubjectKey(group string) string {
 	return "g:" + group
 }
 
-// BuildTenantInfos builds the tenant info list from raw AITenant and Gateway objects.
-// Exported for testing.
+// BuildTenantInfos builds the tenant info list from raw AITenant, Gateway, Route,
+// and Service objects. Exported for testing.
 func BuildTenantInfos(
 	tenants []unstructured.Unstructured,
 	gateways []unstructured.Unstructured,
 	routes []unstructured.Unstructured,
+	services []unstructured.Unstructured,
 	gatewayNamespace string,
 	log *slog.Logger,
 ) []types.TenantInfo {
@@ -770,6 +790,16 @@ func BuildTenantInfos(
 	}
 
 	routeHosts := gateway.BuildRouteHostMap(routes)
+
+	// Service names selecting each Gateway, used to match Routes to Gateways
+	// via selector labels rather than internal-hostname parsing.
+	svcNamesByGateway := make(map[string]map[string]struct{}, len(gateways))
+	for i := range gateways {
+		gwName := gateways[i].GetName()
+		if _, ok := svcNamesByGateway[gwName]; !ok {
+			svcNamesByGateway[gwName] = gateway.GatewayServiceNames(services, gwName)
+		}
+	}
 
 	result := make([]types.TenantInfo, 0, len(tenants))
 	for i := range tenants {
@@ -793,7 +823,7 @@ func BuildTenantInfos(
 			continue
 		}
 
-		meta, err := gateway.ExtractMetadata(gw.Object, gwName, gatewayNamespace, routeHosts)
+		meta, err := gateway.ExtractMetadata(gw.Object, gwName, gatewayNamespace, routeHosts, svcNamesByGateway[gwName])
 		if err != nil {
 			log.Warn("gateway metadata extraction failed, returning partial data",
 				"tenant", name, "gateway", gwName, "error", err)

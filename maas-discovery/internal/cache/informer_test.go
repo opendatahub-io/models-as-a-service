@@ -75,7 +75,7 @@ func TestBuildTenantInfos_SingleTenantWithGateway(t *testing.T) {
 		),
 	}
 
-	result := cache.BuildTenantInfos(tenants, gateways, nil, "gw-ns", testLog)
+	result := cache.BuildTenantInfos(tenants, gateways, nil, nil, "gw-ns", testLog)
 
 	require.Len(t, result, 1)
 	assert.Equal(t, "team-a", result[0].Name)
@@ -104,7 +104,7 @@ func TestBuildTenantInfos_MultipleTenants(t *testing.T) {
 		),
 	}
 
-	result := cache.BuildTenantInfos(tenants, gateways, nil, "gw-ns", testLog)
+	result := cache.BuildTenantInfos(tenants, gateways, nil, nil, "gw-ns", testLog)
 
 	require.Len(t, result, 2)
 	assert.Equal(t, "team-a", result[0].Name)
@@ -118,7 +118,7 @@ func TestBuildTenantInfos_GatewayNotFound(t *testing.T) {
 		makeTenant("team-a", "missing-gw"),
 	}
 
-	result := cache.BuildTenantInfos(tenants, nil, nil, "gw-ns", testLog)
+	result := cache.BuildTenantInfos(tenants, nil, nil, nil, "gw-ns", testLog)
 
 	require.Len(t, result, 1)
 	assert.Equal(t, "team-a", result[0].Name)
@@ -140,7 +140,7 @@ func TestBuildTenantInfos_GatewayWithoutStatus(t *testing.T) {
 		}},
 	}
 
-	result := cache.BuildTenantInfos(tenants, gateways, nil, "gw-ns", testLog)
+	result := cache.BuildTenantInfos(tenants, gateways, nil, nil, "gw-ns", testLog)
 
 	require.Len(t, result, 1)
 	assert.Equal(t, "broken-gw", result[0].Gateway.Name)
@@ -159,7 +159,7 @@ func TestBuildTenantInfos_TenantWithoutGatewayRef(t *testing.T) {
 		),
 	}
 
-	result := cache.BuildTenantInfos(tenants, gateways, nil, "gw-ns", testLog)
+	result := cache.BuildTenantInfos(tenants, gateways, nil, nil, "gw-ns", testLog)
 
 	require.Len(t, result, 1)
 	assert.Equal(t, "default-gw-tenant", result[0].Gateway.Name,
@@ -168,7 +168,7 @@ func TestBuildTenantInfos_TenantWithoutGatewayRef(t *testing.T) {
 }
 
 func TestBuildTenantInfos_NoTenants(t *testing.T) {
-	result := cache.BuildTenantInfos(nil, nil, nil, "gw-ns", testLog)
+	result := cache.BuildTenantInfos(nil, nil, nil, nil, "gw-ns", testLog)
 	assert.Empty(t, result)
 }
 
@@ -185,7 +185,7 @@ func TestBuildTenantInfos_SharedGateway(t *testing.T) {
 		),
 	}
 
-	result := cache.BuildTenantInfos(tenants, gateways, nil, "gw-ns", testLog)
+	result := cache.BuildTenantInfos(tenants, gateways, nil, nil, "gw-ns", testLog)
 
 	require.Len(t, result, 2)
 	assert.Equal(t, "https://shared.example.com", result[0].Gateway.ExternalURL)
@@ -204,10 +204,48 @@ func TestBuildTenantInfos_GatewayWithStatusAddresses(t *testing.T) {
 		),
 	}
 
-	result := cache.BuildTenantInfos(tenants, gateways, nil, "gw-ns", testLog)
+	result := cache.BuildTenantInfos(tenants, gateways, nil, nil, "gw-ns", testLog)
 
 	require.Len(t, result, 1)
 	assert.Equal(t, "https://lb.example.com", result[0].Gateway.ExternalURL)
+}
+
+func makeServiceObj(name string, selector map[string]any) unstructured.Unstructured {
+	spec := map[string]any{}
+	if selector != nil {
+		spec["selector"] = selector
+	}
+	return unstructured.Unstructured{Object: map[string]any{
+		"metadata": map[string]any{"name": name, "namespace": "gw-ns"},
+		"spec":     spec,
+	}}
+}
+
+func makeRouteObj(host, svcName string, tls bool) unstructured.Unstructured {
+	route := unstructured.Unstructured{Object: map[string]any{
+		"spec": map[string]any{
+			"host": host,
+			"to":   map[string]any{"kind": "Service", "name": svcName},
+		},
+	}}
+	if tls {
+		spec, ok := route.Object["spec"].(map[string]any)
+		if !ok {
+			panic("route spec is not a map")
+		}
+		spec["tls"] = map[string]any{"termination": "edge"}
+	}
+	route.Object["status"] = map[string]any{
+		"ingress": []any{
+			map[string]any{
+				"host": host,
+				"conditions": []any{
+					map[string]any{"type": "Admitted", "status": "True"},
+				},
+			},
+		},
+	}
+	return route
 }
 
 func TestBuildTenantInfos_RouteHostFallback(t *testing.T) {
@@ -222,29 +260,77 @@ func TestBuildTenantInfos_RouteHostFallback(t *testing.T) {
 		),
 	}
 	routes := []unstructured.Unstructured{
-		{Object: map[string]any{
-			"spec": map[string]any{
-				"host": "maas.apps.example.com",
-				"to":   map[string]any{"kind": "Service", "name": "internal-gw-svc"},
-				"tls":  map[string]any{"termination": "edge"},
-			},
-			"status": map[string]any{
-				"ingress": []any{
-					map[string]any{
-						"host": "maas.apps.example.com",
-						"conditions": []any{
-							map[string]any{"type": "Admitted", "status": "True"},
-						},
-					},
-				},
-			},
-		}},
+		makeRouteObj("maas.apps.example.com", "internal-gw-svc", true),
+	}
+	services := []unstructured.Unstructured{
+		makeServiceObj("internal-gw-svc", map[string]any{
+			"gateway.networking.k8s.io/gateway-name": "internal-gw",
+		}),
 	}
 
-	result := cache.BuildTenantInfos(tenants, gateways, routes, "gw-ns", testLog)
+	result := cache.BuildTenantInfos(tenants, gateways, routes, services, "gw-ns", testLog)
 
 	require.Len(t, result, 1)
 	assert.Equal(t, "https://maas.apps.example.com", result[0].Gateway.ExternalURL)
+}
+
+// TestBuildTenantInfos_RouteFallbackSelectorMatching covers defect 5: the
+// Route targets a Service whose name differs from the Gateway's internal
+// hostname prefix, matched via the gateway-name selector label instead.
+func TestBuildTenantInfos_RouteFallbackSelectorMatching(t *testing.T) {
+	tenants := []unstructured.Unstructured{
+		makeTenant("team-a", "internal-gw"),
+	}
+	gateways := []unstructured.Unstructured{
+		makeGatewayObj("internal-gw",
+			[]any{specListener("HTTPS", "", 443)},
+			[]any{statusListenerReady("HTTPS", 1)},
+			[]any{map[string]any{"value": "internal-gw.gw-ns.svc.cluster.local"}},
+		),
+	}
+	routes := []unstructured.Unstructured{
+		makeRouteObj("maas.apps.example.com", "custom-edge-svc", true),
+	}
+	services := []unstructured.Unstructured{
+		makeServiceObj("custom-edge-svc", map[string]any{
+			"gateway.networking.k8s.io/gateway-name": "internal-gw",
+		}),
+	}
+
+	result := cache.BuildTenantInfos(tenants, gateways, routes, services, "gw-ns", testLog)
+
+	require.Len(t, result, 1)
+	assert.Equal(t, "https://maas.apps.example.com", result[0].Gateway.ExternalURL)
+}
+
+// TestBuildTenantInfos_RouteFallbackNoSelectorService: a Route targeting a
+// Service that does not select the Gateway must not be used, even when its
+// name matches the internal hostname prefix.
+func TestBuildTenantInfos_RouteFallbackNoSelectorService(t *testing.T) {
+	tenants := []unstructured.Unstructured{
+		makeTenant("team-a", "internal-gw"),
+	}
+	gateways := []unstructured.Unstructured{
+		makeGatewayObj("internal-gw",
+			[]any{specListener("HTTPS", "", 443)},
+			[]any{statusListenerReady("HTTPS", 1)},
+			[]any{map[string]any{"value": "internal-gw-svc.gw-ns.svc.cluster.local"}},
+		),
+	}
+	routes := []unstructured.Unstructured{
+		makeRouteObj("unrelated.apps.example.com", "internal-gw-svc", true),
+	}
+	services := []unstructured.Unstructured{
+		makeServiceObj("internal-gw-svc", map[string]any{
+			"gateway.networking.k8s.io/gateway-name": "some-other-gw",
+		}),
+	}
+
+	result := cache.BuildTenantInfos(tenants, gateways, routes, services, "gw-ns", testLog)
+
+	require.Len(t, result, 1)
+	assert.Empty(t, result[0].Gateway.ExternalURL,
+		"partial data must be returned when no selector-matching Route exists")
 }
 
 func TestInformerCache_Synced(t *testing.T) {

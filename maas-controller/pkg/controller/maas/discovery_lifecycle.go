@@ -296,6 +296,13 @@ func buildDiscoveryCrossNamespaceRBAC(controllerNS, aitenantNS, gatewayNS string
 				Verbs:     []string{"get", "list", "watch"},
 			},
 			{
+				// Services carrying the gateway-name selector label are used
+				// to match Routes to Gateways in the Route fallback.
+				APIGroups: []string{""},
+				Resources: []string{"services"},
+				Verbs:     []string{"get", "list", "watch"},
+			},
+			{
 				APIGroups: []string{"route.openshift.io"},
 				Resources: []string{"routes"},
 				Verbs:     []string{"get", "list", "watch"},

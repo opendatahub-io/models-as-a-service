@@ -104,7 +104,14 @@ func TestExtractMetadata_LocalHostnameDetection(t *testing.T) {
 				[]any{map[string]any{"value": test.address}},
 			)
 
-			meta, err := gateway.ExtractMetadata(gw, "gw", "gw-ns", test.routes)
+			// The Service selecting the gateway is named after the local
+			// hostname's first label in these fixtures.
+			serviceNames := make(map[string]struct{}, len(test.routes))
+			for svcName := range test.routes {
+				serviceNames[svcName] = struct{}{}
+			}
+
+			meta, err := gateway.ExtractMetadata(gw, "gw", "gw-ns", test.routes, serviceNames)
 			if test.wantErr != "" {
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), test.wantErr)
