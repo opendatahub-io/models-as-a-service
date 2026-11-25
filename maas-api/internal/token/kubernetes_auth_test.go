@@ -197,7 +197,7 @@ func TestExtractUserInfo_KubernetesFallbackDisabled(t *testing.T) {
 	assert.Empty(t, client.Actions(), "gateway-only mode must not run TokenReview")
 }
 
-func TestLokiRouteRejectsGatewayIdentityHeaders(t *testing.T) {
+func TestLokiRouteIdentityTransport(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	client := fake.NewSimpleClientset()
 	client.PrependReactor("create", "tokenreviews", func(action k8stesting.Action) (bool, runtime.Object, error) {
@@ -206,11 +206,14 @@ func TestLokiRouteRejectsGatewayIdentityHeaders(t *testing.T) {
 	})
 	h := token.NewHandler(logger.Development(), "test-tenant").WithKubeClient(client)
 	router := gin.New()
-	router.Use(h.RejectGatewayIdentityHeaders(), h.ExtractUserInfo(token.AuthModeGatewayOrKubernetes))
+	router.Use(
+		h.RejectLegacyGatewayIdentityHeaders(),
+		h.ExtractVerifiedIdentityOptional(),
+		h.ExtractUserInfo(token.AuthModeGatewayOrKubernetes),
+	)
 	router.GET("/test", func(c *gin.Context) { c.Status(http.StatusOK) })
 
 	headers := map[string]string{
-		constant.HeaderIdentity:       `{"source":"oidc"}`,
 		constant.HeaderUsername:       "spoofed-user",
 		constant.HeaderGroup:          `["spoofed-group"]`,
 		constant.HeaderOrganizationID: "spoofed-org",
@@ -226,7 +229,28 @@ func TestLokiRouteRejectsGatewayIdentityHeaders(t *testing.T) {
 			assert.Equal(t, http.StatusUnauthorized, w.Code)
 		})
 	}
-	assert.Empty(t, client.Actions(), "gateway identity headers must be rejected before TokenReview")
+	assert.Empty(t, client.Actions(), "legacy gateway identity headers must be rejected before TokenReview")
+
+	t.Run("verified identity envelope wins over bearer token", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/test", nil)
+		req.Header.Set("Authorization", "Bearer sha256~oc-token")
+		req.Header.Set(constant.HeaderIdentity, `{
+			"source": "oidc",
+			"claims": {
+				"iss": "https://issuer.example.com",
+				"sub": "oidc-user",
+				"azp": "maas",
+				"aud": "maas",
+				"org_id": "42c3e46f-2477-44d7-a85b-d3b43f6b31fa",
+				"roles": ["admins"]
+			}
+		}`)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		assert.Empty(t, client.Actions(), "the verified identity envelope must not fall through to TokenReview")
+	})
 
 	t.Run("bearer-only request authenticates", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/test", nil)

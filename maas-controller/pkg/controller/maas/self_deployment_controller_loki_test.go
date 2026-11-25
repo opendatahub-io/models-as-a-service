@@ -273,7 +273,6 @@ func TestLifecycleReconciler_MaasAPILokiDatasource(t *testing.T) {
 		g.Expect(err).NotTo(HaveOccurred())
 		g.Expect(found).To(BeTrue())
 		g.Expect(dropHeaders).To(ConsistOf(
-			"X-MaaS-Identity",
 			"X-MaaS-Username",
 			"X-MaaS-Group",
 			"X-MaaS-Organization-Id",

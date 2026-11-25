@@ -501,16 +501,17 @@ func (h *Handler) RejectTrustedIdentityHeaders() gin.HandlerFunc {
 	}
 }
 
-// RejectGatewayIdentityHeaders keeps internal Loki routes on Kubernetes
-// TokenReview authentication. Direct callers cannot select the trusted gateway
-// transport by injecting identity headers.
-func (h *Handler) RejectGatewayIdentityHeaders() gin.HandlerFunc {
+// RejectLegacyGatewayIdentityHeaders keeps internal Loki routes on the verified
+// identity envelope or Kubernetes TokenReview. Direct callers cannot select the
+// legacy gateway transport by injecting username, group, or organization
+// headers; the envelope remains available to the gateway-authenticated Perses
+// path and is parsed by ExtractVerifiedIdentityOptional.
+func (h *Handler) RejectLegacyGatewayIdentityHeaders() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if len(c.Request.Header.Values(constant.HeaderIdentity)) > 0 ||
-			len(c.Request.Header.Values(constant.HeaderUsername)) > 0 ||
+		if len(c.Request.Header.Values(constant.HeaderUsername)) > 0 ||
 			len(c.Request.Header.Values(constant.HeaderGroup)) > 0 ||
 			len(c.Request.Header.Values(constant.HeaderOrganizationID)) > 0 {
-			h.rejectIdentity(c, errors.New("gateway identity headers are not accepted"))
+			h.rejectIdentity(c, errors.New("legacy gateway identity headers are not accepted"))
 			return
 		}
 		c.Next()

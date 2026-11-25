@@ -2,10 +2,12 @@
 
 These tests cover the deployed integration path: the retired Python proxy is
 gone, maas-api has scoped Loki access, the proxy is not exposed publicly, and
-TokenReview remains the only accepted caller identity transport.
+callers authenticate through the gateway-verified identity envelope or
+Kubernetes TokenReview.
 """
 
 import base64
+import json
 import logging
 import os
 import time
@@ -501,7 +503,7 @@ def _rewritten_backend_path(rule, match, candidate_path):
     return candidate_path
 
 
-def test_internal_loki_proxy_requires_tokenreview(
+def test_internal_loki_proxy_authentication(
     maas_api_internal_url: str, token: str
 ):
     query = urlencode(
@@ -531,6 +533,37 @@ def test_internal_loki_proxy_requires_tokenreview(
     assert status == 401, (
         "A valid bearer token with a spoofed trusted identity header must return 401, "
         f"got {status}"
+    )
+
+
+def test_internal_loki_proxy_accepts_verified_identity_envelope(
+    maas_api_internal_url: str,
+):
+    identity = json.dumps(
+        {
+            "source": "oidc",
+            "claims": {
+                "iss": "https://issuer.example.com",
+                "sub": "e2e-user",
+                "azp": "maas",
+                "aud": "maas",
+                "org_id": "42c3e46f-2477-44d7-a85b-d3b43f6b31fa",
+                "roles": ["admins"],
+            },
+        },
+        separators=(",", ":"),
+    )
+    url = f"{maas_api_internal_url}/v1/logs/loki/api/v1/query?query=%7B"
+    status, body = kubectl_curl(
+        url,
+        headers={
+            "Authorization": "Bearer invalid-token-12345",
+            "X-MaaS-Identity": identity,
+        },
+    )
+    assert status == 400, (
+        "A verified identity envelope must authenticate before query validation; "
+        f"got {status}: {body[:500]}"
     )
 
 
@@ -664,3 +697,19 @@ def test_perses_datasources_use_maas_api_when_installed():
         assert actual == url, (
             f"Perses datasource {name} must use maas-api, got {actual}"
         )
+        drop_headers = (
+            datasource.get("spec", {})
+            .get("config", {})
+            .get("plugin", {})
+            .get("spec", {})
+            .get("proxy", {})
+            .get("spec", {})
+            .get("dropHeaders", [])
+        )
+        normalized_headers = {header.lower() for header in drop_headers}
+        assert "x-maas-identity" not in normalized_headers, (
+            f"Perses datasource {name} must forward the gateway-verified identity envelope"
+        )
+        assert {"x-maas-username", "x-maas-group", "x-maas-organization-id"} <= (
+            normalized_headers
+        ), f"Perses datasource {name} must drop spoofable legacy identity headers"

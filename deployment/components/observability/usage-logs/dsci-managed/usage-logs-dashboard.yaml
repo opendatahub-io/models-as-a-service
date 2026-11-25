@@ -636,7 +636,6 @@ spec:
             secret: usage-logs-multi-tenancy-secret
             url: https://maas-api.redhat-ai-gateway-infra.svc.cluster.local:8443/v1/logs?only_user=true
             dropHeaders:
-              - X-MaaS-Identity
               - X-MaaS-Username
               - X-MaaS-Group
               - X-MaaS-Organization-Id
