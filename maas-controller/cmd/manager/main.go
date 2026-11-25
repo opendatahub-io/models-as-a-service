@@ -1426,6 +1426,7 @@ func main() {
 	if err := (&maas.LifecycleReconciler{
 		Client:                      mgr.GetClient(),
 		Scheme:                      mgr.GetScheme(),
+		APIReader:                   mgr.GetAPIReader(),
 		DeploymentName:              "maas-controller",
 		DeploymentNS:                controllerNamespace,
 		TenantSubscriptionNamespace: maasSubscriptionNamespace,

@@ -552,15 +552,113 @@ func TestPatchPayloadProcessingEnvoyFilterOmitsRouterFallback(t *testing.T) {
 	configPatches, found, err := unstructured.NestedSlice(ef.Object, "spec", "configPatches")
 	require.NoError(t, err)
 	require.True(t, found)
-	require.Len(t, configPatches, 12)
+	require.Len(t, configPatches, 17)
 
-	for i := 4; i < 10; i++ {
+	for i := 4; i < 15; i++ {
 		cp, ok := configPatches[i].(map[string]any)
 		require.True(t, ok)
 		op, _, _ := unstructured.NestedString(cp, "patch", "operation")
 		assert.Equal(t, "MERGE", op)
 	}
 	requireEPPReorderPatches(t, configPatches)
+}
+
+func TestPatchMaaSAPIMonitoringNetworkPolicyUsesConfiguredNamespace(t *testing.T) {
+	resources := renderOverlayResources(t, "tenant-ns")
+	networkPolicy := requireResource(t, resources, GVKNetworkPolicy, "maas-api-allow-monitoring")
+	params := PlatformParams{MonitoringNamespace: "custom-monitoring"}
+
+	err := patchMaaSAPIMonitoringNetworkPolicy(networkPolicy, params)
+	require.NoError(t, err)
+
+	ingress, found, err := unstructured.NestedSlice(networkPolicy.Object, "spec", "ingress")
+	require.NoError(t, err)
+	require.True(t, found)
+	require.NotEmpty(t, ingress)
+
+	foundHTTPSRule := false
+	for _, ruleValue := range ingress {
+		rule, ok := ruleValue.(map[string]any)
+		require.True(t, ok)
+		ports, _, err := unstructured.NestedSlice(rule, "ports")
+		require.NoError(t, err)
+		for _, portValue := range ports {
+			port, ok := portValue.(map[string]any)
+			require.True(t, ok)
+			portNumber, _, err := unstructured.NestedInt64(port, "port")
+			require.NoError(t, err)
+			if portNumber != 8443 {
+				continue
+			}
+			from, found, err := unstructured.NestedSlice(rule, "from")
+			require.NoError(t, err)
+			require.True(t, found)
+			require.NotEmpty(t, from)
+			peer, ok := from[0].(map[string]any)
+			require.True(t, ok)
+			namespace, found, err := unstructured.NestedString(peer,
+				"namespaceSelector", "matchLabels", "kubernetes.io/metadata.name")
+			require.NoError(t, err)
+			require.True(t, found)
+			assert.Equal(t, "custom-monitoring", namespace)
+			foundHTTPSRule = true
+		}
+	}
+	assert.True(t, foundHTTPSRule, "monitoring NetworkPolicy must contain the Perses HTTPS rule")
+}
+
+func TestPatchMaaSAPIMonitoringNetworkPolicyOnlyUpdatesPersesPeer(t *testing.T) {
+	networkPolicy := &unstructured.Unstructured{Object: map[string]any{
+		"spec": map[string]any{
+			"ingress": []any{map[string]any{
+				"from": []any{
+					map[string]any{
+						"namespaceSelector": map[string]any{"matchLabels": map[string]any{
+							"kubernetes.io/metadata.name": "unrelated-ns",
+						}},
+						"podSelector": map[string]any{"matchLabels": map[string]any{
+							"app.kubernetes.io/name": "unrelated",
+						}},
+					},
+					map[string]any{
+						"namespaceSelector": map[string]any{"matchLabels": map[string]any{
+							"kubernetes.io/metadata.name": "redhat-ods-monitoring",
+						}},
+						"podSelector": map[string]any{"matchLabels": map[string]any{
+							"app.kubernetes.io/managed-by": "perses-operator",
+						}},
+					},
+				},
+				"ports": []any{map[string]any{"protocol": "TCP", "port": int64(8443)}},
+			}},
+		},
+	}}
+
+	err := patchMaaSAPIMonitoringNetworkPolicy(networkPolicy, PlatformParams{MonitoringNamespace: "custom-monitoring"})
+	require.NoError(t, err)
+
+	ingress, found, err := unstructured.NestedSlice(networkPolicy.Object, "spec", "ingress")
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Len(t, ingress, 1)
+	rule, ok := ingress[0].(map[string]any)
+	require.True(t, ok)
+	from, found, err := unstructured.NestedSlice(rule, "from")
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Len(t, from, 2)
+	unrelatedPeer, ok := from[0].(map[string]any)
+	require.True(t, ok)
+	persesPeer, ok := from[1].(map[string]any)
+	require.True(t, ok)
+	unrelatedNamespace, found, err := unstructured.NestedString(unrelatedPeer, "namespaceSelector", "matchLabels", "kubernetes.io/metadata.name")
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, "unrelated-ns", unrelatedNamespace)
+	persesNamespace, found, err := unstructured.NestedString(persesPeer, "namespaceSelector", "matchLabels", "kubernetes.io/metadata.name")
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, "custom-monitoring", persesNamespace)
 }
 
 func TestPatchPayloadProcessingEnvoyFilterKeepsRouterFallback(t *testing.T) {
@@ -579,7 +677,7 @@ func TestPatchPayloadProcessingEnvoyFilterKeepsRouterFallback(t *testing.T) {
 	configPatches, found, err := unstructured.NestedSlice(ef.Object, "spec", "configPatches")
 	require.NoError(t, err)
 	require.True(t, found)
-	require.Len(t, configPatches, 10)
+	require.Len(t, configPatches, 15)
 
 	wantClusters := []string{
 		grpcClusterName(PayloadPreProcessingDeploymentName(""), params.GatewayNamespace, 9004),
@@ -593,7 +691,7 @@ func TestPatchPayloadProcessingEnvoyFilterKeepsRouterFallback(t *testing.T) {
 		cluster, _, _ := unstructured.NestedString(cp, "patch", "value", "typed_config", "grpc_service", "envoy_grpc", "cluster_name")
 		assert.Equal(t, wantCluster, cluster, "configPatches[%d] grpc cluster_name", i)
 	}
-	for i := 2; i < 8; i++ {
+	for i := 2; i < 13; i++ {
 		cp, ok := configPatches[i].(map[string]any)
 		require.True(t, ok)
 		routeName, _, _ := unstructured.NestedString(cp, "match", "routeConfiguration", "vhost", "route", "name")

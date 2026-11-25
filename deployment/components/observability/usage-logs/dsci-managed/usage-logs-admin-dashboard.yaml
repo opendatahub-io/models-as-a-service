@@ -740,7 +740,15 @@ spec:
         proxy:
           kind: HTTPProxy
           spec:
-            url: 'https://data-science-usage-logs-lokistack-gateway-http:8080/api/logs/v1/application'
+            url: 'https://maas-api.redhat-ai-gateway-infra.svc.cluster.local:8443/v1/logs'
+            # Perses is a trusted proxy: it forwards the gateway-overwritten
+            # X-MaaS-Identity but drops client-controlled legacy identity
+            # headers. A compromised Perses workload can forge the envelope and
+            # read usage logs; NetworkPolicy must not admit untrusted proxies.
+            dropHeaders:
+              - X-MaaS-Username
+              - X-MaaS-Group
+              - X-MaaS-Organization-Id
             allowedEndpoints:
               - endpointPattern: "/loki/api/v1/query"
                 method: GET
@@ -758,6 +766,5 @@ spec:
       enable: true
       insecureSkipVerify: false
       caCert:
-        type: configmap
-        name: data-science-usage-logs-lokistack-gateway-ca-bundle
-        certPath: service-ca.crt
+        type: file
+        certPath: /var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt

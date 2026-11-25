@@ -2,17 +2,18 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
-	authenticationv1 "k8s.io/api/authentication/v1" //nolint:importas // Must use distinct alias from authorization/v1
-	authorizationv1 "k8s.io/api/authorization/v1"   //nolint:importas // Must use distinct alias from authentication/v1
+	authorizationv1 "k8s.io/api/authorization/v1" //nolint:importas // Must use distinct alias from authentication/v1
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/token"
 )
 
 // TenantAuthMiddleware validates bearer tokens via TokenReview and checks tenant access via SubjectAccessReview.
@@ -35,17 +36,21 @@ func TenantAuthMiddleware(log *logger.Logger, kubeClient kubernetes.Interface) g
 			return
 		}
 
-		token := strings.TrimPrefix(authHeader, "Bearer ")
+		bearer := strings.TrimPrefix(authHeader, "Bearer ")
 
 		// Step 2: Validate token via TokenReview and extract user identity
-		tr := &authenticationv1.TokenReview{
-			Spec: authenticationv1.TokenReviewSpec{Token: token},
-		}
-		result, err := kubeClient.AuthenticationV1().TokenReviews().Create(
-			ctx, tr, metav1.CreateOptions{},
-		)
-
+		// (shared with the ExtractUserInfo Kubernetes-auth fallback).
+		user, err := token.ReviewToken(ctx, kubeClient, bearer)
 		if err != nil {
+			if errors.Is(err, token.ErrTokenNotAuthenticated) {
+				log.Debug("Token not authenticated", "error", err)
+				c.JSON(http.StatusUnauthorized, gin.H{
+					"error":   "Authentication failed",
+					"details": "Invalid token",
+				})
+				c.Abort()
+				return
+			}
 			log.Error("TokenReview failed", "error", err)
 			c.JSON(http.StatusUnauthorized, gin.H{
 				"error":   "Authentication failed",
@@ -55,19 +60,8 @@ func TenantAuthMiddleware(log *logger.Logger, kubeClient kubernetes.Interface) g
 			return
 		}
 
-		if !result.Status.Authenticated {
-			log.Debug("Token not authenticated",
-				"error", result.Status.Error)
-			c.JSON(http.StatusUnauthorized, gin.H{
-				"error":   "Authentication failed",
-				"details": "Invalid token",
-			})
-			c.Abort()
-			return
-		}
-
-		username := result.Status.User.Username
-		groups := result.Status.User.Groups
+		username := user.Username
+		groups := user.Groups
 
 		log.Debug("Token authenticated successfully")
 

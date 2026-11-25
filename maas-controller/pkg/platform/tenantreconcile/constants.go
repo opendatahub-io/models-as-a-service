@@ -176,6 +176,7 @@ const (
 	baseMaaSAPIKeyCleanupScriptConfigMapName       = "maas-api-key-cleanup-script" //nolint:gosec // Kubernetes resource name, not a credential
 	baseMaaSAPIDeploymentNSNetworkPolicyName       = "maas-api-allow-deployment-ns"
 	baseMaaSAPIGatewayNetworkPolicyName            = "maas-api-allow-gateway"
+	baseMaaSAPIMonitoringNetworkPolicyName         = "maas-api-allow-monitoring"
 	baseMaaSAPIEgressRestrictNetworkPolicyName     = "maas-api-egress-restrict"
 	baseMaaSAPIServingCertName                     = "maas-api-serving-cert"
 	baseUsageLogsEnvoyFilterName                   = "maas-model-access-logs"
@@ -197,9 +198,8 @@ const (
 	MaaSDBSecretName             = "maas-db-config" //nolint:gosec // secret name reference, not a credential
 	MaaSDBSecretKey              = "DB_CONNECTION_URL"
 
-	// LokiReadSecretName is the Secret in the app namespace whose presence
-	// enables the maas-api read-only Loki proxy (GET /v1/logs*). Its absence
-	// leaves LOKI_READ_ENDPOINT unset, which disables the proxy.
+	// LokiReadSecretName is the Secret in the app namespace that can override
+	// the maas-api Loki proxy endpoint and supply its upstream credentials.
 	LokiReadSecretName = "usage-logs-loki" //nolint:gosec // secret name reference, not a credential
 	// LokiReadSecretKey holds the Loki read API base URL injected as the
 	// LOKI_READ_ENDPOINT env var on the maas-api container.
@@ -214,6 +214,10 @@ const (
 	// appended to the system trust pool for proxied upstream Loki requests; a
 	// missing key keeps the system pool only.
 	LokiReadCASecretKey = "LOKI_READ_CA" //nolint:gosec // secret key reference, not a credential
+
+	// LokiReadApplicationScope is the LokiStack tenant selected by the
+	// controller-managed default usage-logs gateway.
+	LokiReadApplicationScope = "application"
 
 	// Condition types aligned with ODH internal/controller/status for DSC aggregation parity.
 	ConditionDependenciesAvailable      = "DependenciesAvailable"

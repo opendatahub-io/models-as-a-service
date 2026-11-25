@@ -1,11 +1,11 @@
-# User-scoped usage dashboard — queries go through loki-query-proxy which
+# User-scoped usage dashboard — queries go through the maas-api Loki proxy
 # injects user_id filtering based on the logged-in user's Kubernetes token.
-# Subscription/model dropdowns use LokiLogQLVariable (not /label/values):
-# the tenancy proxy cannot user-scope label-values requests.
+# Subscription/model dropdowns use LokiLogQLVariable rather than /label/values
+# because their values are structured metadata rather than stream labels.
 # customAllValue: ".*" on ListVariables ensures "All" matches entries with
 # absent labels (e.g. user_id when capturing is disabled). Do not remove.
 # API key uses LokiLogQLVariable: key_name is structured metadata (not a stream
-# label), and the tenancy proxy can user-scope /query and /query_range.
+# label), and maas-api scopes all proxied LogQL requests.
 # API-key filter copies ${api_key:regexliteral} into a LogQL double-quoted
 # label (__ak_sel), then the Go template reads .__ak_sel. Do not interpolate
 # the name into a backtick string: a backtick in an existing key name would
@@ -611,7 +611,7 @@ spec:
             content:
               "$ref": "#/spec/panels/tokenConsumptionTable"
 ---
-# User-scoped Loki datasource — routes through usage-logs-tenancy-proxy which
+# User-scoped Loki datasource — routes through maas-api which
 # injects user_id filtering. Named "usage-logs-multi-tenancy" to avoid
 # collision with the admin "usage-logs" datasource.
 apiVersion: perses.dev/v1alpha1
@@ -634,7 +634,15 @@ spec:
           kind: HTTPProxy
           spec:
             secret: usage-logs-multi-tenancy-secret
-            url: https://usage-logs-tenancy-proxy:8443
+            url: https://maas-api.redhat-ai-gateway-infra.svc.cluster.local:8443/v1/logs?only_user=true
+            # Perses is a trusted proxy: it forwards the gateway-overwritten
+            # X-MaaS-Identity but drops client-controlled legacy identity
+            # headers. A compromised Perses workload can forge the envelope and
+            # read usage logs; NetworkPolicy must not admit untrusted proxies.
+            dropHeaders:
+              - X-MaaS-Username
+              - X-MaaS-Group
+              - X-MaaS-Organization-Id
             allowedEndpoints:
               - endpointPattern: "/loki/api/v1/query"
                 method: GET
@@ -646,6 +654,5 @@ spec:
     tls:
       enable: true
       caCert:
-        type: configmap
-        name: usage-logs-tenancy-proxy-ca-bundle
-        certPath: service-ca.crt
+        type: file
+        certPath: /var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt

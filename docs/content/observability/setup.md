@@ -101,15 +101,17 @@ kubectl patch configs.maas.opendatahub.io default --type=merge -p '{"spec":{"usa
 
 We have introduced usage dashboards that are based on structured access logs rather than on metrics for both administrators and non-admin users as a tech-preview feature. The data presented in these dashboards is more accurate and consistent, and a bit more enriched, compared to the data in the metrics-based dashboard.
 
-The controller deploys the tenancy proxy and usage-log dashboards whenever `Config/default` is present, from `deployment/components/observability/usage-logs/dsci-managed/`. When `Config.spec.usageLogging` is `true`, it renders `usage-logs/` instead, which also deploys the usage-logs collector. The per-tenant EnvoyFilter is removed only when `MaasTenantConfig.spec.telemetry.enabled` is explicitly `false`. When `usageLogging` is `true`, the EnvoyFilter sends plaintext OTLP to `usage-logs-collector`. When it is `false` or omitted, the EnvoyFilter sends OTLP over TLS to the headless `data-science-usage-logs-collector-headless` Service, trusting the OpenShift service CA and verifying the headless-service DNS name as SNI with TLS 1.2 or newer.
+The controller deploys usage-log dashboards whenever `Config/default` is present, from `deployment/components/observability/usage-logs/dsci-managed/`. When `Config.spec.usageLogging` is `true`, it renders `usage-logs/` instead, which also deploys the usage-logs collector. The per-tenant EnvoyFilter is removed when `MaasTenantConfig.spec.telemetry.enabled` is not `true`. When `usageLogging` is `true`, the EnvoyFilter sends plaintext OTLP to `usage-logs-collector`. When it is `false` or omitted, the EnvoyFilter sends OTLP over TLS to the headless `data-science-usage-logs-collector-headless` Service, trusting the OpenShift service CA and verifying the headless-service DNS name as SNI with TLS 1.2 or newer.
 
 When tenant telemetry is enabled and `usageLogging` is `false` or omitted, `MaasTenantConfig` phase is `Degraded` if `UsageLogsCollectorAvailable` or `PersesAvailable` is not `True` on `DSCInitialization`. When `usageLogging` is `true` and tenant telemetry is enabled, the phase is `Degraded` if `PersesAvailable` is not `True`. With telemetry disabled, `MaasTenantConfig` stays independent of those platform conditions.
 
 - **EnvoyFilter** (`maas-model-access-logs`) - emits OTLP structured access logs from the gateway
 - **OpenTelemetry Collector** (`usage-logs-collector`) - collects the logs and exports them to Loki; deployed only when `usageLogging` is `true`
-- **Tenancy Proxy** (`usage-logs-tenancy-proxy`) - filters user-scoped usage data for non-admin users; serves TLS 1.3 only and negotiates the `X25519MLKEM768` hybrid post-quantum key-exchange group when the client offers it, with classical groups as fallback (OpenSSL configuration in the `usage-tenancy-proxy-source` ConfigMap, selected via `OPENSSL_CONF`)
+- **maas-api read-only Loki proxy** - authorizes dashboard users, filters user-, organization-, and tenant-scoped usage data, and authenticates to the default LokiStack gateway with its service account before forwarding a restricted set of Loki read endpoints
 - **Perses Dashboard** (`dashboard-4-maas-usage-logs-admin`) - usage dashboard for administrators (shows information on all users)
 - **Perses Dashboard** (`dashboard-5-maas-usage-logs`) - user-scoped usage dashboard
+
+To override the proxy's upstream, create a `usage-logs-loki` Secret in the maas-api namespace with `LOKI_READ_ENDPOINT`, and optionally `LOKI_READ_TOKEN` or `LOKI_READ_CA`. Use HTTPS in production. An HTTP endpoint is accepted only without a bearer token and is intended solely for trusted development or test networks.
 
 !!! warning "Privacy"
     Structured access logs record request attributes.
@@ -163,7 +165,7 @@ kustomize build deployment/components/observability/observability/dashboards | k
 | `deployment/base/observability/` | TelemetryPolicy, Istio Telemetry, metadata-evaluator PrometheusRule |
 | `deployment/components/observability/prometheus/` | Standalone Prometheus (dev/test) |
 | `deployment/components/observability/observability/dashboards/` | Perses usage dashboard (metrics) |
-| `deployment/components/observability/usage-logs/dsci-managed/` | Perses usage-log dashboards and tenancy proxy |
+| `deployment/components/observability/usage-logs/dsci-managed/` | Perses usage-log dashboards |
 | `deployment/components/observability/usage-logs/` | Same resources plus the usage-logs collector; rendered when `usageLogging` is `true` |
 
 **Operator vs Kustomize drift:**

@@ -377,6 +377,37 @@ func TestApplyPlatformParamsWithRenderedOverlay(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, params.GatewayNamespace, firstParentRef["namespace"])
 	assert.Equal(t, params.GatewayName, firstParentRef["name"])
+	rules, found, err := unstructured.NestedSlice(httpRoute.Object, "spec", "rules")
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Len(t, rules, 11)
+	for ruleIndex, ruleValue := range rules {
+		rule, ok := ruleValue.(map[string]any)
+		require.True(t, ok)
+		filters, found, err := unstructured.NestedSlice(rule, "filters")
+		require.NoError(t, err)
+		if !found {
+			continue
+		}
+		for _, filterValue := range filters {
+			filter, ok := filterValue.(map[string]any)
+			require.True(t, ok)
+			rewrite, found, err := unstructured.NestedMap(filter, "urlRewrite", "path")
+			require.NoError(t, err)
+			if !found || rewrite["type"] != "ReplacePrefixMatch" {
+				continue
+			}
+			matches, found, err := unstructured.NestedSlice(rule, "matches")
+			require.NoError(t, err)
+			require.True(t, found, "rule %d", ruleIndex)
+			require.Len(t, matches, 1, "rule %d", ruleIndex)
+			match, ok := matches[0].(map[string]any)
+			require.True(t, ok)
+			pathType, _, err := unstructured.NestedString(match, "path", "type")
+			require.NoError(t, err)
+			assert.Equal(t, "PathPrefix", pathType, "rule %d", ruleIndex)
+		}
+	}
 
 	// maas-api-auth-policy is no longer rendered by kustomize; auth for maas-api-route
 	// is handled by the singleton maas-gateway-auth AuthPolicy (managed by the controller).
@@ -427,12 +458,12 @@ func TestApplyPlatformParamsWithRenderedOverlay(t *testing.T) {
 	assert.False(t, targetRefsFound, "targetRefs must be cleared; mutually exclusive with workloadSelector")
 
 	// Verify dual-stage filter chain with dual WASM anchors (router fallback omitted when Kuadrant WASM present):
-	//   [0..3] WasmPlugin + RHCL wasm, [4..9] per-route disable MERGE on maas-api-route rules 0–5,
-	//   [10..11] EPP reorder.
+	//   [0..3] WasmPlugin + RHCL wasm, [4..14] per-route disable MERGE on
+	//   maas-api-route rules 0–10, [15..16] EPP reorder.
 	configPatches, found, err := unstructured.NestedSlice(payloadEnvoyFilter.Object, "spec", "configPatches")
 	require.NoError(t, err)
 	require.True(t, found)
-	require.Len(t, configPatches, 12, "expected twelve configPatches (4x filter insert + 6x MERGE + 2x EPP reorder)")
+	require.Len(t, configPatches, 17, "expected seventeen configPatches (4x filter insert + 11x MERGE + 2x EPP reorder)")
 
 	wantWasmPluginAnchor := wasmpluginAnchorName(params.GatewayNamespace, params.GatewayName)
 	wantBeforeCluster := grpcClusterName(PayloadPreProcessingDeploymentName(tenantID), params.GatewayNamespace, 9004)
@@ -455,8 +486,8 @@ func TestApplyPlatformParamsWithRenderedOverlay(t *testing.T) {
 		assert.Equal(t, wantWasmClusters[i], cluster, "configPatches[%d] grpc cluster_name", i)
 	}
 
-	// Verify per-route ext_proc disable on maas-api-route rules 0–5.
-	for i := 4; i < 10; i++ {
+	// Verify per-route ext_proc disable on maas-api-route rules 0–10.
+	for i := 4; i < 15; i++ {
 		cp, ok := configPatches[i].(map[string]any)
 		require.True(t, ok, "configPatches[%d] should be a map", i)
 

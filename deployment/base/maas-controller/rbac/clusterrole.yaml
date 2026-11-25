@@ -39,10 +39,12 @@ rules:
   - watch
 - apiGroups:
   - ""
+  resourceNames:
+  - usage-logs-tenancy-proxy-tls
   resources:
-  - pods/log
+  - secrets
   verbs:
-  - get
+  - delete
 - apiGroups:
   - ""
   resources:
@@ -463,14 +465,6 @@ rules:
   - get
   - list
   - watch
-- apiGroups:
-  - security.openshift.io
-  resourceNames:
-  - nonroot-v2
-  resources:
-  - securitycontextconstraints
-  verbs:
-  - use
 - apiGroups:
   - serving.kserve.io
   resources:

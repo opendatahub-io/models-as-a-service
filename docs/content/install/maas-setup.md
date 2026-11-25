@@ -431,10 +431,9 @@ MaaS operand NetworkPolicies follow [ODH-ADR-Operator-0016](https://github.com/o
 | `maas-api-allow-gateway` | `maas-api` | Ingress | Gateway pods in `openshift-ingress` → `:8443` |
 | `maas-authorino-allow` | `maas-api` | Ingress | Authorino pods in Kuadrant/RHCL namespaces → `:8443` |
 | `maas-api-allow-monitoring` | `maas-api` | Ingress | `redhat-ods-monitoring` → `:9090` |
-| `maas-api-egress-restrict` | `maas-api` | Egress | OpenShift CoreDNS; Kubernetes API; allow-all by default (overridable or opt-out via `maasconfig/default`; see [PostgreSQL egress](#postgresql-egress)) |
+| `maas-api-egress-restrict` | `maas-api` | Egress | OpenShift CoreDNS; Kubernetes API; LokiStack gateway; allow-all by default (overridable or opt-out via `maasconfig/default`; see [PostgreSQL egress](#postgresql-egress)) |
+| `usage-logs-lokistack-allow-maas-api` | LokiStack gateway | Ingress | `maas-api` pods in the infrastructure namespace → `:8080` |
 | `usage-logs-collector-egress-restrict` | usage-logs collector | Egress | CoreDNS; LokiStack gateway pods (`app.kubernetes.io/name=lokistack`, `app.kubernetes.io/instance=usage`, `app.kubernetes.io/component=lokistack-gateway`) → `:8080` |
-| `usage-tenancy-proxy-allow-perses` | tenancy proxy | Ingress | Perses pods and kubelet probes (`host-network`) → `:8443` |
-| `usage-tenancy-proxy-egress-restrict` | tenancy proxy | Egress | CoreDNS; Kubernetes API; LokiStack gateway pods (`app.kubernetes.io/name=lokistack`, `app.kubernetes.io/component=lokistack-gateway`, `app.kubernetes.io/instance=data-science-usage-logs-lokistack`; `usage` when `usageLogging` is true) → `:8080` |
 
 ### PostgreSQL egress
 
@@ -450,7 +449,8 @@ from `maas-db-config`.
 
 1. DNS to OpenShift CoreDNS (ports `53` and `5353`)
 2. Kubernetes API (TCP `443` and `6443`, port-only rule — see below)
-3. **Allow-all** remaining egress (`egress: - {}`)
+3. LokiStack gateway pods in the monitoring namespace (`:8080`) when the Loki read proxy uses its default endpoint
+4. **Allow-all** remaining egress (`egress: - {}`)
 
 This works for any database topology without extra configuration. A separate companion `NetworkPolicy` **cannot**
 narrow egress while allow-all is present (NetworkPolicies are unioned).
@@ -462,7 +462,8 @@ For least-privilege egress, configure `maasconfig/default` (same pattern as the
 namespaces — you declare the peers explicitly.
 
 **Replace the default egress block** with `spec.networkPolicyEgressRules`. You are responsible for including DNS,
-Kubernetes API, and database destinations:
+Kubernetes API, and database destinations. MaaS appends the default LokiStack gateway rule automatically when the
+Loki read proxy uses its default endpoint; provide your own rule for an endpoint override:
 
 ```yaml
 apiVersion: maas.opendatahub.io/v1alpha1
@@ -538,7 +539,7 @@ usage logging, and so on) continue to be reconciled by `maas-controller`.
 
 ### Kubernetes API egress (port-only rule)
 
-`maas-api-egress-restrict` and `usage-tenancy-proxy-egress-restrict` allow egress to TCP ports `443` and `6443` without a `to` peer. This is a documented platform exception: in-cluster clients reach the API through the `kubernetes.default` Service ClusterIP, and on OVN-Kubernetes the policy may be evaluated against that VIP before apiserver endpoint DNAT. A `namespaceSelector` for `openshift-kube-apiserver` does not match that path and can block required API access (token projection, TokenReview). [ODH-ADR-Operator-0016](https://github.com/opendatahub-io/architecture-decision-records/blob/main/architecture-decision-records/operator/ODH-ADR-Operator-0016-networkpolicy-platform-contract.md) does not define a shared API-server peer mapping; components document this limitation instead of adding a broad ingress or egress allow-all.
+`maas-api-egress-restrict` allows egress to TCP ports `443` and `6443` without a `to` peer. This is a documented platform exception: in-cluster clients reach the API through the `kubernetes.default` Service ClusterIP, and on OVN-Kubernetes the policy may be evaluated against that VIP before apiserver endpoint DNAT. A `namespaceSelector` for `openshift-kube-apiserver` does not match that path and can block required API access (token projection, TokenReview). [ODH-ADR-Operator-0016](https://github.com/opendatahub-io/architecture-decision-records/blob/main/architecture-decision-records/operator/ODH-ADR-Operator-0016-networkpolicy-platform-contract.md) does not define a shared API-server peer mapping; components document this limitation instead of adding a broad ingress or egress allow-all.
 
 ## Next steps
 

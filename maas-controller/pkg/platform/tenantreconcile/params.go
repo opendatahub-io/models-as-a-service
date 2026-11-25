@@ -78,9 +78,9 @@ type PlatformParams struct {
 	MonitoringNamespace string
 
 	// LokiReadEndpoint is injected as LOKI_READ_ENDPOINT on the maas-api
-	// container, enabling the read-only Loki proxy (GET /v1/logs*). Empty
-	// disables the proxy. Resolved from the usage-logs-loki Secret in the app
-	// namespace; see resolveLokiReadEndpoint.
+	// container, enabling the read-only Loki proxy (GET /v1/logs*). It defaults
+	// to the LokiStack gateway in the monitoring namespace and can be overridden
+	// by the usage-logs-loki Secret; see resolveLokiReadEndpoint.
 	LokiReadEndpoint string
 
 	// LokiReadTokenFromSecret injects LOKI_READ_TOKEN on the maas-api container
@@ -89,6 +89,19 @@ type PlatformParams struct {
 	// var out of the render (and the SSA apply removes any previously applied
 	// value). See resolveLokiReadEndpoint.
 	LokiReadTokenFromSecret bool
+
+	// LokiReadUseServiceAccountToken injects
+	// LOKI_READ_USE_SERVICE_ACCOUNT_TOKEN on the maas-api container. It is only
+	// enabled for the default in-cluster Loki endpoint and when no Secret token
+	// is configured, so maas-api's projected token is never sent to a custom
+	// endpoint override.
+	LokiReadUseServiceAccountToken bool
+
+	// LokiReadScopeOrgID injects LOKI_READ_SCOPE_ORG_ID on the maas-api
+	// container. The default LokiStack endpoint selects the application tenant;
+	// custom endpoint overrides set an explicitly empty value to disable the
+	// LokiStack tenant header.
+	LokiReadScopeOrgID string
 
 	// LokiReadCAFromSecret injects LOKI_READ_CA on the maas-api container as a
 	// secretKeyRef to the usage-logs-loki Secret, appending the PEM bundle to
@@ -122,6 +135,9 @@ type PlatformParams struct {
 
 	// MaaSAPIEgressRules replaces the default maas-api egress block when non-empty.
 	MaaSAPIEgressRules []netwv1.NetworkPolicyEgressRule
+	// MaaSAPILokiEgressRule allows maas-api to reach the default LokiStack
+	// gateway when the read-only Loki proxy uses its default endpoint.
+	MaaSAPILokiEgressRule *netwv1.NetworkPolicyEgressRule
 	// MaaSAPIAdditionalEgressRules are appended after the base egress block.
 	MaaSAPIAdditionalEgressRules []netwv1.NetworkPolicyEgressRule
 	// MaaSAPIEgressNetworkPolicyDisabled omits maas-api-egress-restrict from the
@@ -669,6 +685,8 @@ func patchNetworkPolicyResource(
 		return patchMaaSAPIDeploymentNSNetworkPolicy(r, params)
 	case baseMaaSAPIEgressRestrictNetworkPolicyName:
 		return patchMaaSAPIEgressRestrictNetworkPolicy(r, params)
+	case baseMaaSAPIMonitoringNetworkPolicyName:
+		return patchMaaSAPIMonitoringNetworkPolicy(r, params)
 	case PayloadProcessingName:
 		r.SetName(PayloadProcessingNetworkPolicyName(params.TenantIdentifier))
 		return patchPayloadProcessingNetworkPolicy(log, r, params)
@@ -803,6 +821,83 @@ func maasAPIDeploymentNamespacePeerIn(controllerNamespace, labelKey string, labe
 	}
 }
 
+// patchMaaSAPIMonitoringNetworkPolicy points the Perses ingress rule at the
+// configured monitoring namespace instead of a kustomize-time default.
+func patchMaaSAPIMonitoringNetworkPolicy(r *unstructured.Unstructured, params PlatformParams) error {
+	ingress, found, err := unstructured.NestedSlice(r.Object, "spec", "ingress")
+	if err != nil {
+		return fmt.Errorf("read maas-api monitoring NetworkPolicy ingress: %w", err)
+	}
+	if !found || len(ingress) == 0 {
+		return errors.New("maas-api monitoring NetworkPolicy ingress is missing")
+	}
+	if params.MonitoringNamespace == "" {
+		return nil
+	}
+
+	patched := false
+	for ruleIndex, ruleValue := range ingress {
+		rule, ok := ruleValue.(map[string]any)
+		if !ok {
+			return fmt.Errorf("maas-api monitoring NetworkPolicy ingress[%d] is not an object", ruleIndex)
+		}
+		ports, _, err := unstructured.NestedSlice(rule, "ports")
+		if err != nil {
+			return fmt.Errorf("read maas-api monitoring NetworkPolicy ingress[%d] ports: %w", ruleIndex, err)
+		}
+		allowsHTTPS := false
+		for _, portValue := range ports {
+			port, ok := portValue.(map[string]any)
+			if !ok {
+				continue
+			}
+			protocol, _, _ := unstructured.NestedString(port, "protocol")
+			portNumber, _, _ := unstructured.NestedInt64(port, "port")
+			if (protocol == "" || protocol == "TCP") && portNumber == 8443 {
+				allowsHTTPS = true
+				break
+			}
+		}
+		if !allowsHTTPS {
+			continue
+		}
+		from, found, err := unstructured.NestedSlice(rule, "from")
+		if err != nil {
+			return fmt.Errorf("read maas-api monitoring NetworkPolicy ingress[%d] from: %w", ruleIndex, err)
+		}
+		if !found || len(from) == 0 {
+			return fmt.Errorf("maas-api monitoring NetworkPolicy ingress[%d] has no peers", ruleIndex)
+		}
+		patchedPeer := false
+		for peerIndex, peerValue := range from {
+			peer, ok := peerValue.(map[string]any)
+			if !ok {
+				return fmt.Errorf("maas-api monitoring NetworkPolicy ingress[%d] peer[%d] is not an object", ruleIndex, peerIndex)
+			}
+			managedBy, _, _ := unstructured.NestedString(peer, "podSelector", "matchLabels", "app.kubernetes.io/managed-by")
+			if managedBy != "perses-operator" {
+				continue
+			}
+			if err := unstructured.SetNestedField(peer, params.MonitoringNamespace,
+				"namespaceSelector", "matchLabels", "kubernetes.io/metadata.name"); err != nil {
+				return fmt.Errorf("write maas-api monitoring NetworkPolicy ingress[%d] peer[%d] namespace: %w", ruleIndex, peerIndex, err)
+			}
+			from[peerIndex] = peer
+			patchedPeer = true
+		}
+		if !patchedPeer {
+			continue
+		}
+		rule["from"] = from
+		ingress[ruleIndex] = rule
+		patched = true
+	}
+	if !patched {
+		return errors.New("maas-api monitoring NetworkPolicy is missing the Perses HTTPS rule")
+	}
+	return unstructured.SetNestedSlice(r.Object, ingress, "spec", "ingress")
+}
+
 // patchMaaSAPIEgressRestrictNetworkPolicy applies maasconfig egress overrides to
 // maas-api-egress-restrict. Default: DNS + API + allow-all. networkPolicyEgressRules
 // on Config replaces the default block; networkPolicyAdditionalEgressRules appends.
@@ -844,6 +939,18 @@ func patchMaaSAPIEgressRestrictNetworkPolicy(r *unstructured.Unstructured, param
 			return fmt.Errorf("convert additional maas-api egress rules: %w", err)
 		}
 		egress = append(egress, additional...)
+	}
+
+	if params.MaaSAPILokiEgressRule != nil {
+		lokiRules, err := networkPolicyEgressRulesToUnstructured([]netwv1.NetworkPolicyEgressRule{*params.MaaSAPILokiEgressRule})
+		if err != nil {
+			return fmt.Errorf("convert maas-api Loki egress rule: %w", err)
+		}
+		for _, rule := range lokiRules {
+			if !egressRuleInList(rule, egress) {
+				egress = append(egress, rule)
+			}
+		}
 	}
 
 	return unstructured.SetNestedSlice(r.Object, egress, "spec", "egress")
@@ -1095,6 +1202,16 @@ func patchMaaSAPIDeployment(log logr.Logger, r *unstructured.Unstructured, param
 			if err := setOrAddEnvVarFromSecret(r, "maas-api", "LOKI_READ_TOKEN", LokiReadSecretName, LokiReadTokenSecretKey); err != nil {
 				return fmt.Errorf("patch LOKI_READ_TOKEN: %w", err)
 			}
+		}
+		if params.LokiReadUseServiceAccountToken {
+			if err := setOrAddEnvVar(r, "maas-api", "LOKI_READ_USE_SERVICE_ACCOUNT_TOKEN", "true"); err != nil {
+				return fmt.Errorf("patch LOKI_READ_USE_SERVICE_ACCOUNT_TOKEN: %w", err)
+			}
+		}
+		// Always set this value when the proxy is enabled: an empty value must
+		// override maas-api's application-tenant default for custom endpoints.
+		if err := setOrAddEnvVar(r, "maas-api", "LOKI_READ_SCOPE_ORG_ID", params.LokiReadScopeOrgID); err != nil {
+			return fmt.Errorf("patch LOKI_READ_SCOPE_ORG_ID: %w", err)
 		}
 		// The CA bundle follows the same secretKeyRef pattern. Omitted when the
 		// Secret has no CA key; the SSA apply then removes any previously applied
@@ -1605,7 +1722,7 @@ func patchPayloadProcessingEnvoyFilter(log logr.Logger, r *unstructured.Unstruct
 	const (
 		wasmFilterPatchCount     = 4 // WasmPlugin pair + RHCL 1.4 wasm pair
 		routerFallbackPatchCount = 2 // router anchor when Kuadrant WASM is absent
-		routeDisablePatchCount   = 6
+		routeDisablePatchCount   = 11
 		// Trailing REMOVE + INSERT_BEFORE that move Istio's InferencePool filter in front of
 		// the router. Their anchors (Istio's fixed filter name and the router) are the same on
 		// every gateway, so no mode rewrites them.
@@ -1690,8 +1807,8 @@ func patchPayloadProcessingEnvoyFilter(log logr.Logger, r *unstructured.Unstruct
 	// Route patches disable ext_proc on all non-inference maas-api routes; the EPP reorder
 	// patches after them need no rewrite.
 	// Route name uses Istio's Gateway API convention: <namespace>.<httproute-name>.<rule-index>.
-	// Rule indices: 0=/v1/models, 1=/v1/subscriptions, 2=/v1/api-keys, 3=/maas-api/v1/*,
-	// 4=/maas-api/health, 5=/v1/me
+	// Rule indices: 0=/v1/models, 1=/v1/subscriptions, 2=/v1/api-keys,
+	// 3-8=public /maas-api/v1/* prefixes, 9=/maas-api/health, 10=/v1/me
 	for i := routeDisablePatchBase; i < routeDisablePatchEnd; i++ {
 		patch, ok := configPatches[i].(map[string]any)
 		if !ok {

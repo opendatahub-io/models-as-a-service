@@ -2,7 +2,7 @@ package lokiproxy
 
 import (
 	"net/url"
-	"sort"
+	"strings"
 	"testing"
 
 	logqlv2 "github.com/observatorium/api/logql/v2"
@@ -10,264 +10,357 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func orgMatcher() *labels.Matcher {
-	return &labels.Matcher{Type: labels.MatchEqual, Name: "organization_id", Value: "1234"}
+func requiredTenantMatcher() *labels.Matcher {
+	return &labels.Matcher{Type: labels.MatchEqual, Name: tenantLabel, Value: "tenant-a"}
 }
 
-// enforcedQuery applies enforceQueryMatchers and returns the resulting "query"
-// parameter, mirroring the rewrite the proxy performs before forwarding.
-func enforcedQuery(t *testing.T, initial url.Values, required []*labels.Matcher, queryEndpoint bool) string {
-	t.Helper()
-
-	v := url.Values{}
-	for key, values := range initial {
-		v[key] = append([]string{}, values...)
-	}
-	require.NoError(t, enforceQueryMatchers(v, required, queryEndpoint))
-	return v.Get(queryParam)
+func requiredOrganizationMatcher() *labels.Matcher {
+	return &labels.Matcher{Type: labels.MatchEqual, Name: organizationLabel, Value: "1234"}
 }
 
-// selectorMatchers parses a LogQL expression and returns the matchers of every
-// stream selector found in it (sorted for stable comparison). Every selector
-// is visited through its StreamMatcherExpr, which yields each matcher exactly
-// once.
-func selectorMatchers(t *testing.T, query string) []string {
+func requiredUserMatcher() *labels.Matcher {
+	return &labels.Matcher{Type: labels.MatchEqual, Name: userLabel, Value: "user-abc"}
+}
+
+func enforcedQuery(t *testing.T, query string, required []*labels.Matcher, queryEndpoint bool) string {
 	t.Helper()
 
-	expr, err := logqlv2.ParseExpr(query)
-	require.NoError(t, err)
-
-	var matchers []string
-	expr.Walk(func(e any) {
-		if le, ok := e.(*logqlv2.StreamMatcherExpr); ok {
-			for _, m := range le.Matchers() {
-				matchers = append(matchers, m.String())
-			}
-		}
-	})
-	sort.Strings(matchers)
-	return matchers
+	values := url.Values{queryParam: []string{query}}
+	require.NoError(t, enforceQueryMatchers(values, required, queryEndpoint))
+	return values.Get(queryParam)
 }
 
 func TestEnforceQueryMatchersQueryEndpoint(t *testing.T) {
 	t.Parallel()
-	tt := []struct {
-		desc     string
-		query    string
-		expected []string
+
+	required := []*labels.Matcher{
+		requiredTenantMatcher(),
+		requiredOrganizationMatcher(),
+		requiredUserMatcher(),
+	}
+	expectedFilter := `| tenant_name = "tenant-a" and organization_id = "1234" and user_id = "user-abc"`
+
+	tests := []struct {
+		name  string
+		query string
 	}{
 		{
-			desc:     "query with no organization matcher is extended",
-			query:    `{app="api"}`,
-			expected: []string{`app="api"`, `organization_id="1234"`},
+			name:  "plain selector",
+			query: `{app="api"}`,
 		},
 		{
-			desc:     "conflicting organization matcher is overwritten",
-			query:    `{app="api", organization_id="other-org"}`,
-			expected: []string{`app="api"`, `organization_id="1234"`},
+			name:  "existing identity selectors",
+			query: `{app="api", organization_id="other", user_id="victim"}`,
 		},
 		{
-			desc:     "client matcher on the organization label is always overwritten",
-			query:    `{organization_id="1234", app="api"}`,
-			expected: []string{`app="api"`, `organization_id="1234"`},
+			name:  "pipeline expression",
+			query: `{app="api"} | json | level="info"`,
 		},
 		{
-			desc:     "regex organization matcher is overwritten",
-			query:    `{organization_id=~".*"}`,
-			expected: []string{`organization_id="1234"`},
+			name:  "metric expression",
+			query: `sum(count_over_time({app="api"}[5m]))`,
 		},
 		{
-			desc:     "pipeline expression selector is enforced",
-			query:    `{app="api"} | json | foo="bar"`,
-			expected: []string{`app="api"`, `organization_id="1234"`},
+			name:  "binary expression",
+			query: `sum(rate({app="a"}[1m])) or sum(rate({app="b"}[1m]))`,
 		},
 		{
-			desc:     "metric query selector is enforced",
-			query:    `sum(count_over_time({app="api"}[5m]))`,
-			expected: []string{`app="api"`, `organization_id="1234"`},
+			name: "dashboard variable pipeline",
+			query: `count by (api_key) (count_over_time({service_name="models-as-a-service"} ` +
+				`| user_id!="" | user_id!="-" | label_format api_key="{{.key_name}} ({{.user_id}})" ` +
+				`| keep api_key [5m]))`,
 		},
 		{
-			desc:     "binary expression selectors are enforced",
-			query:    `sum(rate({app="a"}[1m])) or sum(rate({app="b"}[1m]))`,
-			expected: []string{`app="a"`, `app="b"`, `organization_id="1234"`, `organization_id="1234"`},
+			name: "dashboard raw-string pipeline",
+			query: `sum by (target_tokens) (sum_over_time({service_name="models-as-a-service"} ` +
+				"| label_format target_tokens=`{{ if eq .response_type \"hit\" }}{{ .tokens_total }}{{ else }}0{{ end }}`" +
+				` | unwrap target_tokens [5m]))`,
 		},
 	}
 
-	for _, tc := range tt {
-		t.Run(tc.desc, func(t *testing.T) {
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
-			query := enforcedQuery(t, url.Values{queryParam: []string{tc.query}}, []*labels.Matcher{orgMatcher()}, true)
-			require.Equal(t, tc.expected, selectorMatchers(t, query))
+			query := enforcedQuery(t, test.query, required, true)
+			require.Contains(t, query, `tenant_name = "tenant-a"`)
+			require.Equal(
+				t,
+				strings.Count(query, `tenant_name = "tenant-a"`),
+				strings.Count(query, " "+expectedFilter),
+				"query: %s",
+				query,
+			)
 		})
 	}
 }
 
-func TestEnforceQueryMatchersQueryEndpointEmptyQuery(t *testing.T) {
-	// On query endpoints an empty query is left untouched; Loki rejects it.
-	v := url.Values{"limit": []string{"10"}}
-	require.NoError(t, enforceQueryMatchers(v, []*labels.Matcher{orgMatcher()}, true))
-	require.Empty(t, v.Get(queryParam))
-	require.Equal(t, "10", v.Get("limit"))
+func TestEnforceQueryMatchersRejectsRawLogBinaryExpression(t *testing.T) {
+	t.Parallel()
+
+	values := url.Values{queryParam: []string{`{app="a"} or {app="b"}`}}
+	err := enforceQueryMatchers(
+		values,
+		[]*labels.Matcher{
+			requiredTenantMatcher(),
+			requiredOrganizationMatcher(),
+			requiredUserMatcher(),
+		},
+		true,
+	)
+	require.ErrorIs(t, err, ErrInvalidQuery)
+	require.ErrorContains(t, err, "rewritten query does not parse")
+}
+
+// The raw-string value closes its quote when the query is re-rendered and
+// hides the rest of the original query behind a comment, so the selector count
+// stays the same while an unscoped selector reaches Loki.
+func TestEnforceQueryMatchersRejectsCountBalancedBreakout(t *testing.T) {
+	t.Parallel()
+
+	required := []*labels.Matcher{
+		{Type: labels.MatchEqual, Name: tenantLabel, Value: "tenant-a"},
+		{Type: labels.MatchEqual, Name: userLabel, Value: "alice"},
+	}
+	query := strings.ReplaceAll(
+		`sum(count_over_time({service_name="models-as-a-service"} | x = @a") [1h])) or count by `+
+			`(tenant_name, line) (count_over_time({service_name=~".+"} `+
+			`| label_format line="{{__line__}}" [1h])) #@ [1h])) or count by(tenant_name,line) `+
+			`(count_over_time({service_name="nothing"} | label_format line="{{__line__}}" [1h]))`,
+		"@", "`",
+	)
+	values := url.Values{queryParam: []string{query}}
+
+	err := enforceQueryMatchers(values, required, true)
+
+	require.ErrorIs(t, err, ErrInvalidQuery, "forwarded: %s", values.Get(queryParam))
+}
+
+func TestEnforceQueryMatchersRejectsRendererInjection(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		query string
+		valid bool
+	}{
+		{
+			name:  "raw string breakout",
+			valid: false,
+			query: `sum(count_over_time({service_name="models-as-a-service"} | x = ` + "`" +
+				`a") [1h])) or count by (tenant_name, line) (count_over_time({service_name=~".+"} ` +
+				`| label_format line="{{__line__}}" [1h])) #@` + "`" + ` [1h]))`,
+		},
+		{
+			name:  "label_replace parameter breakout",
+			valid: false,
+			query: `label_replace(sum(count_over_time({service_name="models-as-a-service"}[1h])), ` +
+				`"destination", "$1", "source", ".*\") or count by (tenant_name) ` +
+				`(count_over_time({service_name=~\".+\"}[1h])) #")`,
+		},
+		{
+			name:  "benign raw string containing a double quote",
+			valid: true,
+			query: `{app="api"} | line_format ` + "`" + `{{ if eq .level \"info\" }}{{ .message }}{{ end }}` + "`",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			values := url.Values{queryParam: []string{test.query}}
+			err := enforceQueryMatchers(values, []*labels.Matcher{
+				requiredTenantMatcher(),
+				requiredOrganizationMatcher(),
+				requiredUserMatcher(),
+			}, true)
+			if test.valid {
+				require.NoError(t, err)
+				rewritten := values.Get(queryParam)
+				require.Contains(
+					t,
+					rewritten,
+					`| tenant_name = "tenant-a" and organization_id = "1234" and user_id = "user-abc"`,
+				)
+				_, parseErr := logqlv2.ParseExpr(rewritten)
+				require.NoError(t, parseErr, "query: %s", rewritten)
+				return
+			}
+
+			require.ErrorIs(t, err, ErrInvalidQuery)
+			require.ErrorContains(t, err, "rewritten query failed selector enforcement")
+		})
+	}
+}
+
+func TestEnforceQueryMatchersEscapesPipelineMatcherValues(t *testing.T) {
+	t.Parallel()
+
+	maliciousUsername := `user-" or organization_id!="1234`
+	query := enforcedQuery(
+		t,
+		`{app="api"}`,
+		[]*labels.Matcher{
+			requiredTenantMatcher(),
+			requiredOrganizationMatcher(),
+			{Type: labels.MatchEqual, Name: userLabel, Value: maliciousUsername},
+		},
+		true,
+	)
+
+	_, err := logqlv2.ParseExpr(query)
+	require.NoError(t, err, "query: %s", query)
+	require.Contains(t, query, `user_id = "user-\" or organization_id!=\"1234"`)
+}
+
+func TestEnforceQueryMatchersQueryEndpointEmptyAndOversized(t *testing.T) {
+	values := url.Values{"limit": []string{"100"}}
+	err := enforceQueryMatchers(values, []*labels.Matcher{requiredTenantMatcher()}, true)
+	require.ErrorIs(t, err, ErrInvalidQuery)
+	require.ErrorContains(t, err, "empty query")
+	require.Equal(t, "100", values.Get("limit"))
+
+	values = url.Values{queryParam: []string{strings.Repeat("a", maxQueryLength+1)}}
+	err = enforceQueryMatchers(values, []*labels.Matcher{requiredTenantMatcher()}, true)
+	require.ErrorIs(t, err, ErrInvalidQuery)
+	require.ErrorContains(t, err, "query too long")
 }
 
 func TestEnforceQueryMatchersLabelEndpoints(t *testing.T) {
 	t.Parallel()
-	tt := []struct {
-		desc     string
-		query    string
-		expected []string
-	}{
-		{
-			desc:     "empty query becomes an organization selector",
-			query:    "",
-			expected: []string{`organization_id="1234"`},
-		},
-		{
-			desc:     "client selector is combined with organization matcher",
-			query:    `{app="api"}`,
-			expected: []string{`app="api"`, `organization_id="1234"`},
-		},
-	}
 
-	for _, tc := range tt {
-		t.Run(tc.desc, func(t *testing.T) {
-			t.Parallel()
+	t.Run("empty query uses the tenant selector", func(t *testing.T) {
+		t.Parallel()
+		require.Equal(
+			t,
+			`{tenant_name="tenant-a"}`,
+			enforcedQuery(t, "", []*labels.Matcher{requiredTenantMatcher()}, false),
+		)
+	})
 
-			query := enforcedQuery(t, url.Values{queryParam: []string{tc.query}}, []*labels.Matcher{orgMatcher()}, false)
-			require.Equal(t, tc.expected, selectorMatchers(t, query))
-		})
-	}
-}
+	t.Run("selector-only query gains the tenant matcher", func(t *testing.T) {
+		t.Parallel()
+		query := enforcedQuery(
+			t,
+			`{app="api"}`,
+			[]*labels.Matcher{requiredTenantMatcher()},
+			false,
+		)
+		require.Contains(t, query, `app="api"`)
+		require.Contains(t, query, `tenant_name="tenant-a"`)
+	})
 
-// The user-scoped view injects both the organization and the user matcher;
-// conflicting client matchers for either label must be overridden.
-func TestEnforceQueryMatchersUserScoped(t *testing.T) {
-	t.Parallel()
+	t.Run("identity filters are rejected", func(t *testing.T) {
+		t.Parallel()
+		for _, query := range []string{"", `{app="api"}`} {
+			values := url.Values{queryParam: []string{query}}
+			err := enforceQueryMatchers(
+				values,
+				[]*labels.Matcher{requiredTenantMatcher(), requiredOrganizationMatcher()},
+				false,
+			)
+			require.ErrorIs(t, err, ErrInvalidQuery)
+			require.ErrorContains(t, err, "label endpoints require indexed stream labels")
+		}
+	})
 
-	required := []*labels.Matcher{
-		orgMatcher(),
-		{Type: labels.MatchEqual, Name: "user_id", Value: "user-abc"},
-	}
-
-	tt := []struct {
-		desc     string
-		query    string
-		expected []string
-	}{
-		{
-			desc:     "plain selector gains both matchers",
-			query:    `{app="api"}`,
-			expected: []string{`app="api"`, `organization_id="1234"`, `user_id="user-abc"`},
-		},
-		{
-			desc:     "conflicting user matcher is overwritten",
-			query:    `{user_id="victim", organization_id="other"}`,
-			expected: []string{`organization_id="1234"`, `user_id="user-abc"`},
-		},
-		{
-			desc:     "negative user matcher is overwritten",
-			query:    `{user_id!="user-abc"}`,
-			expected: []string{`organization_id="1234"`, `user_id="user-abc"`},
-		},
-		{
-			desc:     "regex user matcher is overwritten",
-			query:    `{user_id=~".*"}`,
-			expected: []string{`organization_id="1234"`, `user_id="user-abc"`},
-		},
-	}
-
-	for _, tc := range tt {
-		t.Run(tc.desc, func(t *testing.T) {
-			t.Parallel()
-
-			query := enforcedQuery(t, url.Values{queryParam: []string{tc.query}}, required, true)
-			require.Equal(t, tc.expected, selectorMatchers(t, query))
-		})
-	}
+	t.Run("access-mode matrix", func(t *testing.T) {
+		t.Parallel()
+		tests := []struct {
+			name     string
+			required []*labels.Matcher
+			allowed  bool
+		}{
+			{
+				name:     "tenant admin",
+				required: []*labels.Matcher{requiredTenantMatcher()},
+				allowed:  true,
+			},
+			{
+				name: "tenant user",
+				required: []*labels.Matcher{
+					requiredTenantMatcher(),
+					requiredUserMatcher(),
+				},
+			},
+			{
+				name: "organization admin",
+				required: []*labels.Matcher{
+					requiredTenantMatcher(),
+					requiredOrganizationMatcher(),
+				},
+			},
+			{
+				name: "organization user",
+				required: []*labels.Matcher{
+					requiredTenantMatcher(),
+					requiredOrganizationMatcher(),
+					requiredUserMatcher(),
+				},
+			},
+		}
+		for _, test := range tests {
+			t.Run(test.name, func(t *testing.T) {
+				t.Parallel()
+				err := enforceQueryMatchers(url.Values{}, test.required, false)
+				if test.allowed {
+					require.NoError(t, err)
+					return
+				}
+				require.ErrorIs(t, err, ErrInvalidQuery)
+			})
+		}
+	})
 }
 
 func TestEnforceQueryMatchersInvalidQuery(t *testing.T) {
-	v := url.Values{queryParam: []string{`{app="unclosed`}}
-	err := enforceQueryMatchers(v, []*labels.Matcher{orgMatcher()}, true)
+	values := url.Values{queryParam: []string{`{app="unclosed`}}
+	err := enforceQueryMatchers(values, []*labels.Matcher{requiredTenantMatcher()}, true)
 	require.ErrorIs(t, err, ErrInvalidQuery)
 }
 
-func TestCombineLabelMatchers(t *testing.T) {
+func TestPartitionRequiredMatchers(t *testing.T) {
 	t.Parallel()
-	tt := []struct {
-		desc             string
-		queryMatchers    []*labels.Matcher
-		requiredMatchers []*labels.Matcher
-		expected         []string
-	}{
-		{
-			desc:             "required matcher added when label absent",
-			queryMatchers:    []*labels.Matcher{{Type: labels.MatchEqual, Name: "app", Value: "api"}},
-			requiredMatchers: []*labels.Matcher{orgMatcher()},
-			expected:         []string{`app="api"`, `organization_id="1234"`},
-		},
-		{
-			desc:             "conflicting matcher silently overwritten",
-			queryMatchers:    []*labels.Matcher{{Type: labels.MatchEqual, Name: "organization_id", Value: "other"}},
-			requiredMatchers: []*labels.Matcher{orgMatcher()},
-			expected:         []string{`organization_id="1234"`},
-		},
-		{
-			desc:             "exact match on allowed value also overwritten",
-			queryMatchers:    []*labels.Matcher{orgMatcher()},
-			requiredMatchers: []*labels.Matcher{orgMatcher()},
-			expected:         []string{`organization_id="1234"`},
-		},
-		{
-			desc:             "regex matcher overwritten",
-			queryMatchers:    []*labels.Matcher{{Type: labels.MatchRegexp, Name: "organization_id", Value: ".*"}},
-			requiredMatchers: []*labels.Matcher{orgMatcher()},
-			expected:         []string{`organization_id="1234"`},
-		},
-		{
-			desc:             "negative matcher overwritten",
-			queryMatchers:    []*labels.Matcher{{Type: labels.MatchNotEqual, Name: "organization_id", Value: "1234"}},
-			requiredMatchers: []*labels.Matcher{orgMatcher()},
-			expected:         []string{`organization_id="1234"`},
-		},
-	}
 
-	for _, tc := range tt {
-		t.Run(tc.desc, func(t *testing.T) {
-			t.Parallel()
+	querySelector, queryPipeline := partitionRequiredMatchers([]*labels.Matcher{
+		requiredTenantMatcher(),
+		requiredOrganizationMatcher(),
+		requiredUserMatcher(),
+	}, true)
+	require.Empty(t, querySelector)
+	require.Equal(
+		t,
+		[]*labels.Matcher{
+			requiredTenantMatcher(),
+			requiredOrganizationMatcher(),
+			requiredUserMatcher(),
+		},
+		queryPipeline,
+	)
 
-			combined := combineLabelMatchers(tc.queryMatchers, tc.requiredMatchers)
-			got := make([]string, 0, len(combined))
-			for _, m := range combined {
-				got = append(got, m.String())
-			}
-			sort.Strings(got)
-			sort.Strings(tc.expected)
-			require.Equal(t, tc.expected, got)
-		})
-	}
+	labelSelector, labelPipeline := partitionRequiredMatchers([]*labels.Matcher{
+		requiredTenantMatcher(),
+		requiredOrganizationMatcher(),
+	}, false)
+	require.Equal(t, []*labels.Matcher{requiredTenantMatcher()}, labelSelector)
+	require.Equal(t, []*labels.Matcher{requiredOrganizationMatcher()}, labelPipeline)
 }
 
-// The injected matcher must always win over client-supplied matchers for the
-// same label, including regex and pipeline forms (defense in depth on top of
-// the query endpoint tests above).
-func TestInjectedMatcherAlwaysWins(t *testing.T) {
+func TestCombineLabelMatchersPreservesOnlySelectorRequirements(t *testing.T) {
 	t.Parallel()
 
-	required := []*labels.Matcher{orgMatcher()}
+	combined := combineLabelMatchers(
+		[]*labels.Matcher{{Type: labels.MatchEqual, Name: "app", Value: "api"}},
+		[]*labels.Matcher{requiredTenantMatcher()},
+	)
+	require.ElementsMatch(t, []string{`app="api"`, `tenant_name="tenant-a"`}, matcherStrings(combined))
+}
 
-	queries := []string{
-		`{organization_id="other"}`,
-		`{organization_id=~".*"}`,
-		`{organization_id!~"12.*"}`,
-		`{organization_id!="1234"} | json`,
-		`sum(count_over_time({organization_id=~"other|12"}[5m]))`,
+func matcherStrings(matchers []*labels.Matcher) []string {
+	result := make([]string, 0, len(matchers))
+	for _, matcher := range matchers {
+		result = append(result, matcher.String())
 	}
-
-	for _, query := range queries {
-		enforced := enforcedQuery(t, url.Values{queryParam: []string{query}}, required, true)
-		matchers := selectorMatchers(t, enforced)
-		require.Contains(t, matchers, `organization_id="1234"`, "query: %s", query)
-	}
+	return result
 }

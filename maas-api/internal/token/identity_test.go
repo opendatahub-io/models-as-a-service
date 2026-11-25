@@ -271,7 +271,7 @@ func TestGetMe(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	handler := token.NewHandler(logger.New(false), "tenant")
 	router := gin.New()
-	router.GET("/v1/me", handler.ExtractVerifiedIdentityOptional(), handler.ExtractUserInfoOptional(), handler.GetMe)
+	router.GET("/v1/me", handler.ExtractVerifiedIdentityOptional(), handler.ExtractUserInfoOptional(token.AuthModeGateway), handler.GetMe)
 
 	request := httptest.NewRequest(http.MethodGet, "/v1/me?organization_id=another-org", nil)
 	request.Header.Set(constant.HeaderIdentity, validIdentityEnvelope)
@@ -307,7 +307,7 @@ func TestGetMeRequiresAnAuthenticatedIdentity(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	handler := token.NewHandler(logger.New(false), "tenant")
 	router := gin.New()
-	router.GET("/v1/me", handler.ExtractVerifiedIdentityOptional(), handler.ExtractUserInfoOptional(), handler.GetMe)
+	router.GET("/v1/me", handler.ExtractVerifiedIdentityOptional(), handler.ExtractUserInfoOptional(token.AuthModeGateway), handler.GetMe)
 
 	request := httptest.NewRequest(http.MethodGet, "/v1/me", nil)
 	request.Header.Set(constant.HeaderUsername, "alice")
@@ -323,7 +323,7 @@ func TestGetMeUsesGatewayIdentityForOtherAuthenticationMethods(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	handler := token.NewHandler(logger.New(false), "tenant")
 	router := gin.New()
-	router.GET("/v1/me", handler.ExtractVerifiedIdentityOptional(), handler.ExtractUserInfoOptional(), handler.GetMe)
+	router.GET("/v1/me", handler.ExtractVerifiedIdentityOptional(), handler.ExtractUserInfoOptional(token.AuthModeGateway), handler.GetMe)
 
 	request := httptest.NewRequest(http.MethodGet, "/v1/me", nil)
 	request.Header.Set(constant.HeaderUsername, "alice")
@@ -385,7 +385,7 @@ func TestGetMeRejectsInferenceAPIKeys(t *testing.T) {
 			gin.SetMode(gin.TestMode)
 			handler := token.NewHandler(logger.New(false), "tenant")
 			router := gin.New()
-			router.GET("/v1/me", handler.ExtractVerifiedIdentityOptional(), handler.ExtractUserInfoOptional(), handler.GetMe)
+			router.GET("/v1/me", handler.ExtractVerifiedIdentityOptional(), handler.ExtractUserInfoOptional(token.AuthModeGateway), handler.GetMe)
 
 			request := httptest.NewRequest(http.MethodGet, "/v1/me", nil)
 			request.Header.Set(constant.HeaderUsername, "alice")
@@ -404,7 +404,7 @@ func TestGetMeRejectsInferenceAPIKeysWithVerifiedIdentity(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	handler := token.NewHandler(logger.New(false), "tenant")
 	router := gin.New()
-	router.GET("/v1/me", handler.ExtractVerifiedIdentityOptional(), handler.ExtractUserInfoOptional(), handler.GetMe)
+	router.GET("/v1/me", handler.ExtractVerifiedIdentityOptional(), handler.ExtractUserInfoOptional(token.AuthModeGateway), handler.GetMe)
 
 	request := httptest.NewRequest(http.MethodGet, "/v1/me", nil)
 	request.Header.Set(constant.HeaderIdentity, validIdentityEnvelope)
@@ -421,7 +421,7 @@ func TestGetMePrefersVerifiedSSOIdentityOverGatewayIdentity(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	handler := token.NewHandler(logger.New(false), "tenant")
 	router := gin.New()
-	router.GET("/v1/me", handler.ExtractVerifiedIdentityOptional(), handler.ExtractUserInfoOptional(), handler.GetMe)
+	router.GET("/v1/me", handler.ExtractVerifiedIdentityOptional(), handler.ExtractUserInfoOptional(token.AuthModeGateway), handler.GetMe)
 
 	request := httptest.NewRequest(http.MethodGet, "/v1/me", nil)
 	request.Header.Set(constant.HeaderIdentity, validIdentityEnvelope)
@@ -444,7 +444,7 @@ func TestGetMeIgnoresIncompleteLegacyHeadersWhenVerifiedIdentityPresent(t *testi
 	gin.SetMode(gin.TestMode)
 	handler := token.NewHandler(logger.New(false), "tenant")
 	router := gin.New()
-	router.GET("/v1/me", handler.ExtractVerifiedIdentityOptional(), handler.ExtractUserInfoOptional(), handler.GetMe)
+	router.GET("/v1/me", handler.ExtractVerifiedIdentityOptional(), handler.ExtractUserInfoOptional(token.AuthModeGateway), handler.GetMe)
 
 	request := httptest.NewRequest(http.MethodGet, "/v1/me", nil)
 	request.Header.Set(constant.HeaderIdentity, validIdentityEnvelope)
@@ -464,7 +464,7 @@ func TestGetMeIgnoresMalformedLegacyHeadersWhenVerifiedIdentityPresent(t *testin
 	gin.SetMode(gin.TestMode)
 	handler := token.NewHandler(logger.New(false), "tenant")
 	router := gin.New()
-	router.GET("/v1/me", handler.ExtractVerifiedIdentityOptional(), handler.ExtractUserInfoOptional(), handler.GetMe)
+	router.GET("/v1/me", handler.ExtractVerifiedIdentityOptional(), handler.ExtractUserInfoOptional(token.AuthModeGateway), handler.GetMe)
 
 	request := httptest.NewRequest(http.MethodGet, "/v1/me", nil)
 	request.Header.Set(constant.HeaderIdentity, validIdentityEnvelope)

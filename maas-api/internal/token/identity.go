@@ -501,6 +501,30 @@ func (h *Handler) RejectTrustedIdentityHeaders() gin.HandlerFunc {
 	}
 }
 
+// RejectLegacyGatewayIdentityHeaders keeps internal Loki routes on the verified
+// identity envelope or Kubernetes TokenReview. Direct callers cannot select the
+// legacy gateway transport by injecting username, group, or organization
+// headers; the envelope remains available to the gateway-authenticated Perses
+// path and is parsed by ExtractVerifiedIdentityOptional.
+//
+// The envelope itself is not signed for maas-api. It is trusted only after the
+// gateway has authenticated OIDC callers and overwritten client-supplied
+// values, or after NetworkPolicy has restricted the direct caller to a trusted
+// Perses workload. A compromised Perses workload consequently remains inside
+// this trust boundary and can forge an identity; callers that can reach the
+// route directly or through an untrusted proxy must not be allowed to set it.
+func (h *Handler) RejectLegacyGatewayIdentityHeaders() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if len(c.Request.Header.Values(constant.HeaderUsername)) > 0 ||
+			len(c.Request.Header.Values(constant.HeaderGroup)) > 0 ||
+			len(c.Request.Header.Values(constant.HeaderOrganizationID)) > 0 {
+			h.rejectIdentity(c, errors.New("legacy gateway identity headers are not accepted"))
+			return
+		}
+		c.Next()
+	}
+}
+
 func validateOptionalIdentityHeaders(header http.Header) error {
 	// HTTP permits repeated headers. Accepting more than one copy would make
 	// the effective identity depend on proxy header-ordering behavior.

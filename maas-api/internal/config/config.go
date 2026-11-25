@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 
@@ -120,8 +121,19 @@ type Config struct {
 	// LokiReadToken is the service account token sent as the Bearer credential
 	// on proxied upstream Loki requests (LOKI_READ_TOKEN, sourced from the
 	// usage-logs-loki Secret). When empty the proxy sends no Authorization
-	// header upstream.
+	// header upstream unless the controller selected the default in-cluster
+	// Loki endpoint and enabled the projected service-account token.
 	LokiReadToken string
+
+	// LokiReadUseServiceAccountToken makes the Loki proxy authenticate to the
+	// controller-selected default LokiStack gateway with maas-api's projected
+	// service-account token. It is never enabled for custom endpoint overrides.
+	LokiReadUseServiceAccountToken bool
+
+	// LokiReadScopeOrgID selects the upstream LokiStack tenant. It defaults to
+	// the application tenant; an explicitly empty value disables the header for
+	// custom gateways that do not use LokiStack tenant selection.
+	LokiReadScopeOrgID string
 
 	// LokiReadCA is a PEM bundle appended to the system trust pool for proxied
 	// upstream Loki requests (LOKI_READ_CA, sourced from the usage-logs-loki
@@ -160,6 +172,11 @@ func Load() *Config {
 	discoveryEnableHTTP2, _ := env.GetBool("DISCOVERY_ENABLE_HTTP2", false)
 	logFormat := logger.Format(env.GetString("LOG_FORMAT", string(logger.FormatZap)))
 	otelInsecure, _ := env.GetBool("OTEL_EXPORTER_OTLP_INSECURE", false)
+	lokiReadUseServiceAccountToken, _ := env.GetBool("LOKI_READ_USE_SERVICE_ACCOUNT_TOKEN", false)
+	lokiReadScopeOrgID := "application"
+	if value, present := os.LookupEnv("LOKI_READ_SCOPE_ORG_ID"); present {
+		lokiReadScopeOrgID = strings.TrimSpace(value)
+	}
 	otelSampleRate := 1.0
 	if rateStr := env.GetString("OTEL_TRACES_SAMPLE_RATE", ""); rateStr != "" {
 		if parsed, err := strconv.ParseFloat(rateStr, 64); err == nil && parsed >= 0 && parsed <= 1 {
@@ -176,36 +193,38 @@ func Load() *Config {
 	aitenantNamespace := env.GetString("AITENANT_NAMESPACE", "ai-tenants")
 
 	c := &Config{
-		Name:                        env.GetString("INSTANCE_NAME", gatewayName),
-		Namespace:                   env.GetString("NAMESPACE", constant.DefaultNamespace),
-		GatewayName:                 gatewayName,
-		GatewayNamespace:            env.GetString("GATEWAY_NAMESPACE", constant.DefaultGatewayNamespace),
-		MaaSSubscriptionNamespace:   env.GetString("MAAS_SUBSCRIPTION_NAMESPACE", constant.DefaultMaaSSubscriptionNamespace),
-		TenantName:                  tenantName,
-		AITenantName:                aitenantName,
-		AITenantNamespace:           aitenantNamespace,
-		Address:                     env.GetString("ADDRESS", ""),
-		Secure:                      secure,
-		TLS:                         loadTLSConfig(),
-		DebugMode:                   debugMode,
-		LogFormat:                   logFormat,
-		DBConnectionURL:             "", // Loaded from K8s secret via LoadDatabaseURLs()
-		DBReadConnectionURL:         "", // Loaded from K8s secret via LoadDatabaseURLs()
-		APIKeyMaxExpirationDays:     maxExpirationDays,
-		AccessCheckTimeoutSeconds:   accessCheckTimeoutSeconds,
-		SARCacheMaxSize:             sarCacheMaxSize,
-		LastUsedDebounceSecs:        lastUsedDebounceSecs,
-		APIKeyDeletionRetentionDays: apiKeyDeletionRetentionDays,
-		MetricsPort:                 metricsPort,
-		MetricsSecure:               metricsSecure,
-		MetricsCertDir:              metricsCertDir,
-		DiscoveryEnableHTTP2:        discoveryEnableHTTP2,
-		LokiReadEndpoint:            env.GetString("LOKI_READ_ENDPOINT", ""),
-		LokiReadToken:               env.GetString("LOKI_READ_TOKEN", ""),
-		LokiReadCA:                  env.GetString("LOKI_READ_CA", ""),
-		OTELEndpoint:                env.GetString("OTEL_EXPORTER_OTLP_ENDPOINT", ""),
-		OTELInsecure:                otelInsecure,
-		OTELSampleRate:              otelSampleRate,
+		Name:                           env.GetString("INSTANCE_NAME", gatewayName),
+		Namespace:                      env.GetString("NAMESPACE", constant.DefaultNamespace),
+		GatewayName:                    gatewayName,
+		GatewayNamespace:               env.GetString("GATEWAY_NAMESPACE", constant.DefaultGatewayNamespace),
+		MaaSSubscriptionNamespace:      env.GetString("MAAS_SUBSCRIPTION_NAMESPACE", constant.DefaultMaaSSubscriptionNamespace),
+		TenantName:                     tenantName,
+		AITenantName:                   aitenantName,
+		AITenantNamespace:              aitenantNamespace,
+		Address:                        env.GetString("ADDRESS", ""),
+		Secure:                         secure,
+		TLS:                            loadTLSConfig(),
+		DebugMode:                      debugMode,
+		LogFormat:                      logFormat,
+		DBConnectionURL:                "", // Loaded from K8s secret via LoadDatabaseURLs()
+		DBReadConnectionURL:            "", // Loaded from K8s secret via LoadDatabaseURLs()
+		APIKeyMaxExpirationDays:        maxExpirationDays,
+		AccessCheckTimeoutSeconds:      accessCheckTimeoutSeconds,
+		SARCacheMaxSize:                sarCacheMaxSize,
+		LastUsedDebounceSecs:           lastUsedDebounceSecs,
+		APIKeyDeletionRetentionDays:    apiKeyDeletionRetentionDays,
+		MetricsPort:                    metricsPort,
+		MetricsSecure:                  metricsSecure,
+		MetricsCertDir:                 metricsCertDir,
+		DiscoveryEnableHTTP2:           discoveryEnableHTTP2,
+		LokiReadEndpoint:               env.GetString("LOKI_READ_ENDPOINT", ""),
+		LokiReadToken:                  env.GetString("LOKI_READ_TOKEN", ""),
+		LokiReadUseServiceAccountToken: lokiReadUseServiceAccountToken,
+		LokiReadScopeOrgID:             lokiReadScopeOrgID,
+		LokiReadCA:                     env.GetString("LOKI_READ_CA", ""),
+		OTELEndpoint:                   env.GetString("OTEL_EXPORTER_OTLP_ENDPOINT", ""),
+		OTELInsecure:                   otelInsecure,
+		OTELSampleRate:                 otelSampleRate,
 		// Deprecated env var (backward compatibility with pre-TLS version)
 		deprecatedHTTPPort: env.GetString("PORT", ""),
 	}

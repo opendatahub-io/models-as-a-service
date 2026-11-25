@@ -421,6 +421,10 @@ _CUSTOM_CA_PATH = "/tmp/ca-bundle.crt"
 
 @functools.lru_cache(maxsize=1)
 def _fetch_openshift_service_ca() -> Optional[str]:
+    return _fetch_openshift_service_ca_before_deadline(None)
+
+
+def _fetch_openshift_service_ca_before_deadline(deadline: float | None) -> Optional[str]:
     """Try to fetch the OpenShift service-serving CA bundle.
 
     On OpenShift clusters, service-serving certificates are signed by a
@@ -437,11 +441,12 @@ def _fetch_openshift_service_ca() -> Optional[str]:
             ["kubectl", "get", "configmap", "signing-cabundle",
              "-n", "openshift-service-ca",
              "-o", f"go-template={tpl}"],
-            capture_output=True, text=True, timeout=15,
+            capture_output=True, text=True,
+            timeout=_timeout_before_deadline(deadline, 15),
         )
         if result.returncode == 0 and result.stdout.strip():
             return result.stdout
-    except subprocess.TimeoutExpired:
+    except (subprocess.TimeoutExpired, TimeoutError):
         log.warning(
             "Timed out fetching signing-cabundle from openshift-service-ca; "
             "will fall back to service-account CA"
@@ -449,7 +454,7 @@ def _fetch_openshift_service_ca() -> Optional[str]:
     return None
 
 
-def get_curl_ca_bundle(namespace: str) -> tuple[str, Optional[str]]:
+def get_curl_ca_bundle(namespace: str, deadline: float | None = None) -> tuple[str, Optional[str]]:
     """Determine the CA cert path and optional content for curl TLS verification.
 
     Resolution order:
@@ -467,9 +472,10 @@ def get_curl_ca_bundle(namespace: str) -> tuple[str, Optional[str]]:
             result = subprocess.run(
                 ["kubectl", "get", "configmap", E2E_CURL_CA_CONFIGMAP,
                  "-n", namespace, "-o", f"go-template={tpl}"],
-                capture_output=True, text=True, timeout=15,
+                capture_output=True, text=True,
+                timeout=_timeout_before_deadline(deadline, 15),
             )
-        except subprocess.TimeoutExpired:
+        except (subprocess.TimeoutExpired, TimeoutError):
             log.warning(
                 "Timed out fetching E2E_CURL_CA_CONFIGMAP=%s in namespace %s, falling back to SA CA",
                 E2E_CURL_CA_CONFIGMAP, namespace,
@@ -484,7 +490,10 @@ def get_curl_ca_bundle(namespace: str) -> tuple[str, Optional[str]]:
         )
         return _SA_CA_PATH, None
 
-    ca_content = _fetch_openshift_service_ca()
+    if deadline is None:
+        ca_content = _fetch_openshift_service_ca()
+    else:
+        ca_content = _fetch_openshift_service_ca_before_deadline(deadline)
     if ca_content:
         return _CUSTOM_CA_PATH, ca_content
 
@@ -496,12 +505,21 @@ def get_curl_ca_bundle(namespace: str) -> tuple[str, Optional[str]]:
     return _SA_CA_PATH, None
 
 
-def _write_ca_to_pod(pod_name: str, namespace: str, ca_content: str) -> None:
+def _write_ca_to_pod(
+    pod_name: str,
+    namespace: str,
+    ca_content: str,
+    deadline: float | None,
+) -> None:
     """Write CA bundle content into an ephemeral curl pod at _CUSTOM_CA_PATH."""
     subprocess.run(
         ["kubectl", "exec", "-i", pod_name, "-n", namespace,
          "--", "sh", "-c", f"cat > {_CUSTOM_CA_PATH}"],
-        input=ca_content, capture_output=True, text=True, timeout=15, check=True,
+        input=ca_content,
+        capture_output=True,
+        text=True,
+        timeout=_timeout_before_deadline(deadline, 15),
+        check=True,
     )
 
 
@@ -513,6 +531,7 @@ def kubectl_curl(
     json_body: dict = None,
     namespace: str = None,
     attempts: int = 2,
+    max_duration: float | None = None,
 ) -> tuple[int, str]:
     """Execute an HTTP request from inside the cluster via kubectl exec.
 
@@ -534,6 +553,8 @@ def kubectl_curl(
         namespace: Kubernetes namespace for the ephemeral curl pod
             (default: ``E2E_CURL_POD_NAMESPACE``).
         attempts: How many probe attempts to allow before returning ``0``.
+        max_duration: Optional wall-clock duration in seconds for all attempts.
+        Pod cleanup has a separate best-effort timeout.
 
     Returns:
         ``(status_code, response_body)``.  *status_code* is ``0`` when every
@@ -543,13 +564,17 @@ def kubectl_curl(
         "E2E_CURL_POD_NAMESPACE", E2E_CURL_POD_NAMESPACE,
     )
     status_code, body = 0, ""
+    deadline = time.monotonic() + max_duration if max_duration is not None else None
     for attempt in range(1, attempts + 1):
+        if deadline is not None and time.monotonic() >= deadline:
+            break
         status_code, body = _kubectl_curl_once(
             url,
             method=method,
             headers=headers,
             json_body=json_body,
             namespace=namespace,
+            deadline=deadline,
         )
         if status_code:
             return status_code, body
@@ -558,7 +583,12 @@ def kubectl_curl(
                 "kubectl curl probe of %s failed (attempt %d/%d); retrying with a fresh pod",
                 url, attempt, attempts,
             )
-            time.sleep(2)
+            sleep_duration = 2
+            if deadline is not None:
+                sleep_duration = min(2, deadline - time.monotonic())
+                if sleep_duration <= 0:
+                    break
+            time.sleep(sleep_duration)
     return status_code, body
 
 
@@ -569,13 +599,19 @@ def _kubectl_curl_once(
     headers: dict | None,
     json_body: dict | None,
     namespace: str,
+    deadline: float | None,
 ) -> tuple[int, str]:
     """One ephemeral-pod probe for :func:`kubectl_curl`; ``0`` on any failure."""
     pod_name = f"test-curl-{os.getpid()}-{uuid.uuid4().hex[:6]}"
-    ca_cert_path, ca_bundle_content = get_curl_ca_bundle(namespace)
+    try:
+        ca_cert_path, ca_bundle_content = get_curl_ca_bundle(namespace, deadline)
+    except Exception as error:
+        log.error("kubectl curl CA lookup failed: %s", error)
+        return 0, str(error)
 
     try:
         # 1. Create an ephemeral pod (no credentials in spec)
+        create_timeout = _timeout_before_deadline(deadline, 30)
         create_cmd = [
             "kubectl", "run", pod_name,
             "--restart=Never",
@@ -584,18 +620,31 @@ def _kubectl_curl_once(
             "--labels=maas-api-e2e-probe=true",
             "--command", "--", "sleep", "300",
         ]
-        subprocess.run(create_cmd, capture_output=True, text=True, timeout=30, check=True)
+        subprocess.run(
+            create_cmd,
+            capture_output=True,
+            text=True,
+            timeout=create_timeout,
+            check=True,
+        )
 
         # 2. Wait for pod readiness
+        wait_timeout = _timeout_before_deadline(deadline, 45)
         wait_cmd = [
             "kubectl", "wait", "--for=condition=Ready",
             f"pod/{pod_name}", "-n", namespace, "--timeout=30s",
         ]
-        subprocess.run(wait_cmd, capture_output=True, text=True, timeout=45, check=True)
+        subprocess.run(
+            wait_cmd,
+            capture_output=True,
+            text=True,
+            timeout=wait_timeout,
+            check=True,
+        )
 
         # 2.5. Write custom CA bundle into the pod if configured
         if ca_bundle_content:
-            _write_ca_to_pod(pod_name, namespace, ca_bundle_content)
+            _write_ca_to_pod(pod_name, namespace, ca_bundle_content, deadline)
 
         # 3. Build a shell script that reads credentials from stdin
         script_lines = []
@@ -645,7 +694,10 @@ def _kubectl_curl_once(
             "--", "sh", "-c", script,
         ]
         result = subprocess.run(
-            exec_cmd, capture_output=True, text=True, timeout=60,
+            exec_cmd,
+            capture_output=True,
+            text=True,
+            timeout=_timeout_before_deadline(deadline, 60),
             input=stdin_data,
         )
 
@@ -675,6 +727,15 @@ def _kubectl_curl_once(
             subprocess.run(delete_cmd, capture_output=True, text=True, timeout=15)
         except subprocess.TimeoutExpired:
             log.warning("Timed out deleting curl pod %s/%s; leaving it behind", namespace, pod_name)
+
+
+def _timeout_before_deadline(deadline: float | None, default_timeout: float) -> float:
+    if deadline is None:
+        return default_timeout
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError("kubectl curl deadline expired")
+    return min(default_timeout, remaining)
 
 
 def _maas_api_url():

@@ -20,7 +20,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -55,6 +54,9 @@ import (
 	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/platform/tenantreconcile"
 )
 
+//+kubebuilder:rbac:groups=loki.grafana.com,resources=application,resourceNames=logs,verbs=get;create
+//+kubebuilder:rbac:groups="",resources=secrets,resourceNames=usage-logs-tenancy-proxy-tls,verbs=delete
+
 // CleanupFinalizer was historically added to the maas-controller Deployment for coordinated
 // teardown when ODH removed MaaS. It is no longer set; this constant remains so reconciles
 // can strip it from older installs.
@@ -69,21 +71,21 @@ const usageLogsCollectorClusterRoleBindingName = "usage-collector-application-lo
 // usageLogsDsciManagedKustomizeDir is the kustomization rendered when usageLogging is false or omitted.
 const usageLogsDsciManagedKustomizeDir = "dsci-managed"
 
-// usageLogsMaaSAPILokiDatasourceURL is the Perses datasource base URL for the
-// maas-api read-only Loki proxy (GET /v1/logs*). Hardcoded to the RHOAI
-// infra namespace for now; maas-api serves TLS on 8443 with a service-ca
-// signed serving cert. The multi-tenancy datasource appends ?only_user=true.
-const usageLogsMaaSAPILokiDatasourceURL = "https://maas-api.redhat-ai-gateway-infra.svc.cluster.local:8443/v1/logs"
-
 // usageLogsMaaSAPILokiCACertPath is the cluster service-ca bundle mounted in
 // every pod's service account volume; it verifies maas-api's serving cert.
 const usageLogsMaaSAPILokiCACertPath = "/var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt"
 
-// usageLogsTenancyProxyDeploymentName is the Deployment for the Loki query tenancy proxy.
-const usageLogsTenancyProxyDeploymentName = "usage-logs-tenancy-proxy"
+// usageLogsLokiAllowMaaSAPINetworkPolicyName permits maas-api to reach the
+// usage-logs LokiStack gateways when DSCI's gateway policy is restrictive.
+const usageLogsLokiAllowMaaSAPINetworkPolicyName = "usage-logs-lokistack-allow-maas-api"
 
-// usageLogsTenancyProxyContainerName is the proxy container in the tenancy proxy Deployment.
-const usageLogsTenancyProxyContainerName = "proxy"
+const (
+	usageLogsTenancyProxyServiceName   = "usage-logs-tenancy-proxy"
+	usageLogsTenancyProxyTLSSecretName = usageLogsTenancyProxyServiceName + "-tls"
+	serviceCAServiceNameAnnotation     = "service.beta.openshift.io/originating-service-name"
+	serviceCAServiceUIDAnnotation      = "service.beta.openshift.io/originating-service-uid"
+	serviceCAComponentAnnotation       = "openshift.io/owning-component"
+)
 
 // LifecycleReconciler watches the maas-controller Deployment. It is the sole creator of the
 // cluster-scoped Config/default anchor when the Deployment exists and is not terminating (so
@@ -98,6 +100,7 @@ const usageLogsTenancyProxyContainerName = "proxy"
 type LifecycleReconciler struct {
 	client.Client
 	Scheme                      *runtime.Scheme
+	APIReader                   client.Reader
 	DeploymentName              string
 	DeploymentNS                string
 	TenantSubscriptionNamespace string
@@ -107,9 +110,8 @@ type LifecycleReconciler struct {
 	ObservabilityManifestsPath  string
 	MonitoringNamespace         string
 	UsageLogsManifestPath       string
-	// InfraNamespace is where maas-api runs; the usage-logs-loki Secret is
-	// looked up there to switch the Perses datasources to the maas-api Loki
-	// proxy (see ensureUsageLogs / patchPersesDatasourceMaaSAPILoki).
+	// InfraNamespace is where the shared maas-api service runs; usage-log
+	// Perses datasources point to its read-only Loki proxy.
 	InfraNamespace        string
 	DiscoveryEnabled      bool
 	DiscoveryManifestPath string
@@ -132,9 +134,6 @@ type LifecycleReconciler struct {
 //+kubebuilder:rbac:groups=perses.dev,resources=persesdashboards;persesdatasources,verbs=get;list;watch;create;patch;delete
 //+kubebuilder:rbac:groups=opentelemetry.io,resources=opentelemetrycollectors,verbs=get;list;watch;create;patch;delete
 //+kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterrolebindings;rolebindings,verbs=get;list;watch;create;patch;delete
-//+kubebuilder:rbac:groups=loki.grafana.com,resources=application,resourceNames=logs,verbs=create;get
-//+kubebuilder:rbac:groups="",resources=pods/log,verbs=get
-//+kubebuilder:rbac:groups=security.openshift.io,resources=securitycontextconstraints,resourceNames=nonroot-v2,verbs=use
 
 func (r *LifecycleReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	ctx = oteljson.IntoContext(ctx)
@@ -604,7 +603,7 @@ func (r *LifecycleReconciler) ensureUsageDashboard(ctx context.Context, log logr
 	return nil
 }
 
-// ensureUsageLogs deploys usage-log dashboards, the tenancy proxy, and related RBAC.
+// ensureUsageLogs deploys usage-log dashboards.
 // usageLogging true renders usage-logs. false and omitted render dsci-managed.
 // Objects rendered by both bundles are applied in place. Controller-owned objects
 // rendered only by the other bundle are deleted.
@@ -634,14 +633,6 @@ func (r *LifecycleReconciler) ensureUsageLogs(ctx context.Context, log logr.Logg
 		return fmt.Errorf("render inactive usage logs: %w", err)
 	}
 
-	// The usage-logs-loki Secret in the infra namespace switches the Perses
-	// datasources from the LokiStack gateway / tenancy proxy to the maas-api
-	// Loki proxy. Absent secret keeps the rendered defaults.
-	maasAPILoki, err := r.maasAPILokiEnabled(ctx, log)
-	if err != nil {
-		return err
-	}
-
 	// Track if the collector is skipped due to missing CRD (CWE-863).
 	// If the OpenTelemetryCollector CRD is unavailable, we must skip the entire
 	// bundle to prevent orphaned ClusterRoleBinding from granting cluster-logging-application-write
@@ -653,16 +644,14 @@ func (r *LifecycleReconciler) ensureUsageLogs(ctx context.Context, log logr.Logg
 			continue
 		}
 		res := resource // avoid loop variable aliasing
-		if err := patchTenancyProxyImage(&res); err != nil {
-			return fmt.Errorf("patch %s %s: %w", res.GetKind(), res.GetName(), err)
-		}
 		if err := patchPersesDatasourceURL(&res); err != nil {
 			return fmt.Errorf("patch %s %s: %w", res.GetKind(), res.GetName(), err)
 		}
-		if maasAPILoki {
-			if err := patchPersesDatasourceMaaSAPILoki(&res); err != nil {
-				return fmt.Errorf("patch %s %s: %w", res.GetKind(), res.GetName(), err)
-			}
+		if err := patchPersesDatasourceMaaSAPILoki(&res, r.InfraNamespace); err != nil {
+			return fmt.Errorf("patch %s %s: %w", res.GetKind(), res.GetName(), err)
+		}
+		if err := patchUsageLogsLokiAllowMaaSAPINetworkPolicy(&res, r.InfraNamespace); err != nil {
+			return fmt.Errorf("patch %s %s: %w", res.GetKind(), res.GetName(), err)
 		}
 		if err := controllerutil.SetControllerReference(&cfg, &res, r.Scheme); err != nil {
 			return fmt.Errorf("set controller reference on %s %s: %w", res.GetKind(), res.GetName(), err)
@@ -711,7 +700,16 @@ func (r *LifecycleReconciler) ensureUsageLogs(ctx context.Context, log logr.Logg
 		return err
 	}
 
-	return nil
+	if err := r.cleanupLegacyUsageLogsTenancyProxySecret(ctx, log, cfg.UID, r.MonitoringNamespace); err != nil {
+		return err
+	}
+	return r.deleteOwnedRenderedResources(
+		ctx,
+		log,
+		cfg,
+		legacyUsageLogsTenancyProxyResources(r.MonitoringNamespace),
+		"removed Python usage-logs tenancy proxy",
+	)
 }
 
 // resourcesAbsentFrom returns objects in have whose group, version, kind,
@@ -775,7 +773,11 @@ func (r *LifecycleReconciler) deleteOwnedRenderedResources(
 			continue
 		}
 
-		if err := r.Delete(ctx, existing); err != nil {
+		uid, resourceVersion := existing.GetUID(), existing.GetResourceVersion()
+		if err := r.Delete(ctx, existing, client.Preconditions{
+			UID:             &uid,
+			ResourceVersion: &resourceVersion,
+		}); err != nil {
 			if apierrors.IsNotFound(err) {
 				continue
 			}
@@ -848,33 +850,13 @@ func patchPersesDatasourceURL(res *unstructured.Unstructured) error {
 	return nil
 }
 
-// maasAPILokiEnabled reports whether the usage-logs-loki Secret exists in the
-// infra namespace, which switches the Perses datasources to the maas-api Loki
-// proxy. A missing InfraNamespace leaves the feature off.
-func (r *LifecycleReconciler) maasAPILokiEnabled(ctx context.Context, log logr.Logger) (bool, error) {
-	if r.InfraNamespace == "" {
-		return false, nil
-	}
-	secret := &corev1.Secret{}
-	if err := r.Get(ctx, client.ObjectKey{Namespace: r.InfraNamespace, Name: tenantreconcile.LokiReadSecretName}, secret); err != nil {
-		if apierrors.IsNotFound(err) {
-			log.V(1).Info("usage-logs-loki Secret not found; Perses datasources keep rendered defaults",
-				"name", tenantreconcile.LokiReadSecretName, "namespace", r.InfraNamespace)
-			return false, nil
-		}
-		return false, fmt.Errorf("get Secret %s/%s: %w", r.InfraNamespace, tenantreconcile.LokiReadSecretName, err)
-	}
-	log.Info("usage-logs-loki Secret present; switching Perses datasources to the maas-api Loki proxy")
-	return true, nil
-}
-
 // patchPersesDatasourceMaaSAPILoki repoints the usage-log Perses datasources at
-// the maas-api read-only Loki proxy when the usage-logs-loki Secret exists.
+// the maas-api read-only Loki proxy.
 // usage-logs-all keeps the organization-wide (admin) view; usage-logs-multi-tenancy
 // appends only_user=true for the caller-scoped view. The CA switches from a
 // ConfigMap bundle to the service-ca.crt file mounted in every pod, which
 // verifies maas-api's service-ca-signed serving certificate.
-func patchPersesDatasourceMaaSAPILoki(res *unstructured.Unstructured) error {
+func patchPersesDatasourceMaaSAPILoki(res *unstructured.Unstructured, infraNamespace string) error {
 	if res.GetKind() != "PersesDatasource" {
 		return nil
 	}
@@ -888,7 +870,10 @@ func patchPersesDatasourceMaaSAPILoki(res *unstructured.Unstructured) error {
 		return nil
 	}
 
-	url := usageLogsMaaSAPILokiDatasourceURL
+	if infraNamespace == "" {
+		return errors.New("infrastructure namespace is required for the maas-api Loki datasource URL")
+	}
+	url := fmt.Sprintf("https://maas-api.%s.svc.cluster.local:8443/v1/logs", infraNamespace)
 	if onlyUser {
 		url += "?only_user=true"
 	}
@@ -913,38 +898,141 @@ func patchPersesDatasourceMaaSAPILoki(res *unstructured.Unstructured) error {
 	return nil
 }
 
-// patchTenancyProxyImage sets the tenancy-proxy container image to RELATED_IMAGE_ODH_PYTHON_312_IMAGE
-// if configured, otherwise uses DefaultUsageLogsTenancyProxyImage. This enables disconnected deployments
-// to mirror the image while maintaining a code-defined default.
-func patchTenancyProxyImage(res *unstructured.Unstructured) error {
-	if res.GetKind() != "Deployment" || res.GetName() != usageLogsTenancyProxyDeploymentName {
+func (r *LifecycleReconciler) cleanupLegacyUsageLogsTenancyProxySecret(ctx context.Context, log logr.Logger, configUID types.UID, namespace string) error {
+	reader := r.APIReader
+	if reader == nil {
+		reader = r.Client
+	}
+
+	secret := &corev1.Secret{}
+	key := client.ObjectKey{Namespace: namespace, Name: usageLogsTenancyProxyTLSSecretName}
+	if err := reader.Get(ctx, key, secret); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("get legacy Secret %s/%s: %w", namespace, usageLogsTenancyProxyTLSSecretName, err)
+	}
+	if !isServiceCAGeneratedTenancyProxySecret(secret) {
+		log.V(1).Info("skipping deletion of unowned legacy TLS Secret",
+			"kind", secret.Kind, "name", secret.Name, "namespace", secret.Namespace)
 		return nil
 	}
 
-	image := os.Getenv("RELATED_IMAGE_ODH_PYTHON_312_IMAGE")
-	if image == "" {
-		image = DefaultUsageLogsTenancyProxyImage
-	}
-
-	containers, found, err := unstructured.NestedSlice(res.Object, "spec", "template", "spec", "containers")
-	if err != nil {
-		return fmt.Errorf("read containers in deployment: %w", err)
-	}
-	if !found {
-		return errors.New("containers not found in usage-logs-tenancy-proxy deployment")
-	}
-
-	for i, c := range containers {
-		cm, ok := c.(map[string]any)
-		if !ok || cm["name"] != usageLogsTenancyProxyContainerName {
-			continue
+	service := &corev1.Service{}
+	serviceKey := client.ObjectKey{Namespace: namespace, Name: usageLogsTenancyProxyServiceName}
+	if err := r.Get(ctx, serviceKey, service); err != nil {
+		if apierrors.IsNotFound(err) {
+			log.V(1).Info("skipping deletion of legacy TLS Secret because its Service is absent",
+				"kind", secret.Kind, "name", secret.Name, "namespace", secret.Namespace)
+			return nil
 		}
-		cm["image"] = image
-		containers[i] = cm
-		return unstructured.SetNestedSlice(res.Object, containers, "spec", "template", "spec", "containers")
+		return fmt.Errorf("get legacy Service %s/%s: %w", namespace, usageLogsTenancyProxyServiceName, err)
+	}
+	if !isOwnedByConfigOrController(service, configUID) {
+		log.V(1).Info("skipping deletion of legacy TLS Secret because its Service is not owned by MaaS",
+			"kind", secret.Kind, "name", secret.Name, "namespace", secret.Namespace)
+		return nil
+	}
+	if string(service.UID) != strings.TrimSpace(secret.Annotations[serviceCAServiceUIDAnnotation]) {
+		log.V(1).Info("skipping deletion of legacy TLS Secret because its Service UID does not match",
+			"kind", secret.Kind, "name", secret.Name, "namespace", secret.Namespace)
+		return nil
 	}
 
-	return errors.New("proxy container not found in usage-logs-tenancy-proxy deployment")
+	uid, resourceVersion := secret.UID, secret.ResourceVersion
+	err := r.Delete(ctx, secret, client.Preconditions{UID: &uid, ResourceVersion: &resourceVersion})
+	if apierrors.IsNotFound(err) {
+		log.V(1).Info("skipped deletion of already removed legacy TLS Secret",
+			"kind", secret.Kind, "name", secret.Name, "namespace", secret.Namespace)
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("delete legacy Secret %s/%s: %w", namespace, usageLogsTenancyProxyTLSSecretName, err)
+	}
+	log.Info("deleted service-ca Secret for the removed Python usage-logs tenancy proxy",
+		"name", usageLogsTenancyProxyTLSSecretName, "namespace", namespace)
+	return nil
+}
+
+func isServiceCAGeneratedTenancyProxySecret(secret *corev1.Secret) bool {
+	return secret.Type == corev1.SecretTypeTLS &&
+		secret.Annotations[serviceCAServiceNameAnnotation] == usageLogsTenancyProxyServiceName &&
+		strings.TrimSpace(secret.Annotations[serviceCAServiceUIDAnnotation]) != "" &&
+		secret.Annotations[serviceCAComponentAnnotation] == "service-ca"
+}
+
+func legacyUsageLogsTenancyProxyResources(namespace string) []unstructured.Unstructured {
+	objects := []struct {
+		apiVersion string
+		kind       string
+		name       string
+		namespace  string
+	}{
+		{"apps/v1", "Deployment", "usage-logs-tenancy-proxy", namespace},
+		{"v1", "Service", "usage-logs-tenancy-proxy", namespace},
+		{"v1", "ServiceAccount", "usage-tenancy-proxy", namespace},
+		{"v1", "ConfigMap", "usage-tenancy-proxy-source", namespace},
+		{"v1", "ConfigMap", "usage-logs-tenancy-proxy-ca-bundle", namespace},
+		{"rbac.authorization.k8s.io/v1", "ClusterRole", "usage-tenancy-proxy", ""},
+		{"rbac.authorization.k8s.io/v1", "ClusterRoleBinding", "usage-tenancy-proxy", ""},
+		{"rbac.authorization.k8s.io/v1", "RoleBinding", "usage-tenancy-proxy-scc-nonroot-v2", namespace},
+		{"networking.k8s.io/v1", "NetworkPolicy", "usage-tenancy-proxy-allow-perses", namespace},
+		{"networking.k8s.io/v1", "NetworkPolicy", "usage-tenancy-proxy-egress-restrict", namespace},
+	}
+
+	resources := make([]unstructured.Unstructured, 0, len(objects))
+	for _, object := range objects {
+		resource := unstructured.Unstructured{}
+		resource.SetAPIVersion(object.apiVersion)
+		resource.SetKind(object.kind)
+		resource.SetNamespace(object.namespace)
+		resource.SetName(object.name)
+		resources = append(resources, resource)
+	}
+	return resources
+}
+
+func patchUsageLogsLokiAllowMaaSAPINetworkPolicy(res *unstructured.Unstructured, infraNamespace string) error {
+	if res.GetKind() != "NetworkPolicy" || res.GetName() != usageLogsLokiAllowMaaSAPINetworkPolicyName {
+		return nil
+	}
+	if infraNamespace == "" {
+		return errors.New("infrastructure namespace is required for the maas-api Loki ingress policy")
+	}
+	ingress, found, err := unstructured.NestedSlice(res.Object, "spec", "ingress")
+	if err != nil || !found || len(ingress) == 0 {
+		return errors.New("maas-api Loki ingress policy is missing an ingress rule")
+	}
+	rule, ok := ingress[0].(map[string]any)
+	if !ok {
+		return errors.New("maas-api Loki ingress rule has an invalid shape")
+	}
+	from, ok := rule["from"].([]any)
+	if !ok || len(from) == 0 {
+		return errors.New("maas-api Loki ingress rule is missing a source peer")
+	}
+	peer, ok := from[0].(map[string]any)
+	if !ok {
+		return errors.New("maas-api Loki ingress source peer has an invalid shape")
+	}
+	namespaceSelector, ok := peer["namespaceSelector"].(map[string]any)
+	if !ok {
+		return errors.New("maas-api Loki ingress source peer is missing a namespace selector")
+	}
+	matchLabels, ok := namespaceSelector["matchLabels"].(map[string]any)
+	if !ok {
+		return errors.New("maas-api Loki ingress namespace selector is missing match labels")
+	}
+	matchLabels["kubernetes.io/metadata.name"] = infraNamespace
+	namespaceSelector["matchLabels"] = matchLabels
+	peer["namespaceSelector"] = namespaceSelector
+	from[0] = peer
+	rule["from"] = from
+	ingress[0] = rule
+	if err := unstructured.SetNestedSlice(res.Object, ingress, "spec", "ingress"); err != nil {
+		return fmt.Errorf("set maas-api Loki ingress rules: %w", err)
+	}
+	return nil
 }
 
 // tenantsHealthReason enumerates reasons used for ConfigConditionTenantsHealthy.
@@ -1159,18 +1247,6 @@ func formatTenantList(tenants []string, maxItems int) string {
 	return strings.Join(tenants[:maxItems], ", ") + fmt.Sprintf(" (and %d more)", len(tenants)-maxItems)
 }
 
-// enqueueLokiReadSecret schedules the lifecycle reconcile when the Secret that
-// switches the shared Perses datasources changes in the infrastructure namespace.
-func (r *LifecycleReconciler) enqueueLokiReadSecret(_ context.Context, obj client.Object) []reconcile.Request {
-	if r.InfraNamespace == "" || obj.GetNamespace() != r.InfraNamespace || obj.GetName() != tenantreconcile.LokiReadSecretName {
-		return nil
-	}
-	return []reconcile.Request{{NamespacedName: types.NamespacedName{
-		Namespace: r.DeploymentNS,
-		Name:      r.DeploymentName,
-	}}}
-}
-
 // SetupWithManager registers the lifecycle controller and its platform resource watches.
 func (r *LifecycleReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	selfOnly := predicate.NewPredicateFuncs(func(o client.Object) bool {
@@ -1191,10 +1267,6 @@ func (r *LifecycleReconciler) SetupWithManager(mgr ctrl.Manager) error {
 
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&appsv1.Deployment{}, builder.WithPredicates(selfOnly)).
-		Watches(
-			&corev1.Secret{},
-			handler.EnqueueRequestsFromMapFunc(r.enqueueLokiReadSecret),
-		).
 		Watches(
 			&maasv1alpha1.Config{},
 			handler.EnqueueRequestsFromMapFunc(func(_ context.Context, _ client.Object) []reconcile.Request {

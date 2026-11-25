@@ -144,7 +144,7 @@ func TestListModelsUsesVerifiedFlatIdentityGroups(t *testing.T) {
 	defer cleanup()
 
 	tokenHandler := token.NewHandler(testLogger, fixtures.TestTenant)
-	router.GET("/v1/models", tokenHandler.ExtractVerifiedIdentityOptional(), tokenHandler.ExtractUserInfoOptional(), modelsHandler.ListLLMs)
+	router.GET("/v1/models", tokenHandler.ExtractVerifiedIdentityOptional(), tokenHandler.ExtractUserInfoOptional(token.AuthModeGateway), modelsHandler.ListLLMs)
 	request := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
 	request.Header.Set("Authorization", "Bearer valid-token")
 	//nolint:lll // JSON identity envelope requires full structure on one line
@@ -440,7 +440,7 @@ func TestListingModels(t *testing.T) { //nolint:maintidx // table-driven test wi
 	tokenHandler := token.NewHandler(testLogger, fixtures.TestTenant)
 
 	v1 := router.Group("/v1")
-	v1.GET("/models", tokenHandler.ExtractUserInfo(), modelsHandler.ListLLMs)
+	v1.GET("/models", tokenHandler.ExtractUserInfo(token.AuthModeGateway), modelsHandler.ListLLMs)
 
 	w := httptest.NewRecorder()
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/models", nil)
@@ -590,7 +590,7 @@ func TestListingModelsWithSubscriptionHeader(t *testing.T) {
 	tokenHandler := token.NewHandler(testLogger, fixtures.TestTenant)
 
 	v1 := router.Group("/v1")
-	v1.GET("/models", tokenHandler.ExtractUserInfo(), modelsHandler.ListLLMs)
+	v1.GET("/models", tokenHandler.ExtractUserInfo(token.AuthModeGateway), modelsHandler.ListLLMs)
 
 	// Table-driven tests for API key auth (X-MaaS-Subscription header injected by Authorino)
 	subscriptionTests := []struct {
@@ -824,7 +824,7 @@ func TestListModels_ReturnAllModels(t *testing.T) {
 
 	tokenHandler := token.NewHandler(testLogger, fixtures.TestTenant)
 	v1 := router.Group("/v1")
-	v1.GET("/models", tokenHandler.ExtractUserInfo(), modelsHandler.ListLLMs)
+	v1.GET("/models", tokenHandler.ExtractUserInfo(token.AuthModeGateway), modelsHandler.ListLLMs)
 
 	t.Run("user token - returns all models from all subscriptions", func(t *testing.T) {
 		w := httptest.NewRecorder()
@@ -877,7 +877,7 @@ func TestListModels_ReturnAllModels(t *testing.T) {
 
 		tokenHandler2 := token.NewHandler(testLogger, fixtures.TestTenant)
 		v1_2 := router2.Group("/v1")
-		v1_2.GET("/models", tokenHandler2.ExtractUserInfo(), emptyHandler.ListLLMs)
+		v1_2.GET("/models", tokenHandler2.ExtractUserInfo(token.AuthModeGateway), emptyHandler.ListLLMs)
 
 		w := httptest.NewRecorder()
 		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/models", nil)
@@ -1014,7 +1014,7 @@ func TestListModels_DeduplicationBySubscription(t *testing.T) {
 
 	tokenHandler := token.NewHandler(testLogger, fixtures.TestTenant)
 	v1 := router.Group("/v1")
-	v1.GET("/models", tokenHandler.ExtractUserInfo(), modelsHandler.ListLLMs)
+	v1.GET("/models", tokenHandler.ExtractUserInfo(token.AuthModeGateway), modelsHandler.ListLLMs)
 
 	t.Run("same model in different subscriptions aggregates into subscriptions array", func(t *testing.T) {
 		w := httptest.NewRecorder()
@@ -1133,7 +1133,7 @@ func TestListModels_DifferentModelRefsWithSameModelID(t *testing.T) {
 
 	tokenHandler := token.NewHandler(testLogger, fixtures.TestTenant)
 	v1 := router.Group("/v1")
-	v1.GET("/models", tokenHandler.ExtractUserInfo(), modelsHandler.ListLLMs)
+	v1.GET("/models", tokenHandler.ExtractUserInfo(token.AuthModeGateway), modelsHandler.ListLLMs)
 
 	t.Run("different MaaSModelRefs with same model ID but different URLs return separate entries", func(t *testing.T) {
 		w := httptest.NewRecorder()
@@ -1242,7 +1242,7 @@ func TestListModels_DifferentModelRefsWithSameURLAndModelID(t *testing.T) {
 
 	tokenHandler := token.NewHandler(testLogger, fixtures.TestTenant)
 	v1 := router.Group("/v1")
-	v1.GET("/models", tokenHandler.ExtractUserInfo(), modelsHandler.ListLLMs)
+	v1.GET("/models", tokenHandler.ExtractUserInfo(token.AuthModeGateway), modelsHandler.ListLLMs)
 
 	t.Run("different MaaSModelRefs with same URL and model ID remain separate entries", func(t *testing.T) {
 		w := httptest.NewRecorder()
@@ -1349,7 +1349,7 @@ func TestListModels_DifferentModelRefsWithSameModelIDAndDifferentSubscriptions(t
 
 	tokenHandler := token.NewHandler(testLogger, fixtures.TestTenant)
 	v1 := router.Group("/v1")
-	v1.GET("/models", tokenHandler.ExtractUserInfo(), modelsHandler.ListLLMs)
+	v1.GET("/models", tokenHandler.ExtractUserInfo(token.AuthModeGateway), modelsHandler.ListLLMs)
 
 	t.Run("different MaaSModelRefs with same model ID but different URLs return separate entries", func(t *testing.T) {
 		w := httptest.NewRecorder()
@@ -1443,7 +1443,7 @@ func TestListModels_ExternalModelUsesModelRefName(t *testing.T) {
 
 	tokenHandler := token.NewHandler(testLogger, fixtures.TestTenant)
 	v1 := router.Group("/v1")
-	v1.GET("/models", tokenHandler.ExtractUserInfo(), modelsHandler.ListLLMs)
+	v1.GET("/models", tokenHandler.ExtractUserInfo(token.AuthModeGateway), modelsHandler.ListLLMs)
 
 	w := httptest.NewRecorder()
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/models", nil)
@@ -1504,7 +1504,7 @@ func TestListModels_SubscriptionWithoutModelRefs(t *testing.T) {
 
 	tokenHandler := token.NewHandler(testLogger, fixtures.TestTenant)
 	v1 := router.Group("/v1")
-	v1.GET("/models", tokenHandler.ExtractUserInfo(), modelsHandler.ListLLMs)
+	v1.GET("/models", tokenHandler.ExtractUserInfo(token.AuthModeGateway), modelsHandler.ListLLMs)
 
 	t.Run("API key bound to subscription without modelRefs lists no models", func(t *testing.T) {
 		w := httptest.NewRecorder()
@@ -1578,7 +1578,7 @@ func TestListModels_NoAuthContext(t *testing.T) {
 	// Use ExtractUserInfoOptional (the production middleware for /v1/models)
 	tokenHandler := token.NewHandler(testLogger, fixtures.TestTenant)
 	v1 := router.Group("/v1")
-	v1.GET("/models", tokenHandler.ExtractUserInfoOptional(), modelsHandler.ListLLMs)
+	v1.GET("/models", tokenHandler.ExtractUserInfoOptional(token.AuthModeGateway), modelsHandler.ListLLMs)
 
 	t.Run("returns empty list when no auth headers at all", func(t *testing.T) {
 		w := httptest.NewRecorder()
@@ -1667,7 +1667,7 @@ func TestListModels_StrictAuthOnOtherEndpoints(t *testing.T) {
 
 	// Use the strict ExtractUserInfo for a non-models endpoint
 	v1 := router.Group("/v1")
-	v1.GET("/strict-endpoint", tokenHandler.ExtractUserInfo(), func(c *gin.Context) {
+	v1.GET("/strict-endpoint", tokenHandler.ExtractUserInfo(token.AuthModeGateway), func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
 

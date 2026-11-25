@@ -105,6 +105,7 @@ spec:
         streamLabels:
           resourceAttributes:
             - name: service.name
+            - name: tenant_name
             - name: subscription
             - name: model
             - name: response_type
@@ -123,25 +124,18 @@ spec:
     mode: openshift-logging
 ```
 
-!!! note "AI Grid deployments"
-    For AI Grid deployments using the MaaS API Loki read proxy, add
-    `organization_id` and `user_id` to the existing
-    `spec.limits.global.otlp.streamLabels.resourceAttributes` list in the
-    `LokiStack` spec:
-
-    ```yaml
-    streamLabels:
-      resourceAttributes:
-        # Keep the existing resource attributes and add these entries.
-        - name: organization_id
-        - name: user_id
-    ```
-
-    The collector must also export both fields as OTLP resource attributes.
-    If it uses the `groupbyattrs` processor, include both fields in
-    `groupbyattrs.keys`. The proxy requires indexed stream labels for its
-    organization and user filters to match logs. These changes affect newly
-    ingested logs; existing logs retain their original label configuration.
+!!! note "Logs-based usage dashboards"
+    The usage dashboards query Loki through the maas-api read-only Loki proxy,
+    which is always enabled and defaults to the LokiStack gateway in the
+    monitoring namespace. On `/query` and `/query_range`, the proxy enforces
+    `tenant_name`, `organization_id`, and `user_id` as post-parse LogQL label
+    filters, matching the retired Python proxy's compatibility model and
+    historical records whose identity fields are structured attributes.
+    `/labels` and `/label/{name}/values` cannot enforce post-parse filters.
+    They use `tenant_name` as a stream selector and reject requests from access
+    modes that also require an organization or user restriction. Therefore,
+    `tenant_name` must be indexed for label discovery, while the identity fields
+    used by query endpoints do not need to be indexed.
     See [Logs-based usage dashboards](../observability/setup.md#logs-based-usage-dashboards)
     for identity capture settings.
 

@@ -22,7 +22,7 @@ func setupRouter(t *testing.T) *gin.Engine {
 
 	h := token.NewHandler(logger.Development(), "test")
 	router := gin.New()
-	router.Use(h.ExtractUserInfo())
+	router.Use(h.ExtractUserInfo(token.AuthModeGateway))
 	router.GET("/test", func(c *gin.Context) {
 		user, exists := c.Get("user")
 		if !exists {
@@ -67,7 +67,7 @@ func setupOptionalRouter(t *testing.T) *gin.Engine {
 
 	h := token.NewHandler(logger.Development(), "test")
 	router := gin.New()
-	router.Use(h.ExtractUserInfoOptional())
+	router.Use(h.ExtractUserInfoOptional(token.AuthModeGateway))
 	router.GET("/test", func(c *gin.Context) {
 		user, exists := c.Get("user")
 		if !exists {
@@ -215,7 +215,7 @@ func TestExtractUserInfoOptional(t *testing.T) {
 		gin.SetMode(gin.TestMode)
 		handler := token.NewHandler(logger.Development(), "test")
 		router := gin.New()
-		router.Use(handler.ExtractVerifiedIdentityOptional(), handler.ExtractUserInfoOptional())
+		router.Use(handler.ExtractVerifiedIdentityOptional(), handler.ExtractUserInfoOptional(token.AuthModeGateway))
 		router.GET("/test", func(c *gin.Context) {
 			user, exists := c.Get("user")
 			if !exists {
@@ -253,7 +253,7 @@ func TestExtractUserInfoOptional(t *testing.T) {
 		gin.SetMode(gin.TestMode)
 		handler := token.NewHandler(logger.Development(), "test")
 		router := gin.New()
-		router.Use(handler.ExtractVerifiedIdentityOptional(), handler.ExtractUserInfoOptional())
+		router.Use(handler.ExtractVerifiedIdentityOptional(), handler.ExtractUserInfoOptional(token.AuthModeGateway))
 		router.GET("/test", func(c *gin.Context) {
 			user, exists := c.Get("user")
 			if !exists {

@@ -13,6 +13,7 @@ import (
 	"github.com/go-logr/logr"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	netwv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -20,6 +21,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/client-go/util/retry"
 	"k8s.io/utils/ptr"
@@ -124,8 +126,16 @@ func RunPlatformWithReader(
 		log.Info(bufferWarning)
 	}
 	applyMaaSAPIEgressConfig(&params, mcfg)
-	if err := resolveLokiReadEndpoint(ctx, c, appNs, &params, log); err != nil {
+	usageLogging := false
+	if mcfg != nil {
+		usageLogging = ptr.Deref(mcfg.Spec.UsageLogging, false)
+	}
+	if err := resolveLokiReadEndpoint(ctx, c, appNs, usageLogging, &params, log); err != nil {
 		return nil, fmt.Errorf("resolve loki read endpoint: %w", err)
+	}
+	defaultEndpoint := defaultLokiReadEndpoint(monitoringNamespace, usageLogging)
+	if defaultEndpoint != "" && params.LokiReadEndpoint == defaultEndpoint {
+		params.MaaSAPILokiEgressRule = lokiReadEgressRule(monitoringNamespace, usageLogging)
 	}
 
 	if !params.SkipIPP {
@@ -233,12 +243,10 @@ func RunPlatformWithReader(
 }
 
 // resolveLokiReadEndpoint sets params.LokiReadEndpoint (and the token
-// secretKeyRef flag) from the usage-logs-loki Secret in the app namespace. When
-// the Secret is absent the endpoint stays empty, which disables the maas-api
-// Loki proxy: the rendered Deployment omits LOKI_READ_ENDPOINT and the SSA
-// apply removes any previously applied value. A Secret that exists with a
-// missing key or an invalid URL only disables the proxy and records a warning
-// rather than failing the whole tenant reconcile.
+// secretKeyRef flag) from the usage-logs-loki Secret in the app namespace.
+// When the Secret is absent, or its endpoint is missing or invalid, the proxy
+// uses the LokiStack gateway in the monitoring namespace. A monitoring
+// namespace is therefore required to enable the proxy without an override.
 //
 // When the LOKI_READ_TOKEN key is present, the maas-api Deployment gets a
 // LOKI_READ_TOKEN env var referencing the Secret via secretKeyRef (so the
@@ -248,39 +256,49 @@ func RunPlatformWithReader(
 // upstream may not require it. A missing LOKI_READ_CA key is not a warning:
 // maas-api then trusts only the system pool, which is correct when the
 // upstream certificate is publicly trusted.
-func resolveLokiReadEndpoint(ctx context.Context, c client.Client, appNs string, params *PlatformParams, log logr.Logger) error {
+func resolveLokiReadEndpoint(ctx context.Context, c client.Client, appNs string, usageLogging bool, params *PlatformParams, log logr.Logger) error {
+	defaultEndpoint := defaultLokiReadEndpoint(params.MonitoringNamespace, usageLogging)
 	secret := &corev1.Secret{}
 	err := c.Get(ctx, types.NamespacedName{Namespace: appNs, Name: LokiReadSecretName}, secret)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			log.V(1).Info("usage-logs-loki Secret not found; maas-api Loki proxy disabled",
-				"name", LokiReadSecretName, "namespace", appNs)
+			params.LokiReadEndpoint = defaultEndpoint
+			params.LokiReadUseServiceAccountToken = true
+			params.LokiReadScopeOrgID = LokiReadApplicationScope
+			log.V(1).Info("usage-logs-loki Secret not found; maas-api Loki proxy uses the monitoring namespace default",
+				"name", LokiReadSecretName, "namespace", appNs, "endpoint", defaultEndpoint)
 			return nil
 		}
 		return fmt.Errorf("get Secret %s/%s: %w", appNs, LokiReadSecretName, err)
 	}
 
 	endpoint := strings.TrimSpace(string(secret.Data[LokiReadSecretKey]))
+	token := strings.TrimSpace(string(secret.Data[LokiReadTokenSecretKey]))
 	if endpoint == "" {
+		params.LokiReadEndpoint = defaultEndpoint
+		setLokiReadTokenParams(params, appNs, token, defaultEndpoint, defaultEndpoint)
+		params.LokiReadScopeOrgID = LokiReadApplicationScope
 		params.Warnings = append(params.Warnings, fmt.Sprintf(
-			"Secret '%s' in namespace '%s' is missing key '%s'; the maas-api Loki proxy stays disabled",
+			"Secret '%s' in namespace '%s' is missing key '%s'; the maas-api Loki proxy uses its default endpoint",
 			LokiReadSecretName, appNs, LokiReadSecretKey))
 		return nil
 	}
 	if u, parseErr := url.Parse(endpoint); parseErr != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+		params.LokiReadEndpoint = defaultEndpoint
+		setLokiReadTokenParams(params, appNs, token, defaultEndpoint, defaultEndpoint)
+		params.LokiReadScopeOrgID = LokiReadApplicationScope
 		params.Warnings = append(params.Warnings, fmt.Sprintf(
-			"Secret '%s' in namespace '%s' has an invalid '%s' value (must be a valid http(s) URL); the maas-api Loki proxy stays disabled",
+			"Secret '%s' in namespace '%s' has an invalid '%s' value (must be a valid http(s) URL); the maas-api Loki proxy uses its default endpoint",
 			LokiReadSecretName, appNs, LokiReadSecretKey))
-		return nil //nolint:nilerr // Invalid optional configuration disables the proxy without failing tenant reconciliation.
+		return nil //nolint:nilerr // Invalid optional configuration falls back to the default endpoint without failing reconciliation.
 	}
 
 	params.LokiReadEndpoint = endpoint
-	if strings.TrimSpace(string(secret.Data[LokiReadTokenSecretKey])) != "" {
-		params.LokiReadTokenFromSecret = true
+	setLokiReadTokenParams(params, appNs, token, endpoint, defaultEndpoint)
+	if endpoint == defaultEndpoint {
+		params.LokiReadScopeOrgID = LokiReadApplicationScope
 	} else {
-		params.Warnings = append(params.Warnings, fmt.Sprintf(
-			"Secret '%s' in namespace '%s' is missing key '%s'; the maas-api Loki proxy sends no Authorization header upstream",
-			LokiReadSecretName, appNs, LokiReadTokenSecretKey))
+		params.LokiReadScopeOrgID = ""
 	}
 	// A missing CA key is not a warning: maas-api then trusts only the system
 	// pool, which is correct for fleets whose upstream certificate is publicly
@@ -294,6 +312,51 @@ func resolveLokiReadEndpoint(ctx context.Context, c client.Client, appNs string,
 	log.Info("maas-api Loki read proxy enabled", "endpoint", endpoint,
 		"tokenInjected", params.LokiReadTokenFromSecret, "caInjected", params.LokiReadCAFromSecret)
 	return nil
+}
+
+func setLokiReadTokenParams(params *PlatformParams, appNs, token, endpoint, defaultEndpoint string) {
+	params.LokiReadTokenFromSecret = token != ""
+	params.LokiReadUseServiceAccountToken = token == "" && endpoint == defaultEndpoint
+	if token == "" {
+		params.Warnings = append(params.Warnings, fmt.Sprintf(
+			"Secret '%s' in namespace '%s' is missing key '%s'; the maas-api Loki proxy uses its configured upstream without a Secret token",
+			LokiReadSecretName, appNs, LokiReadTokenSecretKey))
+	}
+}
+
+func defaultLokiReadEndpoint(monitoringNamespace string, usageLogging bool) string {
+	if monitoringNamespace == "" {
+		return ""
+	}
+	gatewayService := "data-science-usage-logs-lokistack-gateway-http"
+	if usageLogging {
+		gatewayService = "usage-gateway-http"
+	}
+	return fmt.Sprintf("https://%s.%s.svc:8080/api/logs/v1/application", gatewayService, monitoringNamespace)
+}
+
+func lokiReadEgressRule(monitoringNamespace string, usageLogging bool) *netwv1.NetworkPolicyEgressRule {
+	instance := "data-science-usage-logs-lokistack"
+	if usageLogging {
+		instance = "usage"
+	}
+	tcp := corev1.ProtocolTCP
+	port := intstr.FromInt32(8080)
+	return &netwv1.NetworkPolicyEgressRule{
+		To: []netwv1.NetworkPolicyPeer{{
+			NamespaceSelector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{"kubernetes.io/metadata.name": monitoringNamespace},
+			},
+			PodSelector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{
+					"app.kubernetes.io/component": "lokistack-gateway",
+					"app.kubernetes.io/instance":  instance,
+					"app.kubernetes.io/name":      "lokistack",
+				},
+			},
+		}},
+		Ports: []netwv1.NetworkPolicyPort{{Protocol: &tcp, Port: &port}},
+	}
 }
 
 type payloadProcessingSwitchOutcome struct {
