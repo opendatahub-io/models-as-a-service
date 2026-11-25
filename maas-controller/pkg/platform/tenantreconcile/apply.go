@@ -21,8 +21,9 @@ const ssaFieldOwner = "maas-controller"
 // ApplyRendered server-side-applies rendered objects with Config as controller owner.
 //
 // The cluster-scoped Config is a valid owner for namespaced resources in any namespace
-// and for cluster-scoped operands. Tenant tracking labels are always applied so the
-// reconciler can correlate resources with the namespace-local config object for status and debugging.
+// and for cluster-scoped operands. Tenant tracking labels are applied so the reconciler
+// can correlate resources with the namespace-local config object for status and debugging,
+// except on tenant-neutral operands (see isTenantNeutralOperand).
 //
 // Objects matched by skipConfigControllerOwnerRef (see configOwnerRefSkips) do not receive a
 // Config controller ownerReference; they still receive tenant tracking labels. Add predicates
@@ -57,9 +58,7 @@ func ApplyRendered(ctx context.Context, c client.Client, scheme *runtime.Scheme,
 			continue
 		}
 
-		if skipConfigControllerOwnerRef(u, appNs) {
-			setTenantTrackingLabels(u, tenant)
-		} else {
+		if !skipConfigControllerOwnerRef(u, appNs) {
 			if err := controllerutil.SetControllerReference(mcfg, u, scheme); err != nil {
 				var already *controllerutil.AlreadyOwnedError
 				if errors.As(err, &already) {
@@ -70,6 +69,10 @@ func ApplyRendered(ctx context.Context, c client.Client, scheme *runtime.Scheme,
 					return fmt.Errorf("set controller reference (Config) on %s %s/%s: %w", u.GetKind(), u.GetNamespace(), u.GetName(), err)
 				}
 			}
+		}
+		// Leaving the labels out also removes them from objects an earlier release
+		// labeled: maas-controller owns them, so the next apply drops them.
+		if !isTenantNeutralOperand(u) {
 			setTenantTrackingLabels(u, tenant)
 		}
 		preparePayloadProcessingPluginsConfigMapApply(ctx, c, u)
@@ -192,6 +195,16 @@ func isOwnedByExternalController(ctx context.Context, c client.Client, rendered 
 		}
 	}
 	return false
+}
+
+// isTenantNeutralOperand reports whether every tenant renders u identically under one
+// name. It then carries no tenant tracking labels: each tenant's apply would relabel it,
+// and istiod pushes to every gateway whenever a Service changes. Tenant deletion
+// (cleanupTenantResources) and watches do not rely on these labels; Config garbage
+// collection removes it.
+func isTenantNeutralOperand(u *unstructured.Unstructured) bool {
+	gvk := u.GroupVersionKind()
+	return (gvk == GVKService || gvk == GVKServiceMonitor) && u.GetName() == maasAPIMetricsServiceMonitorName
 }
 
 func setTenantTrackingLabels(obj *unstructured.Unstructured, tenant client.Object) {
