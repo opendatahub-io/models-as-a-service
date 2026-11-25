@@ -208,7 +208,7 @@ func TestLifecycleReconciler_MaasAPILokiDatasourceSwitch(t *testing.T) {
 					Namespace: infraNS,
 				},
 				Data: map[string][]byte{
-					tenantreconcile.LokiReadSecretKey: []byte("https://data-science-lokistack-gateway-http.opendatahub.svc:8080/api/logs/v1/application"),
+					tenantreconcile.LokiReadSecretKey: []byte("https://data-science-usage-logs-lokistack-gateway-http.opendatahub.svc:8080/api/logs/v1/application"),
 				},
 			})
 		}

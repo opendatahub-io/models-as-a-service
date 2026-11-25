@@ -58,9 +58,21 @@ Non-streaming chat/completions tests should use `assert_inference_response()` fr
 Streaming smoke uses `assert_openai_sse_chat_stream()`, which also requires at
 least one non-empty content chunk before `data: [DONE]`.
 
+That is a *shape* assertion, and a fully buffered response satisfies it. Pass
+`min_inter_chunk_gap_sec=` to additionally require the body be delivered
+incrementally: the helper timestamps each `data:` line as it is read off the
+socket and fails if the largest gap between consecutive chunks is below the given
+value. A buffered body arrives in one burst, so every gap collapses to ~0. The
+largest gap rather than a first-to-last span, so the threshold does not depend on
+how many tokens the backend produces. It only means anything against a paced
+backend, so `test_streaming_delivery.py` runs it against the dedicated `slow-stream`
+fixture and pairs it with `min_first_data_sec=` to prove the backend is still
+paced. Tests on the shared fast simulators must leave both unset.
+
 | File | Focus |
 |------|--------|
 | `test_subscription.py` | Subscription / inference flows |
+| `test_streaming_delivery.py` | SSE delivery timing: tokens must arrive as they are generated, not in one burst at completion (against the paced `slow-stream` fixture) |
 | `test_observability_identity.py` | Opt-in organization attribution reproduction on one gateway/model; requires `E2E_OBSERVABILITY_IDENTITY=true` and Limitador telemetry |
 | `test_trlp_rate_grouping.py` | TRLP limits grouped by rate: shared limits, per-subscription and per-user budgets, rate edits, gateway wasm config size guard |
 | `test_api_keys.py` | `/v1/api-keys` |
