@@ -1,0 +1,9 @@
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: MaaSModelRef
+metadata:
+  name: e2e-rerank-simulated
+  namespace: llm
+spec:
+  modelRef:
+    kind: LLMInferenceService
+    name: e2e-rerank-simulated
