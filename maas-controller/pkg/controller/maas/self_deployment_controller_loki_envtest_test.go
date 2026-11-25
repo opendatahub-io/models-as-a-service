@@ -138,14 +138,17 @@ func TestLifecycleReconciler_PortalCopyReplacementEnvtest(t *testing.T) {
 	g.Expect(reconciler.ensureUsageLogs(ctx, ctrl.Log)).To(Succeed())
 	getPersesEnvtest(t, cl, "PersesDashboard", "maas-portal-usage-logs", "opendatahub")
 
-	reconciler.Client = &replaceOnApplyClient{
+	applyClient := &replaceOnApplyClient{
 		Client:     cl,
 		targetName: "maas-portal-usage-logs-multi-tenancy",
 	}
+	reconciler.Client = applyClient
 	err := reconciler.ensureUsageLogs(ctx, ctrl.Log)
 	g.Expect(err).To(HaveOccurred())
 	g.Expect(apierrors.IsConflict(err) || apierrors.IsInvalid(err)).To(BeTrue(),
 		"stale SSA should be rejected: %v", err)
+	g.Expect(applyClient.appliedResourceVersion).To(Equal(applyClient.observedResourceVersion))
+	g.Expect(applyClient.appliedResourceVersion).NotTo(BeEmpty())
 
 	reconciler.Client = cl
 	g.Expect(reconciler.ensureUsageLogs(ctx, ctrl.Log)).To(Succeed())
@@ -215,8 +218,10 @@ func startLifecycleLokiEnvtest(t *testing.T) (client.Client, *k8sruntime.Scheme)
 
 type replaceOnApplyClient struct {
 	client.Client
-	targetName string
-	replaced   bool
+	targetName              string
+	replaced                bool
+	appliedResourceVersion  string
+	observedResourceVersion string
 }
 
 func (c *replaceOnApplyClient) Apply(ctx context.Context, config k8sruntime.ApplyConfiguration, opts ...client.ApplyOption) error {
@@ -231,6 +236,8 @@ func (c *replaceOnApplyClient) Apply(ctx context.Context, config k8sruntime.Appl
 		if err := c.Get(ctx, client.ObjectKeyFromObject(obj), existing); err != nil {
 			return err
 		}
+		c.observedResourceVersion = existing.GetResourceVersion()
+		c.appliedResourceVersion = obj.GetResourceVersion()
 		if err := c.Delete(ctx, existing); err != nil {
 			return err
 		}

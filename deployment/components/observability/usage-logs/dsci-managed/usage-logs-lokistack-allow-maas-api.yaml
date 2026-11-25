@@ -16,7 +16,6 @@ spec:
         operator: In
         values:
           - data-science-usage-logs-lokistack
-          - usage
   policyTypes:
     - Ingress
   ingress:

@@ -788,7 +788,7 @@ func (r *LifecycleReconciler) reconcileUsageLogsPortalCopy(
 		return false, nil
 	}
 
-	owned, uid, err := r.ensureUsageLogsPortalCopyOwnership(ctx, log, cfg.UID, res)
+	owned, uid, resourceVersion, err := r.ensureUsageLogsPortalCopyOwnership(ctx, log, cfg.UID, res)
 	if err != nil {
 		if isOptionalAPIGroup(res.GroupVersionKind().Group) && (apimeta.IsNoMatchError(err) || apierrors.IsNotFound(err)) {
 			log.Info("skipping usage-logs resource: optional CRD not yet registered, will apply once installed",
@@ -809,6 +809,7 @@ func (r *LifecycleReconciler) reconcileUsageLogsPortalCopy(
 	}
 
 	res.SetUID(uid)
+	res.SetResourceVersion(resourceVersion)
 	if err := r.Apply(ctx, client.ApplyConfigurationFromUnstructured(res),
 		client.ForceOwnership, client.FieldOwner("maas-controller")); err != nil {
 		if apierrors.IsNotFound(err) {
@@ -950,25 +951,25 @@ func (r *LifecycleReconciler) ensureUsageLogsPortalCopyOwnership(
 	log logr.Logger,
 	configUID types.UID,
 	res *unstructured.Unstructured,
-) (bool, types.UID, error) {
+) (bool, types.UID, string, error) {
 	created := res.DeepCopy()
 	if err := r.Create(ctx, created); err == nil {
-		return true, created.GetUID(), nil
+		return true, created.GetUID(), created.GetResourceVersion(), nil
 	} else if !apierrors.IsAlreadyExists(err) {
-		return false, "", fmt.Errorf("create %s %s/%s: %w", res.GetKind(), res.GetNamespace(), res.GetName(), err)
+		return false, "", "", fmt.Errorf("create %s %s/%s: %w", res.GetKind(), res.GetNamespace(), res.GetName(), err)
 	}
 
 	existing := &unstructured.Unstructured{}
 	existing.SetGroupVersionKind(res.GroupVersionKind())
 	if err := r.Get(ctx, client.ObjectKeyFromObject(res), existing); err != nil {
-		return false, "", fmt.Errorf("get %s %s/%s: %w", res.GetKind(), res.GetNamespace(), res.GetName(), err)
+		return false, "", "", fmt.Errorf("get %s %s/%s: %w", res.GetKind(), res.GetNamespace(), res.GetName(), err)
 	}
 	if !isOwnedByConfigOrController(existing, configUID) {
 		log.Info("skipping unowned Portal usage-log copy",
 			"kind", res.GetKind(), "name", res.GetName(), "namespace", res.GetNamespace())
-		return false, "", nil
+		return false, "", "", nil
 	}
-	return true, existing.GetUID(), nil
+	return true, existing.GetUID(), existing.GetResourceVersion(), nil
 }
 
 // usageLogsKustomizeDir selects the usage-logs kustomization.
