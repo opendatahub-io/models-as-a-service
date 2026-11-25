@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"slices"
 	"strings"
 
 	logqlv2 "github.com/observatorium/api/logql/v2"
@@ -37,6 +38,7 @@ func enforceQueryMatchers(v url.Values, required []*labels.Matcher, queryEndpoin
 	}
 
 	selectorRequired, pipelineRequired := partitionRequiredMatchers(required, queryEndpoint)
+	rawPipelineRequired := pipelineRequired
 	pipelineRequired = escapePipelineMatcherValues(pipelineRequired)
 	if paramValue == "" {
 		if queryEndpoint {
@@ -70,6 +72,16 @@ func enforceQueryMatchers(v url.Values, required []*labels.Matcher, queryEndpoin
 			}
 		})
 
+		// The renderer writes label-filter values without escaping, so the
+		// reparsed tree carries the raw required values. Build the expected
+		// log queries from a second copy injected with those raw values.
+		wantExpr, _ := logqlv2.ParseExpr(paramValue)
+		wantExpr.Walk(func(e any) {
+			if le, ok := e.(*logqlv2.LogQueryExpr); ok {
+				le.SetMatchers(combineLabelMatchers(le.Matchers(), selectorRequired))
+				le.AppendPipelineMatchers(rawPipelineRequired, "and")
+			}
+		})
 		rewritten := expr.String()
 		// Reparse the AST-rendered query. This also rejects raw-log binary
 		// expressions whose operands would need parentheses; the retired
@@ -79,7 +91,8 @@ func enforceQueryMatchers(v url.Values, required []*labels.Matcher, queryEndpoin
 			return fmt.Errorf("%w: rewritten query does not parse: %w", ErrInvalidQuery, err)
 		}
 		if countSelectorNodes(reparsed) != selectorsBefore ||
-			!allSelectorsCarry(reparsed, selectorRequired) {
+			!allSelectorsCarry(reparsed, selectorRequired) ||
+			!slices.Equal(logQueryStrings(reparsed), logQueryStrings(wantExpr)) {
 			return fmt.Errorf("%w: rewritten query failed selector enforcement", ErrInvalidQuery)
 		}
 		v.Set(queryParam, rewritten)
@@ -95,6 +108,16 @@ func enforceQueryMatchers(v url.Values, required []*labels.Matcher, queryEndpoin
 	}
 	v.Set(queryParam, rewritten)
 	return nil
+}
+
+func logQueryStrings(expr logqlv2.Expr) []string {
+	var out []string
+	expr.Walk(func(e any) {
+		if lq, ok := e.(*logqlv2.LogQueryExpr); ok {
+			out = append(out, lq.String())
+		}
+	})
+	return out
 }
 
 func countSelectorNodes(expr logqlv2.Expr) int {
@@ -174,19 +197,13 @@ func escapePipelineMatcherValues(matchers []*labels.Matcher) []*labels.Matcher {
 // matcher for the same label, so the injected tenant filter cannot be weakened
 // or inverted by client-supplied matchers.
 func combineLabelMatchers(queryMatchers, requiredMatchers []*labels.Matcher) []*labels.Matcher {
-	queryMatchersMap := make(map[string]*labels.Matcher)
+	matchers := make([]*labels.Matcher, 0, len(queryMatchers)+len(requiredMatchers))
 	for _, qm := range queryMatchers {
-		queryMatchersMap[qm.Name] = qm
+		if !slices.ContainsFunc(requiredMatchers, func(rm *labels.Matcher) bool { return rm.Name == qm.Name }) {
+			matchers = append(matchers, qm)
+		}
 	}
-	for _, rm := range requiredMatchers {
-		queryMatchersMap[rm.Name] = rm
-	}
-
-	matchers := make([]*labels.Matcher, 0, len(queryMatchersMap))
-	for _, m := range queryMatchersMap {
-		matchers = append(matchers, m)
-	}
-	return matchers
+	return append(matchers, requiredMatchers...)
 }
 
 func appendSelectorMatchers(query string, required []*labels.Matcher) (string, error) {

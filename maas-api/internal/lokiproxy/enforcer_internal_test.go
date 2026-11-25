@@ -112,6 +112,30 @@ func TestEnforceQueryMatchersRejectsRawLogBinaryExpression(t *testing.T) {
 	require.ErrorContains(t, err, "rewritten query does not parse")
 }
 
+// The raw-string value closes its quote when the query is re-rendered and
+// hides the rest of the original query behind a comment, so the selector count
+// stays the same while an unscoped selector reaches Loki.
+func TestEnforceQueryMatchersRejectsCountBalancedBreakout(t *testing.T) {
+	t.Parallel()
+
+	required := []*labels.Matcher{
+		{Type: labels.MatchEqual, Name: tenantLabel, Value: "tenant-a"},
+		{Type: labels.MatchEqual, Name: userLabel, Value: "alice"},
+	}
+	query := strings.ReplaceAll(
+		`sum(count_over_time({service_name="models-as-a-service"} | x = @a") [1h])) or count by `+
+			`(tenant_name, line) (count_over_time({service_name=~".+"} `+
+			`| label_format line="{{__line__}}" [1h])) #@ [1h])) or count by(tenant_name,line) `+
+			`(count_over_time({service_name="nothing"} | label_format line="{{__line__}}" [1h]))`,
+		"@", "`",
+	)
+	values := url.Values{queryParam: []string{query}}
+
+	err := enforceQueryMatchers(values, required, true)
+
+	require.ErrorIs(t, err, ErrInvalidQuery, "forwarded: %s", values.Get(queryParam))
+}
+
 func TestEnforceQueryMatchersRejectsRendererInjection(t *testing.T) {
 	t.Parallel()
 
