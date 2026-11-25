@@ -32,6 +32,7 @@ cleanup_smoke_container() {
 cleanup() {
   if [[ -n "$PORT_FORWARD_PID" ]]; then
     kill "$PORT_FORWARD_PID" 2>/dev/null || true
+    wait "$PORT_FORWARD_PID" 2>/dev/null || true
     PORT_FORWARD_PID=""
   fi
   cleanup_smoke_container
@@ -615,7 +616,7 @@ PY
 
   log "Assert maas-api starts and serves its health endpoint"
   kk -n "$infra_ns" rollout status deployment/maas-api --timeout=240s
-  kk -n "$infra_ns" port-forward --address 127.0.0.1 svc/maas-api :8443 >"$KIND_WORK/port-forward.log" 2>&1 &
+  command kubectl --context "$KIND_CONTEXT" -n "$infra_ns" port-forward --address 127.0.0.1 svc/maas-api :8443 >"$KIND_WORK/port-forward.log" 2>&1 &
   PORT_FORWARD_PID=$!
   local forward_port=""
   for _ in $(seq 1 45); do
@@ -628,6 +629,7 @@ PY
     if [[ -n "$forward_port" ]] && curl -fsSk --max-time 5 "https://127.0.0.1:${forward_port}/health" >/dev/null 2>&1; then
       echo "maas-api /health passed"
       kill "$PORT_FORWARD_PID" 2>/dev/null || true
+      wait "$PORT_FORWARD_PID" 2>/dev/null || true
       PORT_FORWARD_PID=""
       return 0
     fi

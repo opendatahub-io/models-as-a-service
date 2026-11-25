@@ -788,66 +788,157 @@ def kustomize_command() -> list[str]:
     raise SystemExit("kustomize is required (set KUSTOMIZE_BIN)")
 
 
+RENDER_TREES = ("deployment", "maas-api/deploy")
+
+
 def kustomization_files() -> list[Path]:
     files: list[Path] = []
-    for base in (ROOT / "deployment", ROOT / "maas-api/deploy"):
+    for base in (ROOT / tree for tree in RENDER_TREES):
         files.extend(sorted(base.rglob("kustomization.yaml")))
     return files
 
 
-def resolve_ref(base: Path, ref: str) -> Path:
-    return (base / ref).resolve()
+def is_remote_ref(ref: str) -> bool:
+    return (
+        "://" in ref
+        or ref.startswith("github.com/")
+        or ref.startswith("git@")
+        or "?ref=" in ref
+    )
+
+
+def check_local_ref(
+    kustomization: Path,
+    relative: Path,
+    label: str,
+    ref: str,
+    *,
+    expect_dir: bool = False,
+) -> Path | None:
+    target = (kustomization.parent / ref).resolve()
+    if resolve_inside_root(target) is None:
+        fail(f"{relative}: {label} {ref!r} resolves outside the repository")
+        return None
+    if not target.exists():
+        fail(f"{relative}: {label} {ref!r} does not exist")
+        return None
+    if expect_dir and not target.is_dir():
+        fail(f"{relative}: {label} {ref!r} is not a directory")
+        return None
+    return target
+
+
+def child_kustomization(target: Path) -> Path | None:
+    if not target.is_dir():
+        return None
+    for name in ("kustomization.yaml", "kustomization.yml", "Kustomization"):
+        candidate = target / name
+        if candidate.is_file():
+            return candidate
+    return None
 
 
 def check_kustomization_refs(files: list[Path]) -> None:
-    for path in files:
+    queue = list(files)
+    seen: set[Path] = set()
+    while queue:
+        path = queue.pop()
+        resolved = path.resolve()
+        if resolve_inside_root(resolved) is None:
+            fail(f"{path}: kustomization file resolves outside the repository")
+            continue
+        if resolved in seen:
+            continue
+        seen.add(resolved)
         docs = read_yaml(path)
         if not docs:
             continue
         doc = docs[0]
         relative = path.relative_to(ROOT)
-        for field in ("resources", "components"):
+
+        for field in ("resources", "components", "bases"):
             for ref in doc.get(field, []) or []:
-                if not isinstance(ref, str):
+                if not isinstance(ref, str) or is_remote_ref(ref):
                     continue
-                if (
-                    "://" in ref
-                    or ref.startswith("github.com/")
-                    or ref.startswith("git@")
-                    or "?ref=" in ref
-                ):
-                    continue
-                target = resolve_ref(path.parent, ref)
-                if resolve_inside_root(target) is None:
-                    fail(f"{relative}: {field} entry {ref!r} resolves outside the repository")
-                    continue
-                if not target.exists():
-                    fail(f"{relative}: {field} entry {ref!r} does not exist")
+                target = check_local_ref(path, relative, f"{field} entry", ref)
+                if target:
+                    child = child_kustomization(target)
+                    if child:
+                        queue.append(child)
+
         for generator in ("configMapGenerator", "secretGenerator"):
             for ref in doc.get(generator, []) or []:
+                if not isinstance(ref, dict):
+                    continue
                 for env_file in ref.get("envs", []) or []:
-                    target = (path.parent / env_file).resolve()
-                    if resolve_inside_root(target) is None:
-                        fail(
-                            f"{relative}: {generator} env file {env_file!r} resolves "
-                            "outside the repository"
-                        )
-                        continue
-                    if not target.exists():
-                        fail(
-                            f"{relative}: {generator} env file {env_file!r} does not exist"
-                        )
+                    if isinstance(env_file, str):
+                        check_local_ref(path, relative, f"{generator} env file", env_file)
+                env_file = ref.get("env")
+                if isinstance(env_file, str):
+                    check_local_ref(path, relative, f"{generator} env file", env_file)
                 for file_ref in ref.get("files", []) or []:
                     file_path = str(file_ref).split("=", 1)[-1]
-                    target = (path.parent / file_path).resolve()
-                    if resolve_inside_root(target) is None:
-                        fail(
-                            f"{relative}: {generator} file {file_path!r} resolves "
-                            "outside the repository"
-                        )
-                        continue
-                    if not target.exists():
-                        fail(f"{relative}: {generator} file {file_path!r} does not exist")
+                    check_local_ref(path, relative, f"{generator} file", file_path)
+
+        for ref in doc.get("patchesStrategicMerge", []) or []:
+            if not isinstance(ref, str):
+                continue
+            stripped = ref.lstrip()
+            if "\n" in ref or stripped.startswith(
+                ("{", "[", "-", "apiVersion:", "kind:", "metadata:")
+            ):
+                continue
+            check_local_ref(path, relative, "patchesStrategicMerge entry", ref)
+
+        for field in ("patchesJson6902", "patches", "replacements"):
+            for ref in doc.get(field, []) or []:
+                if isinstance(ref, dict) and isinstance(ref.get("path"), str):
+                    check_local_ref(path, relative, f"{field} path", ref["path"])
+
+        for field in ("configurations", "crds", "generators", "transformers"):
+            for ref in doc.get(field, []) or []:
+                if isinstance(ref, str) and not is_remote_ref(ref):
+                    check_local_ref(path, relative, f"{field} entry", ref)
+
+        openapi = doc.get("openapi")
+        if isinstance(openapi, dict) and isinstance(openapi.get("path"), str):
+            check_local_ref(path, relative, "openapi path", openapi["path"])
+
+        for chart in doc.get("helmCharts", []) or []:
+            if not isinstance(chart, dict):
+                continue
+            if isinstance(chart.get("valuesFile"), str):
+                check_local_ref(path, relative, "helmCharts valuesFile", chart["valuesFile"])
+            for ref in chart.get("additionalValuesFiles", []) or []:
+                if isinstance(ref, str):
+                    check_local_ref(
+                        path, relative, "helmCharts additionalValuesFiles entry", ref
+                    )
+            if isinstance(chart.get("chartHome"), str):
+                check_local_ref(
+                    path,
+                    relative,
+                    "helmCharts chartHome",
+                    chart["chartHome"],
+                    expect_dir=True,
+                )
+
+        helm_globals = doc.get("helmGlobals")
+        if isinstance(helm_globals, dict) and isinstance(helm_globals.get("chartHome"), str):
+            check_local_ref(
+                path,
+                relative,
+                "helmGlobals chartHome",
+                helm_globals["chartHome"],
+                expect_dir=True,
+            )
+
+
+def check_render_tree_symlinks() -> None:
+    for tree in RENDER_TREES:
+        for path in (ROOT / tree).rglob("*"):
+            if path.is_symlink() and resolve_inside_root(path.resolve()) is None:
+                fail(f"{path.relative_to(ROOT)}: symlink resolves outside the repository")
 
 
 def render_all(
@@ -855,50 +946,76 @@ def render_all(
 ) -> tuple[dict[str, list[dict[str, Any]]], list[tuple[str, Path]]]:
     command = kustomize_command()
     files = kustomization_files()
+    check_render_tree_symlinks()
     check_kustomization_refs(files)
+    if ERRORS:
+        print("Aborting before any kustomize invocation; no render output was written.")
+        return {}, []
     rendered: dict[str, list[dict[str, Any]]] = {}
     render_outputs: list[tuple[str, Path]] = []
-    output_dir.mkdir(parents=True, exist_ok=True)
-    for index, path in enumerate(files):
-        docs = read_yaml(path)
-        if not docs:
-            continue
-        if docs[0].get("kind") == "Component":
-            continue
-        remote_refs = [
-            ref
-            for field in ("resources", "components")
-            for ref in docs[0].get(field, []) or []
-            if isinstance(ref, str)
-            and ("://" in ref or ref.startswith("github.com/") or ref.startswith("git@") or "?ref=" in ref)
-        ]
-        if remote_refs:
-            warn(
-                f"{path.parent.relative_to(ROOT)}: skipped render because it references external kustomize "
-                f"resources (assert these in the consuming operator): {', '.join(remote_refs)}"
+    with tempfile.TemporaryDirectory(prefix="maas-kustomize-") as temp_dir:
+        temp_root = Path(temp_dir)
+        for index, path in enumerate(files):
+            docs = read_yaml(path)
+            if not docs:
+                continue
+            if docs[0].get("kind") == "Component":
+                continue
+            remote_refs = [
+                ref
+                for field in ("resources", "components")
+                for ref in docs[0].get(field, []) or []
+                if isinstance(ref, str) and is_remote_ref(ref)
+            ]
+            if remote_refs:
+                warn(
+                    f"{path.parent.relative_to(ROOT)}: skipped render because it references external kustomize "
+                    f"resources (assert these in the consuming operator): {', '.join(remote_refs)}"
+                )
+                continue
+            relative = path.parent.relative_to(ROOT).as_posix()
+            sandbox = temp_root / f"{index:04d}"
+            sandbox.mkdir()
+            for tree in RENDER_TREES:
+                destination = sandbox / tree
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copytree(ROOT / tree, destination, symlinks=False)
+            (sandbox / "kustomization.yaml").write_text(
+                yaml.safe_dump({"resources": [relative]}, sort_keys=False),
+                encoding="utf-8",
             )
-            continue
-        relative = path.parent.relative_to(ROOT).as_posix()
-        if Path(command[0]).name == "kubectl":
-            build_command = [*command, str(path.parent)]
-        else:
-            build_command = [*command, "build", "--load-restrictor", "LoadRestrictionsNone", str(path.parent)]
-        result = subprocess.run(
-            build_command,
-            text=True,
-            capture_output=True,
-        )
-        if result.returncode != 0:
-            fail(f"kustomize build failed for {relative}:\n{result.stderr.strip()}")
-            continue
-        if result.stderr.strip():
-            warn(f"{relative}: kustomize warning: {result.stderr.strip()}")
-        slug = relative.replace("/", "__")
-        target = output_dir / f"{index:04d}-{slug}.yaml"
-        target.write_text(result.stdout, encoding="utf-8")
-        parsed = [doc for doc in yaml.safe_load_all(result.stdout) if isinstance(doc, dict)]
-        rendered[relative] = parsed
-        render_outputs.append((relative, target))
+            if Path(command[0]).name == "kubectl":
+                build_command = [
+                    *command,
+                    "--load-restrictor",
+                    "LoadRestrictionsRootOnly",
+                    str(sandbox),
+                ]
+            else:
+                build_command = [
+                    *command,
+                    "build",
+                    "--load-restrictor",
+                    "LoadRestrictionsRootOnly",
+                    str(sandbox),
+                ]
+            result = subprocess.run(
+                build_command,
+                text=True,
+                capture_output=True,
+            )
+            if result.returncode != 0:
+                fail(f"kustomize build failed for {relative}:\n{result.stderr.strip()}")
+                continue
+            if result.stderr.strip():
+                warn(f"{relative}: kustomize warning: {result.stderr.strip()}")
+            slug = relative.replace("/", "__")
+            output_dir.mkdir(parents=True, exist_ok=True)
+            target = output_dir / f"{index:04d}-{slug}.yaml"
+            target.write_text(result.stdout, encoding="utf-8")
+            parsed = [doc for doc in yaml.safe_load_all(result.stdout) if isinstance(doc, dict)]
+            rendered[relative] = parsed
+            render_outputs.append((relative, target))
     return rendered, render_outputs
 
 
@@ -1431,6 +1548,8 @@ def check_escalation_closure(rendered: dict[str, list[dict[str, Any]]]) -> None:
 
 def check_manifests(output_dir: Path) -> None:
     rendered, render_outputs = render_all(output_dir)
+    if ERRORS:
+        raise SystemExit(1)
     for root in REQUIRED_KUSTOMIZATION_ROOTS:
         if root not in rendered:
             if not (ROOT / root / "kustomization.yaml").exists():

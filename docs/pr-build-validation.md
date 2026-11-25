@@ -74,9 +74,15 @@ a silently shorter run.
 
 For each render:
 
-- `kustomize build --load-restrictor LoadRestrictionsNone` must succeed. The
-  pre-existing `vars` deprecation warning from the controller xks overlay is
-  reported as a warning.
+- Every local loader input is resolved before rendering: `resources`,
+  `components`, `bases`, generator `envs`/`env`/`files`, patch and replacement
+  paths, configurations, CRDs, transformers, OpenAPI, and Helm values/chart
+  paths. Symlink escapes outside the checkout are rejected. A containment error
+  aborts the job before any Kustomize invocation and writes no render output.
+- Each entry point renders from an isolated temporary copy of `deployment/` and
+  `maas-api/deploy/` with `--load-restrictor LoadRestrictionsRootOnly`, so the
+  renderer cannot read host files. The pre-existing `vars` deprecation warning
+  from the controller xks overlay is reported as a warning.
 - `kubeconform -strict -ignore-missing-schemas -verbose` must pass. The JSON
   report is then checked against an explicit built-in API-group allow-list; a
   `Deploymnet` typo cannot hide as "schema not found", and Gateway API is not
