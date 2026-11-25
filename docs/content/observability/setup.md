@@ -111,6 +111,8 @@ When tenant telemetry is enabled and `usageLogging` is `false` or omitted, `Maas
 - **Perses Dashboard** (`dashboard-4-maas-usage-logs-admin`) - usage dashboard for administrators (shows information on all users)
 - **Perses Dashboard** (`dashboard-5-maas-usage-logs`) - user-scoped usage dashboard
 
+When the `usage-logs-loki` Secret is configured for maas-api, the controller additionally creates `maas-portal-usage-logs`, `maas-portal-usage-logs-admin`, and their Portal-only datasources. These copies use the maas-api Loki proxy, while the shared dashboards and datasources keep their rendered LokiStack defaults. The MaaS Portal must select the Portal copy names; the RHOAI Dashboard does not list them because they do not use its `dashboard-` naming convention.
+
 !!! warning "Privacy"
     Structured access logs record request attributes.
     User identity (`user_id`) is included only when `MaasTenantConfig.spec.telemetry.logs.captureUser` is `true`.
