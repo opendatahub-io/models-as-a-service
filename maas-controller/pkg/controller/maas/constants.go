@@ -19,6 +19,7 @@ const (
 // when their CRDs are not yet registered, instead of failing the Tenant reconcile.
 // The CRD watch in the controller re-triggers reconcile once the CRDs appear.
 var OptionalAPIGroups = map[string]bool{
+	"monitoring.rhobs": true, // COO — product Prometheus rules, not core OpenShift monitoring
 	"perses.dev":       true, // Cluster Observability Operator (COO) — Perses dashboards and datasources
 	"opentelemetry.io": true, // OpenTelemetry Collector
 }
