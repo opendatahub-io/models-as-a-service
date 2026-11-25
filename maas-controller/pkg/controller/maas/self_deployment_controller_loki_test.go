@@ -352,12 +352,22 @@ func TestLifecycleReconciler_MaasAPILokiPortalCopies(t *testing.T) {
 		g.Expect(err).NotTo(HaveOccurred())
 		g.Expect(found).To(BeTrue())
 		g.Expect(url).To(Equal(usageLogsMaaSAPILokiDatasourceURL))
+		secret, found, err := unstructured.NestedString(portalAdmin.Object,
+			"spec", "config", "plugin", "spec", "proxy", "spec", "secret")
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(found).To(BeTrue())
+		g.Expect(secret).To(Equal("maas-portal-usage-logs-all-secret"))
 
 		portalMulti := getDatasource(t, cl, "maas-portal-usage-logs-multi-tenancy")
 		url, found, err = unstructured.NestedString(portalMulti.Object, "spec", "config", "plugin", "spec", "proxy", "spec", "url")
 		g.Expect(err).NotTo(HaveOccurred())
 		g.Expect(found).To(BeTrue())
 		g.Expect(url).To(Equal(usageLogsMaaSAPILokiDatasourceURL + "?only_user=true"))
+		secret, found, err = unstructured.NestedString(portalMulti.Object,
+			"spec", "config", "plugin", "spec", "proxy", "spec", "secret")
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(found).To(BeTrue())
+		g.Expect(secret).To(Equal("maas-portal-usage-logs-multi-tenancy-secret"))
 
 		portalDashboard := getPerses(t, cl, "PersesDashboard", "maas-portal-usage-logs")
 		names := nestedNames(portalDashboard.Object)

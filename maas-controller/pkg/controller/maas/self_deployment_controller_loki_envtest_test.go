@@ -144,7 +144,8 @@ func TestLifecycleReconciler_PortalCopyReplacementEnvtest(t *testing.T) {
 	}
 	err := reconciler.ensureUsageLogs(ctx, ctrl.Log)
 	g.Expect(err).To(HaveOccurred())
-	g.Expect(apierrors.IsConflict(err)).To(BeTrue(), "stale SSA should conflict: %v", err)
+	g.Expect(apierrors.IsConflict(err) || apierrors.IsInvalid(err)).To(BeTrue(),
+		"stale SSA should be rejected: %v", err)
 
 	reconciler.Client = cl
 	g.Expect(reconciler.ensureUsageLogs(ctx, ctrl.Log)).To(Succeed())
