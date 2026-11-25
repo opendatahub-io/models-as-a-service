@@ -153,8 +153,14 @@ func TestEnforceQueryMatchersRejectsRendererInjection(t *testing.T) {
 			}, true)
 			if test.valid {
 				require.NoError(t, err)
-				_, parseErr := logqlv2.ParseExpr(values.Get(queryParam))
-				require.NoError(t, parseErr, "query: %s", values.Get(queryParam))
+				rewritten := values.Get(queryParam)
+				require.Contains(
+					t,
+					rewritten,
+					`| tenant_name = "tenant-a" and organization_id = "1234" and user_id = "user-abc"`,
+				)
+				_, parseErr := logqlv2.ParseExpr(rewritten)
+				require.NoError(t, parseErr, "query: %s", rewritten)
 				return
 			}
 

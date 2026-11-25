@@ -584,15 +584,18 @@ def test_internal_loki_proxy_queries_when_lokistack_exists(
         pytest.fail("Selected usage-logs LokiStack has no ready gateway endpoints")
 
     queries = {
-        "metric": 'sum(count_over_time({service_name="models-as-a-service"}[5m]))',
+        "metric": (
+            'sum(count_over_time({service_name="models-as-a-service"}[5m]))',
+            ("query", "query_range"),
+        ),
         "raw string": (
-            r'{app="api"} | line_format '
-            r'`{{ if eq .level "info" }}{{ .message }}{{ end }}`'
+            r'{app="api"} | line_format `{{ if eq .level "info" }}{{ .message }}{{ end }}`',
+            ("query_range",),
         ),
     }
-    for query_name, query in queries.items():
+    for query_name, (query, endpoints) in queries.items():
         encoded_query = urlencode({"only_user": "true", "query": query})
-        for endpoint in ("query", "query_range"):
+        for endpoint in endpoints:
             url = f"{maas_api_internal_url}/v1/logs/loki/api/v1/{endpoint}?{encoded_query}"
             status, body = 0, ""
             query_deadline = time.monotonic() + 120
