@@ -1,0 +1,85 @@
+apiVersion: serving.kserve.io/v1alpha1
+kind: LLMInferenceService
+metadata:
+  name: echo-simulator-large-io
+spec:
+  model:
+    # uri is required by the LLMIS schema but not used by llm-d-inference-sim.
+    uri: hf://placeholder/no-model
+    name: test/e2e-echo-model-large-io
+  # Skip storage-initializer; simulator generates responses without model weights.
+  storageInitializer:
+    enabled: false
+  replicas: 1
+  router:
+    route: {}
+    # Connect to MaaS-enabled gateway
+    gateway:
+      refs:
+        - name: maas-default-gateway
+          namespace: openshift-ingress
+  template:
+    containers:
+      - name: main
+        # v1.0.0 adds --max-request-body-size-mb, which is required to accept >4MB bodies.
+        # v1.0.0 also removes /ready; use /health/ready for the readiness probe below.
+        image: "ghcr.io/llm-d/llm-d-inference-sim:v1.0.0"
+        imagePullPolicy: Always
+        command: ["/app/llm-d-inference-sim"]
+        args:
+        - --port
+        - "8000"
+        - --model
+        - test/e2e-echo-model-large-io
+        # echo mirrors the last user message back as the completion.
+        - --mode
+        - echo
+        # 1700000 allows ~4MB of prose per request (800K words × 2 for echo = 1.6M tokens).
+        # --max-request-body-size-mb 8 overrides fasthttp's 4MB default body limit so
+        # a 4MB JSON payload (content + envelope) can reach the sim.
+        - --max-model-len
+        - "1700000"
+        - --max-request-body-size-mb
+        - "8"
+        - --no-mm-encoder-only
+        - --ssl-certfile
+        - /var/run/kserve/tls/tls.crt
+        - --ssl-keyfile
+        - /var/run/kserve/tls/tls.key
+        env:
+          - name: POD_NAME
+            valueFrom:
+              fieldRef:
+                apiVersion: v1
+                fieldPath: metadata.name
+          - name: POD_NAMESPACE
+            valueFrom:
+              fieldRef:
+                apiVersion: v1
+                fieldPath: metadata.namespace
+          - name: POD_IP
+            valueFrom:
+              fieldRef:
+                apiVersion: v1
+                fieldPath: status.podIP
+        ports:
+          - name: https
+            containerPort: 8000
+            protocol: TCP
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: https
+            scheme: HTTPS
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: 500m
+            memory: 1Gi
+        readinessProbe:
+          httpGet:
+            path: /health/ready
+            port: https
+            scheme: HTTPS
