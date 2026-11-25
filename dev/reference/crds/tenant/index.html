@@ -3939,12 +3939,12 @@ to <code>/v1/messages</code>. The ExternalModel flow is <strong>OpenAI Chat Comp
 <code>intelligent_route</code> selects the provider first, and that provider's trusted
 profile determines whether translation runs. An OpenAI-compatible provider
 remains pass-through.</p>
-<p>The currently qualified ExternalModel profiles are OpenAI <code>openai-chat</code>
-pass-through and Anthropic <code>messages</code> translation. The Anthropic profile
-requires this permission to be enabled. Azure OpenAI, Vertex AI, Bedrock, and
-custom provider or format combinations are not qualified by this runtime; an
-active unqualified binding fails reconciliation and retains the last-known
-serving route rather than being silently removed.</p>
+<p>Anthropic <code>messages</code> bindings, Azure OpenAI bindings, and bindings whose
+<code>targetModel</code> differs from the model's client-facing name require this
+permission; without it ai-gateway-controller skips them with reason
+<code>APITranslationDisabled</code>. A binding's <code>path</code> also takes effect only with it,
+but is not flagged. See
+<a href="../../../install/external-model-setup/#api-translation">External Model Setup</a>.</p>
 <p>The shared translator stays strict for Anthropic-only fields that Chat
 Completions cannot represent. Requests using <code>cache_control</code> prompt-caching
 markers or extended-thinking fields are rejected with a client error; this
@@ -4461,7 +4461,7 @@ Anthropic <code>messages</code> profile.</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="November 4, 2026 22:40:05 UTC">November 4, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="November 25, 2026 02:17:26 UTC">November 25, 2026</span>
   </span>
 
     

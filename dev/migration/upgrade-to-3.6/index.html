@@ -814,6 +814,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="IPP → Praxis API translation migration">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#known-issue-a-blocked-tenants-payload-processor-is-not-tenant-scoped" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Known issue: a blocked tenant's payload processor is not tenant-scoped
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -3353,6 +3370,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="IPP → Praxis API translation migration">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#known-issue-a-blocked-tenants-payload-processor-is-not-tenant-scoped" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Known issue: a blocked tenant's payload processor is not tenant-scoped
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -3495,9 +3529,7 @@ maas-controller inspects the live <code>payload-processing-plugins</code> Config
 </tbody>
 </table>
 <p>The legacy IPP request translator was a multi-provider catch-all documented for
-OpenAI, Anthropic, Azure OpenAI, Vertex AI, and Bedrock Mantle. Praxis currently
-qualifies only OpenAI <code>openai-chat</code> pass-through and Anthropic <code>messages</code>
-translation for ExternalModels. The <code>apiTranslation</code> permission is not a
+OpenAI, Anthropic, Azure OpenAI, Vertex AI, and Bedrock Mantle. The <code>apiTranslation</code> permission is not a
 tenant-wide translator choice: it permits both the shared <strong>Anthropic Messages
 client → OpenAI-compatible backend</strong> flow and the ExternalModel <strong>OpenAI Chat
 Completions client → selected Anthropic Messages provider</strong> flow. In the
@@ -3505,13 +3537,16 @@ ExternalModel path, <code>intelligent_route</code> selects the provider per requ
 the selected provider's profile remains bound through request and response
 translation. OpenAI-compatible candidates remain pass-through.</p>
 <p>An active Azure OpenAI, Vertex AI, Bedrock, custom provider, or unqualified
-format/auth binding is not claimed as compatible. The AIGC resolver fails that
-reconcile before publishing or cleaning serving resources, preserving the
-last-known route and overlay; the migration compatibility check likewise must
-keep IPP state until that binding is qualified or an operator explicitly
-accepts the compatibility risk. A passing shared <code>/v1/messages</code> request does
-not prove ExternalModel compatibility, and a recognized IPP ConfigMap
-fingerprint alone does not prove every historical provider direction.</p>
+format/auth binding is not claimed as compatible, so the migration
+compatibility check keeps IPP state until that binding is qualified or an
+operator explicitly accepts the compatibility risk. For the bindings
+ai-gateway-controller serves on Praxis, see
+<a href="../../install/external-model-setup/#providers">External Model Setup</a>; for any
+other, its resolver fails that reconcile before publishing or cleaning serving
+resources, preserving the last-known route and overlay. A passing
+shared <code>/v1/messages</code> request does not prove ExternalModel compatibility, and a
+recognized IPP ConfigMap fingerprint alone does not prove every historical
+provider direction.</p>
 <p>The compatibility check passes an active binding only when it is:</p>
 <ul>
 <li>an <code>openai</code> provider with <code>apiFormat: openai-chat</code> (pass-through), or</li>
@@ -3567,6 +3602,20 @@ replaces it with the Praxis plugins schema; re-apply any still-needed
 customizations in the Praxis ConfigMap shape afterward. An override does not
 establish parity for Azure, Vertex, Bedrock, OpenAI variants, streaming, or
 other provider behavior without matching deployed evidence.</p>
+<h3 id="known-issue-a-blocked-tenants-payload-processor-is-not-tenant-scoped">Known issue: a blocked tenant's payload processor is not tenant-scoped</h3>
+<p>While a tenant's migration is blocked, maas-controller leaves its RHOAI 3.5
+payload processor (<code>payload-processing</code> and <code>payload-pre-processing</code> in the
+gateway namespace) as it is. That processor is not tenant-scoped, so it also
+acts on the ExternalModels of other tenants:</p>
+<ul>
+<li>A new ExternalModel in another tenant can return <code>403</code> for a few minutes
+  after it is created.</li>
+<li>An ExternalModel in another tenant that reuses the name of a model the
+  blocked tenant serves can make the blocked tenant's model return <code>500</code>.</li>
+</ul>
+<p>To clear it, let the migration finish: change or remove the bindings that the
+blocked message names, or set the force annotation above after reviewing the
+risk. maas-controller then deletes the legacy payload processor.</p>
 <h2 id="externalmodels-outside-tenant-namespaces">ExternalModels outside tenant namespaces</h2>
 <p>In 3.5 the default tenant served ExternalModels in every namespace. 3.6 keeps
 that behavior: ai-gateway-controller serves an ExternalModel without
@@ -3619,7 +3668,7 @@ it with <code>kubectl delete externalmodels.maas.opendatahub.io &lt;name&gt; -n 
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="November 4, 2026 22:40:05 UTC">November 4, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="November 25, 2026 02:17:26 UTC">November 25, 2026</span>
   </span>
 
     
