@@ -64,6 +64,9 @@ func TestOIDCTokenBoundWhen(t *testing.T) {
 	if !ok {
 		t.Fatalf("OIDCTokenBoundWhen() predicate is not a string: %#v", got[0])
 	}
+	if guard := `"authorization" in request.headers && `; !strings.HasPrefix(predicate, guard) {
+		t.Errorf("predicate %q does not start with %q", predicate, guard)
+	}
 	for _, required := range []string{
 		`!request.headers.authorization.startsWith("Bearer sk-oai-")`,
 		`request.headers.authorization.matches("^Bearer [^.]+\\.[^.]+\\.[^.]+$")`,

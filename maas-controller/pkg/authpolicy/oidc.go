@@ -10,11 +10,14 @@ const externalJWTShape = `request.headers.authorization.matches("^Bearer [^.]+\\
 // OIDCTokenBoundWhen selects an externally authenticated JWT while leaving
 // OpenShift TokenReview and MaaS API-key identities on their existing paths.
 // The top-level iss claim distinguishes an external OIDC claim map from the
-// TokenReview user object.
+// TokenReview user object. An external JWT always comes in the Authorization
+// header, and both the JWT match and notAPIKeyPredicate may read it unguarded,
+// so the header check comes first rather than relying on which identity
+// authenticated a request without it.
 func OIDCTokenBoundWhen(notAPIKeyPredicate string) []any {
 	return []any{
 		map[string]any{
-			"predicate": notAPIKeyPredicate + ` && ` + externalJWTShape + ` && has(auth.identity.iss)`,
+			"predicate": `"authorization" in request.headers && ` + notAPIKeyPredicate + ` && ` + externalJWTShape + ` && has(auth.identity.iss)`,
 		},
 	}
 }
