@@ -25,6 +25,7 @@ import (
 	"github.com/opendatahub-io/models-as-a-service/maas-discovery/internal/cache"
 	"github.com/opendatahub-io/models-as-a-service/maas-discovery/internal/cert"
 	"github.com/opendatahub-io/models-as-a-service/maas-discovery/internal/handler"
+	"github.com/opendatahub-io/models-as-a-service/maas-discovery/internal/metrics"
 	"github.com/opendatahub-io/models-as-a-service/maas-discovery/internal/middleware"
 	"github.com/opendatahub-io/models-as-a-service/maas-discovery/internal/tlsprofile"
 )
@@ -45,6 +46,10 @@ func main() {
 
 func run() error {
 	addr := flag.String("addr", ":8443", "listen address")
+	metricsAddr := flag.String("metrics-addr", ":9090", "listen address for the Prometheus metrics endpoint (cluster-internal); empty disables")
+	metricsSecureFlag := flag.Bool("metrics-secure", true, "serve metrics over HTTPS with kube authn/authz (TokenReview + SubjectAccessReview for GET /metrics)")
+	metricsCertDir := flag.String("metrics-cert-dir", "/tmp/k8s-metrics-server/metrics-certs",
+		"directory containing tls.crt/tls.key for the metrics server (OpenShift service-ca mount)")
 	tlsCert := flag.String("tls-cert", "", "path to TLS certificate file")
 	tlsKey := flag.String("tls-key", "", "path to TLS key file")
 	selfSigned := flag.Bool("self-signed", false, "generate a self-signed certificate for development")
@@ -59,6 +64,8 @@ func run() error {
 		return err
 	}
 	log := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
+
+	m := metrics.New()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -81,7 +88,7 @@ func run() error {
 		return fmt.Errorf("configuring TLS: %w", err)
 	}
 
-	tc, err := buildCache(ctx, log, restConfig, *tenantNamespace, *gatewayNamespace)
+	tc, err := buildCache(ctx, log, restConfig, *tenantNamespace, *gatewayNamespace, m)
 	if err != nil {
 		return fmt.Errorf("creating cache: %w", err)
 	}
@@ -96,26 +103,69 @@ func run() error {
 	engine.Use(gin.Recovery())
 	engine.Use(middleware.RequestID())
 	engine.Use(middleware.AccessLogger(log))
+	engine.Use(middleware.Prometheus(m))
 
 	var authMiddleware []gin.HandlerFunc
+	var metricsKubeClient kubernetes.Interface
 	if restConfig != nil {
 		kubeClient, clientErr := kubernetes.NewForConfig(restConfig)
 		if clientErr != nil {
 			return fmt.Errorf("creating kubernetes client for auth: %w", clientErr)
 		}
+		metricsKubeClient = kubeClient
 		authMiddleware = append(authMiddleware, auth.TokenReviewMiddleware(log, kubeClient, *tenantNamespace))
 	}
 	h.RegisterRoutes(engine, authMiddleware...)
 
 	srv := newServer(*addr, engine, tlsConfig)
 
-	errCh := make(chan error, 1)
+	// The metrics endpoint serves on a separate cluster-internal port that is
+	// never attached to the tenant-facing gateway route. Secure by default:
+	// HTTPS with the service-ca certificate plus TokenReview/SAR authn/authz,
+	// matching the maas-api convention. Without a cluster connection (local
+	// development) it falls back to plain HTTP with a warning.
+	var metricsSrv *http.Server
+	metricsSecure := *metricsSecureFlag
+	if *metricsAddr != "" {
+		if metricsSecure && restConfig == nil {
+			log.Warn("no cluster connection available, serving metrics over plain HTTP without authentication (development only)")
+			metricsSecure = false
+		}
+		metricsSrv = newMetricsServer(log, m, metrics.ServerOptions{
+			Addr:         *metricsAddr,
+			Secure:       metricsSecure,
+			CertDir:      *metricsCertDir,
+			KubeClient:   metricsKubeClient,
+			Log:          log,
+			MinVersion:   profileMinVersion,
+			CipherSuites: profileCipherSuites,
+		})
+	}
+
+	errCh := make(chan error, 2)
 	go func() {
 		log.Info("starting discovery service", "addr", *addr)
 		if serr := srv.ListenAndServeTLS("", ""); serr != nil && !errors.Is(serr, http.ErrServerClosed) {
 			errCh <- serr
 		}
 	}()
+	if metricsSrv != nil {
+		go func() {
+			log.Info("starting metrics endpoint", "addr", *metricsAddr, "secure", metricsSecure)
+			var serr error
+			if metricsSecure {
+				serr = metricsSrv.ListenAndServeTLS("", "")
+			} else {
+				serr = metricsSrv.ListenAndServe()
+			}
+			// Observability must never take down the tenant API: a metrics
+			// server failure (e.g. port conflict) is logged and dropped
+			// rather than propagated to the main error channel.
+			if serr != nil && !errors.Is(serr, http.ErrServerClosed) {
+				log.Error("metrics server failed, continuing without metrics", "error", serr)
+			}
+		}()
+	}
 
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
@@ -137,8 +187,28 @@ func run() error {
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		return fmt.Errorf("shutdown error: %w", err)
 	}
+	if metricsSrv != nil {
+		if err := metricsSrv.Shutdown(shutdownCtx); err != nil {
+			return fmt.Errorf("metrics shutdown error: %w", err)
+		}
+	}
 	log.Info("server stopped")
 	return nil
+}
+
+// newMetricsServer builds the metrics server, degrading to nil (metrics
+// disabled) instead of failing startup: the tenant API must not become
+// unavailable because observability cannot be served — e.g. when the
+// deployment does not yet mount the service-ca certificate. The failure is
+// logged at error level so a missing metrics endpoint stays visible.
+func newMetricsServer(log *slog.Logger, m *metrics.Metrics, opts metrics.ServerOptions) *http.Server {
+	srv, err := m.NewServer(opts)
+	if err != nil {
+		log.Error("unable to start metrics server, continuing without metrics",
+			"error", err, "addr", opts.Addr, "secure", opts.Secure)
+		return nil
+	}
+	return srv
 }
 
 func newServer(addr string, handler http.Handler, tlsConfig *tls.Config) *http.Server {
@@ -184,7 +254,7 @@ func parseLogLevel(raw string) (slog.Level, error) {
 }
 
 //nolint:ireturn // returns Stub or InformerCache depending on environment
-func buildCache(ctx context.Context, log *slog.Logger, restConfig *rest.Config, tenantNS, gatewayNS string) (cache.TenantCache, error) {
+func buildCache(ctx context.Context, log *slog.Logger, restConfig *rest.Config, tenantNS, gatewayNS string, m *metrics.Metrics) (cache.TenantCache, error) {
 	if restConfig == nil {
 		return cache.NewStub(), nil
 	}
@@ -194,6 +264,7 @@ func buildCache(ctx context.Context, log *slog.Logger, restConfig *rest.Config, 
 		TenantNamespace:  tenantNS,
 		GatewayNamespace: gatewayNS,
 		Log:              log,
+		Metrics:          m,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("creating informer cache: %w", err)

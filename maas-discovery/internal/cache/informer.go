@@ -21,6 +21,7 @@ import (
 	k8scache "k8s.io/client-go/tools/cache"
 
 	"github.com/opendatahub-io/models-as-a-service/maas-discovery/internal/gateway"
+	"github.com/opendatahub-io/models-as-a-service/maas-discovery/internal/metrics"
 	"github.com/opendatahub-io/models-as-a-service/maas-discovery/internal/types"
 )
 
@@ -67,6 +68,7 @@ type InformerCache struct {
 	tenantNamespace  string
 	gatewayNamespace string
 	restConfig       *rest.Config
+	metrics          *metrics.Metrics
 
 	metadataRebuildMu    sync.Mutex
 	entitlementRebuildMu sync.Mutex
@@ -88,6 +90,10 @@ type InformerCacheOptions struct {
 	TenantNamespace  string
 	GatewayNamespace string
 	Log              *slog.Logger
+
+	// Metrics receives cache and informer health updates. Optional; a nil
+	// value disables instrumentation.
+	Metrics *metrics.Metrics
 }
 
 // NewInformerCache creates an InformerCache. Call Start to begin watching.
@@ -110,6 +116,7 @@ func NewInformerCache(opts InformerCacheOptions) (*InformerCache, error) {
 		tenantNamespace:      opts.TenantNamespace,
 		gatewayNamespace:     opts.GatewayNamespace,
 		restConfig:           opts.RestConfig,
+		metrics:              opts.Metrics,
 		entitlementsByTenant: make(map[string]tenantEntitlement),
 		tenantsBySubject:     make(map[string]map[string]struct{}),
 		dirtyTenants:         make(map[string]struct{}),
@@ -236,6 +243,9 @@ func (ic *InformerCache) Start(ctx context.Context) error {
 	if !k8scache.WaitForCacheSync(stopCh, authPolicyInformer.HasSynced) {
 		return errors.New("informer sync failed for entitlement informers")
 	}
+	ic.metrics.SetInformerSynced(metrics.ResourceAITenants, true)
+	ic.metrics.SetInformerSynced(metrics.ResourceGateways, true)
+	ic.metrics.SetInformerSynced(metrics.ResourceEntitlements, true)
 
 	if routeInformer != nil {
 		routeSyncCtx, cancel := context.WithTimeout(ctx, routeSyncTimeout)
@@ -246,7 +256,11 @@ func (ic *InformerCache) Start(ctx context.Context) error {
 			} else {
 				ic.log.Warn("Route informer sync failed, continuing without Route data")
 			}
+			ic.metrics.SetInformerSynced(metrics.ResourceRoutes, false)
+			ic.metrics.IncrInformerSyncTimeout(metrics.ResourceRoutes)
 			routeInformer = nil
+		} else {
+			ic.metrics.SetInformerSynced(metrics.ResourceRoutes, true)
 		}
 	} else {
 		ic.log.Info("OpenShift Route API not available, gateway external hostname resolution via Routes disabled")
@@ -415,12 +429,26 @@ func (ic *InformerCache) rebuildFromInformers(tenantInformer, gatewayInformer, r
 	}
 
 	result := BuildTenantInfos(tenants, gateways, routes, ic.gatewayNamespace, ic.log)
+	ic.metrics.SetTenantCounts(len(result), CountPartialMetadata(result))
 
 	ic.mu.Lock()
 	ic.tenants = result
 	ic.mu.Unlock()
 
 	ic.log.Debug("tenant cache rebuilt", "count", len(result))
+}
+
+// CountPartialMetadata returns how many of the tenant infos are missing
+// their gateway external URL — i.e. degraded gateway metadata that today is
+// only surfaced as warnings during extraction.
+func CountPartialMetadata(infos []types.TenantInfo) int {
+	partial := 0
+	for i := range infos {
+		if infos[i].Gateway.ExternalURL == "" {
+			partial++
+		}
+	}
+	return partial
 }
 
 func (ic *InformerCache) markTenantDirty(tenantName string) {

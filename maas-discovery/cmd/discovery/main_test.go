@@ -14,7 +14,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	kubefake "k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/rest"
+
+	"github.com/opendatahub-io/models-as-a-service/maas-discovery/internal/metrics"
 )
 
 func TestFetchTLSSettingsWithRetryAuthorizationErrorsFailImmediately(t *testing.T) {
@@ -128,4 +131,29 @@ func TestNewServer_AES256OnlyTLS12DisablesHTTP2AndStarts(t *testing.T) {
 
 func testLogger() *slog.Logger {
 	return slog.New(slog.DiscardHandler)
+}
+
+func TestNewMetricsServer_DegradesGracefullyWhenCertsMissing(t *testing.T) {
+	m := metrics.New()
+
+	// Secure metrics requested but the service-ca cert dir does not exist:
+	// the tenant API must keep starting, with the failure logged.
+	srv := newMetricsServer(testLogger(), m, metrics.ServerOptions{
+		Addr:       "127.0.0.1:0",
+		Secure:     true,
+		CertDir:    t.TempDir(), // empty: no tls.crt/tls.key
+		KubeClient: kubefake.NewSimpleClientset(),
+	})
+	assert.Nil(t, srv)
+}
+
+func TestNewMetricsServer_InsecureWithoutKubeRequirements(t *testing.T) {
+	m := metrics.New()
+
+	srv := newMetricsServer(testLogger(), m, metrics.ServerOptions{
+		Addr:   "127.0.0.1:0",
+		Secure: false,
+	})
+	assert.NotNil(t, srv)
+	require.NoError(t, srv.Close())
 }
