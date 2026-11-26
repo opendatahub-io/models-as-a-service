@@ -400,8 +400,10 @@ const (
 	celTokenReviewGroups = `(has(auth.identity.user.groups) && ` +
 		celTokenReviewGroupsSafe + ` ? auth.identity.user.groups : [])`
 	celNonAPIKeyGroups = `(has(auth.identity.iss) ? ` + celOIDCTransportGroups + ` : ` + celTokenReviewGroups + `)`
-	celGroups          = `(has(auth.metadata) && has(auth.metadata.apiKeyValidation)) ` +
-		`? auth.metadata.apiKeyValidation.groups : ` + celNonAPIKeyGroups
+	// maas-api omits an empty groups list, so the API-key branch defaults it.
+	celGroups = `(has(auth.metadata) && has(auth.metadata.apiKeyValidation)) ` +
+		`? (has(auth.metadata.apiKeyValidation.groups) ? auth.metadata.apiKeyValidation.groups : []) : ` +
+		celNonAPIKeyGroups
 	celAPIKeyGroupsHeaderJSON = `(has(auth.metadata.apiKeyValidation.groupsJSON) ` +
 		`? auth.metadata.apiKeyValidation.groupsJSON ` +
 		`: (has(auth.metadata.apiKeyValidation.groups) ` +
@@ -443,6 +445,21 @@ const (
 	celSubscription = `(has(auth.metadata) && has(auth.metadata.apiKeyValidation)) ` +
 		`? auth.metadata.apiKeyValidation.subscription : ` +
 		`("x-maas-subscription" in request.headers ? request.headers["x-maas-subscription"] : "")`
+
+	// celSubscriptionInfoPresent is true when the subscription-info metadata call ran and
+	// returned JSON. The call is skipped off model routes and for rejected API keys, and
+	// fails when maas-api cannot be reached.
+	celSubscriptionInfoPresent = `(has(auth.metadata) && "subscription-info" in auth.metadata)`
+
+	// celAPIKeyIdentity is true when an API-key method authenticated the request: their
+	// plain identity is the credential string, while token methods produce a claims map.
+	// Unlike the header predicates it does not depend on which header carried the key.
+	celAPIKeyIdentity = `type(auth.identity) == string` //nolint:gosec // CEL expression, not a credential
+
+	// celAPIKeyValid is true when maas-api accepted the API key. Authorino stores any JSON
+	// response, including a non-2xx error without "valid", so every step is guarded.
+	celAPIKeyValid = `(has(auth.metadata) && "apiKeyValidation" in auth.metadata && ` +
+		`has(auth.metadata.apiKeyValidation.valid) && auth.metadata.apiKeyValidation.valid == true)`
 )
 
 // celModelIdentity extracts model identity from the request at gateway level.
@@ -482,7 +499,8 @@ const (
 	celBodyRoutedModelMismatch = `(` + celPathRoutedBodyModel + ` && !` + celBodyRoutedModelMatches + `)`
 	// Prefer MaaSModelRef identity resolved by subscription select (handles BBR
 	// publisher IDs). Fall back to path/header identity for path-based routing.
-	celResolvedModelIdentity = `(has(auth.metadata["subscription-info"].resolvedModel) && ` +
+	celResolvedModelIdentity = `(` + celSubscriptionInfoPresent + ` && ` +
+		`has(auth.metadata["subscription-info"].resolvedModel) && ` +
 		`auth.metadata["subscription-info"].resolvedModel != "" ` +
 		`? auth.metadata["subscription-info"].resolvedModel ` +
 		`: ` + celModelIdentity + `)`
@@ -836,7 +854,7 @@ func subscriptionInfoStringHeader(jsonField string) map[string]any {
 	return map[string]any{
 		"when": []any{
 			map[string]any{
-				"predicate": fmt.Sprintf(`has(%s) && %s != ""`, path, path),
+				"predicate": fmt.Sprintf(`%s && %s != ""`, subscriptionInfoHas(jsonField), path),
 			},
 		},
 		"plain": map[string]any{
@@ -1224,13 +1242,14 @@ allow {
 				// Use auth.identity (set by the winning auth method) rather than a
 				// header-based CEL expression.  In Authorino's proto-map CEL context,
 				// accessing an absent header via bracket notation throws an error that
-				// silently suppresses the metadata call; auth.identity is always a
-				// safe string after authentication succeeds.
+				// silently suppresses the metadata call.
 				// api-keys sets identity = "Bearer sk-oai-…", api-keys-x-api-key sets
 				// identity = "sk-oai-…" — both start with "sk-oai-" after stripping.
+				// Token identities are maps, and matches() on a map fails rather than
+				// returning false, so the type check comes first.
 				"when": []any{
 					map[string]any{
-						"predicate": `auth.identity.matches("^(Bearer )?sk-oai-.*")`,
+						"predicate": celAPIKeyIdentity + ` && auth.identity.matches("^(Bearer )?sk-oai-.*")`,
 					},
 				},
 				"http": map[string]any{
@@ -1245,9 +1264,11 @@ allow {
 				"priority": int64(0),
 			}, `auth.identity.replace("Bearer ", "")`),
 			"subscription-info": r.withMetadataCache(map[string]any{
+				// Rejected API keys carry no groups or username, so selection is skipped
+				// for them rather than left to a failing request body.
 				"when": []any{
 					map[string]any{
-						"predicate": celModelIdentityAvailable,
+						"predicate": celModelIdentityAvailable + ` && (!(` + celAPIKeyIdentity + `) || ` + celAPIKeyValid + `)`,
 					},
 				},
 				"http": map[string]any{
@@ -1337,7 +1358,7 @@ allow {
 					"X-MaaS-Subscription-Rate-Limit-Id": map[string]any{
 						"when": []any{
 							map[string]any{
-								"predicate": `has(auth.metadata["subscription-info"].rateLimitId) && auth.metadata["subscription-info"].rateLimitId != ""`,
+								"predicate": subscriptionInfoHas("rateLimitId") + ` && auth.metadata["subscription-info"].rateLimitId != ""`,
 							},
 						},
 						"plain": map[string]any{
@@ -1398,7 +1419,7 @@ allow {
 									"expression": `(has(auth.metadata) && has(auth.metadata.apiKeyValidation)) ? auth.metadata.apiKeyValidation.keyName : ""`,
 								},
 								"selected_subscription": map[string]any{
-									"expression": `has(auth.metadata["subscription-info"].name) ? auth.metadata["subscription-info"].name : ""`,
+									"expression": subscriptionInfoFieldExpr("name"),
 								},
 								// Model-scoped subscription key: namespace/name@modelIdentity
 								// Prefer resolvedModel from subscription-info (MaaSModelRef
@@ -1407,11 +1428,10 @@ allow {
 								// match this field when maas-api omits rateLimitId.
 								"selected_subscription_key": map[string]any{
 									"expression": fmt.Sprintf(
-										`(has(auth.metadata["subscription-info"].namespace) && `+
-											`has(auth.metadata["subscription-info"].name)) `+
+										`(%s && %s) `+
 											`? auth.metadata["subscription-info"].namespace + "/" `+
 											`+ auth.metadata["subscription-info"].name + "@" + %s : ""`,
-										celResolvedModelIdentity,
+										subscriptionInfoHas("namespace"), subscriptionInfoHas("name"), celResolvedModelIdentity,
 									),
 								},
 								// Short hash from maas-api (subscription-info.rateLimitId) for
@@ -1419,16 +1439,16 @@ allow {
 								// identity). New TRLP limits match this field; legacy limits
 								// match selected_subscription_key instead.
 								"selected_subscription_id": map[string]any{
-									"expression": `has(auth.metadata["subscription-info"].rateLimitId) ? auth.metadata["subscription-info"].rateLimitId : ""`,
+									"expression": subscriptionInfoFieldExpr("rateLimitId"),
 								},
 								"subscription_info": map[string]any{
-									"expression": `has(auth.metadata["subscription-info"].name) ? auth.metadata["subscription-info"] : {}`,
+									"expression": subscriptionInfoHas("name") + ` ? auth.metadata["subscription-info"] : {}`,
 								},
 								"subscription_error": map[string]any{
-									"expression": `has(auth.metadata["subscription-info"].error) ? auth.metadata["subscription-info"].error : ""`,
+									"expression": subscriptionInfoFieldExpr("error"),
 								},
 								"subscription_error_message": map[string]any{
-									"expression": `has(auth.metadata["subscription-info"].message) ? auth.metadata["subscription-info"].message : ""`,
+									"expression": subscriptionInfoFieldExpr("message"),
 								},
 							},
 						},
@@ -1453,7 +1473,9 @@ allow {
 			"unauthorized": map[string]any{
 				"code": int64(403),
 				"body": map[string]any{
-					"expression": `'{"error":{"message":"' + (has(auth.metadata["subscription-info"].message)` +
+					// subscription-info is absent for rejected API keys and when maas-api cannot be
+					// reached. Authorino sends an empty value for an expression that fails.
+					"expression": `'{"error":{"message":"' + (` + subscriptionInfoHas("message") +
 						` ? auth.metadata["subscription-info"].message` +
 						`.replace('\\', '\\\\').replace('"', '\\"')` +
 						`.replace('\n', '\\n').replace('\r', '\\r').replace('\t', '\\t')` +
@@ -1463,7 +1485,7 @@ allow {
 				},
 				"headers": map[string]any{
 					"x-ext-auth-reason": map[string]any{
-						"expression": `has(auth.metadata["subscription-info"].error) ? auth.metadata["subscription-info"].error : ` +
+						"expression": subscriptionInfoHas("error") + ` ? auth.metadata["subscription-info"].error : ` +
 							`(` + celBodyRoutedModelMismatch + ` ? "model_mismatch" : "unauthorized")`,
 					},
 					"content-type": map[string]any{
@@ -1531,7 +1553,7 @@ func selectedGuardrailHeader(checkID string) map[string]any {
 			map[string]any{"predicate": celModelIdentityAvailable},
 		},
 		"plain": map[string]any{
-			"expression": fmt.Sprintf(`(has(%s) && %q in %s && %s[%q] == true) ? "true" : "false"`, selected, checkID, selected, selected, checkID),
+			"expression": fmt.Sprintf(`(%s && %q in %s && %s[%q] == true) ? "true" : "false"`, subscriptionInfoHas("selectedGuardrailChecks"), checkID, selected, selected, checkID),
 		},
 		"metrics":  false,
 		"priority": int64(0),
@@ -1562,8 +1584,14 @@ allow {
 
 // subscriptionInfoFieldExpr is a CEL expression for a subscription-info field, or "" when absent.
 func subscriptionInfoFieldExpr(field string) string {
-	return fmt.Sprintf(`has(auth.metadata) && "subscription-info" in auth.metadata && `+
-		`has(auth.metadata["subscription-info"].%[1]s) ? auth.metadata["subscription-info"].%[1]s : ""`, field)
+	return fmt.Sprintf(`%s ? auth.metadata["subscription-info"].%s : ""`, subscriptionInfoHas(field), field)
+}
+
+// subscriptionInfoHas is a CEL presence check for a subscription-info field. has() guards only
+// the last field, so has(auth.metadata["subscription-info"].x) fails with "no such key" whenever
+// subscription-info was not fetched. Authorino then drops the expression's value.
+func subscriptionInfoHas(field string) string {
+	return fmt.Sprintf(`(%s && has(auth.metadata["subscription-info"].%s))`, celSubscriptionInfoPresent, field)
 }
 
 func (r *MaaSAuthPolicyReconciler) gatewayAuthPolicyName(gatewayNamespace, gatewayName string) string {
