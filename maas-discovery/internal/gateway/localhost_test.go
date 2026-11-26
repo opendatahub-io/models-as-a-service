@@ -105,13 +105,14 @@ func TestExtractMetadata_LocalHostnameDetection(t *testing.T) {
 			)
 
 			// The Service selecting the gateway is named after the local
-			// hostname's first label in these fixtures.
-			serviceNames := make(map[string]struct{}, len(test.routes))
+			// hostname's first label in these fixtures; it exposes the
+			// Gateway's 443 listener port.
+			gwServices := make(gateway.GatewayServices, len(test.routes))
 			for svcName := range test.routes {
-				serviceNames[svcName] = struct{}{}
+				gwServices[svcName] = []gateway.ServicePort{{Port: 443}}
 			}
 
-			meta, err := gateway.ExtractMetadata(gw, "gw", "gw-ns", test.routes, serviceNames)
+			meta, err := gateway.ExtractMetadata(gw, "gw", "gw-ns", test.routes, gwServices)
 			if test.wantErr != "" {
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), test.wantErr)

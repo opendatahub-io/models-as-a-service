@@ -210,10 +210,13 @@ func TestBuildTenantInfos_GatewayWithStatusAddresses(t *testing.T) {
 	assert.Equal(t, "https://lb.example.com", result[0].Gateway.ExternalURL)
 }
 
-func makeServiceObj(name string, selector map[string]any) unstructured.Unstructured {
+func makeServiceObj(name string, selector map[string]any, ports ...any) unstructured.Unstructured {
 	spec := map[string]any{}
 	if selector != nil {
 		spec["selector"] = selector
+	}
+	if len(ports) > 0 {
+		spec["ports"] = ports
 	}
 	return unstructured.Unstructured{Object: map[string]any{
 		"metadata": map[string]any{"name": name, "namespace": "gw-ns"},
@@ -221,20 +224,18 @@ func makeServiceObj(name string, selector map[string]any) unstructured.Unstructu
 	}}
 }
 
-func makeRouteObj(host, svcName string, tls bool) unstructured.Unstructured {
+func makeRouteObj(host, svcName string) unstructured.Unstructured {
 	route := unstructured.Unstructured{Object: map[string]any{
 		"spec": map[string]any{
 			"host": host,
 			"to":   map[string]any{"kind": "Service", "name": svcName},
 		},
 	}}
-	if tls {
-		spec, ok := route.Object["spec"].(map[string]any)
-		if !ok {
-			panic("route spec is not a map")
-		}
-		spec["tls"] = map[string]any{"termination": "edge"}
+	spec, ok := route.Object["spec"].(map[string]any)
+	if !ok {
+		panic("route spec is not a map")
 	}
+	spec["tls"] = map[string]any{"termination": "edge"}
 	route.Object["status"] = map[string]any{
 		"ingress": []any{
 			map[string]any{
@@ -245,6 +246,18 @@ func makeRouteObj(host, svcName string, tls bool) unstructured.Unstructured {
 			},
 		},
 	}
+	return route
+}
+
+// makeRouteObjWithPort builds an admitted, host-only, TLS Route whose backend
+// targets the given Service port.
+func makeRouteObjWithPort(host, svcName string, targetPort int64) unstructured.Unstructured {
+	route := makeRouteObj(host, svcName)
+	spec, ok := route.Object["spec"].(map[string]any)
+	if !ok {
+		panic("route spec is not a map")
+	}
+	spec["port"] = map[string]any{"targetPort": targetPort}
 	return route
 }
 
@@ -260,12 +273,12 @@ func TestBuildTenantInfos_RouteHostFallback(t *testing.T) {
 		),
 	}
 	routes := []unstructured.Unstructured{
-		makeRouteObj("maas.apps.example.com", "internal-gw-svc", true),
+		makeRouteObj("maas.apps.example.com", "internal-gw-svc"),
 	}
 	services := []unstructured.Unstructured{
 		makeServiceObj("internal-gw-svc", map[string]any{
 			"gateway.networking.k8s.io/gateway-name": "internal-gw",
-		}),
+		}, map[string]any{"name": "https", "port": int64(443)}),
 	}
 
 	result := cache.BuildTenantInfos(tenants, gateways, routes, services, "gw-ns", testLog)
@@ -289,18 +302,48 @@ func TestBuildTenantInfos_RouteFallbackSelectorMatching(t *testing.T) {
 		),
 	}
 	routes := []unstructured.Unstructured{
-		makeRouteObj("maas.apps.example.com", "custom-edge-svc", true),
+		makeRouteObj("maas.apps.example.com", "custom-edge-svc"),
 	}
 	services := []unstructured.Unstructured{
 		makeServiceObj("custom-edge-svc", map[string]any{
 			"gateway.networking.k8s.io/gateway-name": "internal-gw",
-		}),
+		}, map[string]any{"port": int64(443)}),
 	}
 
 	result := cache.BuildTenantInfos(tenants, gateways, routes, services, "gw-ns", testLog)
 
 	require.Len(t, result, 1)
 	assert.Equal(t, "https://maas.apps.example.com", result[0].Gateway.ExternalURL)
+}
+
+// TestBuildTenantInfos_RouteFallbackRejectsMetricsPort: a Route targeting a
+// Service that selects the Gateway pods but only exposes a non-listener port
+// (e.g. metrics) must not provide the Gateway's external URL.
+func TestBuildTenantInfos_RouteFallbackRejectsMetricsPort(t *testing.T) {
+	tenants := []unstructured.Unstructured{
+		makeTenant("team-a", "internal-gw"),
+	}
+	gateways := []unstructured.Unstructured{
+		makeGatewayObj("internal-gw",
+			[]any{specListener("HTTPS", "", 443)},
+			[]any{statusListenerReady("HTTPS", 1)},
+			[]any{map[string]any{"value": "internal-gw.gw-ns.svc.cluster.local"}},
+		),
+	}
+	routes := []unstructured.Unstructured{
+		makeRouteObjWithPort("metrics.apps.example.com", "internal-gw-metrics", int64(8082)),
+	}
+	services := []unstructured.Unstructured{
+		makeServiceObj("internal-gw-metrics", map[string]any{
+			"gateway.networking.k8s.io/gateway-name": "internal-gw",
+		}, map[string]any{"name": "metrics", "port": int64(8082)}),
+	}
+
+	result := cache.BuildTenantInfos(tenants, gateways, routes, services, "gw-ns", testLog)
+
+	require.Len(t, result, 1)
+	assert.Empty(t, result[0].Gateway.ExternalURL,
+		"a Route to a non-listener port must not provide the external URL")
 }
 
 // TestBuildTenantInfos_RouteFallbackNoSelectorService: a Route targeting a
@@ -318,7 +361,7 @@ func TestBuildTenantInfos_RouteFallbackNoSelectorService(t *testing.T) {
 		),
 	}
 	routes := []unstructured.Unstructured{
-		makeRouteObj("unrelated.apps.example.com", "internal-gw-svc", true),
+		makeRouteObj("unrelated.apps.example.com", "internal-gw-svc"),
 	}
 	services := []unstructured.Unstructured{
 		makeServiceObj("internal-gw-svc", map[string]any{

@@ -791,13 +791,14 @@ func BuildTenantInfos(
 
 	routeHosts := gateway.BuildRouteHostMap(routes)
 
-	// Service names selecting each Gateway, used to match Routes to Gateways
-	// via selector labels rather than internal-hostname parsing.
-	svcNamesByGateway := make(map[string]map[string]struct{}, len(gateways))
+	// Services selecting each Gateway, used to match Routes to Gateways
+	// via selector labels rather than internal-hostname parsing, and to
+	// reject Route backends that do not reach a Gateway listener.
+	svcByGateway := make(map[string]gateway.GatewayServices, len(gateways))
 	for i := range gateways {
 		gwName := gateways[i].GetName()
-		if _, ok := svcNamesByGateway[gwName]; !ok {
-			svcNamesByGateway[gwName] = gateway.GatewayServiceNames(services, gwName)
+		if _, ok := svcByGateway[gwName]; !ok {
+			svcByGateway[gwName] = gateway.SelectGatewayServices(services, gwName)
 		}
 	}
 
@@ -823,7 +824,7 @@ func BuildTenantInfos(
 			continue
 		}
 
-		meta, err := gateway.ExtractMetadata(gw.Object, gwName, gatewayNamespace, routeHosts, svcNamesByGateway[gwName])
+		meta, err := gateway.ExtractMetadata(gw.Object, gwName, gatewayNamespace, routeHosts, svcByGateway[gwName])
 		if err != nil {
 			log.Warn("gateway metadata extraction failed, returning partial data",
 				"tenant", name, "gateway", gwName, "error", err)

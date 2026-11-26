@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"sort"
+	"strconv"
 	"strings"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -31,7 +32,26 @@ type RouteHostInfo struct {
 	Host   string
 	Scheme string
 	Port   int64
+
+	// TargetPort and TargetPortName record the Route's spec.port.targetPort
+	// (an IntOrString: a Service port number or a Service port name). Route
+	// selection uses them to reject Routes whose backend port does not reach
+	// a Gateway listener (e.g. a Service exposing only a metrics port).
+	// Both zero-value means the Route leaves the backend port unspecified.
+	TargetPort     int64
+	TargetPortName string
 }
+
+// ServicePort is a port exposed by a Service that selects a Gateway.
+type ServicePort struct {
+	Name string
+	Port int64
+}
+
+// GatewayServices maps the name of each Service that selects a Gateway's pods
+// (i.e. carries the gateway.networking.k8s.io/gateway-name selector label) to
+// the ports that Service exposes.
+type GatewayServices map[string][]ServicePort
 
 // ExtractMetadata extracts connection metadata from a Gateway's unstructured object map.
 // On success it returns a fully populated GatewayMetadata. If the gateway is missing
@@ -39,11 +59,11 @@ type RouteHostInfo struct {
 // degrade gracefully by keeping name/namespace and omitting externalUrl.
 //
 // routeHosts maps Service names to admitted external Route endpoints (see
-// BuildRouteHostMap). serviceNames is the set of Services that select this
-// Gateway (see GatewayServiceNames); when the Gateway only publishes a
+// BuildRouteHostMap). gwServices describes the Services that select this
+// Gateway (see SelectGatewayServices); when the Gateway only publishes a
 // cluster-local address, the Route fallback looks up endpoints for any of
-// those Services.
-func ExtractMetadata(gateway map[string]any, name, namespace string, routeHosts map[string]RouteHostInfo, serviceNames map[string]struct{}) (*types.GatewayMetadata, error) {
+// those Services whose backend port reaches a Gateway listener.
+func ExtractMetadata(gateway map[string]any, name, namespace string, routeHosts map[string]RouteHostInfo, gwServices GatewayServices) (*types.GatewayMetadata, error) {
 	spec, ok := gateway["spec"].(map[string]any)
 	if !ok {
 		return nil, errors.New("gateway spec not found")
@@ -95,7 +115,7 @@ func ExtractMetadata(gateway map[string]any, name, namespace string, routeHosts 
 
 	if isLocalHostname(externalHost) {
 		effectiveScheme, effectivePort := listenerSchemeAndPort(protocol, port)
-		if routeInfo, ok := bestRouteEndpoint(routeHosts, serviceNames); ok {
+		if routeInfo, ok := bestRouteEndpoint(routeHosts, gwServices, gatewayListenerPorts(spec)); ok {
 			if routeInfo.Scheme != "" {
 				effectiveScheme = routeInfo.Scheme
 			}
@@ -151,38 +171,130 @@ func BuildRouteHostMap(routes []unstructured.Unstructured) map[string]RouteHostI
 	return m
 }
 
-// GatewayServiceNames returns the names of the Services that select the given
-// Gateway's pods, i.e. those carrying the gateway.networking.k8s.io/gateway-name
-// selector label. It mirrors the hardened maas-api implementation (PR #1888):
-// Route→Gateway matching is done via Service selector labels rather than by
-// parsing the Gateway's internal hostname, so Routes targeting any Service
-// that selects the Gateway are matched.
-func GatewayServiceNames(services []unstructured.Unstructured, gatewayName string) map[string]struct{} {
-	names := make(map[string]struct{})
+// SelectGatewayServices returns the Services that select the given Gateway's
+// pods, i.e. those carrying the gateway.networking.k8s.io/gateway-name
+// selector label, mapped to the ports each Service exposes. It mirrors the
+// hardened maas-api implementation (PR #1888): Route→Gateway matching is done
+// via Service selector labels rather than by parsing the Gateway's internal
+// hostname, so Routes targeting any Service that selects the Gateway are
+// matched. The exposed ports let Route selection reject backends that do not
+// reach a Gateway listener.
+func SelectGatewayServices(services []unstructured.Unstructured, gatewayName string) GatewayServices {
+	out := make(GatewayServices)
 	for i := range services {
 		selectorValue, found, err := unstructured.NestedString(services[i].Object, "spec", "selector", gatewayNameLabel)
 		if err != nil || !found || selectorValue != gatewayName {
 			continue
 		}
-		names[services[i].GetName()] = struct{}{}
+		name := services[i].GetName()
+		out[name] = servicePorts(services[i].Object)
 	}
-	return names
+	return out
+}
+
+// servicePorts extracts the ports a Service exposes from its unstructured
+// object. Ports with a missing or zero port number are skipped.
+func servicePorts(svc map[string]any) []ServicePort {
+	spec, ok := svc["spec"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	portsRaw, ok := spec["ports"].([]any)
+	if !ok {
+		return nil
+	}
+	ports := make([]ServicePort, 0, len(portsRaw))
+	for _, p := range portsRaw {
+		portMap, ok := p.(map[string]any)
+		if !ok {
+			continue
+		}
+		port := toInt64(portMap["port"])
+		if port == 0 {
+			continue
+		}
+		name, _ := portMap["name"].(string)
+		ports = append(ports, ServicePort{Name: name, Port: port})
+	}
+	return ports
 }
 
 // bestRouteEndpoint picks the best Route endpoint among those targeting any
-// Service in serviceNames, deterministically: HTTPS preferred, then
+// Service that selects the Gateway and whose backend port reaches one of the
+// Gateway's listener ports, deterministically: HTTPS preferred, then
 // lexicographically by host. Returns false when no endpoint matches.
-func bestRouteEndpoint(routeHosts map[string]RouteHostInfo, serviceNames map[string]struct{}) (RouteHostInfo, bool) {
-	endpoints := make([]RouteHostInfo, 0, len(serviceNames))
+func bestRouteEndpoint(routeHosts map[string]RouteHostInfo, gwServices GatewayServices, listenerPorts map[int64]struct{}) (RouteHostInfo, bool) {
+	endpoints := make([]RouteHostInfo, 0, len(gwServices))
 	for svcName, info := range routeHosts {
-		if _, ok := serviceNames[svcName]; ok {
-			endpoints = append(endpoints, info)
+		if _, ok := gwServices[svcName]; !ok {
+			continue
 		}
+		if !routeReachesListener(info, gwServices[svcName], listenerPorts) {
+			continue
+		}
+		endpoints = append(endpoints, info)
 	}
 	if len(endpoints) == 0 {
 		return RouteHostInfo{}, false
 	}
 	return bestEndpoint(endpoints), true
+}
+
+// routeReachesListener reports whether the Route's backend resolves to a port
+// of the given Service that matches one of the Gateway's listener ports. A
+// Service selects pods, not a listener, so a Service that selects the Gateway
+// pods can expose non-listener ports such as metrics; Routes whose backend
+// resolves only to such ports must not contribute the Gateway's external URL.
+func routeReachesListener(info RouteHostInfo, svcPorts []ServicePort, listenerPorts map[int64]struct{}) bool {
+	var candidates []int64
+	switch {
+	case info.TargetPort != 0:
+		// Numeric targetPort names a Service port directly.
+		for _, p := range svcPorts {
+			if p.Port == info.TargetPort {
+				candidates = append(candidates, p.Port)
+			}
+		}
+	case info.TargetPortName != "":
+		// Named targetPort resolves through the Service port of that name.
+		for _, p := range svcPorts {
+			if p.Name != "" && p.Name == info.TargetPortName {
+				candidates = append(candidates, p.Port)
+			}
+		}
+	default:
+		// No explicit backend port: the router admits the Route against the
+		// Service's port, so any exposed port is a candidate.
+		for _, p := range svcPorts {
+			candidates = append(candidates, p.Port)
+		}
+	}
+	for _, port := range candidates {
+		if _, ok := listenerPorts[port]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+// gatewayListenerPorts returns the set of ports the Gateway's spec listeners
+// expose.
+func gatewayListenerPorts(spec map[string]any) map[int64]struct{} {
+	ports := make(map[int64]struct{})
+	listenersRaw, ok := spec["listeners"].([]any)
+	if !ok {
+		return ports
+	}
+	for _, l := range listenersRaw {
+		listener, ok := l.(map[string]any)
+		if !ok {
+			continue
+		}
+		if p := toInt64(listener["port"]); p != 0 {
+			ports[p] = struct{}{}
+		}
+	}
+	return ports
 }
 
 // bestEndpoint returns the deterministically best endpoint: HTTPS preferred,
@@ -278,7 +390,32 @@ func admittedHostOnlyRouteEndpoint(route map[string]any) (string, RouteHostInfo,
 		port = 443
 	}
 
-	return svcName, RouteHostInfo{Host: host, Scheme: scheme, Port: port}, true
+	// Retain the Route's backend port (an IntOrString: a Service port number
+	// or name) so selection can reject Routes that do not reach a Gateway
+	// listener. A targetPort given as a numeric string is treated as a number,
+	// matching IntOrString semantics.
+	var targetPort int64
+	var targetPortName string
+	if portSpec, ok := spec["port"].(map[string]any); ok {
+		switch tp := portSpec["targetPort"].(type) {
+		case string:
+			if n, err := strconv.ParseInt(tp, 10, 64); err == nil {
+				targetPort = n
+			} else {
+				targetPortName = tp
+			}
+		default:
+			targetPort = toInt64(portSpec["targetPort"])
+		}
+	}
+
+	return svcName, RouteHostInfo{
+		Host:           host,
+		Scheme:         scheme,
+		Port:           port,
+		TargetPort:     targetPort,
+		TargetPortName: targetPortName,
+	}, true
 }
 
 // admittedRouteHost returns the host from the Route's admitting
