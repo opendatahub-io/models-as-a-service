@@ -49,6 +49,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/oteljson"
@@ -84,6 +85,37 @@ const usageLogsTenancyProxyDeploymentName = "usage-logs-tenancy-proxy"
 
 // usageLogsTenancyProxyContainerName is the proxy container in the tenancy proxy Deployment.
 const usageLogsTenancyProxyContainerName = "proxy"
+
+// These names are duplicated in the usage-log Perses manifests. Keep them in
+// sync with deployment/components/observability/usage-logs/dsci-managed.
+const (
+	usageLogsUserDashboardName                = "dashboard-5-maas-usage-logs"
+	usageLogsAdminDashboardName               = "dashboard-4-maas-usage-logs-admin"
+	usageLogsMultiTenancyDatasourceName       = "usage-logs-multi-tenancy"
+	usageLogsAllDatasourceName                = "usage-logs-all"
+	usageLogsPortalUserDashboardName          = "maas-portal-usage-logs"
+	usageLogsPortalAdminDashboardName         = "maas-portal-usage-logs-admin"
+	usageLogsPortalMultiTenancyDatasourceName = "maas-portal-usage-logs-multi-tenancy"
+	usageLogsPortalAllDatasourceName          = "maas-portal-usage-logs-all"
+)
+
+const (
+	persesDatasourceCRDName = "persesdatasources.perses.dev"
+	persesDashboardCRDName  = "persesdashboards.perses.dev"
+)
+
+// usageLogsPortalCopies maps the shared usage-log Perses resources to
+// Portal-only copies. The copy names intentionally do not start with
+// "dashboard-", so the RHOAI Dashboard does not list them.
+var usageLogsPortalCopies = []struct {
+	source      string
+	destination string
+}{
+	{source: usageLogsUserDashboardName, destination: usageLogsPortalUserDashboardName},
+	{source: usageLogsAdminDashboardName, destination: usageLogsPortalAdminDashboardName},
+	{source: usageLogsMultiTenancyDatasourceName, destination: usageLogsPortalMultiTenancyDatasourceName},
+	{source: usageLogsAllDatasourceName, destination: usageLogsPortalAllDatasourceName},
+}
 
 // LifecycleReconciler watches the maas-controller Deployment. It is the sole creator of the
 // cluster-scoped Config/default anchor when the Deployment exists and is not terminating (so
@@ -634,11 +666,20 @@ func (r *LifecycleReconciler) ensureUsageLogs(ctx context.Context, log logr.Logg
 		return fmt.Errorf("render inactive usage logs: %w", err)
 	}
 
-	// The usage-logs-loki Secret in the infra namespace switches the Perses
-	// datasources from the LokiStack gateway / tenancy proxy to the maas-api
-	// Loki proxy. Absent secret keeps the rendered defaults.
+	// The usage-logs-loki Secret in the infra namespace enables the maas-api
+	// Loki proxy. Portal-only copies use that proxy while the shared resources
+	// keep their rendered LokiStack gateway / tenancy proxy defaults.
 	maasAPILoki, err := r.maasAPILokiEnabled(ctx, log)
 	if err != nil {
+		return err
+	}
+	portalCopies, err := usageLogsPortalPersesCopies(resources)
+	if err != nil {
+		return err
+	}
+	if maasAPILoki {
+		resources = append(resources, portalCopies...)
+	} else if err := r.deleteOwnedRenderedResources(ctx, log, cfg, portalCopies, "maasAPILoki"); err != nil {
 		return err
 	}
 
@@ -647,6 +688,13 @@ func (r *LifecycleReconciler) ensureUsageLogs(ctx context.Context, log logr.Logg
 	// bundle to prevent orphaned ClusterRoleBinding from granting cluster-logging-application-write
 	// permissions to a ServiceAccount (usage-logs-collector) that anyone could then create and exploit.
 	collectorSkipped := false
+	portalDatasourceReady := make(map[string]bool)
+	portalDashboards := make(map[string]unstructured.Unstructured, 2)
+	for _, portalCopy := range portalCopies {
+		if portalCopy.GetKind() == tenantreconcile.GVKPersesDashboard.Kind {
+			portalDashboards[usageLogsPortalDatasourceName(portalCopy.GetName())] = portalCopy
+		}
+	}
 
 	for _, resource := range resources {
 		if collectorSkipped {
@@ -666,6 +714,18 @@ func (r *LifecycleReconciler) ensureUsageLogs(ctx context.Context, log logr.Logg
 		}
 		if err := controllerutil.SetControllerReference(&cfg, &res, r.Scheme); err != nil {
 			return fmt.Errorf("set controller reference on %s %s: %w", res.GetKind(), res.GetName(), err)
+		}
+
+		if isUsageLogsPortalDatasource(&res) || isUsageLogsPortalDashboard(&res) {
+			applied, err := r.reconcileUsageLogsPortalCopy(ctx, log, cfg, &res,
+				portalDashboards, portalDatasourceReady[usageLogsPortalDatasourceName(res.GetName())])
+			if err != nil {
+				return err
+			}
+			if isUsageLogsPortalDatasource(&res) && applied {
+				portalDatasourceReady[res.GetName()] = true
+			}
+			continue
 		}
 
 		if err := r.Apply(ctx, client.ApplyConfigurationFromUnstructured(&res), client.ForceOwnership, client.FieldOwner("maas-controller")); err != nil {
@@ -714,6 +774,60 @@ func (r *LifecycleReconciler) ensureUsageLogs(ctx context.Context, log logr.Logg
 	return nil
 }
 
+func (r *LifecycleReconciler) reconcileUsageLogsPortalCopy(
+	ctx context.Context,
+	log logr.Logger,
+	cfg maasv1alpha1.Config,
+	res *unstructured.Unstructured,
+	portalDashboards map[string]unstructured.Unstructured,
+	datasourceReady bool,
+) (bool, error) {
+	if isUsageLogsPortalDashboard(res) && !datasourceReady {
+		log.Info("skipping Portal usage-log dashboard because its datasource was not reconciled",
+			"kind", res.GetKind(), "name", res.GetName(), "namespace", res.GetNamespace())
+		return false, nil
+	}
+
+	owned, uid, resourceVersion, err := r.ensureUsageLogsPortalCopyOwnership(ctx, log, cfg.UID, res)
+	if err != nil {
+		if isOptionalAPIGroup(res.GroupVersionKind().Group) && (apimeta.IsNoMatchError(err) || apierrors.IsNotFound(err)) {
+			log.Info("skipping usage-logs resource: optional CRD not yet registered, will apply once installed",
+				"group", res.GroupVersionKind().Group, "kind", res.GetKind(),
+				"name", res.GetName(), "namespace", res.GetNamespace())
+			return false, nil
+		}
+		return false, err
+	}
+	if !owned {
+		if dashboard, ok := portalDashboards[res.GetName()]; ok {
+			if err := r.deleteOwnedRenderedResources(ctx, log, cfg,
+				[]unstructured.Unstructured{dashboard}, "maasAPILoki"); err != nil {
+				return false, err
+			}
+		}
+		return false, nil
+	}
+
+	res.SetUID(uid)
+	res.SetResourceVersion(resourceVersion)
+	if err := r.Apply(ctx, client.ApplyConfigurationFromUnstructured(res),
+		client.ForceOwnership, client.FieldOwner("maas-controller")); err != nil {
+		if apierrors.IsNotFound(err) {
+			return false, fmt.Errorf("apply %s %s/%s: %w",
+				res.GetKind(), res.GetNamespace(), res.GetName(), err)
+		}
+		if isOptionalAPIGroup(res.GroupVersionKind().Group) && apimeta.IsNoMatchError(err) {
+			log.Info("skipping usage-logs resource: optional CRD not yet registered, will apply once installed",
+				"group", res.GroupVersionKind().Group, "kind", res.GetKind(),
+				"name", res.GetName(), "namespace", res.GetNamespace())
+			return false, nil
+		}
+		return false, fmt.Errorf("apply %s %s/%s: %w",
+			res.GetKind(), res.GetNamespace(), res.GetName(), err)
+	}
+	return true, nil
+}
+
 // resourcesAbsentFrom returns objects in have whose group, version, kind,
 // namespace, and name are not present in keep.
 func resourcesAbsentFrom(have, keep []unstructured.Unstructured) []unstructured.Unstructured {
@@ -734,6 +848,128 @@ func resourcesAbsentFrom(have, keep []unstructured.Unstructured) []unstructured.
 func renderedResourceID(obj unstructured.Unstructured) string {
 	gvk := obj.GroupVersionKind()
 	return strings.Join([]string{gvk.Group, gvk.Version, gvk.Kind, obj.GetNamespace(), obj.GetName()}, "/")
+}
+
+// usageLogsPortalPersesCopies clones the shared usage-log Perses resources.
+// Dashboard clones are rewritten to reference the cloned datasources, so the
+// copies never fall back to the shared datasources.
+func usageLogsPortalPersesCopies(resources []unstructured.Unstructured) ([]unstructured.Unstructured, error) {
+	renames := make(map[string]string, len(usageLogsPortalCopies))
+	for _, mapping := range usageLogsPortalCopies {
+		renames[mapping.source] = mapping.destination
+	}
+
+	found := make(map[string]struct{}, len(renames))
+	dashboardCopies := make([]unstructured.Unstructured, 0, 2)
+	datasourceCopies := make([]unstructured.Unstructured, 0, 2)
+	for i := range resources {
+		newName, ok := renames[resources[i].GetName()]
+		if !ok {
+			continue
+		}
+		if resources[i].GetKind() != tenantreconcile.GVKPersesDashboard.Kind &&
+			resources[i].GetKind() != tenantreconcile.GVKPersesDatasource.Kind {
+			continue
+		}
+		if _, exists := found[resources[i].GetName()]; exists {
+			return nil, fmt.Errorf("duplicate usage-log resource %s %s", resources[i].GetKind(), resources[i].GetName())
+		}
+		found[resources[i].GetName()] = struct{}{}
+
+		portalCopy := resources[i].DeepCopy()
+		portalCopy.SetName(newName)
+		if portalCopy.GetKind() == tenantreconcile.GVKPersesDashboard.Kind {
+			renameNestedNames(portalCopy.Object, renames)
+			dashboardCopies = append(dashboardCopies, *portalCopy)
+		} else {
+			if err := unstructured.SetNestedField(portalCopy.Object, newName+"-secret",
+				"spec", "config", "plugin", "spec", "proxy", "spec", "secret"); err != nil {
+				return nil, fmt.Errorf("set Portal datasource secret for %s: %w", newName, err)
+			}
+			datasourceCopies = append(datasourceCopies, *portalCopy)
+		}
+	}
+
+	for name := range renames {
+		if _, ok := found[name]; !ok {
+			return nil, fmt.Errorf("usage-log resource %s is missing from rendered manifests", name)
+		}
+	}
+	return append(datasourceCopies, dashboardCopies...), nil
+}
+
+func renameNestedNames(value any, renames map[string]string) {
+	switch typed := value.(type) {
+	case map[string]any:
+		for key, child := range typed {
+			if key == "name" {
+				if name, ok := child.(string); ok {
+					if newName, renamed := renames[name]; renamed {
+						typed[key] = newName
+					}
+				}
+			}
+			renameNestedNames(typed[key], renames)
+		}
+	case []any:
+		for _, child := range typed {
+			renameNestedNames(child, renames)
+		}
+	}
+}
+
+func isUsageLogsPortalDatasource(res *unstructured.Unstructured) bool {
+	return res.GetKind() == tenantreconcile.GVKPersesDatasource.Kind && isUsageLogsPortalDatasourceName(res.GetName())
+}
+
+func isUsageLogsPortalDatasourceName(name string) bool {
+	return name == usageLogsPortalMultiTenancyDatasourceName || name == usageLogsPortalAllDatasourceName
+}
+
+func isUsageLogsPortalDashboard(res *unstructured.Unstructured) bool {
+	return res.GetKind() == tenantreconcile.GVKPersesDashboard.Kind && usageLogsPortalDatasourceName(res.GetName()) != ""
+}
+
+func usageLogsPortalDatasourceName(name string) string {
+	switch name {
+	case usageLogsPortalUserDashboardName:
+		return usageLogsPortalMultiTenancyDatasourceName
+	case usageLogsPortalAdminDashboardName:
+		return usageLogsPortalAllDatasourceName
+	case usageLogsPortalMultiTenancyDatasourceName, usageLogsPortalAllDatasourceName:
+		return name
+	default:
+		return ""
+	}
+}
+
+// ensureUsageLogsPortalCopyOwnership creates a new copy atomically. If an object
+// with the same identity already exists, it is applied only when MaaS owns it.
+// This prevents forced SSA from taking over a foreign object with a Portal name.
+func (r *LifecycleReconciler) ensureUsageLogsPortalCopyOwnership(
+	ctx context.Context,
+	log logr.Logger,
+	configUID types.UID,
+	res *unstructured.Unstructured,
+) (bool, types.UID, string, error) {
+	created := res.DeepCopy()
+	if err := r.Create(ctx, created); err == nil {
+		return true, created.GetUID(), created.GetResourceVersion(), nil
+	} else if !apierrors.IsAlreadyExists(err) {
+		return false, "", "", fmt.Errorf("create %s %s/%s: %w", res.GetKind(), res.GetNamespace(), res.GetName(), err)
+	}
+
+	existing := &unstructured.Unstructured{}
+	existing.SetGroupVersionKind(res.GroupVersionKind())
+	if err := r.Get(ctx, client.ObjectKeyFromObject(res), existing); err != nil {
+		return false, "", "", fmt.Errorf("get %s %s/%s: %w", res.GetKind(), res.GetNamespace(), res.GetName(), err)
+	}
+	if !isOwnedByConfigOrController(existing, configUID) {
+		log.Info("skipping unowned Portal usage-log copy",
+			"kind", res.GetKind(), "name", res.GetName(), "namespace", res.GetNamespace())
+		return false, "", "", nil
+	}
+	return true, existing.GetUID(), existing.GetResourceVersion(), nil
 }
 
 // usageLogsKustomizeDir selects the usage-logs kustomization.
@@ -775,7 +1011,10 @@ func (r *LifecycleReconciler) deleteOwnedRenderedResources(
 			continue
 		}
 
-		if err := r.Delete(ctx, existing); err != nil {
+		uid := existing.GetUID()
+		resourceVersion := existing.GetResourceVersion()
+		preconditions := client.Preconditions{UID: &uid, ResourceVersion: &resourceVersion}
+		if err := r.Delete(ctx, existing, preconditions); err != nil {
 			if apierrors.IsNotFound(err) {
 				continue
 			}
@@ -813,7 +1052,7 @@ func isOwnedByConfigOrController(obj client.Object, configUID types.UID) bool {
 // using the datasource's deployed namespace. This allows YAML to use simple service references
 // while ensuring they work correctly in any namespace.
 func patchPersesDatasourceURL(res *unstructured.Unstructured) error {
-	if res.GetKind() != "PersesDatasource" {
+	if res.GetKind() != tenantreconcile.GVKPersesDatasource.Kind {
 		return nil
 	}
 
@@ -849,8 +1088,8 @@ func patchPersesDatasourceURL(res *unstructured.Unstructured) error {
 }
 
 // maasAPILokiEnabled reports whether the usage-logs-loki Secret exists in the
-// infra namespace, which switches the Perses datasources to the maas-api Loki
-// proxy. A missing InfraNamespace leaves the feature off.
+// infra namespace, which enables the maas-api Loki proxy. A missing
+// InfraNamespace leaves the feature off.
 func (r *LifecycleReconciler) maasAPILokiEnabled(ctx context.Context, log logr.Logger) (bool, error) {
 	if r.InfraNamespace == "" {
 		return false, nil
@@ -864,25 +1103,25 @@ func (r *LifecycleReconciler) maasAPILokiEnabled(ctx context.Context, log logr.L
 		}
 		return false, fmt.Errorf("get Secret %s/%s: %w", r.InfraNamespace, tenantreconcile.LokiReadSecretName, err)
 	}
-	log.Info("usage-logs-loki Secret present; switching Perses datasources to the maas-api Loki proxy")
+	log.Info("usage-logs-loki Secret present; Portal usage-log copies use the maas-api Loki proxy")
 	return true, nil
 }
 
-// patchPersesDatasourceMaaSAPILoki repoints the usage-log Perses datasources at
-// the maas-api read-only Loki proxy when the usage-logs-loki Secret exists.
-// usage-logs-all keeps the organization-wide (admin) view; usage-logs-multi-tenancy
-// appends only_user=true for the caller-scoped view. The CA switches from a
-// ConfigMap bundle to the service-ca.crt file mounted in every pod, which
-// verifies maas-api's service-ca-signed serving certificate.
+// patchPersesDatasourceMaaSAPILoki repoints the Portal-only usage-log
+// PersesDatasources at the maas-api read-only Loki proxy. The admin datasource
+// keeps the organization-wide view; the multi-tenancy datasource appends
+// only_user=true for the caller-scoped view. The CA switches from a ConfigMap
+// bundle to the service-ca.crt file mounted in every pod, which verifies
+// maas-api's service-ca-signed serving certificate.
 func patchPersesDatasourceMaaSAPILoki(res *unstructured.Unstructured) error {
-	if res.GetKind() != "PersesDatasource" {
+	if res.GetKind() != tenantreconcile.GVKPersesDatasource.Kind {
 		return nil
 	}
 
 	var onlyUser bool
 	switch res.GetName() {
-	case "usage-logs-all":
-	case "usage-logs-multi-tenancy":
+	case usageLogsPortalAllDatasourceName:
+	case usageLogsPortalMultiTenancyDatasourceName:
 		onlyUser = true
 	default:
 		return nil
@@ -1171,6 +1410,22 @@ func (r *LifecycleReconciler) enqueueLokiReadSecret(_ context.Context, obj clien
 	}}}
 }
 
+func (r *LifecycleReconciler) enqueueSelf(_ context.Context, _ client.Object) []reconcile.Request {
+	return []reconcile.Request{{NamespacedName: types.NamespacedName{
+		Namespace: r.DeploymentNS,
+		Name:      r.DeploymentName,
+	}}}
+}
+
+func (r *LifecycleReconciler) isUsageLogsPortalDatasource(obj client.Object) bool {
+	return obj.GetNamespace() == r.MonitoringNamespace && isUsageLogsPortalDatasourceName(obj.GetName())
+}
+
+func (r *LifecycleReconciler) isUsageLogsPortalDashboardWatch(obj client.Object) bool {
+	return obj.GetNamespace() == r.MonitoringNamespace &&
+		(obj.GetName() == usageLogsPortalUserDashboardName || obj.GetName() == usageLogsPortalAdminDashboardName)
+}
+
 // SetupWithManager registers the lifecycle controller and its platform resource watches.
 func (r *LifecycleReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	selfOnly := predicate.NewPredicateFuncs(func(o client.Object) bool {
@@ -1189,7 +1444,7 @@ func (r *LifecycleReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	// (ensureDefaultAITenantReferencesConfig) and the cross-tenant health
 	// aggregation (syncTenantsHealth) stay current.
 
-	return ctrl.NewControllerManagedBy(mgr).
+	controllerBuilder := ctrl.NewControllerManagedBy(mgr).
 		For(&appsv1.Deployment{}, builder.WithPredicates(selfOnly)).
 		Watches(
 			&corev1.Secret{},
@@ -1293,8 +1548,59 @@ func (r *LifecycleReconciler) SetupWithManager(mgr ctrl.Manager) error {
 				}
 				return o.GetName() == discoveryDeploymentName && o.GetNamespace() == discoveryNS
 			})),
-		).
-		Complete(r)
+		)
+
+	persesWatches := []struct {
+		gvk     schema.GroupVersionKind
+		crdName string
+		matches func(client.Object) bool
+	}{
+		{
+			gvk:     tenantreconcile.GVKPersesDatasource,
+			crdName: persesDatasourceCRDName,
+			matches: r.isUsageLogsPortalDatasource,
+		},
+		{
+			gvk:     tenantreconcile.GVKPersesDashboard,
+			crdName: persesDashboardCRDName,
+			matches: r.isUsageLogsPortalDashboardWatch,
+		},
+	}
+
+	persesCRDsInstalled := make([]bool, len(persesWatches))
+	for index, persesWatch := range persesWatches {
+		persesCRDsInstalled[index] = crdExists(context.Background(), mgr.GetAPIReader(), persesWatch.crdName)
+		if persesCRDsInstalled[index] {
+			watchObject := &unstructured.Unstructured{}
+			watchObject.SetGroupVersionKind(persesWatch.gvk)
+			controllerBuilder = controllerBuilder.Watches(
+				watchObject,
+				handler.EnqueueRequestsFromMapFunc(r.enqueueSelf),
+				builder.WithPredicates(predicate.NewPredicateFuncs(persesWatch.matches)),
+			)
+		}
+	}
+
+	lifecycleController, err := controllerBuilder.Build(r)
+	if err != nil {
+		return err
+	}
+	for index, persesWatch := range persesWatches {
+		if persesCRDsInstalled[index] {
+			continue
+		}
+		if err := registerWatchWhenCRDAppears(lifecycleController, mgr, persesWatch.crdName, func() source.Source {
+			watchObject := &unstructured.Unstructured{}
+			watchObject.SetGroupVersionKind(persesWatch.gvk)
+			return source.Kind[client.Object](mgr.GetCache(), watchObject,
+				handler.EnqueueRequestsFromMapFunc(r.enqueueSelf),
+				predicate.NewPredicateFuncs(persesWatch.matches),
+			)
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // aitenantReadyChanged admits an AITenant event only when the Ready condition

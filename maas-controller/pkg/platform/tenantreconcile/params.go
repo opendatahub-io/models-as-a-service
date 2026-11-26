@@ -1335,42 +1335,14 @@ func patchCleanupCronJobImage(log logr.Logger, r *unstructured.Unstructured, par
 		return fmt.Errorf("patch cleanup CronJob image: %w", err)
 	}
 
-	// Patch the cleanup command to use tenant-specific service name
-	containers, found, err := unstructured.NestedSlice(r.Object,
-		"spec", "jobTemplate", "spec", "template", "spec", "containers")
-	if err != nil {
-		return fmt.Errorf("read cleanup CronJob containers: %w", err)
+	// The job calls https://${MAAS_API_SERVICE}.${NAMESPACE}.svc (see the TLS overlay's
+	// cronjob-cleanup-patch.yaml), the name on the tenant's serving certificate. NAMESPACE
+	// comes from the pod, which runs next to the Service.
+	tenantServiceName := MaaSAPIServiceName(params.TenantIdentifier)
+	if err := setOrAddEnvVarAt(r, cronJobContainersPath, "cleanup", "MAAS_API_SERVICE", tenantServiceName); err != nil {
+		return fmt.Errorf("patch cleanup CronJob MAAS_API_SERVICE: %w", err)
 	}
-	if found && len(containers) > 0 {
-		container, ok := containers[0].(map[string]any)
-		if !ok {
-			return errors.New("cleanup CronJob container is not a map")
-		}
-		command, ok := container["command"].([]any)
-		if ok && len(command) > 0 {
-			tenantServiceName := MaaSAPIServiceName(params.TenantIdentifier)
-			// Look for the curl command with maas-api:8443
-			modified := false
-			for i, cmdInterface := range command {
-				if cmd, ok := cmdInterface.(string); ok && strings.Contains(cmd, "maas-api:8443") {
-					// Replace maas-api with tenant-specific service name
-					newCmd := strings.ReplaceAll(cmd, "maas-api:8443", tenantServiceName+":8443")
-					command[i] = newCmd
-					modified = true
-					log.V(4).Info("Patching cleanup CronJob command URL", "old", "maas-api:8443", "new", tenantServiceName+":8443")
-				}
-			}
-			if modified {
-				container["command"] = command
-				containers[0] = container
-				if err := unstructured.SetNestedSlice(r.Object, containers,
-					"spec", "jobTemplate", "spec", "template", "spec", "containers"); err != nil {
-					return fmt.Errorf("write cleanup CronJob containers: %w", err)
-				}
-			}
-		}
-	}
-
+	log.V(4).Info("Patched cleanup CronJob target Service", "service", tenantServiceName)
 	return nil
 }
 
@@ -1894,7 +1866,16 @@ func setContainerArg(r *unstructured.Unstructured, containerName, arg string) er
 }
 
 func setOrAddEnvVar(r *unstructured.Unstructured, containerName, envName, envValue string) error {
-	containers, found, err := unstructured.NestedSlice(r.Object, "spec", "template", "spec", "containers")
+	return setOrAddEnvVarAt(r, []string{"spec", "template", "spec", "containers"}, containerName, envName, envValue)
+}
+
+// cronJobContainersPath locates the containers of a CronJob's job template.
+var cronJobContainersPath = []string{"spec", "jobTemplate", "spec", "template", "spec", "containers"}
+
+// setOrAddEnvVarAt sets or adds a plain env var on the named container of the
+// container list at containersPath.
+func setOrAddEnvVarAt(r *unstructured.Unstructured, containersPath []string, containerName, envName, envValue string) error {
+	containers, found, err := unstructured.NestedSlice(r.Object, containersPath...)
 	if err != nil || !found {
 		return errors.New("containers not found")
 	}
@@ -1911,13 +1892,13 @@ func setOrAddEnvVar(r *unstructured.Unstructured, containerName, envName, envVal
 				envSlice[j] = em
 				cm["env"] = envSlice
 				containers[i] = cm
-				return unstructured.SetNestedSlice(r.Object, containers, "spec", "template", "spec", "containers")
+				return unstructured.SetNestedSlice(r.Object, containers, containersPath...)
 			}
 		}
 		envSlice = append(envSlice, map[string]any{"name": envName, "value": envValue})
 		cm["env"] = envSlice
 		containers[i] = cm
-		return unstructured.SetNestedSlice(r.Object, containers, "spec", "template", "spec", "containers")
+		return unstructured.SetNestedSlice(r.Object, containers, containersPath...)
 	}
 	return fmt.Errorf("container %q not found", containerName)
 }

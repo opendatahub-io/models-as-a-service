@@ -181,6 +181,7 @@ const (
 	baseMaaSAPIAuthPolicyName                      = "maas-api-auth-policy"
 	baseMaaSAPIRouteName                           = "maas-api-route"
 	baseMaaSAPIKeyCleanupCronJobName               = "maas-api-key-cleanup" //nolint:gosec // Kubernetes resource name, not a credential
+	maxCronJobNameLength                           = 52
 	baseGatewayDestinationRuleName                 = "maas-api-backend-tls"
 	baseTelemetryPolicyName                        = "maas-telemetry"
 	baseIstioTelemetryName                         = "latency-per-subscription"
@@ -263,6 +264,8 @@ var (
 	GVKPersesDatasource     = schema.GroupVersionKind{Group: "perses.dev", Version: "v1alpha1", Kind: "PersesDatasource"}
 	GVKCertificate          = schema.GroupVersionKind{Group: "cert-manager.io", Version: "v1", Kind: "Certificate"}
 	GVKHPA                  = schema.GroupVersionKind{Group: "autoscaling", Version: "v2", Kind: "HorizontalPodAutoscaler"}
+	GVKServiceMonitor       = schema.GroupVersionKind{Group: "monitoring.coreos.com", Version: "v1", Kind: "ServiceMonitor"}
+	GVKPodMonitor           = schema.GroupVersionKind{Group: "monitoring.coreos.com", Version: "v1", Kind: "PodMonitor"}
 )
 
 // Resource naming functions for multi-tenant deployment.
@@ -279,7 +282,7 @@ var (
 // - AITenant tenant (tenantID="redteam"): Returns "{base}-{tenantID}" (e.g., "maas-api-redteam")
 //
 // Name length constraints:
-// - Kubernetes resources (Service, ConfigMap, etc.) have a 63-character limit
+// - Most Kubernetes resources (Service, ConfigMap, etc.) have a 63-character limit
 // - Longest base name is "maas-api-auth-policy" (21 chars)
 // - Max tenant name: 63 - 21 - 1 (separator) = 41 chars
 // - AITenant CRD enforces this 41-char limit via XValidation
@@ -319,7 +322,14 @@ func MaaSAPIRouteName(tenantID string) string {
 }
 
 func MaaSAPIKeyCleanupCronJobName(tenantID string) string {
-	return resourceNameForTenant(baseMaaSAPIKeyCleanupCronJobName, tenantID)
+	name := resourceNameForTenant(baseMaaSAPIKeyCleanupCronJobName, tenantID)
+	if len(name) <= maxCronJobNameLength {
+		return name
+	}
+	// AITenant names cannot start with a "-". Using a double minus ("--")
+	// prevents name collisions between resourceNameForTenant() (invoked above)
+	// and BoundedName().
+	return BoundedName(baseMaaSAPIKeyCleanupCronJobName+"--", tenantID, "", maxCronJobNameLength)
 }
 
 func GatewayDestinationRuleName(tenantID string) string {

@@ -1650,7 +1650,7 @@ func aitenantAPIKeyRevocationJobName(aitenantName string) string {
 	// Job-created pod names append "-<suffix>", so keep the Job name below the
 	// label limit rather than merely fitting the Job object's own name.
 	const maxJobNameForGeneratedPods = validation.DNS1123LabelMaxLength - 6
-	return aitenantBoundedName("maas-api-revoke-keys-", aitenantName, "", maxJobNameForGeneratedPods)
+	return tenantreconcile.BoundedName("maas-api-revoke-keys-", aitenantName, "", maxJobNameForGeneratedPods)
 }
 
 func jobComplete(job *batcv1.Job) bool {
@@ -2129,29 +2129,7 @@ func aitenantAccessRoleName(aitenant *maasv1alpha1.AITenant) string {
 
 func aitenantChildName(aitenantName, suffix string) string {
 	const prefix = "aitenant-"
-	return aitenantBoundedName(prefix, aitenantName, "-"+suffix, validation.DNS1123LabelMaxLength)
-}
-
-func aitenantBoundedName(prefix, aitenantName, suffix string, maxLength int) string {
-	name := prefix + aitenantName + suffix
-	if len(name) <= maxLength {
-		return name
-	}
-	sum := sha256.Sum256([]byte(aitenantName))
-	hash := hex.EncodeToString(sum[:])[:8]
-	budget := maxLength - len(prefix) - len(suffix) - len(hash) - 1
-	if budget < 1 {
-		fallback := strings.TrimSuffix(prefix, "-") + "-" + hash + suffix
-		if len(fallback) <= maxLength {
-			return fallback
-		}
-		return strings.TrimSuffix(prefix, "-") + "-" + hash
-	}
-	trimmed := strings.Trim(aitenantName[:budget], "-.")
-	if trimmed == "" {
-		trimmed = hash
-	}
-	return prefix + trimmed + suffix + "-" + hash
+	return tenantreconcile.BoundedName(prefix, aitenantName, "-"+suffix, validation.DNS1123LabelMaxLength)
 }
 
 func objectKind(obj client.Object) string {

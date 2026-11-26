@@ -158,7 +158,9 @@ def _provision_model(tracked: list, prefix: str) -> dict:
                 "externalProviderRefs": [
                     {
                         "ref": {"name": model["provider"]},
-                        "targetModel": "gpt-3.5-turbo",
+                        # The name clients send: nothing rewrites the body model
+                        # without API translation, which this tenant leaves off.
+                        "targetModel": name,
                         "apiFormat": "openai-chat",
                         "path": f"/anything/{model['path_tag']}",
                     }

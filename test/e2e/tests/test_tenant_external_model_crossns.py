@@ -475,7 +475,7 @@ class TestSameNamedProvidersTwoNamespaces:
                 extra_provider_refs=[
                     {
                         "ref": {"name": shared_provider, "namespace": provider_ns_2},
-                        "targetModel": "gpt-3.5-turbo",
+                        "targetModel": name,
                         "apiFormat": "openai-chat",
                         "path": f"/anything/{tag_2}",
                     }

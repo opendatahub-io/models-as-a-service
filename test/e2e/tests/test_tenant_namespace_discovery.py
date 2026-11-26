@@ -20,6 +20,7 @@ Environment variables:
   See multitenancy_helpers.py and test_helper.py for namespace/gateway defaults.
 """
 
+import json
 import os
 import time
 import uuid
@@ -27,6 +28,7 @@ import uuid
 import pytest
 
 from multitenancy_helpers import (
+    AITENANT_KIND,
     AITENANT_NAMESPACE,
     DEFAULT_GATEWAY_NAME,
     FINALIZER_AUTHPOLICY,
@@ -47,10 +49,12 @@ from multitenancy_helpers import (
     delete_maas_subscription,
     delete_namespace_best_effort,
     ensure_namespace,
+    external_oidc_from_env,
     get_gateway_authpolicy,
     get_gateway_authpolicy_issuer,
     get_json_or_none,
     legacy_default_namespace,
+    list_json,
     new_discovery_case,
     patch_controller_tenant_namespace_discovery,
     remove_discovery_labels,
@@ -303,6 +307,57 @@ class TestTenantNamespaceDiscovery:
             delete_namespace_best_effort(other_ns)
             _oc_run(["delete", "rolebinding", f"{sa_name}-binding", "-n", case["tenant_ns"], "--ignore-not-found"])
             _oc_run(["delete", "sa", sa_name, "-n", case["tenant_ns"], "--ignore-not-found"])
+            cleanup_discovery_case(case)
+
+    @pytest.mark.nightly
+    def test_aitenant_oidc_added_after_bootstrap_propagates(self):
+        """1.7 (RHAI-27142): adding spec.oidc to a bootstrapped AITenant updates its
+        gateway AuthPolicy even when no MaaSAuthPolicy CR exists in the tenant namespace."""
+        if os.environ.get("EXTERNAL_OIDC") != "true" or not os.environ.get("OIDC_ISSUER_URL"):
+            pytest.skip("OIDC_ISSUER_URL not set; per-tenant OIDC E2E requires external OIDC deploy")
+
+        expected = os.environ["OIDC_ISSUER_URL"]
+        case = new_discovery_case()  # dedicated gateway -> <gateway>-maas-auth policy
+        gateway_authpolicy = f"{case['gateway_name']}-maas-auth"
+        try:
+            # Bootstrap without OIDC (external_oidc={} suppresses the env fallback) so
+            # the gateway AuthPolicy is created by the create-only bootstrap path —
+            # the exact stale state from the RHAI-27142 repro.
+            bootstrap_aitenant_tenant(case, external_oidc={})
+
+            base = wait_for_json("authpolicy", gateway_authpolicy, GATEWAY_NAMESPACE)
+            auth_rules = ((base.get("spec") or {}).get("defaults") or {}).get("rules", {}).get("authentication") or {}
+            assert "oidc-identities" not in auth_rules, (
+                "precondition: gateway AuthPolicy bootstrapped without OIDC must not carry oidc-identities"
+            )
+            # The RHAI-27142 trigger condition: with no MaaSAuthPolicy CR in the tenant
+            # namespace, only the tenant reconcile path can update the gateway policy.
+            assert list_json("maasauthpolicy", case["tenant_ns"]) == [], (
+                "precondition: no MaaSAuthPolicy CR may exist in the tenant namespace"
+            )
+
+            patch = {"spec": {"oidc": external_oidc_from_env()}}
+            result = _oc_run(
+                [
+                    "patch",
+                    AITENANT_KIND,
+                    case["tenant_label_name"],
+                    "-n",
+                    AITENANT_NAMESPACE,
+                    "--type=merge",
+                    "-p",
+                    json.dumps(patch),
+                ]
+            )
+            assert result.returncode == 0, f"failed to patch AITenant OIDC: {result.stderr.strip()}"
+
+            def oidc_propagated(obj: dict) -> bool:
+                rules = ((obj.get("spec") or {}).get("defaults") or {}).get("rules", {}).get("authentication") or {}
+                issuer = ((rules.get("oidc-identities") or {}).get("jwt") or {}).get("issuerUrl") or ""
+                return issuer.rstrip("/") == expected.rstrip("/")
+
+            wait_for_json("authpolicy", gateway_authpolicy, GATEWAY_NAMESPACE, predicate=oidc_propagated)
+        finally:
             cleanup_discovery_case(case)
 
 
