@@ -952,8 +952,12 @@ func (r *MaaSAuthPolicyReconciler) buildGatewayAuthPolicySpec(oidc *oidcConfig, 
 				"ttl":       int64(oidc.TTL),
 			},
 			"when": []any{
+				// The JWT match reads the Authorization header unguarded, and so does
+				// celIsNotAPIKey when x-api-key is off. Authorino skips the method on an
+				// error as on false, so the guard only removes the error.
 				map[string]any{
-					"predicate": celIsNotAPIKey + ` && request.headers.authorization.matches("^Bearer [^.]+\\.[^.]+\\.[^.]+$")`,
+					"predicate": `"authorization" in request.headers && ` + celIsNotAPIKey +
+						` && request.headers.authorization.matches("^Bearer [^.]+\\.[^.]+\\.[^.]+$")`,
 				},
 			},
 			"metrics":  false,

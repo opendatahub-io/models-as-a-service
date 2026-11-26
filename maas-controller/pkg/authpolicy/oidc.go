@@ -10,11 +10,14 @@ const externalJWTShape = `request.headers.authorization.matches("^Bearer [^.]+\\
 // OIDCTokenBoundWhen selects an externally authenticated JWT while leaving
 // OpenShift TokenReview and MaaS API-key identities on their existing paths.
 // The top-level iss claim distinguishes an external OIDC claim map from the
-// TokenReview user object.
+// TokenReview user object. An external JWT always comes in the Authorization
+// header, and both the JWT match and notAPIKeyPredicate may read it unguarded,
+// so the header check comes first rather than relying on which identity
+// authenticated a request without it.
 func OIDCTokenBoundWhen(notAPIKeyPredicate string) []any {
 	return []any{
 		map[string]any{
-			"predicate": notAPIKeyPredicate + ` && ` + externalJWTShape + ` && has(auth.identity.iss)`,
+			"predicate": `"authorization" in request.headers && ` + notAPIKeyPredicate + ` && ` + externalJWTShape + ` && has(auth.identity.iss)`,
 		},
 	}
 }
@@ -37,12 +40,13 @@ func OIDCTokenBoundPatterns(issuerURL, clientID, audience, purposeClaim, purpose
 	}
 
 	if audience != "" {
-		// JWT aud may be a string or an array of strings. The CEL predicate
-		// accepts either valid representation and fails closed for other types.
+		// JWT aud may be a string or an array of strings. The predicate picks the
+		// comparison by type, so any other aud, or a string that doesn't match, is
+		// false instead of a CEL error.
 		quotedAudience := strconv.Quote(audience)
 		patterns = append(patterns, map[string]any{
 			"predicate": fmt.Sprintf(
-				`has(auth.identity.aud) && (auth.identity.aud == %s || %s in auth.identity.aud)`,
+				`has(auth.identity.aud) && (type(auth.identity.aud) == string ? auth.identity.aud == %s : type(auth.identity.aud) == list && %s in auth.identity.aud)`,
 				quotedAudience,
 				quotedAudience,
 			),
