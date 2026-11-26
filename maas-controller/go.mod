@@ -137,12 +137,14 @@ replace github.com/kserve/kserve => github.com/opendatahub-io/kserve v0.0.0-2026
 
 // Test-only. The gateway AuthPolicy tests use Authorino's CEL package and run its
 // reconciler and auth pipeline in process (pkg/controller/maas/authorino_gateway_test.go).
-// Keep github.com/kuadrant/authorino at the Authorino version RHCL ships. Nothing
-// below is linked into the controller binary.
+// github.com/kuadrant/authorino is v0.26.1, from the line RHCL 1.4 ships. Later v0.26
+// patches change no code the tests run but move the controller's own dependencies, and
+// the Go proxy's v0.26.2 is not the tagged commit. Nothing below is linked into the
+// controller binary.
 require (
 	github.com/envoyproxy/go-control-plane/envoy v1.37.0
 	github.com/gogo/googleapis v1.4.0
-	github.com/kuadrant/authorino v0.24.0
+	github.com/kuadrant/authorino v0.26.1
 )
 
 // Test-only, required by Authorino's controllers and pkg/service packages.
