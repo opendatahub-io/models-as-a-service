@@ -8,6 +8,11 @@ updates:
   - package-ecosystem: "gomod"
     directories:
       - "/maas-*"
+    # Test-only: maas-controller/go.mod must keep github.com/kuadrant/authorino
+    # at the version RHCL ships (see the comment there). Bump it manually when
+    # the supported RHCL line's Authorino operand changes.
+    ignore:
+      - dependency-name: "github.com/kuadrant/authorino"
     schedule:
       interval: "weekly"
       day: "monday"

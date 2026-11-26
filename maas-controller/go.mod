@@ -141,6 +141,8 @@ replace github.com/kserve/kserve => github.com/opendatahub-io/kserve v0.0.0-2026
 // patches change no code the tests run but move the controller's own dependencies, and
 // the Go proxy's v0.26.2 is not the tagged commit. Nothing below is linked into the
 // controller binary.
+// Authorino >= v0.27 requires the OPA evaluators in maasauthpolicy_controller.go
+// to set "version": "v0"; add it when pinning such a version.
 require (
 	github.com/envoyproxy/go-control-plane/envoy v1.37.0
 	github.com/gogo/googleapis v1.4.0
