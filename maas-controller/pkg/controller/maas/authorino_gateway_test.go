@@ -895,7 +895,9 @@ func TestAuthorinoGatewayReportsFailures(t *testing.T) {
 		}}}
 		gateway := newAuthorinoGateway(t, spec, nil)
 		// deny can't decide the phase before cached's `when` has run, so Authorino can't
-		// cancel cached, and cached resolves its key well after deny decided.
+		// cancel cached. cached resolves its key only after the denial is logged, just
+		// before Evaluate returns, so the error lands after Evaluate and only the
+		// harness's wait catches it.
 		cachedWhenRan := make(chan struct{})
 		for _, evaluator := range gateway.config.AuthorizationConfigs {
 			config, ok := evaluator.(*evaluators.AuthorizationConfig)
@@ -911,7 +913,7 @@ func TestAuthorinoGatewayReportsFailures(t *testing.T) {
 			if !ok {
 				t.Fatalf("cache of %s is %T, want the harness's recordingCache", config.Name, config.Cache)
 			}
-			recording.EvaluatorCache = slowCache{EvaluatorCache: recording.EvaluatorCache, delay: 100 * time.Millisecond}
+			recording.EvaluatorCache = lateCache{EvaluatorCache: recording.EvaluatorCache, log: gateway.log}
 			config.Cache = recording
 		}
 
@@ -996,14 +998,20 @@ func (c signallingConditions) Matches(authJSON string) (bool, error) {
 	return c.Expression.Matches(authJSON)
 }
 
-// slowCache resolves its key after a delay.
-type slowCache struct {
+// lateCache resolves its key once the harness has recorded a denial, and a little
+// later, so Evaluate has returned by then.
+type lateCache struct {
 	evaluators.EvaluatorCache
-	delay time.Duration
+	log *pipelineLog
 }
 
-func (c slowCache) ResolveKeyFor(authJSON string) (any, error) {
-	time.Sleep(c.delay)
+func (c lateCache) ResolveKeyFor(authJSON string) (any, error) {
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(time.Millisecond) {
+		if _, denied := c.log.recordedDecisions(); len(denied) > 0 {
+			break
+		}
+	}
+	time.Sleep(50 * time.Millisecond)
 	return c.EvaluatorCache.ResolveKeyFor(authJSON)
 }
 

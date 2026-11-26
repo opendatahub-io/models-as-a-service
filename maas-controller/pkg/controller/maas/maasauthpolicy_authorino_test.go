@@ -751,8 +751,10 @@ func TestGatewayAuthPolicyOnAuthorino(t *testing.T) {
 				}
 				// API-key requests carry sk-oai-key; maas-api validates it without the
 				// Bearer prefix.
-				if got := outcome.callBody(validateEndpoint); got != nil && !reflect.DeepEqual(got, map[string]any{"key": "sk-oai-key"}) {
-					t.Errorf("API key validation body = %#v, want the bare key", got)
+				if slices.Contains(outcome.calledEndpoints(), validateEndpoint) {
+					if got := outcome.callBody(validateEndpoint); !reflect.DeepEqual(got, map[string]any{"key": "sk-oai-key"}) {
+						t.Errorf("API key validation body = %#v, want the bare key", got)
+					}
 				}
 				if got := outcome.callBody(selectEndpoint); tc.wantSelectBody != nil && !reflect.DeepEqual(got, tc.wantSelectBody) {
 					t.Errorf("subscription selection body = %#v, want %#v", got, tc.wantSelectBody)
