@@ -13,6 +13,9 @@
 apiVersion: perses.dev/v1alpha1
 kind: PersesDashboard
 metadata:
+  # Keep usageLogsUserDashboardName in
+  # maas-controller/pkg/controller/maas/self_deployment_controller.go in sync
+  # with this name.
   name: dashboard-5-maas-usage-logs
   namespace: opendatahub
   labels:
@@ -617,6 +620,9 @@ spec:
 apiVersion: perses.dev/v1alpha1
 kind: PersesDatasource
 metadata:
+  # Keep usageLogsMultiTenancyDatasourceName in
+  # maas-controller/pkg/controller/maas/self_deployment_controller.go in sync
+  # with this name.
   name: usage-logs-multi-tenancy
   namespace: opendatahub
   labels:
