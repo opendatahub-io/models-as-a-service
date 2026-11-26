@@ -111,6 +111,51 @@ When tenant telemetry is enabled and `usageLogging` is `false` or omitted, `Maas
 - **Perses Dashboard** (`dashboard-4-maas-usage-logs-admin`) - usage dashboard for administrators (shows information on all users)
 - **Perses Dashboard** (`dashboard-5-maas-usage-logs`) - user-scoped usage dashboard
 
+When the `usage-logs-loki` Secret is configured for maas-api, the controller additionally creates `maas-portal-usage-logs`, `maas-portal-usage-logs-admin`, and their Portal-only datasources. These copies use the maas-api Loki proxy, while the shared dashboards and datasources keep their rendered LokiStack defaults. The MaaS Portal must select the Portal copy names; the RHOAI Dashboard does not list them because they do not use its `dashboard-` naming convention.
+
+On a cluster with a local LokiStack, the Secret alone does not make the maas-api proxy usable. Complete these steps:
+
+1. Create `usage-logs-loki` in the maas-api namespace with `LOKI_READ_ENDPOINT`, `LOKI_READ_TOKEN`, and, when the gateway uses a private CA, `LOKI_READ_CA`:
+
+    ```bash
+    kubectl create secret generic usage-logs-loki -n <maas-api-namespace> \
+      --from-literal=LOKI_READ_ENDPOINT=https://<loki-gateway>.<monitoring-namespace>.svc:8080/api/logs/v1/application \
+      --from-literal=LOKI_READ_TOKEN=<loki-reader-token> \
+      --from-file=LOKI_READ_CA=<loki-gateway-ca.pem>
+    ```
+
+2. Bind the token's service account to a ClusterRole that permits the LokiStack gateway's authorization checks:
+
+    ```yaml
+    apiVersion: rbac.authorization.k8s.io/v1
+    kind: ClusterRole
+    metadata:
+      name: maas-api-usage-logs-reader
+    rules:
+      - apiGroups: ["loki.grafana.com"]
+        resources: ["application"]
+        resourceNames: ["logs"]
+        verbs: ["get"]
+      - apiGroups: [""]
+        resources: ["namespaces"]
+        verbs: ["get"]
+    ---
+    apiVersion: rbac.authorization.k8s.io/v1
+    kind: ClusterRoleBinding
+    metadata:
+      name: maas-api-usage-logs-reader
+    roleRef:
+      apiGroup: rbac.authorization.k8s.io
+      kind: ClusterRole
+      name: maas-api-usage-logs-reader
+    subjects:
+      - kind: ServiceAccount
+        name: <loki-reader-service-account>
+        namespace: <loki-reader-service-account-namespace>
+    ```
+
+3. Verify network access from maas-api to the LokiStack gateway. The controller applies `usage-logs-lokistack-allow-maas-api` for the default `redhat-ai-gateway-infra` maas-api namespace. If maas-api runs in another namespace, create a separately named NetworkPolicy in the LokiStack gateway's namespace, selecting the gateway pods and allowing the custom maas-api namespace. Do not edit the controller-managed policy; Kubernetes combines applicable ingress rules.
+
 !!! warning "Privacy"
     Structured access logs record request attributes.
     User identity (`user_id`) is included only when `MaasTenantConfig.spec.telemetry.logs.captureUser` is `true`.

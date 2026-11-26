@@ -1,0 +1,33 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: usage-logs-lokistack-allow-maas-api
+  namespace: opendatahub
+  labels:
+    app.kubernetes.io/managed-by: maas-controller
+    app.kubernetes.io/component: usage-logs
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: lokistack
+      app.kubernetes.io/component: lokistack-gateway
+    matchExpressions:
+      - key: app.kubernetes.io/instance
+        operator: In
+        values:
+          - data-science-usage-logs-lokistack
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: redhat-ai-gateway-infra
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: maas-api
+              app.kubernetes.io/component: api
+              app.kubernetes.io/part-of: models-as-a-service
+      ports:
+        - protocol: TCP
+          port: 8080
