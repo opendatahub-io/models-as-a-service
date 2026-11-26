@@ -27,7 +27,9 @@ import (
 	"github.com/go-logr/logr"
 	"github.com/gogo/googleapis/google/rpc"
 	"github.com/google/cel-go/cel"
+	"github.com/google/cel-go/common"
 	"github.com/google/cel-go/ext"
+	"github.com/google/cel-go/parser"
 	authorinoapi "github.com/kuadrant/authorino/api/v1beta3"
 	authorinocontrollers "github.com/kuadrant/authorino/controllers"
 	"github.com/kuadrant/authorino/pkg/auth"
@@ -68,9 +70,14 @@ import (
 //     assert their values.
 //   - A `when` of an evaluator Authorino cancels before evaluating it, once another
 //     evaluator in its priority group has decided the phase.
+//   - An authorization error in a rule whose sibling at the same priority denies first.
+//     Authorino reports only the first failure and cancels the rest, so such an error
+//     shows up by chance; give each erroring rule a case where it alone can fail.
+//   - A cache that fails to store an entry, or a cache key that resolves to null.
+//     Authorino evaluates without the cache and logs nothing.
 //   - Authorino as RHCL builds it. The pipeline is Authorino v0.26.1, the RHCL 1.4 line,
-//     built with this module's dependencies, including cel-go v0.29.2. CEL is pinned to
-//     the gateway's libraries only by the compile check.
+//     built with this module's dependencies, including cel-go v0.29.2. Only the compile
+//     check holds CEL to the gateway's libraries and syntax.
 
 // gatewayCELLibraries are the CEL library versions Authorino gets from cel-go v0.21.0,
 // which v0.24.x to v0.26.x build with (RHCL 1.3 and 1.4). v0.28.0 (RHCL 1.5) builds
@@ -84,6 +91,18 @@ var gatewayCELLibraries = []cel.EnvOption{
 	cel.OptionalTypes(cel.OptionalTypesVersion(1)),
 }
 
+// gatewayParser parses with the syntax of cel-go v0.21.0. cel-go v0.29.2 also accepts
+// backtick-quoted identifiers by default, which the gateway rejects as a syntax error,
+// and no environment option turns them off.
+// https://github.com/google/cel-go/blob/v0.29.2/parser/parser.go#L45
+var gatewayParser = func() *parser.Parser {
+	p, err := parser.NewParser(parser.EnableOptionalSyntax(true), parser.EnableIdentEscapeSyntax(false))
+	if err != nil {
+		panic(err)
+	}
+	return p
+}()
+
 // compiledForGateway memoizes compileForGateway, which every gateway runs on every
 // expression of its policy.
 var compiledForGateway sync.Map
@@ -94,7 +113,12 @@ func compileForGateway(expression string, outputType *cel.Type) error {
 		err, _ := cached.(error)
 		return err
 	}
-	_, err := authorinocel.Compile(expression, outputType, gatewayCELLibraries...)
+	var err error
+	if _, issues := gatewayParser.Parse(common.NewTextSource(expression)); issues != nil && len(issues.GetErrors()) > 0 {
+		err = fmt.Errorf("syntax the gateway lacks: %s", issues.ToDisplayString())
+	} else {
+		_, err = authorinocel.Compile(expression, outputType, gatewayCELLibraries...)
+	}
 	compiledForGateway.Store(key, err)
 	return err
 }
@@ -130,9 +154,10 @@ type maasAPICall struct {
 
 // fakeMaaSAPI answers the gateway's maas-api calls with a case's replies and records
 // them. newAuthorinoGateway prefixes each metadata path with the URL's scheme and host,
-// so the first two path segments are what the policy called.
+// so the first two path segments are what the policy called. Its failures go to the
+// gateway's log, so they reach gatewayOutcome.failures like Authorino's.
 type fakeMaaSAPI struct {
-	t       *testing.T
+	log     *pipelineLog
 	mu      sync.Mutex
 	replies maasAPIReplies
 	calls   []maasAPICall
@@ -144,18 +169,18 @@ func (f *fakeMaaSAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	endpoint = "/" + endpoint
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		f.t.Errorf("read maas-api request body: %v", err)
+		f.log.failf("read maas-api request body: %v", err)
 	}
 	var decoded any
 	if err := json.Unmarshal(body, &decoded); err != nil {
-		f.t.Errorf("maas-api %s got a body that is not JSON: %q", endpoint, body)
+		f.log.failf("maas-api %s got a body that is not JSON: %q", endpoint, body)
 	}
 	f.mu.Lock()
 	f.calls = append(f.calls, maasAPICall{scheme: scheme, host: host, endpoint: endpoint, body: decoded})
 	reply, ok := f.replies[endpoint]
 	f.mu.Unlock()
 	if !ok {
-		f.t.Errorf("maas-api %s called without a reply in the case", endpoint)
+		f.log.failf("maas-api %s called without a reply in the case", endpoint)
 	}
 	if _, unreachable := reply.(unreachableReply); !ok || unreachable {
 		if conn, _, err := http.NewResponseController(w).Hijack(); err == nil {
@@ -165,7 +190,7 @@ func (f *fakeMaaSAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(reply); err != nil {
-		f.t.Errorf("encode maas-api reply: %v", err)
+		f.log.failf("encode maas-api reply: %v", err)
 	}
 }
 
@@ -179,16 +204,23 @@ func (f *fakeMaaSAPI) recordedCalls() []maasAPICall {
 // `when`, cache key, metadata call or response config that fails, or an authorization
 // rule that fails for a reason other than a denial.
 type pipelineLog struct {
-	mu sync.Mutex
-	// failingMetadata names the metadata evaluators whose maas-api is unreachable on purpose.
+	// failingMetadata names the metadata evaluators whose maas-api is unreachable on
+	// purpose, and names holds every evaluator's name. Both are read-only once
+	// newAuthorinoGateway returns.
 	failingMetadata map[string]bool
-	failures        []string
-	// decided holds the evaluators Authorino is done with: their `when` didn't match,
-	// their cache key resolved, or Authorino skipped them because their priority group
-	// was already decided.
+	names           map[auth.AuthConfigEvaluator]string
+
+	mu       sync.Mutex
+	failures []string
+	// decided holds the evaluators past every check whose error Authorino swallows: the
+	// `when`, then the cache key if there is one. Evaluators Authorino skipped because
+	// their priority group was already decided count too. A decided evaluator may still
+	// be running.
 	decided map[auth.AuthConfigEvaluator]bool
-	// authenticatedBy names the authentication methods Authorino validated an identity with.
+	// authenticatedBy names the authentication methods Authorino validated an identity
+	// with, and deniedBy the authorization rules that denied the request.
 	authenticatedBy []string
+	deniedBy        []string
 }
 
 func (l *pipelineLog) authenticated(name string) {
@@ -197,10 +229,16 @@ func (l *pipelineLog) authenticated(name string) {
 	l.authenticatedBy = append(l.authenticatedBy, name)
 }
 
-func (l *pipelineLog) recordedAuthentications() []string {
+func (l *pipelineLog) denied(name string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return slices.Clone(l.authenticatedBy)
+	l.deniedBy = append(l.deniedBy, name)
+}
+
+func (l *pipelineLog) recordedDecisions() (authenticatedBy, deniedBy []string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return slices.Clone(l.authenticatedBy), slices.Clone(l.deniedBy)
 }
 
 func (l *pipelineLog) failf(format string, args ...any) {
@@ -221,25 +259,27 @@ func (l *pipelineLog) decide(evaluator auth.AuthConfigEvaluator) {
 	l.decided[evaluator] = true
 }
 
-// settled reports whether every priority group Authorino started has decided on all of
-// its evaluators. A phase returns as soon as one evaluator decides it, leaving the rest
-// of the group running, so a `when` can fail after Evaluate returns.
+// undecided names the evaluators still undecided in the priority groups Authorino
+// started. A phase returns as soon as one evaluator decides it, leaving the rest of the
+// group running, so a `when` can fail after Evaluate returns. A group with no decided
+// evaluator never started.
 // https://github.com/Kuadrant/authorino/blob/v0.26.1/pkg/service/auth_pipeline.go#L222-L245
-func (l *pipelineLog) settled(groups [][]auth.AuthConfigEvaluator) bool {
+func (l *pipelineLog) undecided(groups [][]auth.AuthConfigEvaluator) []string {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	var pending []string
 	for _, group := range groups {
-		decided := 0
+		var groupPending []string
 		for _, evaluator := range group {
-			if l.decided[evaluator] {
-				decided++
+			if !l.decided[evaluator] {
+				groupPending = append(groupPending, l.names[evaluator])
 			}
 		}
-		if decided != 0 && decided != len(group) {
-			return false
+		if len(groupPending) != len(group) {
+			pending = append(pending, groupPending...)
 		}
 	}
-	return true
+	return pending
 }
 
 // recordingConditions reports a `when` that fails to evaluate. Authorino skips the
@@ -323,6 +363,7 @@ func (l *pipelineLog) instrument(t *testing.T, config *evaluators.AuthConfig) []
 				t.Fatalf("%s evaluator %T is unknown, so its `when` can't be checked", phase.name, evaluator)
 			}
 			name = phase.name + "/" + name
+			l.names[evaluator] = name
 			*conditions = recordingConditions{conditions: *conditions, evaluator: evaluator, name: name, log: l, cached: *cache != nil}
 			if *cache != nil {
 				*cache = recordingCache{EvaluatorCache: *cache, evaluator: evaluator, name: name, log: l}
@@ -364,6 +405,8 @@ func (s pipelineLogSink) Info(_ int, msg string, keysAndValues ...any) {
 		// reason is an evaluation error.
 		if err, ok := reason.(error); !ok || err.Error() != "Unauthorized" {
 			s.log.failf("authorization %s: %v", name, reason)
+		} else {
+			s.log.denied(name)
 		}
 	case "cannot build dynamic response":
 		s.log.failf("%s %s: %v", msg, name, reason)
@@ -393,9 +436,9 @@ type gatewayRequest struct {
 	path     string
 	headers  map[string]string
 	identity map[string]any
-	// method is the authentication method that should authenticate the request. A
+	// authMethod is the authentication method that should authenticate the request. A
 	// replaced method reads identity from its own header.
-	method string
+	authMethod string
 }
 
 // gatewayOutcome is what the gateway produces for one request.
@@ -412,8 +455,10 @@ type gatewayOutcome struct {
 	maasAPICalls []maasAPICall
 	failures     []string
 	// authenticatedBy is the authentication method Authorino kept, empty when none
-	// validated the request.
+	// validated the request. deniedBy is the authorization rule whose denial Authorino
+	// reported; with several denying rules at one priority, which one is chance.
 	authenticatedBy string
+	deniedBy        string
 }
 
 func (o gatewayOutcome) calledEndpoints() []string {
@@ -448,7 +493,12 @@ type authorinoGateway struct {
 func newAuthorinoGateway(t *testing.T, spec map[string]any, replies maasAPIReplies) *authorinoGateway {
 	t.Helper()
 	assertAllAuthPolicyCEL_RHCLCompatible(t, spec)
-	maasAPI := &fakeMaaSAPI{t: t, replies: replies}
+	log := &pipelineLog{
+		failingMetadata: map[string]bool{},
+		names:           map[auth.AuthConfigEvaluator]string{},
+		decided:         map[auth.AuthConfigEvaluator]bool{},
+	}
+	maasAPI := &fakeMaaSAPI{log: log, replies: replies}
 	server := httptest.NewServer(maasAPI)
 	t.Cleanup(server.Close)
 
@@ -456,7 +506,6 @@ func newAuthorinoGateway(t *testing.T, spec map[string]any, replies maasAPIRepli
 	if len(authConfigSpec.Callbacks) > 0 {
 		t.Fatalf("the harness doesn't check callbacks")
 	}
-	log := &pipelineLog{failingMetadata: map[string]bool{}, decided: map[auth.AuthConfigEvaluator]bool{}}
 	for name, metadata := range authConfigSpec.Metadata {
 		// Authorino prefers urlExpression over url, which would bypass the fake.
 		if metadata.Http == nil || metadata.Http.Url == "" || metadata.Http.UrlExpression != "" {
@@ -567,10 +616,10 @@ func (g *authorinoGateway) evaluateUnchecked(tb testing.TB, request gatewayReque
 	headers := map[string]string{":authority": gatewayTestHost, ":method": http.MethodPost, ":path": request.path, ":scheme": "https"}
 	maps.Copy(headers, request.headers)
 	if request.identity != nil {
-		if request.method == "" {
-			tb.Fatalf("request for %s has an identity but no method to read it", request.path)
+		if request.authMethod == "" {
+			tb.Fatalf("request for %s has an identity but no authMethod to read it", request.path)
 		}
-		headers[testIdentityHeader+"-"+request.method] = mustJSON(request.identity)
+		headers[testIdentityHeader+"-"+request.authMethod] = mustJSON(request.identity)
 	}
 	check := &envoyauth.CheckRequest{Attributes: &envoyauth.AttributeContext{
 		Request: &envoyauth.AttributeContext_Request{Http: &envoyauth.AttributeContext_HttpRequest{
@@ -582,9 +631,13 @@ func (g *authorinoGateway) evaluateUnchecked(tb testing.TB, request gatewayReque
 	}}
 	ctx := authorinolog.IntoContext(tb.Context(), logr.New(pipelineLogSink{log: g.log}))
 	result := authorinoservice.NewAuthPipeline(ctx, check, g.config).Evaluate()
-	for deadline := time.Now().Add(5 * time.Second); !g.log.settled(g.groups); time.Sleep(50 * time.Microsecond) {
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(time.Millisecond) {
+		pending := g.log.undecided(g.groups)
+		if len(pending) == 0 {
+			break
+		}
 		if time.Now().After(deadline) {
-			tb.Fatalf("Authorino evaluators still undecided 5s after the request")
+			tb.Fatalf("Authorino evaluators %v still undecided 5s after the request", pending)
 		}
 	}
 
@@ -597,13 +650,22 @@ func (g *authorinoGateway) evaluateUnchecked(tb testing.TB, request gatewayReque
 		maasAPICalls: g.maasAPI.recordedCalls(),
 		failures:     g.log.recordedFailures(),
 	}
-	// Authorino keeps the first identity that validates and stops the phase.
-	switch authenticated := g.log.recordedAuthentications(); len(authenticated) {
+	// Authorino keeps the first identity that validates and reports the first denial,
+	// then stops the phase. More than one of either would mean that has changed.
+	authenticated, denied := g.log.recordedDecisions()
+	switch len(authenticated) {
 	case 0:
 	case 1:
 		outcome.authenticatedBy = authenticated[0]
 	default:
 		outcome.failures = append(outcome.failures, fmt.Sprintf("identity validated by %v, want one", authenticated))
+	}
+	switch len(denied) {
+	case 0:
+	case 1:
+		outcome.deniedBy = denied[0]
+	default:
+		outcome.failures = append(outcome.failures, fmt.Sprintf("denial reported by %v, want one", denied))
 	}
 	for _, group := range result.Headers {
 		for name, value := range group {
@@ -628,12 +690,12 @@ func mustJSON(value any) string {
 
 // apiKeyRequest is a request authenticated with a Bearer API key.
 func apiKeyRequest(path string) gatewayRequest {
-	return gatewayRequest{path: path, headers: map[string]string{"authorization": "Bearer sk-oai-key"}, method: "api-keys"}
+	return gatewayRequest{path: path, headers: map[string]string{"authorization": "Bearer sk-oai-key"}, authMethod: "api-keys"}
 }
 
 // xAPIKeyRequest is a request authenticated with the x-api-key header.
 func xAPIKeyRequest(path string) gatewayRequest {
-	return gatewayRequest{path: path, headers: map[string]string{"x-api-key": "sk-oai-key"}, method: "api-keys-x-api-key"}
+	return gatewayRequest{path: path, headers: map[string]string{"x-api-key": "sk-oai-key"}, authMethod: "api-keys-x-api-key"}
 }
 
 func tokenReviewRequest(path string, groups []string) gatewayRequest {
@@ -642,19 +704,19 @@ func tokenReviewRequest(path string, groups []string) gatewayRequest {
 		user["groups"] = groups
 	}
 	return gatewayRequest{
-		path:     path,
-		headers:  map[string]string{"authorization": "Bearer sha256~token", "x-maas-subscription": "gold"},
-		identity: map[string]any{"authenticated": true, "user": user, "audiences": []any{"https://kubernetes.default.svc"}},
-		method:   "openshift-identities",
+		path:       path,
+		headers:    map[string]string{"authorization": "Bearer sha256~token", "x-maas-subscription": "gold"},
+		identity:   map[string]any{"authenticated": true, "user": user, "audiences": []any{"https://kubernetes.default.svc"}},
+		authMethod: "openshift-identities",
 	}
 }
 
 func oidcRequest(path string, claims map[string]any) gatewayRequest {
 	return gatewayRequest{
-		path:     path,
-		headers:  map[string]string{"authorization": "Bearer aaa.bbb.ccc"},
-		identity: claims,
-		method:   "oidc-identities",
+		path:       path,
+		headers:    map[string]string{"authorization": "Bearer aaa.bbb.ccc"},
+		identity:   claims,
+		authMethod: "oidc-identities",
 	}
 }
 
@@ -666,13 +728,23 @@ func TestCompileForGatewayRejectsNewerCELFunctions(t *testing.T) {
 	if err := compileForGateway(`["a", "b"].first()`, nil); err == nil {
 		t.Error("first() compiles, want an error as on the gateway")
 	}
+	// cel-go v0.21.0 has no backtick-quoted identifiers, only backticks inside strings.
+	if err := compileForGateway("request.headers.`x-api-key` == \"k\"", cel.BoolType); err == nil {
+		t.Error("a backtick-quoted field compiles, want a syntax error as on the gateway")
+	}
+	if err := compileForGateway(`request.path == "a`+"`"+`b"`, cel.BoolType); err != nil {
+		t.Errorf("a backtick inside a string literal: %v", err)
+	}
+	if err := compileForGateway(`request.headers[?"x-api-key"].orValue("") == "k"`, cel.BoolType); err != nil {
+		t.Errorf("optional index syntax: %v", err)
+	}
 }
 
 func TestAuthorinoGatewayReportsFailures(t *testing.T) {
 	// The harness replaces the method with a plain identity, as it does OIDC and TokenReview.
 	identityAuthentication := map[string]any{"test-identity": map[string]any{"anonymous": map[string]any{}}}
 	unauthorized := map[string]any{"body": map[string]any{"value": "denied"}}
-	request := gatewayRequest{path: "/v1/me", identity: map[string]any{"sub": "alice"}, method: "test-identity"}
+	request := gatewayRequest{path: "/v1/me", identity: map[string]any{"sub": "alice"}, authMethod: "test-identity"}
 	metadataCall := func(rawURL, bodyExpression string) map[string]any {
 		return map[string]any{"http": map[string]any{
 			"url":         rawURL,
@@ -888,9 +960,9 @@ func TestAuthorinoGatewayReportsFailures(t *testing.T) {
 
 		// when
 		gateway := newAuthorinoGateway(t, spec, maasAPIReplies{"/internal/v1/lookup": map[string]any{}})
-		oidcRequest := request
-		oidcRequest.method = "oidc"
-		outcome := gateway.evaluate(t, oidcRequest)
+		req := request
+		req.authMethod = "oidc"
+		outcome := gateway.evaluate(t, req)
 
 		// then
 		if after := mustJSON(spec); after != before {
@@ -935,16 +1007,14 @@ func (c slowCache) ResolveKeyFor(authJSON string) (any, error) {
 	return c.EvaluatorCache.ResolveKeyFor(authJSON)
 }
 
-// recordingTB records Errorf calls instead of failing the test.
+// recordingTB records Errorf calls instead of failing the test. evaluate calls Errorf
+// on the test goroutine only.
 type recordingTB struct {
 	testing.TB
-	mu     sync.Mutex
 	errors []string
 }
 
 func (r *recordingTB) Errorf(format string, args ...any) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
 	r.errors = append(r.errors, fmt.Sprintf(format, args...))
 }
 
