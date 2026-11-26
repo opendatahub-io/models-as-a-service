@@ -15,10 +15,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	envoyauth "github.com/envoyproxy/go-control-plane/envoy/service/auth/v3"
 	envoytype "github.com/envoyproxy/go-control-plane/envoy/type/v3"
@@ -28,9 +30,11 @@ import (
 	"github.com/google/cel-go/ext"
 	authorinoapi "github.com/kuadrant/authorino/api/v1beta3"
 	authorinocontrollers "github.com/kuadrant/authorino/controllers"
+	"github.com/kuadrant/authorino/pkg/auth"
 	"github.com/kuadrant/authorino/pkg/evaluators"
 	authorinocel "github.com/kuadrant/authorino/pkg/expressions/cel"
 	"github.com/kuadrant/authorino/pkg/index"
+	"github.com/kuadrant/authorino/pkg/jsonexp"
 	authorinolog "github.com/kuadrant/authorino/pkg/log"
 	authorinoservice "github.com/kuadrant/authorino/pkg/service"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -47,9 +51,10 @@ import (
 //
 // Authorino doesn't fail a request when CEL errors: a deny body or header that errors
 // is sent empty, a success header or filter that errors is dropped and cancels the rest
-// of its priority group, and a `when` that errors skips its evaluator. The metadata,
-// authorization and response failures Authorino only logs come back in
-// gatewayOutcome.failures.
+// of its priority group, and a `when` or cache key that errors skips its evaluator or
+// the cache without a log line. The harness reports these, and the metadata and
+// authorization failures Authorino logs, as gatewayOutcome.failures; evaluate fails the
+// test on any of them.
 //
 // Not covered, so these need a test of their own:
 //   - Authentication other than API keys. It is replaced by a plain identity read from
@@ -57,19 +62,38 @@ import (
 //   - Kuadrant's translation of the AuthPolicy into an AuthConfig, apart from the
 //     rename of the success filters to dynamicMetadata.
 //   - The wasm-shim, including spec.defaults.when.
+//   - Deny bodies and headers that error. Authorino sends them empty, so the cases
+//     assert their values.
+//   - A `when` of an evaluator Authorino cancels before evaluating it, once another
+//     evaluator in its priority group has decided the phase.
+//   - Authorino as RHCL builds it. The pipeline is Authorino v0.26.1, the RHCL 1.4 line,
+//     built with this module's dependencies, including cel-go v0.29.2. CEL is pinned to
+//     the gateway's libraries only by the compile check.
 
-// gatewayCELLibraries are the CEL library versions RHCL's Authorino v0.24.0 gets from
-// cel-go v0.21.0. This module builds with cel-go v0.29.2, so Authorino would pick up
-// newer libraries with functions the gateway lacks. cel-go keeps the first registration
-// of a library, so passing these to Compile ahead of Authorino's own pins them.
-// https://github.com/Kuadrant/authorino/blob/v0.24.0/pkg/expressions/cel/expressions.go#L89-L159
+// gatewayCELLibraries are the CEL library versions Authorino gets from cel-go v0.21.0,
+// which v0.24.x to v0.26.x build with (RHCL 1.3 and 1.4). v0.28.0 (RHCL 1.5) builds
+// with cel-go v0.29.0 and gets newer libraries, so the pins are conservative there.
+// This module builds with cel-go v0.29.2, so Authorino would pick up newer libraries
+// with functions the gateway lacks. cel-go keeps the first registration of a library,
+// so passing these to Compile ahead of Authorino's own pins them.
+// https://github.com/Kuadrant/authorino/blob/v0.26.1/pkg/expressions/cel/expressions.go#L90-L125
 var gatewayCELLibraries = []cel.EnvOption{
 	ext.Strings(ext.StringsVersion(3)),
 	cel.OptionalTypes(cel.OptionalTypesVersion(1)),
 }
 
+// compiledForGateway memoizes compileForGateway, which every gateway runs on every
+// expression of its policy.
+var compiledForGateway sync.Map
+
 func compileForGateway(expression string, outputType *cel.Type) error {
+	key := fmt.Sprintf("%v\x00%s", outputType, expression)
+	if cached, ok := compiledForGateway.Load(key); ok {
+		err, _ := cached.(error)
+		return err
+	}
 	_, err := authorinocel.Compile(expression, outputType, gatewayCELLibraries...)
+	compiledForGateway.Store(key, err)
 	return err
 }
 
@@ -83,11 +107,6 @@ const (
 	selectEndpoint   = "/internal/v1/subscriptions/select"
 )
 
-// authenticationMethods are the AuthConfig authentication kinds other than plain.
-// The tests can't reach an OIDC issuer or a Kubernetes API, so these are replaced by a
-// plain identity read from testIdentityHeader. Their `when` and priority stay.
-var authenticationMethods = []string{"apiKey", "jwt", "kubernetesTokenReview", "oauth2Introspection", "x509", "anonymous"}
-
 // maasAPIReplies holds maas-api's reply for each endpoint the gateway may call. Calling
 // an endpoint without a reply fails the test, and so does a reply for an endpoint the
 // policy never calls.
@@ -99,12 +118,15 @@ type unreachableReply struct{}
 var maasAPIUnreachable = unreachableReply{}
 
 type maasAPICall struct {
+	// host is the host of the URL in the policy, before the harness points it at the fake.
+	host     string
 	endpoint string
 	body     any
 }
 
 // fakeMaaSAPI answers the gateway's maas-api calls with a case's replies and records
-// them.
+// them. newAuthorinoGateway prefixes each metadata path with the URL's host, so the
+// first path segment is the host the policy called.
 type fakeMaaSAPI struct {
 	t       *testing.T
 	mu      sync.Mutex
@@ -113,20 +135,22 @@ type fakeMaaSAPI struct {
 }
 
 func (f *fakeMaaSAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	host, endpoint, _ := strings.Cut(strings.TrimPrefix(r.URL.Path, "/"), "/")
+	endpoint = "/" + endpoint
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		f.t.Errorf("read maas-api request body: %v", err)
 	}
 	var decoded any
 	if err := json.Unmarshal(body, &decoded); err != nil {
-		f.t.Errorf("maas-api %s got a body that is not JSON: %q", r.URL.Path, body)
+		f.t.Errorf("maas-api %s got a body that is not JSON: %q", endpoint, body)
 	}
 	f.mu.Lock()
-	f.calls = append(f.calls, maasAPICall{endpoint: r.URL.Path, body: decoded})
-	reply, ok := f.replies[r.URL.Path]
+	f.calls = append(f.calls, maasAPICall{host: host, endpoint: endpoint, body: decoded})
+	reply, ok := f.replies[endpoint]
 	f.mu.Unlock()
 	if !ok {
-		f.t.Errorf("maas-api %s called without a reply in the case", r.URL.Path)
+		f.t.Errorf("maas-api %s called without a reply in the case", endpoint)
 	}
 	if _, unreachable := reply.(unreachableReply); !ok || unreachable {
 		if conn, _, err := http.NewResponseController(w).Hijack(); err == nil {
@@ -146,14 +170,17 @@ func (f *fakeMaaSAPI) recordedCalls() []maasAPICall {
 	return slices.Clone(f.calls)
 }
 
-// pipelineLog collects the evaluator failures Authorino reports only in its log: a
-// metadata call or a response config that fails, or an authorization rule that fails
-// for a reason other than a denial.
+// pipelineLog collects the evaluator failures Authorino doesn't fail the request on: a
+// `when`, cache key, metadata call or response config that fails, or an authorization
+// rule that fails for a reason other than a denial.
 type pipelineLog struct {
 	mu sync.Mutex
 	// failingMetadata names the metadata evaluators whose maas-api is unreachable on purpose.
 	failingMetadata map[string]bool
 	failures        []string
+	// decided holds the evaluators whose `when` ran, or that Authorino skipped because
+	// their priority group was already decided.
+	decided map[auth.AuthConfigEvaluator]bool
 }
 
 func (l *pipelineLog) failf(format string, args ...any) {
@@ -168,6 +195,122 @@ func (l *pipelineLog) recordedFailures() []string {
 	return slices.Clone(l.failures)
 }
 
+func (l *pipelineLog) decide(evaluator auth.AuthConfigEvaluator) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.decided[evaluator] = true
+}
+
+// settled reports whether every priority group Authorino started has decided on all of
+// its evaluators. A phase returns as soon as one evaluator decides it, leaving the rest
+// of the group running, so a `when` can fail after Evaluate returns.
+// https://github.com/Kuadrant/authorino/blob/v0.26.1/pkg/service/auth_pipeline.go#L222-L245
+func (l *pipelineLog) settled(groups [][]auth.AuthConfigEvaluator) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for _, group := range groups {
+		decided := 0
+		for _, evaluator := range group {
+			if l.decided[evaluator] {
+				decided++
+			}
+		}
+		if decided != 0 && decided != len(group) {
+			return false
+		}
+	}
+	return true
+}
+
+// recordingConditions reports a `when` that fails to evaluate. Authorino skips the
+// evaluator as if the conditions didn't match, and logs nothing.
+// https://github.com/Kuadrant/authorino/blob/v0.26.1/pkg/service/auth_pipeline.go#L123-L128
+type recordingConditions struct {
+	conditions jsonexp.Expression
+	evaluator  auth.AuthConfigEvaluator
+	name       string
+	log        *pipelineLog
+}
+
+func (c recordingConditions) Matches(authJSON string) (bool, error) {
+	if c.evaluator != nil {
+		defer c.log.decide(c.evaluator)
+	}
+	if c.conditions == nil {
+		return true, nil
+	}
+	matched, err := c.conditions.Matches(authJSON)
+	if err != nil {
+		c.log.failf("when %s: %v", c.name, err)
+	}
+	return matched, err
+}
+
+// recordingCache reports a cache key that fails to resolve. Authorino evaluates without
+// the cache, and logs nothing.
+// https://github.com/Kuadrant/authorino/blob/v0.26.1/pkg/evaluators/metadata.go#L54-L58
+type recordingCache struct {
+	evaluators.EvaluatorCache
+	name string
+	log  *pipelineLog
+}
+
+func (c recordingCache) ResolveKeyFor(authJSON string) (any, error) {
+	key, err := c.EvaluatorCache.ResolveKeyFor(authJSON)
+	if err != nil {
+		c.log.failf("cache key %s: %v", c.name, err)
+	}
+	return key, err
+}
+
+// instrument wraps the `when` and cache of every evaluator, and returns the evaluators
+// grouped by phase and priority, as Authorino runs them.
+func (l *pipelineLog) instrument(t *testing.T, config *evaluators.AuthConfig) [][]auth.AuthConfigEvaluator {
+	t.Helper()
+	phases := []struct {
+		name       string
+		evaluators []auth.AuthConfigEvaluator
+	}{
+		{"authentication", config.IdentityConfigs},
+		{"metadata", config.MetadataConfigs},
+		{"authorization", config.AuthorizationConfigs},
+		{"response", config.ResponseConfigs},
+	}
+	config.Conditions = recordingConditions{conditions: config.Conditions, name: "auth config", log: l}
+	var groups [][]auth.AuthConfigEvaluator
+	for _, phase := range phases {
+		byPriority := map[int][]auth.AuthConfigEvaluator{}
+		for _, evaluator := range phase.evaluators {
+			var name string
+			var priority int
+			var conditions *jsonexp.Expression
+			var cache *evaluators.EvaluatorCache
+			switch e := evaluator.(type) {
+			case *evaluators.IdentityConfig:
+				name, priority, conditions, cache = e.Name, e.Priority, &e.Conditions, &e.Cache
+			case *evaluators.MetadataConfig:
+				name, priority, conditions, cache = e.Name, e.Priority, &e.Conditions, &e.Cache
+			case *evaluators.AuthorizationConfig:
+				name, priority, conditions, cache = e.Name, e.Priority, &e.Conditions, &e.Cache
+			case *evaluators.ResponseConfig:
+				name, priority, conditions, cache = e.Name, e.Priority, &e.Conditions, &e.Cache
+			default:
+				t.Fatalf("%s evaluator %T is unknown, so its `when` can't be checked", phase.name, evaluator)
+			}
+			name = phase.name + "/" + name
+			*conditions = recordingConditions{conditions: *conditions, evaluator: evaluator, name: name, log: l}
+			if *cache != nil {
+				*cache = recordingCache{EvaluatorCache: *cache, name: name, log: l}
+			}
+			byPriority[priority] = append(byPriority[priority], evaluator)
+		}
+		for _, group := range byPriority {
+			groups = append(groups, group)
+		}
+	}
+	return groups
+}
+
 type pipelineLogSink struct{ log *pipelineLog }
 
 func (s pipelineLogSink) Init(logr.RuntimeInfo)                 {}
@@ -177,10 +320,14 @@ func (s pipelineLogSink) WithName(string) logr.LogSink          { return s }
 func (s pipelineLogSink) Error(err error, msg string, _ ...any) { s.log.failf("%s: %v", msg, err) }
 
 // Info reports the outcome lines of auth_pipeline.go.
-// https://github.com/Kuadrant/authorino/blob/v0.24.0/pkg/service/auth_pipeline.go#L270-L380
+// https://github.com/Kuadrant/authorino/blob/v0.26.1/pkg/service/auth_pipeline.go#L280-L380
 func (s pipelineLogSink) Info(_ int, msg string, keysAndValues ...any) {
 	name, reason := logConfigName(keysAndValues), logValue(keysAndValues, "reason")
 	switch msg {
+	case "skipping config":
+		if evaluator, ok := logValue(keysAndValues, "config").(auth.AuthConfigEvaluator); ok {
+			s.log.decide(evaluator)
+		}
 	case "cannot fetch metadata":
 		if !s.log.failingMetadata[name] {
 			s.log.failf("metadata %s: %v", name, reason)
@@ -191,7 +338,7 @@ func (s pipelineLogSink) Info(_ int, msg string, keysAndValues ...any) {
 		if err, ok := reason.(error); !ok || err.Error() != "Unauthorized" {
 			s.log.failf("authorization %s: %v", name, reason)
 		}
-	case "cannot build dynamic response", "cannot execute callback":
+	case "cannot build dynamic response":
 		s.log.failf("%s %s: %v", msg, name, reason)
 	}
 }
@@ -255,63 +402,53 @@ func (o gatewayOutcome) callBody(endpoint string) any {
 
 type authorinoGateway struct {
 	config  evaluators.AuthConfig
+	groups  [][]auth.AuthConfigEvaluator
 	maasAPI *fakeMaaSAPI
 	log     *pipelineLog
 	replies maasAPIReplies
+	used    bool
 }
 
 // newAuthorinoGateway loads the rules of a generated gateway AuthPolicy into Authorino,
-// with maas-api answering from replies.
+// with maas-api answering from replies. Every CEL expression and predicate in the policy
+// must also compile on RHCL's Authorino. spec is left unchanged.
 func newAuthorinoGateway(t *testing.T, spec map[string]any, replies maasAPIReplies) *authorinoGateway {
 	t.Helper()
+	assertAllAuthPolicyCEL_RHCLCompatible(t, spec)
 	maasAPI := &fakeMaaSAPI{t: t, replies: replies}
 	server := httptest.NewServer(maasAPI)
 	t.Cleanup(server.Close)
 
-	rules := requiredMap(spec, "defaults", "rules")
-	log := &pipelineLog{failingMetadata: map[string]bool{}}
-	for name := range requiredMap(rules, "metadata") {
-		httpConfig := requiredMap(rules, "metadata", name, "http")
-		target, err := url.Parse(fmt.Sprint(httpConfig["url"]))
+	authConfigSpec := decodeAuthConfigSpec(t, requiredMap(spec, "defaults", "rules"))
+	if len(authConfigSpec.Callbacks) > 0 {
+		t.Fatalf("the harness doesn't check callbacks")
+	}
+	log := &pipelineLog{failingMetadata: map[string]bool{}, decided: map[auth.AuthConfigEvaluator]bool{}}
+	for name, metadata := range authConfigSpec.Metadata {
+		if metadata.Http == nil || metadata.Http.Url == "" {
+			t.Fatalf("metadata %s: the harness supports http metadata with a static url only", name)
+		}
+		target, err := url.Parse(metadata.Http.Url)
 		if err != nil {
 			t.Fatalf("metadata %s URL: %v", name, err)
 		}
-		httpConfig["url"] = server.URL + target.Path
+		metadata.Http.Url = server.URL + "/" + target.Host + target.EscapedPath()
+		if target.RawQuery != "" {
+			metadata.Http.Url += "?" + target.RawQuery
+		}
 		if _, unreachable := replies[target.Path].(unreachableReply); unreachable {
 			log.failingMetadata[name] = true
 		}
 	}
-	for name := range requiredMap(rules, "authentication") {
-		method := requiredMap(rules, "authentication", name)
-		if _, plain := method["plain"]; plain {
+	for name, method := range authConfigSpec.Authentication {
+		if method.Plain != nil {
 			continue
 		}
-		for _, kind := range authenticationMethods {
-			delete(method, kind)
+		method.AuthenticationMethodSpec = authorinoapi.AuthenticationMethodSpec{
+			Plain: &authorinoapi.PlainIdentitySpec{Selector: "request.headers." + testIdentityHeader + "|@fromstr"},
 		}
-		delete(method, "credentials")
-		method["plain"] = map[string]any{"selector": "request.headers." + testIdentityHeader + "|@fromstr"}
-	}
-
-	// The rules are Authorino types, except that Kuadrant's AuthPolicy calls the success
-	// dynamicMetadata `filters`, which Kuadrant renames when it writes the AuthConfig.
-	// https://github.com/Kuadrant/kuadrant-operator/blob/v1.4.2/api/v1/authpolicy_types.go#L469
-	// https://github.com/Kuadrant/kuadrant-operator/blob/v1.4.2/internal/controller/authconfigs_reconciler.go#L223-L247
-	if success, ok := rules["response"].(map[string]any)["success"].(map[string]any); ok {
-		if filters, ok := success["filters"]; ok {
-			success["dynamicMetadata"] = filters
-			delete(success, "filters")
-		}
-	}
-	encoded, err := json.Marshal(rules)
-	if err != nil {
-		t.Fatalf("marshal rules: %v", err)
-	}
-	decoder := json.NewDecoder(bytes.NewReader(encoded))
-	decoder.DisallowUnknownFields()
-	var authConfigSpec authorinoapi.AuthConfigSpec
-	if err := decoder.Decode(&authConfigSpec); err != nil {
-		t.Fatalf("rules are not an Authorino AuthConfig spec: %v", err)
+		method.Credentials = authorinoapi.Credentials{}
+		authConfigSpec.Authentication[name] = method
 	}
 	authConfigSpec.Hosts = []string{gatewayTestHost}
 	authConfig := &authorinoapi.AuthConfig{
@@ -338,12 +475,62 @@ func newAuthorinoGateway(t *testing.T, spec map[string]any, replies maasAPIRepli
 	if translated == nil {
 		t.Fatalf("Authorino did not index the AuthConfig: %v", reconciler.StatusReport)
 	}
-	return &authorinoGateway{config: *translated, maasAPI: maasAPI, log: log, replies: replies}
+	groups := log.instrument(t, translated)
+	return &authorinoGateway{config: *translated, groups: groups, maasAPI: maasAPI, log: log, replies: replies}
 }
 
-func (g *authorinoGateway) evaluate(t *testing.T, request gatewayRequest) gatewayOutcome {
+// decodeAuthConfigSpec decodes a copy of the AuthPolicy rules as an Authorino
+// AuthConfig spec. The rules are Authorino types, except that Kuadrant's AuthPolicy
+// calls the success dynamicMetadata `filters`, which Kuadrant renames when it writes the
+// AuthConfig.
+// https://github.com/Kuadrant/kuadrant-operator/blob/v1.4.2/api/v1/authpolicy_types.go#L469
+// https://github.com/Kuadrant/kuadrant-operator/blob/v1.4.2/internal/controller/authconfigs_reconciler.go#L223-L247
+func decodeAuthConfigSpec(t *testing.T, rules map[string]any) authorinoapi.AuthConfigSpec {
 	t.Helper()
+	var copied map[string]any
+	if err := json.Unmarshal([]byte(mustJSON(rules)), &copied); err != nil {
+		t.Fatalf("copy rules: %v", err)
+	}
+	if response, ok := copied["response"].(map[string]any); ok {
+		if success, ok := response["success"].(map[string]any); ok {
+			if filters, ok := success["filters"]; ok {
+				success["dynamicMetadata"] = filters
+				delete(success, "filters")
+			}
+		}
+	}
+	decoder := json.NewDecoder(bytes.NewReader([]byte(mustJSON(copied))))
+	decoder.DisallowUnknownFields()
+	var authConfigSpec authorinoapi.AuthConfigSpec
+	if err := decoder.Decode(&authConfigSpec); err != nil {
+		t.Fatalf("rules are not an Authorino AuthConfig spec: %v", err)
+	}
+	return authConfigSpec
+}
+
+// evaluate sends the request through the gateway and fails tb on every failure the
+// harness reports for it. A gateway serves one request: Authorino's metadata cache would
+// answer a second one without calling maas-api.
+func (g *authorinoGateway) evaluate(tb testing.TB, request gatewayRequest) gatewayOutcome {
+	tb.Helper()
+	outcome := g.evaluateUnchecked(tb, request)
+	for _, failure := range outcome.failures {
+		tb.Errorf("Authorino: %s", failure)
+	}
+	return outcome
+}
+
+// evaluateUnchecked is evaluate without failing tb, for tests of the harness itself.
+func (g *authorinoGateway) evaluateUnchecked(tb testing.TB, request gatewayRequest) gatewayOutcome {
+	tb.Helper()
+	if g.used {
+		tb.Fatalf("a gateway serves one request; create another for %s", request.path)
+	}
+	g.used = true
 	headers := maps.Clone(request.headers)
+	if headers == nil {
+		headers = map[string]string{}
+	}
 	if request.identity != nil {
 		headers[testIdentityHeader] = mustJSON(request.identity)
 	}
@@ -355,8 +542,13 @@ func (g *authorinoGateway) evaluate(t *testing.T, request gatewayRequest) gatewa
 			Headers: headers,
 		}},
 	}}
-	ctx := authorinolog.IntoContext(t.Context(), logr.New(pipelineLogSink{log: g.log}))
+	ctx := authorinolog.IntoContext(tb.Context(), logr.New(pipelineLogSink{log: g.log}))
 	result := authorinoservice.NewAuthPipeline(ctx, check, g.config).Evaluate()
+	for deadline := time.Now().Add(5 * time.Second); !g.log.settled(g.groups); time.Sleep(50 * time.Microsecond) {
+		if time.Now().After(deadline) {
+			tb.Fatalf("Authorino evaluators still undecided 5s after the request")
+		}
+	}
 
 	outcome := gatewayOutcome{
 		allowed:      result.Code == rpc.OK,
@@ -433,13 +625,20 @@ func TestAuthorinoGatewayReportsFailures(t *testing.T) {
 		"test-identity": map[string]any{"plain": map[string]any{"selector": "request.headers." + testIdentityHeader + "|@fromstr"}},
 	}
 	unauthorized := map[string]any{"body": map[string]any{"value": "denied"}}
-	request := gatewayRequest{path: "/v1/me", headers: map[string]string{}, identity: map[string]any{"sub": "alice"}}
+	request := gatewayRequest{path: "/v1/me", identity: map[string]any{"sub": "alice"}}
+	metadataCall := func(rawURL, bodyExpression string) map[string]any {
+		return map[string]any{"http": map[string]any{
+			"url":         rawURL,
+			"method":      "POST",
+			"contentType": "application/json",
+			"body":        map[string]any{"expression": bodyExpression},
+		}}
+	}
 
 	t.Run("failing success header and stray reply", func(t *testing.T) {
 		// given
 		spec := map[string]any{"defaults": map[string]any{"rules": map[string]any{
 			"authentication": identityAuthentication,
-			"metadata":       map[string]any{},
 			"response": map[string]any{
 				"success": map[string]any{
 					"headers": map[string]any{
@@ -452,7 +651,7 @@ func TestAuthorinoGatewayReportsFailures(t *testing.T) {
 		gateway := newAuthorinoGateway(t, spec, maasAPIReplies{"/unused": map[string]any{}})
 
 		// when
-		outcome := gateway.evaluate(t, request)
+		outcome := gateway.evaluateUnchecked(t, request)
 
 		// then
 		assertReported(t, outcome.failures, "cannot build dynamic response broken-header", "case supplies a reply for /unused")
@@ -462,7 +661,6 @@ func TestAuthorinoGatewayReportsFailures(t *testing.T) {
 		// given
 		spec := map[string]any{"defaults": map[string]any{"rules": map[string]any{
 			"authentication": identityAuthentication,
-			"metadata":       map[string]any{},
 			"authorization": map[string]any{
 				"broken-rule": map[string]any{"patternMatching": map[string]any{
 					"patterns": []any{map[string]any{"predicate": `auth.identity.missing == "x"`}},
@@ -473,11 +671,152 @@ func TestAuthorinoGatewayReportsFailures(t *testing.T) {
 		gateway := newAuthorinoGateway(t, spec, nil)
 
 		// when
-		outcome := gateway.evaluate(t, request)
+		outcome := gateway.evaluateUnchecked(t, request)
 
 		// then
 		assertReported(t, outcome.failures, "authorization broken-rule")
 	})
+
+	t.Run("failing metadata request", func(t *testing.T) {
+		// given
+		spec := map[string]any{"defaults": map[string]any{"rules": map[string]any{
+			"authentication": identityAuthentication,
+			"metadata": map[string]any{
+				"broken-metadata": metadataCall("https://maas-api.ns.svc.cluster.local:8443/internal/v1/lookup", `auth.identity.missing`),
+			},
+			"response": map[string]any{"unauthorized": unauthorized},
+		}}}
+		gateway := newAuthorinoGateway(t, spec, maasAPIReplies{"/internal/v1/lookup": map[string]any{}})
+
+		// when
+		outcome := gateway.evaluateUnchecked(t, request)
+
+		// then
+		assertReported(t, outcome.failures, "metadata broken-metadata", "case supplies a reply for /internal/v1/lookup")
+	})
+
+	t.Run("failing when", func(t *testing.T) {
+		// given
+		spec := map[string]any{"defaults": map[string]any{"rules": map[string]any{
+			"authentication": identityAuthentication,
+			"response": map[string]any{
+				"success": map[string]any{
+					"headers": map[string]any{
+						"conditional-header": map[string]any{
+							"when":  []any{map[string]any{"predicate": `auth.identity.missing == "x"`}},
+							"plain": map[string]any{"value": "x"},
+						},
+					},
+				},
+				"unauthorized": unauthorized,
+			},
+		}}}
+		gateway := newAuthorinoGateway(t, spec, nil)
+
+		// when
+		outcome := gateway.evaluateUnchecked(t, request)
+
+		// then
+		assertReported(t, outcome.failures, "when response/conditional-header")
+	})
+
+	t.Run("maas-api call records the host the policy calls", func(t *testing.T) {
+		// given
+		spec := map[string]any{"defaults": map[string]any{"rules": map[string]any{
+			"authentication": identityAuthentication,
+			"metadata": map[string]any{
+				"lookup": metadataCall("https://maas-api-x.ns.svc.cluster.local:8443/internal/v1/lookup", `auth.identity`),
+			},
+			"response": map[string]any{"unauthorized": unauthorized},
+		}}}
+		gateway := newAuthorinoGateway(t, spec, maasAPIReplies{"/internal/v1/lookup": map[string]any{}})
+
+		// when
+		outcome := gateway.evaluate(t, request)
+
+		// then
+		want := []maasAPICall{{host: "maas-api-x.ns.svc.cluster.local:8443", endpoint: "/internal/v1/lookup", body: map[string]any{"sub": "alice"}}}
+		if !reflect.DeepEqual(outcome.maasAPICalls, want) {
+			t.Errorf("maas-api calls = %#v, want %#v", outcome.maasAPICalls, want)
+		}
+	})
+
+	t.Run("failing cache key", func(t *testing.T) {
+		// given
+		lookup := metadataCall("https://maas-api.ns.svc.cluster.local:8443/internal/v1/lookup", `auth.identity`)
+		lookup["cache"] = map[string]any{"key": map[string]any{"expression": `auth.identity.missing`}, "ttl": 60}
+		spec := map[string]any{"defaults": map[string]any{"rules": map[string]any{
+			"authentication": identityAuthentication,
+			"metadata":       map[string]any{"lookup": lookup},
+			"response":       map[string]any{"unauthorized": unauthorized},
+		}}}
+		gateway := newAuthorinoGateway(t, spec, maasAPIReplies{"/internal/v1/lookup": map[string]any{}})
+
+		// when
+		outcome := gateway.evaluateUnchecked(t, request)
+
+		// then
+		assertReported(t, outcome.failures, "cache key metadata/lookup")
+	})
+
+	t.Run("evaluate fails the test on a reported failure", func(t *testing.T) {
+		// given
+		spec := map[string]any{"defaults": map[string]any{"rules": map[string]any{
+			"authentication": identityAuthentication,
+			"response": map[string]any{"success": map[string]any{"headers": map[string]any{
+				"broken-header": map[string]any{"plain": map[string]any{"expression": `auth.identity.missing`}},
+			}}},
+		}}}
+		gateway := newAuthorinoGateway(t, spec, nil)
+		recorder := &recordingTB{TB: t}
+
+		// when
+		gateway.evaluate(recorder, request)
+
+		// then
+		assertReported(t, recorder.errors, "Authorino: cannot build dynamic response broken-header")
+	})
+
+	t.Run("spec is left unchanged and needs no response", func(t *testing.T) {
+		// given
+		spec := map[string]any{"defaults": map[string]any{"rules": map[string]any{
+			"authentication": map[string]any{
+				"oidc": map[string]any{
+					"jwt":         map[string]any{"issuerUrl": "https://issuer.example.com"},
+					"credentials": map[string]any{"authorizationHeader": map[string]any{"prefix": "Bearer"}},
+				},
+			},
+			"metadata": map[string]any{
+				"lookup": metadataCall("https://maas-api.ns.svc.cluster.local:8443/internal/v1/lookup", `auth.identity`),
+			},
+		}}}
+		before := mustJSON(spec)
+
+		// when
+		gateway := newAuthorinoGateway(t, spec, maasAPIReplies{"/internal/v1/lookup": map[string]any{}})
+		outcome := gateway.evaluate(t, request)
+
+		// then
+		if after := mustJSON(spec); after != before {
+			t.Errorf("spec changed:\n%s\nwant\n%s", after, before)
+		}
+		if !outcome.allowed {
+			t.Errorf("request denied (%v), want the plain identity to authenticate it", outcome.status)
+		}
+	})
+}
+
+// recordingTB records Errorf calls instead of failing the test.
+type recordingTB struct {
+	testing.TB
+	mu     sync.Mutex
+	errors []string
+}
+
+func (r *recordingTB) Errorf(format string, args ...any) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.errors = append(r.errors, fmt.Sprintf(format, args...))
 }
 
 func assertReported(t *testing.T, failures []string, wants ...string) {

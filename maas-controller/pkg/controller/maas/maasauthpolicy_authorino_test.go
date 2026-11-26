@@ -10,15 +10,18 @@ import (
 	"encoding/json"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 
 	envoytype "github.com/envoyproxy/go-control-plane/envoy/type/v3"
+
+	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/platform/tenantreconcile"
 )
 
 // The cases run each request through newAuthorinoGateway and assert what other
 // components get: the calls maas-api receives, the headers sent upstream, the identity
-// TokenRateLimitPolicy reads and the deny response. A failure Authorino logs also fails
-// the case.
+// TokenRateLimitPolicy reads and the deny response. Every failure the harness reports
+// also fails the case.
 
 const (
 	celTestOrganizationID = "42c3e46f-2477-44d7-a85b-d3b43f6b31fa"
@@ -478,11 +481,15 @@ func TestGatewayAuthPolicyOnAuthorino(t *testing.T) {
 				outcome := gateway.evaluate(t, tc.request)
 
 				// then
-				for _, failure := range outcome.failures {
-					t.Errorf("Authorino: %s", failure)
-				}
 				if got := outcome.calledEndpoints(); !slices.Equal(got, tc.wantMaaSAPICalls) {
 					t.Errorf("maas-api calls = %v, want %v", got, tc.wantMaaSAPICalls)
+				}
+				// The gateway calls the maas-api Service the tenant reconcile creates.
+				service := tenantreconcile.MaaSAPIServiceName(variant.tenantID)
+				for _, call := range outcome.maasAPICalls {
+					if !strings.HasPrefix(call.host, service+".") {
+						t.Errorf("maas-api %s called on %s, want Service %s", call.endpoint, call.host, service)
+					}
 				}
 				if got := outcome.callBody(selectEndpoint); tc.wantSelectBody != nil && !reflect.DeepEqual(got, tc.wantSelectBody) {
 					t.Errorf("subscription selection body = %#v, want %#v", got, tc.wantSelectBody)
@@ -550,7 +557,7 @@ func assertDenyResponse(t *testing.T, outcome gatewayOutcome, wantBody, wantReas
 	}
 }
 
-// The policy variants the cases run on also compile on RHCL's Authorino.
+// Every policy variant compiles on RHCL's Authorino, including one no case runs yet.
 func TestGatewayAuthPolicyCELCompilesForRHCL(t *testing.T) {
 	for name, variant := range celPolicyVariants() {
 		t.Run(name, func(t *testing.T) {
