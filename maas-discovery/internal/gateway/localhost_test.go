@@ -109,7 +109,7 @@ func TestExtractMetadata_LocalHostnameDetection(t *testing.T) {
 			// Gateway's 443 listener port.
 			gwServices := make(gateway.GatewayServices, len(test.routes))
 			for svcName := range test.routes {
-				gwServices[svcName] = []gateway.ServicePort{{Port: 443}}
+				gwServices[svcName] = []gateway.ServicePort{{Name: "https", Port: 443, TargetPort: 443}}
 			}
 
 			meta, err := gateway.ExtractMetadata(gw, "gw", "gw-ns", test.routes, gwServices)

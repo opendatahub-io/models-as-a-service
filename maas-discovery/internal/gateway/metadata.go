@@ -70,7 +70,8 @@ type GatewayServices map[string][]ServicePort
 // candidates (see BuildRouteHostMap). gwServices describes the Services that
 // select this Gateway (see SelectGatewayServices); when the Gateway only
 // publishes a cluster-local address, the Route fallback looks up endpoints for
-// any of those Services whose backend port reaches a Gateway listener.
+// any of those Services whose backend port reaches a Gateway listener, using
+// the trusted listener-to-pod-port mapping from listenerPodPorts.
 func ExtractMetadata(gateway map[string]any, name, namespace string, routeHosts map[string][]RouteHostInfo, gwServices GatewayServices) (*types.GatewayMetadata, error) {
 	spec, ok := gateway["spec"].(map[string]any)
 	if !ok {
@@ -123,7 +124,8 @@ func ExtractMetadata(gateway map[string]any, name, namespace string, routeHosts 
 
 	if isLocalHostname(externalHost) {
 		effectiveScheme, effectivePort := listenerSchemeAndPort(protocol, port)
-		if routeInfo, ok := bestRouteEndpoint(routeHosts, gwServices, gatewayListenerPorts(spec)); ok {
+		trustedPodPorts := listenerPodPorts(externalHost, gwServices, gatewayListenerPorts(spec))
+		if routeInfo, ok := bestRouteEndpoint(routeHosts, gwServices, trustedPodPorts); ok {
 			if routeInfo.Scheme != "" {
 				effectiveScheme = routeInfo.Scheme
 			}
@@ -252,19 +254,19 @@ func servicePorts(svc map[string]any) []ServicePort {
 }
 
 // bestRouteEndpoint picks the best Route endpoint among those targeting any
-// Service that selects the Gateway and whose backend port reaches one of the
-// Gateway's listener ports, deterministically: HTTPS preferred, then
-// lexicographically by host. All candidates per Service are considered so a
-// valid Route is not shadowed by an invalid one targeting the same Service.
-// Returns false when no endpoint matches.
-func bestRouteEndpoint(routeHosts map[string][]RouteHostInfo, gwServices GatewayServices, listenerPorts map[int64]struct{}) (RouteHostInfo, bool) {
+// Service that selects the Gateway and whose backend port resolves to a pod
+// port that serves one of the Gateway's listeners, deterministically: HTTPS
+// preferred, then lexicographically by host. All candidates per Service are
+// considered so a valid Route is not shadowed by an invalid one targeting the
+// same Service. Returns false when no endpoint matches.
+func bestRouteEndpoint(routeHosts map[string][]RouteHostInfo, gwServices GatewayServices, trustedPodPorts map[int64]struct{}) (RouteHostInfo, bool) {
 	var endpoints []RouteHostInfo
 	for svcName, candidates := range routeHosts {
 		if _, ok := gwServices[svcName]; !ok {
 			continue
 		}
 		for _, info := range candidates {
-			if routeReachesListener(info, gwServices[svcName], listenerPorts) {
+			if routeReachesListener(info, gwServices[svcName], trustedPodPorts) {
 				endpoints = append(endpoints, info)
 			}
 		}
@@ -275,48 +277,106 @@ func bestRouteEndpoint(routeHosts map[string][]RouteHostInfo, gwServices Gateway
 	return bestEndpoint(endpoints), true
 }
 
+// listenerPodPorts returns the pod ports that serve the Gateway's listeners —
+// the trusted listener-to-pod-port mapping Route backends are validated
+// against. The Gateway spec only publishes listener frontend ports; the pod
+// ports behind them come from Service port translations, and a Service that
+// merely selects the Gateway pods can reuse a listener's frontend port number
+// for an unrelated pod port (e.g. metrics), so not every translation can be
+// trusted:
+//
+//   - When the Gateway's internal hostname identifies one of the
+//     selector-matching Services (its first DNS label is that Service's
+//     name — how Gateway API implementations publish their Service), only
+//     that Service's translations are trusted: it is the implementation's
+//     own Service, so its frontend-to-pod-port mapping is authoritative.
+//   - Otherwise, a frontend-to-pod-port mapping is trusted only when every
+//     matching Service exposing that frontend agrees on the pod port.
+//
+// Either way the result fails closed: an empty set rejects all Route
+// fallbacks.
+func listenerPodPorts(hostname string, gwServices GatewayServices, listenerPorts map[int64]struct{}) map[int64]struct{} {
+	trusted := make(map[int64]struct{})
+	addTrustedEntry := func(entry ServicePort) {
+		if _, isListener := listenerPorts[entry.Port]; isListener && entry.TargetPortName == "" && entry.TargetPort > 0 {
+			trusted[entry.TargetPort] = struct{}{}
+		}
+	}
+
+	if svcName, _, ok := strings.Cut(strings.ToLower(strings.TrimSuffix(hostname, ".")), "."); ok && svcName != "" {
+		if entries, found := gwServices[svcName]; found {
+			for _, entry := range entries {
+				addTrustedEntry(entry)
+			}
+			return trusted
+		}
+	}
+
+	// No trusted Service identified: require unanimity. A listener frontend
+	// maps to a trusted pod port only when every matching Service exposing
+	// that frontend translates it to the same pod port.
+	podPortsByFrontend := make(map[int64]map[int64]struct{})
+	for _, entries := range gwServices {
+		for _, entry := range entries {
+			if _, isListener := listenerPorts[entry.Port]; !isListener || entry.TargetPortName != "" || entry.TargetPort <= 0 {
+				continue
+			}
+			if podPortsByFrontend[entry.Port] == nil {
+				podPortsByFrontend[entry.Port] = make(map[int64]struct{})
+			}
+			podPortsByFrontend[entry.Port][entry.TargetPort] = struct{}{}
+		}
+	}
+	for _, podPorts := range podPortsByFrontend {
+		if len(podPorts) == 1 {
+			for podPort := range podPorts {
+				trusted[podPort] = struct{}{}
+			}
+		}
+	}
+	return trusted
+}
+
 // routeReachesListener reports whether the Route's backend resolves, through
-// the given Service, to a pod port serving one of the Gateway's listeners. A
-// Service selects pods, not a listener, so a Service that selects the Gateway
-// pods can expose non-listener ports such as metrics; Routes whose backend
-// resolves only to such ports must not contribute the Gateway's external URL.
+// the given Service, to a pod port that serves one of the Gateway's listeners
+// (i.e. a port in the trusted set from listenerPodPorts). A Service selects
+// pods, not a listener, so a Service that selects the Gateway pods can expose
+// non-listener ports such as metrics; Routes whose backend resolves only to
+// such ports must not contribute the Gateway's external URL.
 //
 // A Route's spec.port.targetPort is an IntOrString naming the pod port: a
-// number is the pod port directly and must match a Service entry's targetPort
-// (the port-translation target of a frontend port), while a name must be a
-// named Service port. A Route that omits spec.port is only admitted by the
-// router against a single-port Service. In every case the matched Service
-// entry's frontend port must be one of the Gateway's listener ports.
-func routeReachesListener(info RouteHostInfo, svcPorts []ServicePort, listenerPorts map[int64]struct{}) bool {
-	// candidate frontends: Service entries the Route's backend resolves
-	// through, whose pod port serves the matched frontend port.
-	var candidates []int64
+// number is the pod port directly, while a name must be a named Service port.
+// A Route that omits spec.port is only admitted by the router against a
+// single-port Service.
+func routeReachesListener(info RouteHostInfo, svcPorts []ServicePort, trustedPodPorts map[int64]struct{}) bool {
+	// podPorts: the pod ports the Route's backend resolves to.
+	var podPorts []int64
 	switch {
 	case info.TargetPort != 0:
-		// Numeric Route targetPort is the pod port; match it against each
-		// Service entry's targetPort. Entries whose targetPort is a
-		// container-port name cannot be resolved and fail closed.
+		// Numeric Route targetPort is the pod port; it must be exposed by the
+		// target Service. Entries whose targetPort is a container-port name
+		// cannot be resolved and fail closed.
 		for _, p := range svcPorts {
 			if p.TargetPortName == "" && p.TargetPort == info.TargetPort {
-				candidates = append(candidates, p.Port)
+				podPorts = append(podPorts, p.TargetPort)
 			}
 		}
 	case info.TargetPortName != "":
 		// Named Route targetPort names a Service port directly.
 		for _, p := range svcPorts {
-			if p.Name != "" && p.Name == info.TargetPortName {
-				candidates = append(candidates, p.Port)
+			if p.Name != "" && p.Name == info.TargetPortName && p.TargetPortName == "" && p.TargetPort > 0 {
+				podPorts = append(podPorts, p.TargetPort)
 			}
 		}
 	default:
 		// No explicit backend port: the router admits the Route against a
 		// single-port Service only.
-		if len(svcPorts) == 1 {
-			candidates = append(candidates, svcPorts[0].Port)
+		if len(svcPorts) == 1 && svcPorts[0].TargetPortName == "" && svcPorts[0].TargetPort > 0 {
+			podPorts = append(podPorts, svcPorts[0].TargetPort)
 		}
 	}
-	for _, port := range candidates {
-		if _, ok := listenerPorts[port]; ok {
+	for _, port := range podPorts {
+		if _, ok := trustedPodPorts[port]; ok {
 			return true
 		}
 	}
