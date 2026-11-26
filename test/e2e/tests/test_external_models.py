@@ -1287,7 +1287,7 @@ class TestSharedProviderMultiModel:
                         "externalProviderRefs": [
                             {
                                 "ref": {"name": setup["provider_name"]},
-                                "targetModel": TARGET_MODEL,
+                                "targetModel": model_name,
                                 "apiFormat": "openai-chat",
                                 "path": SHARED_PROVIDER_PATH,
                             },
