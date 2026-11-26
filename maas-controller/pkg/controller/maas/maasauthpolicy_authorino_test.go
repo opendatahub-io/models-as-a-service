@@ -565,3 +565,30 @@ func TestGatewayAuthPolicyCELCompilesForRHCL(t *testing.T) {
 		})
 	}
 }
+
+// A request without an Authorization header is unauthenticated, and no authentication
+// `when` fails on the missing header.
+func TestGatewayAuthPolicyWithoutAuthorizationHeader(t *testing.T) {
+	variants := celPolicyVariants()
+	// With x-api-key and OIDC both on, the OIDC `when` reads the header past the
+	// API-key check.
+	variants["oidc-x-api-key"] = celPolicyVariant{
+		oidc:           variants["oidc-audience"].oidc,
+		xAPIKeyEnabled: true,
+		guardrails:     []guardrailHeader{},
+	}
+	for name, variant := range variants {
+		t.Run(name, func(t *testing.T) {
+			// given
+			gateway := newAuthorinoGateway(t, variant.spec(t), nil)
+
+			// when
+			outcome := gateway.evaluate(t, gatewayRequest{path: celTestModelPath, headers: map[string]string{"user-agent": "curl/8.9.1"}})
+
+			// then
+			if outcome.allowed || outcome.status != envoytype.StatusCode_Unauthorized {
+				t.Errorf("allowed = %v, status = %v, want Unauthorized", outcome.allowed, outcome.status)
+			}
+		})
+	}
+}

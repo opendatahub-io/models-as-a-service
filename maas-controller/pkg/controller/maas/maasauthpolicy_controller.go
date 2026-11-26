@@ -952,8 +952,11 @@ func (r *MaaSAuthPolicyReconciler) buildGatewayAuthPolicySpec(oidc *oidcConfig, 
 				"ttl":       int64(oidc.TTL),
 			},
 			"when": []any{
+				// The header check comes first: celIsNotAPIKey reads the header unguarded
+				// when x-api-key is off, and an error skips the method like a false.
 				map[string]any{
-					"predicate": celIsNotAPIKey + ` && request.headers.authorization.matches("^Bearer [^.]+\\.[^.]+\\.[^.]+$")`,
+					"predicate": `"authorization" in request.headers && ` + celIsNotAPIKey +
+						` && request.headers.authorization.matches("^Bearer [^.]+\\.[^.]+\\.[^.]+$")`,
 				},
 			},
 			"metrics":  false,
