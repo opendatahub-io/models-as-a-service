@@ -781,12 +781,35 @@ def _get_cluster_token():
 # API Key Management
 # ---------------------------------------------------------------------------
 
+GATEWAY_GENERIC_DENIAL = {"message": "Access denied", "type": "authorization_error", "code": 403}
+
+
+def _is_generic_gateway_denial(response) -> bool:
+    """True for the gateway AuthPolicy's 403 body when maas-api gave no reason.
+
+    The body is sent for every denial without a subscription selection
+    (rejected API key, maas-api unreachable, any denial off a model route),
+    which used to get an empty body and was retried. It is also sent for
+    model-route denials maas-api gave no reason for, such as
+    ``accessAllowed: false``, which already got it and are now retried too.
+    """
+    if response.status_code != 403:
+        return False
+    try:
+        return response.json() == {"error": GATEWAY_GENERIC_DENIAL}
+    except ValueError:
+        return False
+
+
 def _is_transient_gateway_response(response, *, auth_denial_is_transient=True) -> bool:
     """True when the gateway/Authorino response is a known propagation flake.
 
     Retryable signals:
     - Empty 401/403: Envoy has not loaded the AuthPolicy yet (common after
-      MaaSAuthPolicy churn; some gateways return 401 instead of 403). Pass
+      MaaSAuthPolicy churn; some gateways return 401 instead of 403).
+    - 403 with the generic gateway deny body (``_is_generic_gateway_denial``):
+      the tenant's maas-api is not answering yet, or a denial maas-api gave no
+      reason for has not caught up with a MaaSAuthPolicy change. Pass
       ``auth_denial_is_transient=False`` for negative tests where a denial is
       the expected answer: retrying there only burns the retry budget and
       pollutes the flake report with denials that were never flaky.
@@ -800,7 +823,7 @@ def _is_transient_gateway_response(response, *, auth_denial_is_transient=True) -
       rollout artifact, never a maas-api response.
     """
     body = (response.text or "").strip()
-    if response.status_code in (401, 403) and not body:
+    if response.status_code in (401, 403) and (not body or _is_generic_gateway_denial(response)):
         return auth_denial_is_transient
     if response.status_code not in (500, 502, 503):
         return False
@@ -854,6 +877,8 @@ def _transient_body_kind(response) -> str:
         return "no_healthy_upstream"
     if body.startswith("<"):
         return "html_error_page"
+    if _is_generic_gateway_denial(response):
+        return "generic_denial"
     if "\n" not in body and len(body) <= 64:
         return "plaintext"
     return "other"

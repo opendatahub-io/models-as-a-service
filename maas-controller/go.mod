@@ -7,7 +7,6 @@ require (
 	github.com/go-logr/zapr v1.3.0
 	github.com/google/cel-go v0.29.2
 	github.com/kserve/kserve v0.19.0-rc0.0.20260715171408-85065ab905e4
-	github.com/kuadrant/authorino v0.22.0
 	github.com/llm-d/llm-d-router v0.11.0
 	github.com/onsi/ginkgo/v2 v2.29.0
 	github.com/onsi/gomega v1.41.0
@@ -135,3 +134,57 @@ require (
 // commits cannot be fetched as a module. Use the ODH fork snapshot that drops KServe's
 // controller-runtime v0.22.5 pin (KEDA v2.20). Move back to upstream once it can be fetched.
 replace github.com/kserve/kserve => github.com/opendatahub-io/kserve v0.0.0-20260921025512-7d9d7b038cd4
+
+// Test-only. The gateway AuthPolicy tests use Authorino's CEL package and run its
+// reconciler and auth pipeline in process (pkg/controller/maas/authorino_gateway_test.go).
+// Keep github.com/kuadrant/authorino at the Authorino version RHCL ships. Nothing
+// below is linked into the controller binary.
+require (
+	github.com/envoyproxy/go-control-plane/envoy v1.37.0
+	github.com/gogo/googleapis v1.4.0
+	github.com/kuadrant/authorino v0.24.0
+)
+
+// Test-only, required by Authorino's controllers and pkg/service packages.
+require (
+	github.com/XiaoMi/pegasus-go-client v0.0.0-20210427083443-f3b6b08bc4c2 // indirect
+	github.com/agnivade/levenshtein v1.2.1 // indirect
+	github.com/authzed/authzed-go v0.7.0 // indirect
+	github.com/authzed/grpcutil v0.0.0-20230908193239-4286bb1d6403 // indirect
+	github.com/bradfitz/gomemcache v0.0.0-20190913173617-a41fca850d0b // indirect
+	github.com/cenkalti/backoff/v4 v4.3.0 // indirect
+	github.com/certifi/gocertifi v0.0.0-20210507211836-431795d63e8d // indirect
+	github.com/cespare/xxhash v1.1.0 // indirect
+	github.com/cncf/xds/go v0.0.0-20260202195803-dba9d589def2 // indirect
+	github.com/coocood/freecache v1.1.1 // indirect
+	github.com/coreos/go-oidc/v3 v3.17.0 // indirect
+	github.com/dgryski/go-rendezvous v0.0.0-20200823014737-9f7001d12a5f // indirect
+	github.com/eko/gocache v1.2.0 // indirect
+	github.com/envoyproxy/protoc-gen-validate v1.3.3 // indirect
+	github.com/go-ini/ini v1.67.0 // indirect
+	github.com/go-jose/go-jose/v4 v4.1.4 // indirect
+	github.com/go-redis/redis/v8 v8.11.5 // indirect
+	github.com/gobwas/glob v0.2.3 // indirect
+	github.com/gogo/protobuf v1.3.2 // indirect
+	github.com/golang-jwt/jwt/v5 v5.3.1 // indirect
+	github.com/golang/protobuf v1.5.4 // indirect
+	github.com/gorilla/mux v1.8.1 // indirect
+	github.com/grpc-ecosystem/go-grpc-middleware v1.4.0 // indirect
+	github.com/hashicorp/errwrap v1.1.0 // indirect
+	github.com/hashicorp/go-multierror v1.1.1 // indirect
+	github.com/jzelinskie/stringz v0.0.0-20210414224931-d6a8ce844a70 // indirect
+	github.com/open-policy-agent/opa v1.4.0 // indirect
+	github.com/pegasus-kv/thrift v0.13.0 // indirect
+	github.com/planetscale/vtprotobuf v0.6.1-0.20240319094008-0393e58bdf10 // indirect
+	github.com/rcrowley/go-metrics v0.0.0-20250401214520-65e299d6c5c9 // indirect
+	github.com/sirupsen/logrus v1.9.4 // indirect
+	github.com/spf13/cast v1.10.0 // indirect
+	github.com/tchap/go-patricia/v2 v2.3.2 // indirect
+	github.com/xeipuuv/gojsonpointer v0.0.0-20190905194746-02993c407bfb // indirect
+	github.com/xeipuuv/gojsonreference v0.0.0-20180127040603-bd5ef7bd5415 // indirect
+	github.com/yashtewari/glob-intersection v0.2.0 // indirect
+	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp v1.44.0 // indirect
+	go.uber.org/mock v0.6.0 // indirect
+	gopkg.in/natefinch/lumberjack.v2 v2.2.1 // indirect
+	gopkg.in/tomb.v2 v2.0.0-20161208151619-d5d1b5820637 // indirect
+)

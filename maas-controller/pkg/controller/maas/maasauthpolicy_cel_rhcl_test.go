@@ -113,6 +113,17 @@ func assertAllAuthPolicyCEL_RHCLCompatible(t *testing.T, spec map[string]any) {
 	}
 	for _, occ := range occurrences {
 		assertRHCLCompatibleCEL(t, occ.Path, occ.Expr)
+		// A selector is a JSON path, not CEL.
+		var outputType *cel.Type
+		switch {
+		case strings.HasSuffix(occ.Path, ".predicate"):
+			outputType = cel.BoolType
+		case !strings.HasSuffix(occ.Path, ".expression"):
+			continue
+		}
+		if err := compileForGateway(occ.Expr, outputType); err != nil {
+			t.Errorf("CEL at %s does not compile on RHCL's Authorino: %v", occ.Path, err)
+		}
 	}
 }
 

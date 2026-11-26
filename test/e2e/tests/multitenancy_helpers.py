@@ -198,11 +198,9 @@ def is_gateway_auth_denial(response: requests.Response) -> bool:
     """True when a 401/403 is the gateway AuthPolicy's verdict, not a reload gap.
 
     Authorino's denials carry ``x-ext-auth-reason`` and the wasm-shim forwards it
-    even when the body is empty. Unknown API keys get exactly that: maas-api
-    validation returns no groups, the ``subscription-info`` metadata is never
-    fetched, and the policy's unauthorized body expression renders empty. The
-    header's value varies across Authorino versions, so only its presence counts.
-    Empty 401/403 without it stay transient (``_is_transient_gateway_response``).
+    even when the body is empty. The header's value varies across Authorino
+    versions, so only its presence counts. Without it, empty 401/403 and the
+    generic 403 body stay transient (``_is_transient_gateway_response``).
     """
     if response.status_code not in (401, 403):
         return False
