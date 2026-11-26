@@ -1,4 +1,7 @@
 # CronJob base uses http://maas-api:8080; TLS overlay exposes HTTPS on 8443 only.
+# The serving certificate covers <service>.<namespace>.svc but not the short
+# Service name, so the job calls that name. The namespace comes from the pod;
+# maas-controller sets MAAS_API_SERVICE to the tenant's Service.
 apiVersion: batch/v1
 kind: CronJob
 metadata:
@@ -14,6 +17,13 @@ spec:
               name: openshift-service-ca.crt
           containers:
           - name: cleanup
+            env:
+            - name: MAAS_API_SERVICE
+              value: maas-api
+            - name: NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
             volumeMounts:
             - name: maas-api-service-ca
               mountPath: /etc/pki/maas-api
@@ -23,4 +33,4 @@ spec:
             - -c
             - |
               TOKEN="$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)" && \
-              curl -sf --cacert /etc/pki/maas-api/service-ca.crt -X POST -H "Authorization: Bearer ${TOKEN}" https://maas-api:8443/internal/v1/api-keys/cleanup
+              curl -sf --cacert /etc/pki/maas-api/service-ca.crt -X POST -H "Authorization: Bearer ${TOKEN}" "https://${MAAS_API_SERVICE}.${NAMESPACE}.svc:8443/internal/v1/api-keys/cleanup"

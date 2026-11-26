@@ -89,8 +89,6 @@ def _subscription_ns():
 # tenant (subscription) namespace — the only namespace with a MaasTenantConfig.
 EXTERNAL_NS = _subscription_ns()
 
-TARGET_MODEL = "gpt-3.5-turbo"
-
 EXTERNAL_MODEL_NAME = "e2e-rotation-external-model"
 EXTERNAL_PROVIDER_NAME = "e2e-rotation-external-provider"
 SECRET_NAME = f"{EXTERNAL_MODEL_NAME}-api-key"
@@ -396,7 +394,7 @@ def rotation_setup(gateway_url, headers, api_keys_base_url):
                     "externalProviderRefs": [
                         {
                             "ref": {"name": EXTERNAL_PROVIDER_NAME},
-                            "targetModel": TARGET_MODEL,
+                            "targetModel": EXTERNAL_MODEL_NAME,
                             "apiFormat": "openai-chat",
                             "path": "/v1/chat/completions",
                         },

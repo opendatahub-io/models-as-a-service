@@ -914,8 +914,11 @@ func (r *TenantReconciler) cleanupMaaSAuthPolicies(ctx context.Context, log logr
 	return true, nil
 }
 
-// ensureGatewayManagementAuth bootstraps maas-gateway-auth when missing so /maas-api/*
-// management endpoints receive Authorino identity headers (RHOAIENG-81214).
+// ensureGatewayManagementAuth ensures the gateway-level AuthPolicy (maas-gateway-auth
+// and per-tenant <gateway>-maas-auth) so /maas-api/* management endpoints receive
+// Authorino identity headers (RHOAIENG-81214). The policy is created when missing and
+// diff-and-updated when present so AITenant OIDC changes propagate without requiring
+// a MaaSAuthPolicy CR to exist (RHAI-27142).
 func (r *TenantReconciler) ensureGatewayManagementAuth(ctx context.Context, log logr.Logger, tenant *maasv1alpha1.MaasTenantConfig) error {
 	tenantID, err := tenantreconcile.TenantIdentifierFor(tenant)
 	if err != nil {
@@ -931,7 +934,6 @@ func (r *TenantReconciler) ensureGatewayManagementAuth(ctx context.Context, log 
 		GatewayNamespace:                r.GatewayNamespace,
 		ClusterAudience:                 r.ClusterAudience,
 		MetadataCacheTTL:                r.MetadataCacheTTL,
-		AuthzCacheTTL:                   r.MetadataCacheTTL,
 		TenantNamespaceDiscoveryEnabled: r.TenantNamespaceDiscoveryEnabled,
 	}
 
@@ -943,7 +945,7 @@ func (r *TenantReconciler) ensureGatewayManagementAuth(ctx context.Context, log 
 		return nil
 	}
 
-	return authR.ensureBaseGatewayAuthPolicy(
+	return authR.ensureGatewayAuthPolicy(
 		ctx, log,
 		authR.fetchOIDCConfig(ctx, log, tenant.Namespace),
 		authR.discoverXAPIKeyNeeded(ctx, log),

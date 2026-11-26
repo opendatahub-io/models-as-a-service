@@ -4,6 +4,7 @@ kind: Kustomization
 resources:
   - tenancy-proxy-rbac.yaml
   - tenancy-proxy.yaml
+  - usage-logs-lokistack-allow-maas-api.yaml
   - usage-tenancy-proxy-networkpolicy.yaml
   - usage-logs-admin-dashboard.yaml
   - usage-logs-dashboard.yaml

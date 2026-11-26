@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -615,7 +616,7 @@ func authorizedSelectionSubscription(sub *subscription, authorizedSet map[authpo
 func (s *Selector) selectExplicit(
 	ctx context.Context,
 	subscriptions []subscription,
-	requestedSubscription, requestedModel, username string,
+	requestedSubscription, requestedModel, clientModel, username string,
 	groups []string,
 	authorizedSet map[authpolicy.ModelKey]bool,
 ) (*SelectResponse, error) {
@@ -631,7 +632,7 @@ func (s *Selector) selectExplicit(
 			if requestedModel != "" && authorizedSet == nil && !subscriptionIncludesModel(&sub, requestedModel) {
 				return nil, &ModelNotInSubscriptionError{Subscription: requestedSubscription, Model: requestedModel}
 			}
-			return s.completeSelection(ctx, &sub, requestedModel, authorizedSet)
+			return s.completeSelection(ctx, &sub, requestedSubscription, requestedModel, clientModel, authorizedSet)
 		}
 	}
 
@@ -649,7 +650,7 @@ func (s *Selector) selectExplicit(
 			if requestedModel != "" && authorizedSet == nil && !subscriptionIncludesModel(&sub, requestedModel) {
 				return nil, &ModelNotInSubscriptionError{Subscription: requestedSubscription, Model: requestedModel}
 			}
-			return s.completeSelection(ctx, &sub, requestedModel, authorizedSet)
+			return s.completeSelection(ctx, &sub, requestedSubscription, requestedModel, clientModel, authorizedSet)
 		}
 	}
 
@@ -669,6 +670,9 @@ func (s *Selector) SelectWithContext(ctx context.Context, groups []string, usern
 		return nil, errors.New("either groups or username must be provided")
 	}
 
+	// Denials echo the model as the caller sent it: the alias-resolved
+	// identity names a MaaSModelRef the caller may not be authorized for.
+	clientModel := requestedModel
 	requestedModel = s.resolveModelAlias(requestedModel)
 
 	subscriptions, err := s.loadSubscriptions()
@@ -688,7 +692,7 @@ func (s *Selector) SelectWithContext(ctx context.Context, groups []string, usern
 	}
 
 	if requestedSubscription != "" {
-		return s.selectExplicit(ctx, subscriptions, requestedSubscription, requestedModel, username, groups, authorizedSet)
+		return s.selectExplicit(ctx, subscriptions, requestedSubscription, requestedModel, clientModel, username, groups, authorizedSet)
 	}
 
 	// Auto-selection
@@ -731,7 +735,7 @@ func (s *Selector) SelectWithContext(ctx context.Context, groups []string, usern
 	}
 
 	if len(accessibleSubs) == 1 {
-		return s.completeSelection(ctx, &accessibleSubs[0], requestedModel, authorizedSet)
+		return s.completeSelection(ctx, &accessibleSubs[0], accessibleSubs[0].Name, requestedModel, clientModel, authorizedSet)
 	}
 
 	subNames := make([]string, len(accessibleSubs))
@@ -741,15 +745,33 @@ func (s *Selector) SelectWithContext(ctx context.Context, groups []string, usern
 	return nil, &MultipleSubscriptionsError{Subscriptions: subNames}
 }
 
-func (s *Selector) completeSelection(ctx context.Context, sub *subscription, requestedModel string, authorizedSet map[authpolicy.ModelKey]bool) (*SelectResponse, error) {
+// completeSelection builds the response for the selected subscription. label
+// names the subscription in a denial, which only explicit selection reaches:
+// the caller's own reference.
+func (s *Selector) completeSelection(
+	ctx context.Context,
+	sub *subscription,
+	label, requestedModel, clientModel string,
+	authorizedSet map[authpolicy.ModelKey]bool,
+) (*SelectResponse, error) {
 	response, err := s.buildAuthorizedResponse(sub, requestedModel, authorizedSet)
-	if err != nil || requestedModel == "" || !response.AccessAllowed || s.guardrailResolver == nil {
+	// Without an authorized set (no access checker) a model request keeps the
+	// fail-closed accessAllowed=false response.
+	if err != nil || requestedModel == "" || authorizedSet == nil {
 		return response, err
 	}
-	// Guardrail resolution selects within the authorized subset, matching
-	// the reference the authorization decision approved.
+	if !response.AccessAllowed {
+		return nil, &ModelAccessDeniedError{Subscription: label, Model: clientModel}
+	}
+	// The body-routed model and guardrail resolution select within the
+	// authorized subset, matching the reference the authorization decision
+	// approved.
 	selectionSub := authorizedSelectionSubscription(sub, authorizedSet)
 	modelRef := findModelRef(selectionSub, requestedModel)
+	response.BodyRoutedModel = bodyRoutedModel(modelRef)
+	if s.guardrailResolver == nil {
+		return response, nil
+	}
 	if modelRef == nil {
 		return nil, &GuardrailResolutionError{cause: fmt.Errorf("selected model %q is not in subscription", requestedModel)}
 	}
@@ -763,6 +785,18 @@ func (s *Selector) completeSelection(ctx context.Context, sub *subscription, req
 	}
 	response.SelectedGuardrailChecks = &checks
 	return response, nil
+}
+
+// bodyRoutedModel returns SelectResponse.BodyRoutedModel for ref.
+func bodyRoutedModel(ref *ModelRefInfo) *string {
+	if ref != nil && ref.Source == "internal" {
+		return nil
+	}
+	name := ""
+	if ref != nil && ref.Source == "external" {
+		name = ref.ModelName
+	}
+	return &name
 }
 
 // GuardrailResolutionError indicates that an authorized model's effective
@@ -1566,6 +1600,31 @@ type ModelNotInSubscriptionError struct {
 
 func (e *ModelNotInSubscriptionError) Error() string {
 	return fmt.Sprintf("subscription %s does not include model %s", e.Subscription, e.Model)
+}
+
+// ModelAccessDeniedError indicates the selected subscription lacks the requested
+// model or MaaSAuthPolicy does not authorize the caller for it. Both cases give
+// the same message, naming only the caller's own references.
+type ModelAccessDeniedError struct {
+	Subscription string
+	Model        string
+}
+
+// echoSafeName matches a reference a denial can repeat. The gateway puts the
+// message in a JSON string and its escaping does not double a backslash, so a
+// caller-supplied value (the model may come from the body) with other
+// characters is left out.
+var echoSafeName = regexp.MustCompile(`^[A-Za-z0-9 ._:/@+=,~()-]{1,253}$`)
+
+func (e *ModelAccessDeniedError) Error() string {
+	model, subscription := "the requested model", "the selected subscription"
+	if echoSafeName.MatchString(e.Model) {
+		model = `model "` + e.Model + `"`
+	}
+	if echoSafeName.MatchString(e.Subscription) {
+		subscription = `subscription "` + e.Subscription + `"`
+	}
+	return model + " is not available in " + subscription
 }
 
 // ModelUnhealthyError indicates the requested model is not healthy in a Degraded subscription.

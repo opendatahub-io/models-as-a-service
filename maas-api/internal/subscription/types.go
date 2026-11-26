@@ -66,6 +66,13 @@ type SelectResponse struct {
 	// auth.identity.selected_subscription_id. Pre-upgrade subscriptions omit
 	// this field and keep matching on selected_subscription_key.
 	RateLimitID string `json:"rateLimitId,omitempty"`
+	// BodyRoutedModel is the client-facing name (MaaSModelRef
+	// status.resolvedModelAlias) that an ExternalModel is routed by after auth,
+	// via X-Gateway-Model-Name. The gateway denies a path-routed request whose
+	// header differs. Set on a model-scoped allow; nil for an
+	// LLMInferenceService (routed by path); empty when the kind or alias is
+	// unknown, so no header matches. When absent the gateway check passes.
+	BodyRoutedModel *string `json:"bodyRoutedModel,omitempty"`
 	// Objective is the InferenceObjective name for ResolvedModel from the subscription's
 	// status.flowControlStatuses. AuthPolicy injects it as the llm-d objective header; empty
 	// when the model has none, so the scheduler applies priority 0.
