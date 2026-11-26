@@ -234,7 +234,7 @@ def _multi_provider_model(env: dict, name: str, provider_specs: list[dict]) -> d
         resources.track("secret", secret_name, namespace)
         apply_external_provider(provider_name, namespace, credential_secret=secret_name)
         resources.track(EXTERNAL_PROVIDER_KIND, provider_name, namespace)
-        bindings.append(external_model_binding(provider_name, path_tag=path_tag))
+        bindings.append(external_model_binding(provider_name, target_model=name, path_tag=path_tag))
         providers[spec["key"]] = {
             "name": provider_name,
             "secret_name": secret_name,

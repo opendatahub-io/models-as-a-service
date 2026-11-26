@@ -145,16 +145,23 @@ def apply_external_provider(
 def external_model_binding(
     provider_name: str,
     *,
+    target_model: str,
     provider_namespace: str | None = None,
     path_tag: str | None = None,
     provider_path: str | None = None,
     credential_secret: str | None = None,
-    target_model: str = "gpt-3.5-turbo",
 ) -> dict:
     """One ``spec.externalProviderRefs[]`` entry, in the same shape
     ``apply_external_model`` builds (see that builder for the field
     contracts). Used by tests that later re-patch a model's provider set
-    (provider switching, withdrawal)."""
+    (provider switching, withdrawal).
+
+    ``target_model`` has to be the name clients send for the model
+    (``spec.modelName``, or the ExternalModel name without one). Only API
+    translation rewrites the body model, and these tenants leave it off: the
+    AGC reports a model with any other targetModel ``APITranslationDisabled``
+    and does not serve it.
+    """
     ref: dict[str, str] = {"name": provider_name}
     if provider_namespace:
         ref["namespace"] = provider_namespace
@@ -183,10 +190,12 @@ def apply_external_model(
     path_tag: str | None = None,
     provider_path: str | None = None,
     credential_secret: str | None = None,
-    target_model: str = "gpt-3.5-turbo",
     extra_provider_refs: list[dict] | None = None,
 ) -> dict:
     """Create an ExternalModel, optionally attached to explicit gateways.
+
+    Its binding's targetModel is the client-facing name (see
+    ``external_model_binding``).
 
     Args:
         provider_name/provider_namespace: the ExternalProvider to bind. A
@@ -208,11 +217,11 @@ def apply_external_model(
     path_tag = path_tag or uuid.uuid4().hex[:10]
     binding = external_model_binding(
         provider_name,
+        target_model=model_name or name,
         provider_namespace=provider_namespace,
         path_tag=path_tag,
         provider_path=provider_path,
         credential_secret=credential_secret,
-        target_model=target_model,
     )
     bindings = [binding]
     if extra_provider_refs:
