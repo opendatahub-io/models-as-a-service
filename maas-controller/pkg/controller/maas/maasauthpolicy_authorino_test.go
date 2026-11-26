@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"reflect"
 	"slices"
-	"strings"
 	"testing"
 
 	envoytype "github.com/envoyproxy/go-control-plane/envoy/type/v3"
@@ -27,6 +26,7 @@ const (
 	celTestOrganizationID = "42c3e46f-2477-44d7-a85b-d3b43f6b31fa"
 	celTestKeyID          = "8f0c2f9e-5d1a-4b7e-9c3d-2a6b1e4f7c90"
 	celTestModelPath      = "/llm/model-a/v1/chat/completions"
+	celTestInfraNamespace = "maas-system"
 )
 
 // celTestAPIKeyValidation is maas-api's validate response for a valid key. groups is
@@ -122,7 +122,7 @@ func celPolicyVariants() map[string]celPolicyVariant {
 func (v celPolicyVariant) spec(t *testing.T) map[string]any {
 	t.Helper()
 	r := &MaaSAuthPolicyReconciler{
-		InfraNamespace:   "maas-system",
+		InfraNamespace:   celTestInfraNamespace,
 		GatewayName:      "maas-default-gateway",
 		GatewayNamespace: "gateway-ns",
 		ClusterAudience:  "https://kubernetes.default.svc",
@@ -175,6 +175,10 @@ func gatewayPolicyCases() []gatewayPolicyCase {
 		request.headers["x-gateway-model-name"] = model
 		return request
 	}
+	// A Kubernetes service account token is a JWT. The OIDC method rejects it, and
+	// TokenReview authenticates it at the next priority.
+	serviceAccountJWTRequest := tokenReviewRequest(celTestModelPath, []string{"system:authenticated", "dev"})
+	serviceAccountJWTRequest.headers["authorization"] = "Bearer aaa.bbb.ccc"
 
 	return []gatewayPolicyCase{
 		{
@@ -380,6 +384,16 @@ func gatewayPolicyCases() []gatewayPolicyCase {
 			wantRateLimitIdentity: true,
 		},
 		{
+			name:                  "service account JWT on an OIDC gateway is a TokenReview identity",
+			variants:              oidcVariants,
+			request:               serviceAccountJWTRequest,
+			maasAPI:               maasAPIReplies{selectEndpoint: celTestSubscriptionInfo()},
+			wantAllowed:           true,
+			wantMaaSAPICalls:      []string{selectEndpoint},
+			wantHeaders:           map[string]string{"x-maas-username": "system:serviceaccount:ns:sa"},
+			wantRateLimitIdentity: true,
+		},
+		{
 			name:        "TokenReview identity without groups on a maas-api route",
 			variants:    everyVariant,
 			request:     tokenReviewRequest("/maas-api/v1/subscriptions", nil),
@@ -484,12 +498,16 @@ func TestGatewayAuthPolicyOnAuthorino(t *testing.T) {
 				if got := outcome.calledEndpoints(); !slices.Equal(got, tc.wantMaaSAPICalls) {
 					t.Errorf("maas-api calls = %v, want %v", got, tc.wantMaaSAPICalls)
 				}
-				// The gateway calls the maas-api Service the tenant reconcile creates.
-				service := tenantreconcile.MaaSAPIServiceName(variant.tenantID)
+				// The gateway calls the TLS port of the maas-api Service the tenant reconcile
+				// creates in the infrastructure namespace.
+				wantOrigin := "https://" + tenantreconcile.MaaSAPIServiceName(variant.tenantID) + "." + celTestInfraNamespace + ".svc.cluster.local:8443"
 				for _, call := range outcome.maasAPICalls {
-					if !strings.HasPrefix(call.host, service+".") {
-						t.Errorf("maas-api %s called on %s, want Service %s", call.endpoint, call.host, service)
+					if origin := call.scheme + "://" + call.host; origin != wantOrigin {
+						t.Errorf("maas-api %s called on %s, want %s", call.endpoint, origin, wantOrigin)
 					}
+				}
+				if outcome.authenticatedBy != tc.request.method {
+					t.Errorf("authenticated by %q, want %q", outcome.authenticatedBy, tc.request.method)
 				}
 				if got := outcome.callBody(selectEndpoint); tc.wantSelectBody != nil && !reflect.DeepEqual(got, tc.wantSelectBody) {
 					t.Errorf("subscription selection body = %#v, want %#v", got, tc.wantSelectBody)
@@ -583,11 +601,11 @@ func TestGatewayAuthPolicyWithoutAuthorizationHeader(t *testing.T) {
 			gateway := newAuthorinoGateway(t, variant.spec(t), nil)
 
 			// when
-			outcome := gateway.evaluate(t, gatewayRequest{path: celTestModelPath, headers: map[string]string{"user-agent": "curl/8.9.1"}})
+			outcome := gateway.evaluate(t, gatewayRequest{path: celTestModelPath})
 
 			// then
-			if outcome.allowed || outcome.status != envoytype.StatusCode_Unauthorized {
-				t.Errorf("allowed = %v, status = %v, want Unauthorized", outcome.allowed, outcome.status)
+			if outcome.allowed || outcome.status != envoytype.StatusCode_Unauthorized || outcome.authenticatedBy != "" {
+				t.Errorf("allowed = %v, status = %v, authenticated by %q, want Unauthorized", outcome.allowed, outcome.status, outcome.authenticatedBy)
 			}
 		})
 	}

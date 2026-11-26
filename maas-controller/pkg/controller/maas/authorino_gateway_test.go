@@ -57,8 +57,10 @@ import (
 // test on any of them.
 //
 // Not covered, so these need a test of their own:
-//   - Authentication other than API keys. It is replaced by a plain identity read from
-//     testIdentityHeader; its `when`, priority, overrides and defaults stay.
+//   - Authentication other than API keys. Each such method is replaced by a plain
+//     identity read from its own header, testIdentityHeader + "-" + the method name, so
+//     a request authenticates only through the method it names. The method's `when`,
+//     priority, overrides and defaults stay.
 //   - Kuadrant's translation of the AuthPolicy into an AuthConfig, apart from the
 //     rename of the success filters to dynamicMetadata.
 //   - The wasm-shim, including spec.defaults.when.
@@ -99,8 +101,8 @@ func compileForGateway(expression string, outputType *cel.Type) error {
 
 const (
 	gatewayTestHost = "gateway.test"
-	// testIdentityHeader carries the identity for authentication methods the tests
-	// replace with a plain identity.
+	// testIdentityHeader, suffixed with "-" and a method name, carries the identity for an
+	// authentication method the tests replace with a plain identity.
 	testIdentityHeader = "x-test-identity"
 
 	validateEndpoint = "/internal/v1/api-keys/validate"
@@ -118,15 +120,17 @@ type unreachableReply struct{}
 var maasAPIUnreachable = unreachableReply{}
 
 type maasAPICall struct {
-	// host is the host of the URL in the policy, before the harness points it at the fake.
+	// scheme and host are those of the URL in the policy, before the harness points it
+	// at the fake.
+	scheme   string
 	host     string
 	endpoint string
 	body     any
 }
 
 // fakeMaaSAPI answers the gateway's maas-api calls with a case's replies and records
-// them. newAuthorinoGateway prefixes each metadata path with the URL's host, so the
-// first path segment is the host the policy called.
+// them. newAuthorinoGateway prefixes each metadata path with the URL's scheme and host,
+// so the first two path segments are what the policy called.
 type fakeMaaSAPI struct {
 	t       *testing.T
 	mu      sync.Mutex
@@ -135,7 +139,8 @@ type fakeMaaSAPI struct {
 }
 
 func (f *fakeMaaSAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	host, endpoint, _ := strings.Cut(strings.TrimPrefix(r.URL.Path, "/"), "/")
+	scheme, rest, _ := strings.Cut(strings.TrimPrefix(r.URL.Path, "/"), "/")
+	host, endpoint, _ := strings.Cut(rest, "/")
 	endpoint = "/" + endpoint
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
@@ -146,7 +151,7 @@ func (f *fakeMaaSAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.t.Errorf("maas-api %s got a body that is not JSON: %q", endpoint, body)
 	}
 	f.mu.Lock()
-	f.calls = append(f.calls, maasAPICall{host: host, endpoint: endpoint, body: decoded})
+	f.calls = append(f.calls, maasAPICall{scheme: scheme, host: host, endpoint: endpoint, body: decoded})
 	reply, ok := f.replies[endpoint]
 	f.mu.Unlock()
 	if !ok {
@@ -178,9 +183,24 @@ type pipelineLog struct {
 	// failingMetadata names the metadata evaluators whose maas-api is unreachable on purpose.
 	failingMetadata map[string]bool
 	failures        []string
-	// decided holds the evaluators whose `when` ran, or that Authorino skipped because
-	// their priority group was already decided.
+	// decided holds the evaluators Authorino is done with: their `when` didn't match,
+	// their cache key resolved, or Authorino skipped them because their priority group
+	// was already decided.
 	decided map[auth.AuthConfigEvaluator]bool
+	// authenticatedBy names the authentication methods Authorino validated an identity with.
+	authenticatedBy []string
+}
+
+func (l *pipelineLog) authenticated(name string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.authenticatedBy = append(l.authenticatedBy, name)
+}
+
+func (l *pipelineLog) recordedAuthentications() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return slices.Clone(l.authenticatedBy)
 }
 
 func (l *pipelineLog) failf(format string, args ...any) {
@@ -230,18 +250,21 @@ type recordingConditions struct {
 	evaluator  auth.AuthConfigEvaluator
 	name       string
 	log        *pipelineLog
+	// cached evaluators are decided when Authorino resolves their cache key, which it
+	// does right after a matching `when`, on the evaluator's own goroutine.
+	// https://github.com/Kuadrant/authorino/blob/v0.26.1/pkg/service/auth_pipeline.go#L123-L136
+	cached bool
 }
 
 func (c recordingConditions) Matches(authJSON string) (bool, error) {
-	if c.evaluator != nil {
-		defer c.log.decide(c.evaluator)
+	matched, err := true, error(nil)
+	if c.conditions != nil {
+		if matched, err = c.conditions.Matches(authJSON); err != nil {
+			c.log.failf("when %s: %v", c.name, err)
+		}
 	}
-	if c.conditions == nil {
-		return true, nil
-	}
-	matched, err := c.conditions.Matches(authJSON)
-	if err != nil {
-		c.log.failf("when %s: %v", c.name, err)
+	if c.evaluator != nil && (!matched || err != nil || !c.cached) {
+		c.log.decide(c.evaluator)
 	}
 	return matched, err
 }
@@ -251,11 +274,13 @@ func (c recordingConditions) Matches(authJSON string) (bool, error) {
 // https://github.com/Kuadrant/authorino/blob/v0.26.1/pkg/evaluators/metadata.go#L54-L58
 type recordingCache struct {
 	evaluators.EvaluatorCache
-	name string
-	log  *pipelineLog
+	evaluator auth.AuthConfigEvaluator
+	name      string
+	log       *pipelineLog
 }
 
 func (c recordingCache) ResolveKeyFor(authJSON string) (any, error) {
+	defer c.log.decide(c.evaluator)
 	key, err := c.EvaluatorCache.ResolveKeyFor(authJSON)
 	if err != nil {
 		c.log.failf("cache key %s: %v", c.name, err)
@@ -298,9 +323,9 @@ func (l *pipelineLog) instrument(t *testing.T, config *evaluators.AuthConfig) []
 				t.Fatalf("%s evaluator %T is unknown, so its `when` can't be checked", phase.name, evaluator)
 			}
 			name = phase.name + "/" + name
-			*conditions = recordingConditions{conditions: *conditions, evaluator: evaluator, name: name, log: l}
+			*conditions = recordingConditions{conditions: *conditions, evaluator: evaluator, name: name, log: l, cached: *cache != nil}
 			if *cache != nil {
-				*cache = recordingCache{EvaluatorCache: *cache, name: name, log: l}
+				*cache = recordingCache{EvaluatorCache: *cache, evaluator: evaluator, name: name, log: l}
 			}
 			byPriority[priority] = append(byPriority[priority], evaluator)
 		}
@@ -324,6 +349,8 @@ func (s pipelineLogSink) Error(err error, msg string, _ ...any) { s.log.failf("%
 func (s pipelineLogSink) Info(_ int, msg string, keysAndValues ...any) {
 	name, reason := logConfigName(keysAndValues), logValue(keysAndValues, "reason")
 	switch msg {
+	case "identity validated":
+		s.log.authenticated(name)
 	case "skipping config":
 		if evaluator, ok := logValue(keysAndValues, "config").(auth.AuthConfigEvaluator); ok {
 			s.log.decide(evaluator)
@@ -366,6 +393,9 @@ type gatewayRequest struct {
 	path     string
 	headers  map[string]string
 	identity map[string]any
+	// method is the authentication method that should authenticate the request. A
+	// replaced method reads identity from its own header.
+	method string
 }
 
 // gatewayOutcome is what the gateway produces for one request.
@@ -381,6 +411,9 @@ type gatewayOutcome struct {
 	metadata     map[string]any
 	maasAPICalls []maasAPICall
 	failures     []string
+	// authenticatedBy is the authentication method Authorino kept, empty when none
+	// validated the request.
+	authenticatedBy string
 }
 
 func (o gatewayOutcome) calledEndpoints() []string {
@@ -425,14 +458,15 @@ func newAuthorinoGateway(t *testing.T, spec map[string]any, replies maasAPIRepli
 	}
 	log := &pipelineLog{failingMetadata: map[string]bool{}, decided: map[auth.AuthConfigEvaluator]bool{}}
 	for name, metadata := range authConfigSpec.Metadata {
-		if metadata.Http == nil || metadata.Http.Url == "" {
+		// Authorino prefers urlExpression over url, which would bypass the fake.
+		if metadata.Http == nil || metadata.Http.Url == "" || metadata.Http.UrlExpression != "" {
 			t.Fatalf("metadata %s: the harness supports http metadata with a static url only", name)
 		}
 		target, err := url.Parse(metadata.Http.Url)
 		if err != nil {
 			t.Fatalf("metadata %s URL: %v", name, err)
 		}
-		metadata.Http.Url = server.URL + "/" + target.Host + target.EscapedPath()
+		metadata.Http.Url = server.URL + "/" + target.Scheme + "/" + target.Host + target.EscapedPath()
 		if target.RawQuery != "" {
 			metadata.Http.Url += "?" + target.RawQuery
 		}
@@ -445,7 +479,7 @@ func newAuthorinoGateway(t *testing.T, spec map[string]any, replies maasAPIRepli
 			continue
 		}
 		method.AuthenticationMethodSpec = authorinoapi.AuthenticationMethodSpec{
-			Plain: &authorinoapi.PlainIdentitySpec{Selector: "request.headers." + testIdentityHeader + "|@fromstr"},
+			Plain: &authorinoapi.PlainIdentitySpec{Selector: "request.headers." + testIdentityHeader + "-" + name + "|@fromstr"},
 		}
 		method.Credentials = authorinoapi.Credentials{}
 		authConfigSpec.Authentication[name] = method
@@ -527,12 +561,16 @@ func (g *authorinoGateway) evaluateUnchecked(tb testing.TB, request gatewayReque
 		tb.Fatalf("a gateway serves one request; create another for %s", request.path)
 	}
 	g.used = true
-	headers := maps.Clone(request.headers)
-	if headers == nil {
-		headers = map[string]string{}
-	}
+	// Envoy's header map always carries the pseudo-headers, and the wasm-shim forwards the
+	// whole map; it refuses to build a CheckRequest from an empty one.
+	// https://github.com/Kuadrant/wasm-shim/blob/v0.12.1/src/kuadrant/resolver/wasm_host.rs#L32-L36
+	headers := map[string]string{":authority": gatewayTestHost, ":method": http.MethodPost, ":path": request.path, ":scheme": "https"}
+	maps.Copy(headers, request.headers)
 	if request.identity != nil {
-		headers[testIdentityHeader] = mustJSON(request.identity)
+		if request.method == "" {
+			tb.Fatalf("request for %s has an identity but no method to read it", request.path)
+		}
+		headers[testIdentityHeader+"-"+request.method] = mustJSON(request.identity)
 	}
 	check := &envoyauth.CheckRequest{Attributes: &envoyauth.AttributeContext{
 		Request: &envoyauth.AttributeContext_Request{Http: &envoyauth.AttributeContext_HttpRequest{
@@ -559,6 +597,14 @@ func (g *authorinoGateway) evaluateUnchecked(tb testing.TB, request gatewayReque
 		maasAPICalls: g.maasAPI.recordedCalls(),
 		failures:     g.log.recordedFailures(),
 	}
+	// Authorino keeps the first identity that validates and stops the phase.
+	switch authenticated := g.log.recordedAuthentications(); len(authenticated) {
+	case 0:
+	case 1:
+		outcome.authenticatedBy = authenticated[0]
+	default:
+		outcome.failures = append(outcome.failures, fmt.Sprintf("identity validated by %v, want one", authenticated))
+	}
 	for _, group := range result.Headers {
 		for name, value := range group {
 			outcome.headers[strings.ToLower(name)] = value
@@ -582,12 +628,12 @@ func mustJSON(value any) string {
 
 // apiKeyRequest is a request authenticated with a Bearer API key.
 func apiKeyRequest(path string) gatewayRequest {
-	return gatewayRequest{path: path, headers: map[string]string{"authorization": "Bearer sk-oai-key"}}
+	return gatewayRequest{path: path, headers: map[string]string{"authorization": "Bearer sk-oai-key"}, method: "api-keys"}
 }
 
 // xAPIKeyRequest is a request authenticated with the x-api-key header.
 func xAPIKeyRequest(path string) gatewayRequest {
-	return gatewayRequest{path: path, headers: map[string]string{"x-api-key": "sk-oai-key"}}
+	return gatewayRequest{path: path, headers: map[string]string{"x-api-key": "sk-oai-key"}, method: "api-keys-x-api-key"}
 }
 
 func tokenReviewRequest(path string, groups []string) gatewayRequest {
@@ -599,6 +645,7 @@ func tokenReviewRequest(path string, groups []string) gatewayRequest {
 		path:     path,
 		headers:  map[string]string{"authorization": "Bearer sha256~token", "x-maas-subscription": "gold"},
 		identity: map[string]any{"authenticated": true, "user": user, "audiences": []any{"https://kubernetes.default.svc"}},
+		method:   "openshift-identities",
 	}
 }
 
@@ -607,6 +654,7 @@ func oidcRequest(path string, claims map[string]any) gatewayRequest {
 		path:     path,
 		headers:  map[string]string{"authorization": "Bearer aaa.bbb.ccc"},
 		identity: claims,
+		method:   "oidc-identities",
 	}
 }
 
@@ -621,11 +669,10 @@ func TestCompileForGatewayRejectsNewerCELFunctions(t *testing.T) {
 }
 
 func TestAuthorinoGatewayReportsFailures(t *testing.T) {
-	identityAuthentication := map[string]any{
-		"test-identity": map[string]any{"plain": map[string]any{"selector": "request.headers." + testIdentityHeader + "|@fromstr"}},
-	}
+	// The harness replaces the method with a plain identity, as it does OIDC and TokenReview.
+	identityAuthentication := map[string]any{"test-identity": map[string]any{"anonymous": map[string]any{}}}
 	unauthorized := map[string]any{"body": map[string]any{"value": "denied"}}
-	request := gatewayRequest{path: "/v1/me", identity: map[string]any{"sub": "alice"}}
+	request := gatewayRequest{path: "/v1/me", identity: map[string]any{"sub": "alice"}, method: "test-identity"}
 	metadataCall := func(rawURL, bodyExpression string) map[string]any {
 		return map[string]any{"http": map[string]any{
 			"url":         rawURL,
@@ -735,7 +782,7 @@ func TestAuthorinoGatewayReportsFailures(t *testing.T) {
 		outcome := gateway.evaluate(t, request)
 
 		// then
-		want := []maasAPICall{{host: "maas-api-x.ns.svc.cluster.local:8443", endpoint: "/internal/v1/lookup", body: map[string]any{"sub": "alice"}}}
+		want := []maasAPICall{{scheme: "https", host: "maas-api-x.ns.svc.cluster.local:8443", endpoint: "/internal/v1/lookup", body: map[string]any{"sub": "alice"}}}
 		if !reflect.DeepEqual(outcome.maasAPICalls, want) {
 			t.Errorf("maas-api calls = %#v, want %#v", outcome.maasAPICalls, want)
 		}
@@ -757,6 +804,53 @@ func TestAuthorinoGatewayReportsFailures(t *testing.T) {
 
 		// then
 		assertReported(t, outcome.failures, "cache key metadata/lookup")
+	})
+
+	t.Run("cache key resolved after the phase is decided", func(t *testing.T) {
+		// given
+		spec := map[string]any{"defaults": map[string]any{"rules": map[string]any{
+			"authentication": identityAuthentication,
+			"authorization": map[string]any{
+				"deny": map[string]any{"patternMatching": map[string]any{
+					"patterns": []any{map[string]any{"predicate": `false`}},
+				}},
+				"cached": map[string]any{
+					"patternMatching": map[string]any{"patterns": []any{map[string]any{"predicate": `true`}}},
+					"cache":           map[string]any{"key": map[string]any{"expression": `auth.identity.missing`}, "ttl": 60},
+				},
+			},
+			"response": map[string]any{"unauthorized": unauthorized},
+		}}}
+		gateway := newAuthorinoGateway(t, spec, nil)
+		// deny can't decide the phase before cached's `when` has run, so Authorino can't
+		// cancel cached, and cached resolves its key well after deny decided.
+		cachedWhenRan := make(chan struct{})
+		for _, evaluator := range gateway.config.AuthorizationConfigs {
+			config, ok := evaluator.(*evaluators.AuthorizationConfig)
+			if !ok {
+				t.Fatalf("authorization evaluator %T", evaluator)
+			}
+			if config.Name == "deny" {
+				config.Conditions = gatedConditions{Expression: config.Conditions, wait: cachedWhenRan}
+				continue
+			}
+			config.Conditions = signallingConditions{Expression: config.Conditions, ran: cachedWhenRan}
+			recording, ok := config.Cache.(recordingCache)
+			if !ok {
+				t.Fatalf("cache of %s is %T, want the harness's recordingCache", config.Name, config.Cache)
+			}
+			recording.EvaluatorCache = slowCache{EvaluatorCache: recording.EvaluatorCache, delay: 100 * time.Millisecond}
+			config.Cache = recording
+		}
+
+		// when
+		outcome := gateway.evaluateUnchecked(t, request)
+
+		// then
+		if outcome.allowed {
+			t.Errorf("request allowed, want deny to decide")
+		}
+		assertReported(t, outcome.failures, "cache key authorization/cached")
 	})
 
 	t.Run("evaluate fails the test on a reported failure", func(t *testing.T) {
@@ -794,16 +888,51 @@ func TestAuthorinoGatewayReportsFailures(t *testing.T) {
 
 		// when
 		gateway := newAuthorinoGateway(t, spec, maasAPIReplies{"/internal/v1/lookup": map[string]any{}})
-		outcome := gateway.evaluate(t, request)
+		oidcRequest := request
+		oidcRequest.method = "oidc"
+		outcome := gateway.evaluate(t, oidcRequest)
 
 		// then
 		if after := mustJSON(spec); after != before {
 			t.Errorf("spec changed:\n%s\nwant\n%s", after, before)
 		}
-		if !outcome.allowed {
-			t.Errorf("request denied (%v), want the plain identity to authenticate it", outcome.status)
+		if !outcome.allowed || outcome.authenticatedBy != "oidc" {
+			t.Errorf("allowed = %v (%v) by %q, want the replaced oidc method to authenticate it", outcome.allowed, outcome.status, outcome.authenticatedBy)
 		}
 	})
+}
+
+// gatedConditions holds a `when` until another evaluator's `when` has run.
+type gatedConditions struct {
+	jsonexp.Expression
+	wait <-chan struct{}
+}
+
+func (c gatedConditions) Matches(authJSON string) (bool, error) {
+	<-c.wait
+	return c.Expression.Matches(authJSON)
+}
+
+// signallingConditions closes ran once its `when` has run.
+type signallingConditions struct {
+	jsonexp.Expression
+	ran chan struct{}
+}
+
+func (c signallingConditions) Matches(authJSON string) (bool, error) {
+	defer close(c.ran)
+	return c.Expression.Matches(authJSON)
+}
+
+// slowCache resolves its key after a delay.
+type slowCache struct {
+	evaluators.EvaluatorCache
+	delay time.Duration
+}
+
+func (c slowCache) ResolveKeyFor(authJSON string) (any, error) {
+	time.Sleep(c.delay)
+	return c.EvaluatorCache.ResolveKeyFor(authJSON)
 }
 
 // recordingTB records Errorf calls instead of failing the test.
