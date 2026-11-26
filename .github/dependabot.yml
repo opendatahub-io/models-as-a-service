@@ -10,9 +10,14 @@ updates:
       - "/maas-*"
     # Test-only: maas-controller/go.mod must keep github.com/kuadrant/authorino
     # at the version RHCL ships (see the comment there). Bump it manually when
-    # the supported RHCL line's Authorino operand changes.
+    # the supported RHCL line's Authorino operand changes. Scoped to version
+    # updates so security updates still raise PRs.
     ignore:
       - dependency-name: "github.com/kuadrant/authorino"
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"
+          - "version-update:semver-patch"
     schedule:
       interval: "weekly"
       day: "monday"
