@@ -318,6 +318,118 @@ func TestReviewCache_Disabled(t *testing.T) {
 	assert.Equal(t, 3, tokenReviews)
 }
 
+// TestReviewCache_UnparseableExpNotCached: a JWT whose exp claim is present
+// but unparseable cannot have its validity bounded, so its decision must not
+// be cached — each request re-reviews.
+func TestReviewCache_UnparseableExpNotCached(t *testing.T) {
+	client := newCountingClient([]string{"system:authenticated"}, true, true, true)
+	reviewer := auth.NewTokenReviewer(slog.Default(), client, "ai-tenants")
+	cache := auth.NewReviewCache(reviewer, auth.ReviewCacheOptions{
+		TTL: time.Hour, NegativeTTL: 2 * time.Second, MaxEntries: 100,
+	})
+
+	// {"exp": "not-a-number"}
+	payload := base64.RawURLEncoding.EncodeToString([]byte(`{"exp":"not-a-number"}`))
+	token := "e30." + payload + ".c2ln"
+
+	for range 2 {
+		result, err := cache.Review(context.Background(), token)
+		require.NoError(t, err)
+		assert.True(t, result.Authenticated)
+	}
+
+	tokenReviews, _ := client.counts()
+	assert.Equal(t, 2, tokenReviews, "unparseable exp must not be cached")
+}
+
+// TestReviewCache_DegradedAdminCheckNotCached: when the admin-visibility SAR
+// errors, the request is served with non-admin visibility but the degraded
+// decision must not be cached — the next request re-reviews and restores
+// admin visibility once the API server recovers.
+func TestReviewCache_DegradedAdminCheckNotCached(t *testing.T) {
+	client := kubefake.NewSimpleClientset()
+	var tokenReviews, adminSARs, adminFailures int
+	client.PrependReactor("create", "tokenreviews", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		tokenReviews++
+		return true, &authv1.TokenReview{
+			Status: authv1.TokenReviewStatus{
+				Authenticated: true,
+				User:          authv1.UserInfo{Username: "alice"},
+			},
+		}, nil
+	})
+	client.PrependReactor("create", "subjectaccessreviews", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		sar, ok := action.(k8stesting.CreateAction).GetObject().(*authzv1.SubjectAccessReview)
+		if !ok || sar.Spec.ResourceAttributes == nil || sar.Spec.ResourceAttributes.Resource != "aitenants" {
+			return true, &authzv1.SubjectAccessReview{Status: authzv1.SubjectAccessReviewStatus{Allowed: true}}, nil
+		}
+		adminSARs++
+		if adminSARs == 1 {
+			adminFailures++
+			return true, nil, assert.AnError // first admin check fails
+		}
+		return true, &authzv1.SubjectAccessReview{Status: authzv1.SubjectAccessReviewStatus{Allowed: true}}, nil
+	})
+
+	reviewer := auth.NewTokenReviewer(slog.Default(), client, "ai-tenants")
+	cache := auth.NewReviewCache(reviewer, auth.ReviewCacheOptions{
+		TTL: time.Hour, NegativeTTL: 2 * time.Second, MaxEntries: 100,
+	})
+
+	// First request: admin SAR fails, visibility degrades to non-admin.
+	degraded, err := cache.Review(context.Background(), "token-a")
+	require.NoError(t, err)
+	assert.True(t, degraded.Authenticated)
+	assert.False(t, degraded.IsAdmin, "failed admin check must degrade to non-admin")
+	require.Equal(t, 1, adminFailures)
+
+	// Second request within the TTL: the degraded decision must not have
+	// been cached, so the admin SAR runs again and succeeds.
+	recovered, err := cache.Review(context.Background(), "token-a")
+	require.NoError(t, err)
+	assert.True(t, recovered.IsAdmin, "admin visibility must recover once the API server does")
+
+	assert.Equal(t, 2, tokenReviews, "degraded result must not be cached")
+	assert.Equal(t, 2, adminSARs)
+	assert.Equal(t, uint64(2), cache.Stats().Misses)
+	assert.Equal(t, uint64(0), cache.Stats().Hits)
+}
+
+// TestReviewCache_ConcurrentColdMisses: concurrent requests mixing hits,
+// expirations, and re-inserts must be race-free. A short real-time TTL makes
+// entries expire mid-test so goroutines continuously interleave unlocked
+// reads of live entries with locked writes replacing them — the pattern in
+// the review finding. Run under -race (make test does).
+func TestReviewCache_ConcurrentColdMisses(t *testing.T) {
+	client := newCountingClient([]string{"system:authenticated"}, true, true, true)
+	reviewer := auth.NewTokenReviewer(slog.Default(), client, "ai-tenants")
+	cache := auth.NewReviewCache(reviewer, auth.ReviewCacheOptions{
+		TTL: 5 * time.Millisecond, NegativeTTL: 2 * time.Second, MaxEntries: 8192,
+	})
+
+	var wg sync.WaitGroup
+	for range 30 {
+		wg.Go(func() {
+			for range 50 {
+				result, err := cache.Review(context.Background(), "token-a")
+				if err != nil {
+					t.Error("review failed", "error", err)
+					return
+				}
+				if !result.Authenticated || result.Username != "alice" {
+					t.Error("inconsistent cached decision", "result", result)
+					return
+				}
+			}
+		})
+	}
+	wg.Wait()
+
+	tokenReviews, _ := client.counts()
+	assert.Positive(t, tokenReviews, "expiring TTL must force re-reviews")
+	assert.Less(t, tokenReviews, 30*50, "cache must absorb most requests")
+}
+
 // TestReviewCache_InvalidOptions: misconfiguration fails fast at startup.
 func TestReviewCache_InvalidOptions(t *testing.T) {
 	reviewer := auth.NewTokenReviewer(slog.Default(), kubefake.NewSimpleClientset(), "ai-tenants")

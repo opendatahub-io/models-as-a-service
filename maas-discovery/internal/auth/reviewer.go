@@ -37,6 +37,11 @@ type AuthResult struct {
 	// IsAdmin reports whether the caller may list AITenants in the AITenant
 	// namespace (admin visibility for tenant discovery).
 	IsAdmin bool
+	// adminCheckFailed is set when the admin-visibility SubjectAccessReview
+	// errored: IsAdmin is a degraded fallback (false), not a confirmed
+	// decision. Caches must not store degraded results, so an administrator
+	// regains visibility on the next request once the API server recovers.
+	adminCheckFailed bool
 }
 
 // Reviewer authenticates and authorizes a bearer token. Implementations must
@@ -133,8 +138,10 @@ func (r *TokenReviewer) Review(ctx context.Context, token string) (AuthResult, e
 		adminResult, adminErr := r.kubeClient.AuthorizationV1().SubjectAccessReviews().Create(ctx, adminSAR, metav1.CreateOptions{})
 		if adminErr != nil {
 			// A failed admin check degrades to non-admin visibility; the
-			// caller is still authenticated and authorized.
+			// caller is still authenticated and authorized. The result is
+			// marked degraded so it is not cached.
 			r.log.Error("admin SubjectAccessReview failed", "error", adminErr)
+			review.adminCheckFailed = true
 		} else {
 			review.IsAdmin = adminResult.Status.Allowed
 		}

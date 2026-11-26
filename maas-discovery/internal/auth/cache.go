@@ -7,6 +7,8 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
+	"math"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -136,10 +138,14 @@ func (c *ReviewCache) Review(ctx context.Context, token string) (AuthResult, err
 	c.mu.Lock()
 	if node, ok := c.entries[key]; ok {
 		if now.Before(node.entry.expiresAt) {
+			// Copy the result while holding the mutex: a concurrent
+			// review of the same token may replace node.entry (under the
+			// mutex) while this read is in flight.
+			result := node.entry.result
 			c.lru.MoveToFront(node.elem)
 			c.mu.Unlock()
 			c.hits.Add(1)
-			return node.entry.result, nil
+			return result, nil
 		}
 		// Expired: drop the stale entry before re-reviewing.
 		c.removeLocked(node)
@@ -152,6 +158,14 @@ func (c *ReviewCache) Review(ctx context.Context, token string) (AuthResult, err
 		return AuthResult{}, err
 	}
 
+	if result.adminCheckFailed {
+		// Degraded decision (admin check errored): serving it once is the
+		// accepted fallback, but caching it would pin non-admin visibility
+		// on an administrator until the TTL expired after the API server
+		// recovered.
+		return result, nil
+	}
+
 	ttl := c.ttl
 	if !result.Authenticated || !result.Authorized {
 		ttl = c.negativeTTL
@@ -160,7 +174,13 @@ func (c *ReviewCache) Review(ctx context.Context, token string) (AuthResult, err
 	// so derive it from the JWT exp claim when present. The claim is read
 	// without verification — the delegate's TokenReview already
 	// authenticated the token — and is only ever used to shorten the TTL.
-	if exp, ok := tokenExpiry(token); ok {
+	// A present-but-unparseable exp claim cannot bound the decision's
+	// validity, so caching is skipped for it (ttl 0 below).
+	exp, hasExp, expErr := tokenExpiry(token)
+	switch {
+	case expErr != nil:
+		ttl = 0
+	case hasExp:
 		if until := exp.Sub(now); until < ttl {
 			ttl = until
 		}
@@ -224,22 +244,51 @@ func tokenKey(token string) string {
 }
 
 // tokenExpiry extracts the "exp" claim from a JWT-formatted bearer token
-// without verifying it. Returns false for non-JWT tokens or tokens without an
-// expiry claim, in which case the configured TTL applies unchanged.
-func tokenExpiry(token string) (time.Time, bool) {
+// without verifying it. It returns:
+//   - (expiry, true, nil) when the token is a JWT carrying a usable exp
+//     claim, including non-integer NumericDates (RFC 7519), floored to the
+//     second so the cap can never extend past the token's validity;
+//   - (zero, false, nil) for non-JWT tokens or tokens without an exp claim,
+//     in which case the configured TTL applies unchanged;
+//   - an error when a JWT carries an exp claim that cannot be parsed as a
+//     number — the caller must not cache such a decision, since its validity
+//     cannot be bounded.
+func tokenExpiry(token string) (time.Time, bool, error) {
+	claims, ok := jwtClaims(token)
+	if !ok {
+		return time.Time{}, false, nil
+	}
+	raw, present := claims["exp"]
+	if !present {
+		return time.Time{}, false, nil
+	}
+	var num json.Number
+	if err := json.Unmarshal(raw, &num); err != nil {
+		return time.Time{}, false, fmt.Errorf("exp claim is not a number: %s", raw)
+	}
+	seconds, err := num.Float64()
+	if err != nil {
+		return time.Time{}, false, fmt.Errorf("exp claim is not a valid number: %s", raw)
+	}
+	return time.Unix(int64(math.Floor(seconds)), 0).UTC(), true, nil
+}
+
+// jwtClaims decodes the claims of a JWT-formatted token without verifying
+// it. It returns false when the token is not a three-part JWT with a JSON
+// payload (e.g. an opaque OAuth token); such tokens carry no exp
+// information and the configured TTL applies.
+func jwtClaims(token string) (map[string]json.RawMessage, bool) {
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
-		return time.Time{}, false
+		return nil, false
 	}
 	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
 	if err != nil {
-		return time.Time{}, false
+		return nil, false
 	}
-	var claims struct {
-		Exp int64 `json:"exp"`
+	var claims map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		return nil, false
 	}
-	if err := json.Unmarshal(payload, &claims); err != nil || claims.Exp == 0 {
-		return time.Time{}, false
-	}
-	return time.Unix(claims.Exp, 0).UTC(), true
+	return claims, true
 }
