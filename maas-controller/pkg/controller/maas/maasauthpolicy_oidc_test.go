@@ -467,7 +467,7 @@ func TestBuildGatewayAuthPolicySpec_OIDCClientBound(t *testing.T) {
 	audiencePattern, ok := patterns[2].(map[string]any)
 	assert.True(t, ok)
 	assert.Equal(t,
-		`has(auth.identity.aud) && (auth.identity.aud == "maas-api" || "maas-api" in auth.identity.aud)`,
+		`has(auth.identity.aud) && (type(auth.identity.aud) == string ? auth.identity.aud == "maas-api" : type(auth.identity.aud) == list && "maas-api" in auth.identity.aud)`,
 		audiencePattern["predicate"],
 	)
 	expectPattern(t, patterns[3], "auth.identity.token_use", "eq", oidc.AccessTokenPurpose)

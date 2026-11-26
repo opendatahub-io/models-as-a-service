@@ -37,12 +37,13 @@ func OIDCTokenBoundPatterns(issuerURL, clientID, audience, purposeClaim, purpose
 	}
 
 	if audience != "" {
-		// JWT aud may be a string or an array of strings. The CEL predicate
-		// accepts either valid representation and fails closed for other types.
+		// JWT aud may be a string or an array of strings. The predicate picks the
+		// comparison by type, so any other aud, or a string that doesn't match, is
+		// false instead of a CEL error.
 		quotedAudience := strconv.Quote(audience)
 		patterns = append(patterns, map[string]any{
 			"predicate": fmt.Sprintf(
-				`has(auth.identity.aud) && (auth.identity.aud == %s || %s in auth.identity.aud)`,
+				`has(auth.identity.aud) && (type(auth.identity.aud) == string ? auth.identity.aud == %s : type(auth.identity.aud) == list && %s in auth.identity.aud)`,
 				quotedAudience,
 				quotedAudience,
 			),
