@@ -19,12 +19,12 @@ import (
 	"github.com/opendatahub-io/models-as-a-service/maas-discovery/internal/auth"
 )
 
-func setupRouter(kubeClient *kubefake.Clientset) *gin.Engine {
+func setupRouter(reviewer auth.Reviewer) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	log := slog.Default()
 	r := gin.New()
 	r.GET("/v1/tenants",
-		auth.TokenReviewMiddleware(log, kubeClient, "ai-tenants"),
+		auth.TokenReviewMiddleware(log, reviewer),
 		func(c *gin.Context) {
 			username, _ := c.Get(auth.ContextKeyUsername)
 			groups, _ := c.Get(auth.ContextKeyGroups)
@@ -37,6 +37,10 @@ func setupRouter(kubeClient *kubefake.Clientset) *gin.Engine {
 		},
 	)
 	return r
+}
+
+func tokenReviewer(client *kubefake.Clientset) auth.Reviewer {
+	return auth.NewTokenReviewer(slog.Default(), client, "ai-tenants")
 }
 
 func fakeAuthenticatedClient(username string, groups []string) *kubefake.Clientset {
@@ -62,7 +66,7 @@ func fakeAuthenticatedClient(username string, groups []string) *kubefake.Clients
 
 func TestTokenReview_Success(t *testing.T) {
 	client := fakeAuthenticatedClient("alice", []string{"system:authenticated", "team-a"})
-	r := setupRouter(client)
+	r := setupRouter(tokenReviewer(client))
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/v1/tenants", nil)
@@ -99,7 +103,7 @@ func TestTokenReview_NonAdmin(t *testing.T) {
 		return true, &authzv1.SubjectAccessReview{Status: authzv1.SubjectAccessReviewStatus{Allowed: true}}, nil
 	})
 
-	r := setupRouter(client)
+	r := setupRouter(tokenReviewer(client))
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/v1/tenants", nil)
@@ -116,7 +120,7 @@ func TestTokenReview_NonAdmin(t *testing.T) {
 
 func TestTokenReview_MissingAuthHeader(t *testing.T) {
 	client := kubefake.NewSimpleClientset()
-	r := setupRouter(client)
+	r := setupRouter(tokenReviewer(client))
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/v1/tenants", nil)
@@ -133,7 +137,7 @@ func TestTokenReview_InvalidToken(t *testing.T) {
 			Status: authv1.TokenReviewStatus{Authenticated: false, Error: "token expired"},
 		}, nil
 	})
-	r := setupRouter(client)
+	r := setupRouter(tokenReviewer(client))
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/v1/tenants", nil)
@@ -159,7 +163,7 @@ func TestTokenReview_SARDenied(t *testing.T) {
 			Status: authzv1.SubjectAccessReviewStatus{Allowed: false, Reason: "not authorized"},
 		}, nil
 	})
-	r := setupRouter(client)
+	r := setupRouter(tokenReviewer(client))
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/v1/tenants", nil)
