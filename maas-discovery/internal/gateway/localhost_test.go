@@ -22,34 +22,34 @@ func TestExtractMetadata_LocalHostnameDetection(t *testing.T) {
 		local   bool
 		wantURL string
 		wantErr string
-		routes  map[string]gateway.RouteHostInfo
+		routes  map[string][]gateway.RouteHostInfo
 	}{
 		{
 			name:    "cluster.local suffix triggers fallback",
 			address: "internal-gw-svc.gw-ns.svc.cluster.local",
 			local:   true,
-			routes:  map[string]gateway.RouteHostInfo{"internal-gw-svc": {Host: "maas.apps.example.com", Scheme: "https", Port: 443}},
+			routes:  map[string][]gateway.RouteHostInfo{"internal-gw-svc": {{Host: "maas.apps.example.com", Scheme: "https", Port: 443}}},
 			wantURL: "https://maas.apps.example.com",
 		},
 		{
 			name:    "svc suffix triggers fallback",
 			address: "internal-gw-svc.gw-ns.svc",
 			local:   true,
-			routes:  map[string]gateway.RouteHostInfo{"internal-gw-svc": {Host: "maas.apps.example.com", Scheme: "https", Port: 443}},
+			routes:  map[string][]gateway.RouteHostInfo{"internal-gw-svc": {{Host: "maas.apps.example.com", Scheme: "https", Port: 443}}},
 			wantURL: "https://maas.apps.example.com",
 		},
 		{
 			name:    "local suffix triggers fallback",
 			address: "internal-gw-svc.gw-ns.local",
 			local:   true,
-			routes:  map[string]gateway.RouteHostInfo{"internal-gw-svc": {Host: "maas.apps.example.com", Scheme: "https", Port: 443}},
+			routes:  map[string][]gateway.RouteHostInfo{"internal-gw-svc": {{Host: "maas.apps.example.com", Scheme: "https", Port: 443}}},
 			wantURL: "https://maas.apps.example.com",
 		},
 		{
 			name:    "internal suffix triggers fallback",
 			address: "internal-gw-svc.internal",
 			local:   true,
-			routes:  map[string]gateway.RouteHostInfo{"internal-gw-svc": {Host: "maas.apps.example.com", Scheme: "https", Port: 443}},
+			routes:  map[string][]gateway.RouteHostInfo{"internal-gw-svc": {{Host: "maas.apps.example.com", Scheme: "https", Port: 443}}},
 			wantURL: "https://maas.apps.example.com",
 		},
 		{

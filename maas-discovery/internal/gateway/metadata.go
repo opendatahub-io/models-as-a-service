@@ -45,7 +45,15 @@ type RouteHostInfo struct {
 // ServicePort is a port exposed by a Service that selects a Gateway.
 type ServicePort struct {
 	Name string
+	// Port is the Service's frontend port.
 	Port int64
+	// TargetPort is the pod port the frontend port forwards to; Kubernetes
+	// defaults it to Port when the Service leaves targetPort unset.
+	// TargetPortName is set when the Service's targetPort is a container-port
+	// name that cannot be resolved without the pod spec; a numeric Route
+	// targetPort cannot be matched against such an entry.
+	TargetPort     int64
+	TargetPortName string
 }
 
 // GatewayServices maps the name of each Service that selects a Gateway's pods
@@ -58,12 +66,12 @@ type GatewayServices map[string][]ServicePort
 // status, listeners, or an external hostname, it returns an error. Callers should
 // degrade gracefully by keeping name/namespace and omitting externalUrl.
 //
-// routeHosts maps Service names to admitted external Route endpoints (see
-// BuildRouteHostMap). gwServices describes the Services that select this
-// Gateway (see SelectGatewayServices); when the Gateway only publishes a
-// cluster-local address, the Route fallback looks up endpoints for any of
-// those Services whose backend port reaches a Gateway listener.
-func ExtractMetadata(gateway map[string]any, name, namespace string, routeHosts map[string]RouteHostInfo, gwServices GatewayServices) (*types.GatewayMetadata, error) {
+// routeHosts maps Service names to admitted external Route endpoint
+// candidates (see BuildRouteHostMap). gwServices describes the Services that
+// select this Gateway (see SelectGatewayServices); when the Gateway only
+// publishes a cluster-local address, the Route fallback looks up endpoints for
+// any of those Services whose backend port reaches a Gateway listener.
+func ExtractMetadata(gateway map[string]any, name, namespace string, routeHosts map[string][]RouteHostInfo, gwServices GatewayServices) (*types.GatewayMetadata, error) {
 	spec, ok := gateway["spec"].(map[string]any)
 	if !ok {
 		return nil, errors.New("gateway spec not found")
@@ -149,12 +157,15 @@ func buildMetadata(name, namespace, scheme, host string, port int64) *types.Gate
 	}
 }
 
-// BuildRouteHostMap builds a map from Kubernetes Service name to admitted external
-// Route endpoint metadata. Only admitted, host-only Routes with a non-zero backend
-// weight are considered; when multiple Routes target the same Service the winner
-// is chosen deterministically (HTTPS preferred, then lexicographically by host).
+// BuildRouteHostMap builds a map from Kubernetes Service name to all admitted
+// external Route endpoint candidates targeting that Service, each list sorted
+// best-first (HTTPS preferred, then lexicographically by host). Candidates are
+// retained rather than collapsed to one per Service because listener-port
+// validation happens per Gateway at selection time (see bestRouteEndpoint);
+// collapsing early could let an invalid Route (e.g. one targeting a metrics
+// port) shadow a valid Route to the same Service.
 // Returns an empty map if no routes are provided.
-func BuildRouteHostMap(routes []unstructured.Unstructured) map[string]RouteHostInfo {
+func BuildRouteHostMap(routes []unstructured.Unstructured) map[string][]RouteHostInfo {
 	endpointsByService := make(map[string][]RouteHostInfo)
 	for i := range routes {
 		svcName, info, ok := admittedHostOnlyRouteEndpoint(routes[i].Object)
@@ -164,9 +175,12 @@ func BuildRouteHostMap(routes []unstructured.Unstructured) map[string]RouteHostI
 		endpointsByService[svcName] = append(endpointsByService[svcName], info)
 	}
 
-	m := make(map[string]RouteHostInfo, len(endpointsByService))
+	m := make(map[string][]RouteHostInfo, len(endpointsByService))
 	for svcName, endpoints := range endpointsByService {
-		m[svcName] = bestEndpoint(endpoints)
+		sort.SliceStable(endpoints, func(left, right int) bool {
+			return endpointBefore(endpoints[left], endpoints[right])
+		})
+		m[svcName] = endpoints
 	}
 	return m
 }
@@ -193,7 +207,9 @@ func SelectGatewayServices(services []unstructured.Unstructured, gatewayName str
 }
 
 // servicePorts extracts the ports a Service exposes from its unstructured
-// object. Ports with a missing or zero port number are skipped.
+// object. Ports with a missing or zero port number are skipped. The Service's
+// targetPort (an IntOrString) is retained: numeric values resolve to the pod
+// port, and its default is the frontend port when unset.
 func servicePorts(svc map[string]any) []ServicePort {
 	spec, ok := svc["spec"].(map[string]any)
 	if !ok {
@@ -214,7 +230,23 @@ func servicePorts(svc map[string]any) []ServicePort {
 			continue
 		}
 		name, _ := portMap["name"].(string)
-		ports = append(ports, ServicePort{Name: name, Port: port})
+		sp := ServicePort{Name: name, Port: port, TargetPort: port}
+		switch tp := portMap["targetPort"].(type) {
+		case string:
+			if n, err := strconv.ParseInt(tp, 10, 64); err == nil {
+				sp.TargetPort = n
+			} else {
+				// A container-port name cannot be resolved to a number
+				// without the pod spec.
+				sp.TargetPort = 0
+				sp.TargetPortName = tp
+			}
+		default:
+			if n := toInt64(portMap["targetPort"]); n != 0 {
+				sp.TargetPort = n
+			}
+		}
+		ports = append(ports, sp)
 	}
 	return ports
 }
@@ -222,17 +254,20 @@ func servicePorts(svc map[string]any) []ServicePort {
 // bestRouteEndpoint picks the best Route endpoint among those targeting any
 // Service that selects the Gateway and whose backend port reaches one of the
 // Gateway's listener ports, deterministically: HTTPS preferred, then
-// lexicographically by host. Returns false when no endpoint matches.
-func bestRouteEndpoint(routeHosts map[string]RouteHostInfo, gwServices GatewayServices, listenerPorts map[int64]struct{}) (RouteHostInfo, bool) {
-	endpoints := make([]RouteHostInfo, 0, len(gwServices))
-	for svcName, info := range routeHosts {
+// lexicographically by host. All candidates per Service are considered so a
+// valid Route is not shadowed by an invalid one targeting the same Service.
+// Returns false when no endpoint matches.
+func bestRouteEndpoint(routeHosts map[string][]RouteHostInfo, gwServices GatewayServices, listenerPorts map[int64]struct{}) (RouteHostInfo, bool) {
+	var endpoints []RouteHostInfo
+	for svcName, candidates := range routeHosts {
 		if _, ok := gwServices[svcName]; !ok {
 			continue
 		}
-		if !routeReachesListener(info, gwServices[svcName], listenerPorts) {
-			continue
+		for _, info := range candidates {
+			if routeReachesListener(info, gwServices[svcName], listenerPorts) {
+				endpoints = append(endpoints, info)
+			}
 		}
-		endpoints = append(endpoints, info)
 	}
 	if len(endpoints) == 0 {
 		return RouteHostInfo{}, false
@@ -240,33 +275,44 @@ func bestRouteEndpoint(routeHosts map[string]RouteHostInfo, gwServices GatewaySe
 	return bestEndpoint(endpoints), true
 }
 
-// routeReachesListener reports whether the Route's backend resolves to a port
-// of the given Service that matches one of the Gateway's listener ports. A
+// routeReachesListener reports whether the Route's backend resolves, through
+// the given Service, to a pod port serving one of the Gateway's listeners. A
 // Service selects pods, not a listener, so a Service that selects the Gateway
 // pods can expose non-listener ports such as metrics; Routes whose backend
 // resolves only to such ports must not contribute the Gateway's external URL.
+//
+// A Route's spec.port.targetPort is an IntOrString naming the pod port: a
+// number is the pod port directly and must match a Service entry's targetPort
+// (the port-translation target of a frontend port), while a name must be a
+// named Service port. A Route that omits spec.port is only admitted by the
+// router against a single-port Service. In every case the matched Service
+// entry's frontend port must be one of the Gateway's listener ports.
 func routeReachesListener(info RouteHostInfo, svcPorts []ServicePort, listenerPorts map[int64]struct{}) bool {
+	// candidate frontends: Service entries the Route's backend resolves
+	// through, whose pod port serves the matched frontend port.
 	var candidates []int64
 	switch {
 	case info.TargetPort != 0:
-		// Numeric targetPort names a Service port directly.
+		// Numeric Route targetPort is the pod port; match it against each
+		// Service entry's targetPort. Entries whose targetPort is a
+		// container-port name cannot be resolved and fail closed.
 		for _, p := range svcPorts {
-			if p.Port == info.TargetPort {
+			if p.TargetPortName == "" && p.TargetPort == info.TargetPort {
 				candidates = append(candidates, p.Port)
 			}
 		}
 	case info.TargetPortName != "":
-		// Named targetPort resolves through the Service port of that name.
+		// Named Route targetPort names a Service port directly.
 		for _, p := range svcPorts {
 			if p.Name != "" && p.Name == info.TargetPortName {
 				candidates = append(candidates, p.Port)
 			}
 		}
 	default:
-		// No explicit backend port: the router admits the Route against the
-		// Service's port, so any exposed port is a candidate.
-		for _, p := range svcPorts {
-			candidates = append(candidates, p.Port)
+		// No explicit backend port: the router admits the Route against a
+		// single-port Service only.
+		if len(svcPorts) == 1 {
+			candidates = append(candidates, svcPorts[0].Port)
 		}
 	}
 	for _, port := range candidates {
@@ -301,12 +347,18 @@ func gatewayListenerPorts(spec map[string]any) map[int64]struct{} {
 // then lexicographically by host.
 func bestEndpoint(endpoints []RouteHostInfo) RouteHostInfo {
 	sort.SliceStable(endpoints, func(left, right int) bool {
-		if endpoints[left].Scheme != endpoints[right].Scheme {
-			return endpoints[left].Scheme == schemeHTTPS
-		}
-		return endpoints[left].Host < endpoints[right].Host
+		return endpointBefore(endpoints[left], endpoints[right])
 	})
 	return endpoints[0]
+}
+
+// endpointBefore reports whether left ranks better than right: HTTPS
+// preferred, then lexicographically by host.
+func endpointBefore(left, right RouteHostInfo) bool {
+	if left.Scheme != right.Scheme {
+		return left.Scheme == schemeHTTPS
+	}
+	return left.Host < right.Host
 }
 
 // isLocalHostname reports whether a hostname resolves only inside the cluster:
