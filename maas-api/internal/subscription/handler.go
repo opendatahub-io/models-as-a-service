@@ -141,6 +141,7 @@ func (h *Handler) SelectSubscription(c *gin.Context) {
 		var accessDeniedErr *AccessDeniedError
 		var multipleSubsErr *MultipleSubscriptionsError
 		var modelNotInSubErr *ModelNotInSubscriptionError
+		var modelDeniedErr *ModelAccessDeniedError
 		var modelUnhealthyErr *ModelUnhealthyError
 		var guardrailErr *GuardrailResolutionError
 
@@ -207,6 +208,20 @@ func (h *Handler) SelectSubscription(c *gin.Context) {
 			return
 		}
 
+		if errors.As(err, &modelDeniedErr) {
+			h.recordRejection(constant.RejectionUnauthorized)
+			h.logger.Debug("Requested model is not available in subscription",
+				"subscription", modelDeniedErr.Subscription,
+				"model", modelDeniedErr.Model,
+			)
+			// The gateway returns Message as the 403 body.
+			c.JSON(http.StatusOK, SelectResponse{
+				Error:   "access_denied",
+				Message: "Access denied: " + err.Error(),
+			})
+			return
+		}
+
 		if errors.As(err, &modelUnhealthyErr) {
 			h.recordUnhealthyRejection(modelUnhealthyErr)
 			h.logger.Debug("Requested model is unhealthy",
@@ -255,7 +270,20 @@ func (h *Handler) SelectSubscription(c *gin.Context) {
 		"organizationId", response.OrganizationID,
 	)
 	token.SetOrganizationID(c, response.OrganizationID)
-	c.JSON(http.StatusOK, response)
+	c.JSON(http.StatusOK, gatewaySelectResponse(response))
+}
+
+// gatewaySelectResponse omits fields no gateway AuthPolicy reads. Authorino's
+// evaluator cache silently drops entries over its per-entry size limit, so the
+// model list and descriptive subscription fields must not inflate the response.
+func gatewaySelectResponse(response *SelectResponse) *SelectResponse {
+	trimmed := *response
+	trimmed.DisplayName = ""
+	trimmed.Description = ""
+	trimmed.Priority = 0
+	trimmed.ModelRefs = nil
+	trimmed.Labels = nil
+	return &trimmed
 }
 
 func decodeSelectRequest(c *gin.Context) (SelectRequest, error) {

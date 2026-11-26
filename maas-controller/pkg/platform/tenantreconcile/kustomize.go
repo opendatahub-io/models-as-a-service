@@ -62,6 +62,8 @@ func resolveKustomizationPath(manifestDir string) (string, error) {
 	return "", fmt.Errorf("kustomization.yaml not found under %q", manifestDir)
 }
 
+// maasAPIMetricsServiceMonitorName also names the Service it scrapes and the 3.5.x
+// PodMonitor it replaced.
 const maasAPIMetricsServiceMonitorName = "maas-api-metrics"
 
 // postBuildTransform remaps the overlay's hardcoded default namespace to the

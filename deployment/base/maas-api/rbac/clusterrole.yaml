@@ -42,3 +42,8 @@ rules:
 - apiGroups: ["config.openshift.io"]
   resources: ["apiservers"]
   verbs: ["get", "list", "watch"]
+
+# OpenShift Routes for the /v1/tenants Gateway fallback
+- apiGroups: ["route.openshift.io"]
+  resources: ["routes"]
+  verbs: ["list"]

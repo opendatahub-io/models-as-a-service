@@ -22,13 +22,21 @@ kubectl get dscinitialization default-dsci -o json | jq '.status.conditions[] | 
 
 ### Loki for Access Logs
 
-If you plan to store access logs for logs-based showback or for auditing, ensure LokiStack named `usage` is ready in monitoring namespace configured in DSCI `spec.monitoring.namespace` by verifying that the status of its `Ready` condition is `True`:
+Logs-based showback and auditing use the Loki destination selected by `Config.spec.usageLogging`.
+
+When `usageLogging` is `false` or omitted, the gateway EnvoyFilter sends access logs to `data-science-usage-logs-collector`. The tenancy proxy and usage-log dashboards read LokiStack `data-science-usage-logs-lokistack` in the monitoring namespace configured in DSCI `spec.monitoring.namespace`. Verify that the status of its `Ready` condition is `True`:
+
+```bash
+kubectl get lokistack data-science-usage-logs-lokistack -n <monitoring-namespace> -o json | jq '.status.conditions[] | select(.type=="Ready") | {type, status}'
+```
+
+LokiStack `usage` is required only when `usageLogging` is `true`. The usage-logs collector then exports to that stack's gateway. Verify that the status of its `Ready` condition is `True`:
 
 ```bash
 kubectl get lokistack usage -n <monitoring-namespace> -o json | jq '.status.conditions[] | select(.type=="Ready") | {type, status}'
 ```
 
-See [Installing Loki for Access logs](../install/prerequisites.md#loki-for-access-logs)
+See [Installing Loki for Access logs](../install/prerequisites.md#loki-for-access-logs) for the `usage` LokiStack.
 
 ## Installation
 
@@ -93,7 +101,7 @@ kubectl patch configs.maas.opendatahub.io default --type=merge -p '{"spec":{"usa
 
 We have introduced usage dashboards that are based on structured access logs rather than on metrics for both administrators and non-admin users as a tech-preview feature. The data presented in these dashboards is more accurate and consistent, and a bit more enriched, compared to the data in the metrics-based dashboard.
 
-The controller deploys the tenancy proxy and usage-log dashboards whenever `Config/default` is present, from `deployment/components/observability/usage-logs/dsci-managed/`. When `Config.spec.usageLogging` is `true`, it renders `usage-logs/` instead, which also deploys the usage-logs collector. The per-tenant EnvoyFilter is removed when `MaasTenantConfig.spec.telemetry.enabled` is not `true`. When `usageLogging` is `true`, the EnvoyFilter sends plaintext OTLP to `usage-logs-collector`. When it is `false` or omitted, the EnvoyFilter sends OTLP over TLS to the headless `data-science-usage-logs-collector-headless` Service, trusting the OpenShift service CA and verifying the headless-service DNS name as SNI with TLS 1.2 or newer.
+The controller deploys the tenancy proxy and usage-log dashboards whenever `Config/default` is present, from `deployment/components/observability/usage-logs/dsci-managed/`. When `Config.spec.usageLogging` is `true`, it renders `usage-logs/` instead, which also deploys the usage-logs collector. The per-tenant EnvoyFilter is removed only when `MaasTenantConfig.spec.telemetry.enabled` is explicitly `false`. When `usageLogging` is `true`, the EnvoyFilter sends plaintext OTLP to `usage-logs-collector`. When it is `false` or omitted, the EnvoyFilter sends OTLP over TLS to the headless `data-science-usage-logs-collector-headless` Service, trusting the OpenShift service CA and verifying the headless-service DNS name as SNI with TLS 1.2 or newer.
 
 When tenant telemetry is enabled and `usageLogging` is `false` or omitted, `MaasTenantConfig` phase is `Degraded` if `UsageLogsCollectorAvailable` or `PersesAvailable` is not `True` on `DSCInitialization`. When `usageLogging` is `true` and tenant telemetry is enabled, the phase is `Degraded` if `PersesAvailable` is not `True`. With telemetry disabled, `MaasTenantConfig` stays independent of those platform conditions.
 
@@ -102,6 +110,51 @@ When tenant telemetry is enabled and `usageLogging` is `false` or omitted, `Maas
 - **Tenancy Proxy** (`usage-logs-tenancy-proxy`) - filters user-scoped usage data for non-admin users; serves TLS 1.3 only and negotiates the `X25519MLKEM768` hybrid post-quantum key-exchange group when the client offers it, with classical groups as fallback (OpenSSL configuration in the `usage-tenancy-proxy-source` ConfigMap, selected via `OPENSSL_CONF`)
 - **Perses Dashboard** (`dashboard-4-maas-usage-logs-admin`) - usage dashboard for administrators (shows information on all users)
 - **Perses Dashboard** (`dashboard-5-maas-usage-logs`) - user-scoped usage dashboard
+
+When the `usage-logs-loki` Secret is configured for maas-api, the controller additionally creates `maas-portal-usage-logs`, `maas-portal-usage-logs-admin`, and their Portal-only datasources. These copies use the maas-api Loki proxy, while the shared dashboards and datasources keep their rendered LokiStack defaults. The MaaS Portal must select the Portal copy names; the RHOAI Dashboard does not list them because they do not use its `dashboard-` naming convention.
+
+On a cluster with a local LokiStack, the Secret alone does not make the maas-api proxy usable. Complete these steps:
+
+1. Create `usage-logs-loki` in the maas-api namespace with `LOKI_READ_ENDPOINT`, `LOKI_READ_TOKEN`, and, when the gateway uses a private CA, `LOKI_READ_CA`:
+
+    ```bash
+    kubectl create secret generic usage-logs-loki -n <maas-api-namespace> \
+      --from-literal=LOKI_READ_ENDPOINT=https://<loki-gateway>.<monitoring-namespace>.svc:8080/api/logs/v1/application \
+      --from-literal=LOKI_READ_TOKEN=<loki-reader-token> \
+      --from-file=LOKI_READ_CA=<loki-gateway-ca.pem>
+    ```
+
+2. Bind the token's service account to a ClusterRole that permits the LokiStack gateway's authorization checks:
+
+    ```yaml
+    apiVersion: rbac.authorization.k8s.io/v1
+    kind: ClusterRole
+    metadata:
+      name: maas-api-usage-logs-reader
+    rules:
+      - apiGroups: ["loki.grafana.com"]
+        resources: ["application"]
+        resourceNames: ["logs"]
+        verbs: ["get"]
+      - apiGroups: [""]
+        resources: ["namespaces"]
+        verbs: ["get"]
+    ---
+    apiVersion: rbac.authorization.k8s.io/v1
+    kind: ClusterRoleBinding
+    metadata:
+      name: maas-api-usage-logs-reader
+    roleRef:
+      apiGroup: rbac.authorization.k8s.io
+      kind: ClusterRole
+      name: maas-api-usage-logs-reader
+    subjects:
+      - kind: ServiceAccount
+        name: <loki-reader-service-account>
+        namespace: <loki-reader-service-account-namespace>
+    ```
+
+3. Verify network access from maas-api to the LokiStack gateway. The controller applies `usage-logs-lokistack-allow-maas-api` for the default `redhat-ai-gateway-infra` maas-api namespace. If maas-api runs in another namespace, create a separately named NetworkPolicy in the LokiStack gateway's namespace, selecting the gateway pods and allowing the custom maas-api namespace. Do not edit the controller-managed policy; Kubernetes combines applicable ingress rules.
 
 !!! warning "Privacy"
     Structured access logs record request attributes.

@@ -9,10 +9,6 @@ on:
     paths:
       - 'test/e2e/**'
       - '.github/workflows/e2e-collect.yml'
-  push:
-    branches:
-      - main
-
 permissions:
   contents: read
 
