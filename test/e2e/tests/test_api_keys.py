@@ -61,6 +61,7 @@ from test_helper import (
     _delete_sa,
     _get_cr,
     _gateway_url,
+    _is_generic_gateway_denial,
     _maas_api_url,
     _ns,
     _request_with_gateway_retry,
@@ -917,6 +918,9 @@ class TestAPIKeyModelInference:
         )
 
         assert r.status_code == 403, f"Expected 403 for invalid key, got {r.status_code}: {r.text}"
+        # No subscription is selected for a rejected key, so the gateway sends its
+        # generic deny body.
+        assert _is_generic_gateway_denial(r), f"Expected the generic gateway deny body, got: {r.text!r}"
         print("[inference] Invalid API key correctly rejected with 403")
 
     @pytest.mark.smoke
