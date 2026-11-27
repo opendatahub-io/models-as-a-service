@@ -23,25 +23,48 @@ GATEWAY_PROGRAMMED_TIMEOUT="${GATEWAY_PROGRAMMED_TIMEOUT:-600}"
 DEPLOYMENT_NAMESPACE="${DEPLOYMENT_NAMESPACE:-opendatahub}"
 MAAS_SUBSCRIPTION_NAMESPACE="${MAAS_SUBSCRIPTION_NAMESPACE:-models-as-a-service}"
 MODEL_NAMESPACE="${MODEL_NAMESPACE:-llm}"
-MAAS_WEBHOOK_READY_TIMEOUT="${MAAS_WEBHOOK_READY_TIMEOUT:-120}"
+MAAS_WEBHOOK_READY_TIMEOUT="${MAAS_WEBHOOK_READY_TIMEOUT:-180}"
+MAAS_WEBHOOK_APPLY_RETRIES="${MAAS_WEBHOOK_APPLY_RETRIES:-3}"
+
+# True when kubectl apply failed because the admission webhook backend was
+# unreachable/restarting (not because the webhook rejected the object).
+is_maas_webhook_transport_error() {
+    local log_file=$1
+    grep -Eiq \
+        'no endpoints available for service "maas-controller-webhook-service"|failed calling webhook|context deadline exceeded|connection refused|Client\.Timeout exceeded|EOF' \
+        "$log_file"
+}
 
 wait_for_maas_webhook_ready() {
     local timeout="${MAAS_WEBHOOK_READY_TIMEOUT}"
     local deadline=$((SECONDS + timeout))
     local addresses=""
+    local available=""
+
+    echo "Waiting for maas-controller deployment Available in ${DEPLOYMENT_NAMESPACE}..."
+    if ! kubectl wait --for=condition=Available "deployment/maas-controller" \
+        -n "$DEPLOYMENT_NAMESPACE" --timeout="${timeout}s" 2>/dev/null; then
+        echo "⚠️  maas-controller deployment not Available yet; continuing to poll webhook endpoints"
+    fi
 
     echo "Waiting for ready endpoints on maas-controller-webhook-service in ${DEPLOYMENT_NAMESPACE} (timeout: ${timeout}s)..."
     while [[ $SECONDS -lt $deadline ]]; do
+        available=$(kubectl get deployment maas-controller -n "$DEPLOYMENT_NAMESPACE" \
+            -o jsonpath='{.status.availableReplicas}' 2>/dev/null || true)
         addresses=$(kubectl get endpoints maas-controller-webhook-service -n "$DEPLOYMENT_NAMESPACE" \
             -o jsonpath='{.subsets[*].addresses[*].ip}' 2>/dev/null || true)
-        if [[ -n "$addresses" ]]; then
-            echo "✅ MaaS admission webhook has ready endpoints: ${addresses}"
+        # Endpoints alone are not enough: after a cache-sync crash the
+        # EndpointSlice can briefly point at a dying pod (EOF / deadline).
+        if [[ -n "$addresses" && "${available:-0}" -ge 1 ]]; then
+            echo "✅ MaaS admission webhook ready (deployment Available, endpoints: ${addresses})"
+            # Brief settle so the webhook HTTPS server is accepting admits.
+            sleep 3
             return 0
         fi
         sleep 2
     done
 
-    echo "❌ ERROR: maas-controller-webhook-service has no ready endpoints in ${DEPLOYMENT_NAMESPACE} after ${timeout}s"
+    echo "❌ ERROR: maas-controller-webhook-service not ready in ${DEPLOYMENT_NAMESPACE} after ${timeout}s"
     kubectl get deployment,service,endpoints -n "$DEPLOYMENT_NAMESPACE" 2>/dev/null || true
     kubectl get pods -n "$DEPLOYMENT_NAMESPACE" -l control-plane=maas-controller -o wide 2>/dev/null || true
     kubectl logs deployment/maas-controller -n "$DEPLOYMENT_NAMESPACE" --tail=100 2>/dev/null || true
@@ -117,22 +140,26 @@ deploy_models() {
         exit 1
     fi
 
-    local apply_log
+    local apply_log attempt
     apply_log=$(mktemp)
-    if ! apply_e2e_fixtures 2>&1 | tee "$apply_log"; then
-        if grep -Fq 'no endpoints available for service "maas-controller-webhook-service"' "$apply_log"; then
-            echo "⚠️  MaaS webhook endpoints disappeared during fixture creation; waiting and retrying once..."
-            if ! wait_for_maas_webhook_ready || ! apply_e2e_fixtures; then
-                rm -f "$apply_log"
-                echo "❌ ERROR: Failed to deploy MaaS system with e2e fixtures after webhook retry"
-                exit 1
-            fi
-        else
+    attempt=1
+    while true; do
+        if apply_e2e_fixtures 2>&1 | tee "$apply_log"; then
+            break
+        fi
+        if [[ "$attempt" -ge "${MAAS_WEBHOOK_APPLY_RETRIES}" ]] || ! is_maas_webhook_transport_error "$apply_log"; then
             rm -f "$apply_log"
             echo "❌ ERROR: Failed to deploy MaaS system with e2e fixtures"
             exit 1
         fi
-    fi
+        echo "⚠️  MaaS admission webhook transport error during fixture create (attempt ${attempt}/${MAAS_WEBHOOK_APPLY_RETRIES}); waiting and retrying..."
+        attempt=$((attempt + 1))
+        if ! wait_for_maas_webhook_ready; then
+            rm -f "$apply_log"
+            echo "❌ ERROR: Failed to deploy MaaS system with e2e fixtures after webhook retry"
+            exit 1
+        fi
+    done
     rm -f "$apply_log"
     echo "✅ MaaS system deployed (free + premium + e2e test fixtures)"
 
