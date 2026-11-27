@@ -573,6 +573,9 @@ else
                 print_success "MaaS API key created (name: $API_KEY_NAME)"
                 # Set up cleanup trap to delete the API key on exit
                 cleanup_api_key() {
+                    if [ -n "${infer_headers:-}" ]; then
+                        rm -f "$infer_headers"
+                    fi
                     if [ -n "${API_KEY_ID:-}" ] && [ "${API_KEY_ID}" != "null" ]; then
                         curl -sSk -o /dev/null \
                             -H "Authorization: Bearer $OC_TOKEN" \
@@ -722,14 +725,50 @@ else
         
         print_info "Testing: curl -sSk -X POST ${MODEL_CHAT_ENDPOINT} -H \"Authorization: Bearer \$TOKEN\" -H \"Content-Type: application/json\" -d '${REQUEST_PAYLOAD}'"
         
-        INFERENCE_RESPONSE=$(curl -sSk --connect-timeout 10 --max-time 30 -w "\n%{http_code}" \
-            -H "Authorization: Bearer ${TOKEN}" \
-            -H "Content-Type: application/json" \
-            -d "${REQUEST_PAYLOAD}" \
-            "${MODEL_CHAT_ENDPOINT}" 2>/dev/null || echo "")
-        
-        HTTP_CODE=$(echo "$INFERENCE_RESPONSE" | tail -n1)
-        RESPONSE_BODY=$(echo "$INFERENCE_RESPONSE" | sed '$d')
+        # The model route can answer with bodyless 401s for a few seconds while the
+        # gateway settles, even though /maas-api/v1/models just accepted the same key.
+        # The MaaS AuthPolicy rejects API keys with 403, so a 401 here is not its
+        # verdict. Retry for up to 60s; the logged headers show which component
+        # answered, as the cause is not known yet.
+        infer_started=$SECONDS
+        infer_deadline=$((SECONDS + 60))
+        infer_delay=3
+        infer_attempt=0
+        # Without a temp file the check still runs; only the header lines are lost.
+        infer_headers=$(mktemp 2>/dev/null) || infer_headers=""
+        while true; do
+            infer_attempt=$((infer_attempt + 1))
+            INFERENCE_RESPONSE=$(curl -sSk --connect-timeout 10 --max-time 30 -w "\n%{http_code}" \
+                -D "${infer_headers:-/dev/null}" \
+                -H "Authorization: Bearer ${TOKEN}" \
+                -H "Content-Type: application/json" \
+                -d "${REQUEST_PAYLOAD}" \
+                "${MODEL_CHAT_ENDPOINT}" 2>/dev/null || echo "")
+            HTTP_CODE=$(echo "$INFERENCE_RESPONSE" | tail -n1)
+            RESPONSE_BODY=$(echo "$INFERENCE_RESPONSE" | sed '$d')
+            if [ "$HTTP_CODE" != "401" ]; then
+                break
+            fi
+            echo "  Model route returned HTTP 401 (attempt $infer_attempt, $((SECONDS - infer_started))s since the first request)"
+            if [ -n "$infer_headers" ]; then
+                # Keep only the last header block: with a proxy, -D also records the CONNECT reply.
+                tr -d '\r' <"$infer_headers" \
+                    | awk '/^HTTP\//{b=""} {b=b $0 "\n"} END{printf "%s", b}' \
+                    | grep -iE '^(server|www-authenticate|x-ext-auth-reason):' | sed 's/^/    /'
+            fi
+            if [ $((SECONDS + infer_delay)) -ge "$infer_deadline" ]; then
+                break
+            fi
+            sleep "$infer_delay"
+        done
+        if [ -n "$infer_headers" ]; then
+            rm -f "$infer_headers"
+            infer_headers=""
+        fi
+        if [ "$infer_attempt" -gt 1 ] && [ "$HTTP_CODE" != "401" ]; then
+            print_warning "Model route stopped returning 401 after $((SECONDS - infer_started))s (attempt $infer_attempt)" \
+                "The header lines above show which component answered"
+        fi
         
         # Handle timeout/connection failure
         if [ -z "$HTTP_CODE" ] || [ "$HTTP_CODE" = "000" ]; then
@@ -748,7 +787,7 @@ else
                 "Gateway cannot reach model service" \
                 "Check: 1) Model pods running: kubectl get pods -n llm, 2) Model service exists, 3) HTTPRoute configured: kubectl get httproute -n llm"
         elif [ "$HTTP_CODE" = "401" ]; then
-            print_fail "Authorization failed (HTTP 401)" "Response: $(echo $RESPONSE_BODY | head -c 200)" "Check AuthPolicy and TokenRateLimitPolicy"
+            print_fail "Authorization failed (HTTP 401)" "Still 401 after $((SECONDS - infer_started))s ($infer_attempt attempts). Response: $(echo $RESPONSE_BODY | head -c 200)" "Check AuthPolicy and TokenRateLimitPolicy"
         elif [ "$HTTP_CODE" = "429" ]; then
             print_warning "Rate limiting (HTTP 429)" "Response: $(echo $RESPONSE_BODY | head -c 200)" "wait a minute and try again"
         else
