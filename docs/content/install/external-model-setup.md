@@ -368,6 +368,17 @@ kubectl edit configmap payload-processing-plugins -n "${GATEWAY_NAMESPACE}"
 kubectl rollout restart deployment/payload-processing -n "${GATEWAY_NAMESPACE}"
 ```
 
+maas-controller also sets the `ext_proc.ipp` response modes in the tenant's `payload-processing` EnvoyFilter from this ConfigMap, and updates them when the ConfigMap changes:
+
+- With no response plugin in any profile, the product default, the IPP is off the response path (`SKIP`/`NONE`/`SKIP`). The IPP then records no time-to-first-token metric and emits no response event to its data layer.
+- With a response plugin in any profile, or with fields the controller doesn't check such as `postProcessing` or `profilePicker`, the IPP gets response headers, bodies and trailers (`SEND`/`FULL_DUPLEX_STREAMED`/`SEND`). On Envoy 1.36 (OpenShift 4.22), a profile with a streaming response plugin such as `external-metering-streaming` can still get empty or stalled responses from models served through an InferencePool.
+- Changing the modes rebuilds the gateway listeners, which cuts requests still open after the listener drain (about 45 s). Edit the ConfigMap when traffic is quiet. The IPP still needs the restart above to load the new profile.
+- If you set `opendatahub.io/managed=false` on the `payload-processing` EnvoyFilter to work around empty responses, remove it after upgrading so the controller sets the modes again:
+
+    ```bash
+    kubectl annotate envoyfilter payload-processing -n "${GATEWAY_NAMESPACE}" opendatahub.io/managed-
+    ```
+
 maas-controller stamps the ConfigMap with `opendatahub.io/managed=false` so it keeps your edits. To reset it to product defaults once, or to have the controller own it continuously:
 
 ```bash

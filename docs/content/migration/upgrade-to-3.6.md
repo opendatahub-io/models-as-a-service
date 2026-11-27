@@ -124,6 +124,7 @@ While blocked:
 - `MaasTenantConfig` stays `Ready=False` with a message naming the force annotation
 - Annotation `maas.opendatahub.io/payload-processing-migration=blocked` is set
 - Legacy IPP resources remain until an operator acknowledges the risk
+- The legacy IPP keeps serving the tenant, so maas-controller keeps its `payload-processing` EnvoyFilter rendered, `ipp` response modes included (see [IPP response translation](../install/external-model-setup.md#ipp-response-translation-opt-in)), and leaves the other legacy IPP resources as they are
 
 Force migration after reviewing release notes. Back up the current tenant plugins
 ConfigMap from the gateway namespace first — cleanup deletes it and the controller

@@ -50,4 +50,6 @@ data:
         #   response:
         #   - pluginRef: api-translation
         # See docs/content/install/external-model-setup.md (IPP response translation).
+        # With no response plugin in any profile, maas-controller also takes ext_proc.ipp
+        # off the response path in the payload-processing EnvoyFilter.
         response: []
