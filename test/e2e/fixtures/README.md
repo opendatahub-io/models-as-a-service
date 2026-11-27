@@ -65,8 +65,9 @@ shared `random` simulators used by every other test are untouched.
 Like `distinct` and `distinct-2`, the fixture ships only an LLMIS and a
 MaaSModelRef — tests create their own MaaSSubscription and MaaSAuthPolicy.
 
-`echo-sim` is the only simulator on `llm-d-inference-sim:v0.9.0`; every other
-one is pinned to `v0.8.2`. The split is deliberate and should not be
+`echo-sim` is the only fixture on `llm-d-inference-sim:v0.9.0`, which echo-mode
+models created with `_create_llmis(..., echo=True)` also use; every other one is
+pinned to `v0.8.2`. The split is deliberate and should not be
 "tidied up" into a single version:
 
 - echo-sim needs v0.9.0 because the `echo-sim-log-http` overlay passes
@@ -79,7 +80,7 @@ one is pinned to `v0.8.2`. The split is deliberate and should not be
   `Model is not a real HF model, using simulated tokenizer` for made-up ids,
   so only `facebook/opt-125m` — the one real repo id in use — is affected.
   There is no flag to opt out: `--render-url` only repoints the service.
-- echo mode never builds that dataset, so v0.9.0 is safe for this fixture.
+- echo mode never builds that dataset, so v0.9.0 is safe for echo mode.
 
 Behaviour verified against `llm-d-inference-sim:v0.9.0`, worth knowing before
 writing tests against it:

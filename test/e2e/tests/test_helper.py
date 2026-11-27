@@ -335,6 +335,9 @@ LLM_D_INFERENCE_SIM_IMAGE = (
     "ghcr.io/llm-d/llm-d-inference-sim@"
     "sha256:c6838d8616c9818f4cdb0e9ef7597e483a71c081b869d34c7eafac1481d76c60"
 )
+# Echo-mode models created by _create_llmis use the tag the echo fixtures pin;
+# docs/samples/models/echo-simulator/model.yaml says why random mode can't.
+LLM_D_INFERENCE_SIM_ECHO_IMAGE = "ghcr.io/llm-d/llm-d-inference-sim:v0.9.0"
 E2E_CURL_CA_CONFIGMAP = os.environ.get("E2E_CURL_CA_CONFIGMAP", "")
 E2E_CURL_CA_CONFIGMAP_KEY = os.environ.get("E2E_CURL_CA_CONFIGMAP_KEY", "service-ca.crt")
 SIMULATOR_SUBSCRIPTION = os.environ.get("E2E_SIMULATOR_SUBSCRIPTION", "simulator-subscription")
@@ -2796,6 +2799,9 @@ def _create_llmis(
     gateway_namespace: str = "openshift-ingress",
     model_name: str = "facebook/opt-125m",
     scheduler: bool = False,
+    *,
+    echo: bool = False,
+    spec_annotations: Optional[dict] = None,
 ):
     """Create a simulated LLMInferenceService pointing to a specific gateway.
 
@@ -2809,7 +2815,28 @@ def _create_llmis(
             scenarios where two LLMISs intentionally share a model name.
         scheduler: Serve the model through an InferencePool and its endpoint picker
             instead of a plain Service.
+        echo: Run the simulator in echo mode: the completion repeats the last user
+            message, so a test sizes the response with its prompt and can compare
+            them. Needs a model_name that does not resolve on HuggingFace
+            (test/e2e/fixtures/README.md).
+        spec_annotations: spec.annotations, which KServe reads for per-service
+            settings such as serving.kserve.io/route-rule-naming.
     """
+    if echo and model_name == "facebook/opt-125m":
+        raise ValueError(
+            "echo=True needs a made-up model_name: on the echo simulator image "
+            "facebook/opt-125m takes the real-tokenizer path"
+        )
+    if echo:
+        image = LLM_D_INFERENCE_SIM_ECHO_IMAGE
+        # The simulator rejects a prompt over --max-model-len (default 1024 tokens)
+        # with a 400, and in echo mode the prompt is the payload under test.
+        mode_args = ["--mode", "echo", "--max-model-len", "131072"]
+        ready_path = "/ready"
+    else:
+        image = LLM_D_INFERENCE_SIM_IMAGE
+        mode_args = ["--mode", "random"]
+        ready_path = "/health/ready"
     llmis = {
         "apiVersion": "serving.kserve.io/v1alpha1",
         "kind": "LLMInferenceService",
@@ -2843,12 +2870,12 @@ def _create_llmis(
                 "containers": [
                     {
                         "name": "main",
-                        "image": LLM_D_INFERENCE_SIM_IMAGE,
+                        "image": image,
                         "command": ["/app/llm-d-inference-sim"],
                         "args": [
                             "--port", "8000",
                             "--model", model_name,
-                            "--mode", "random",
+                            *mode_args,
                             "--no-mm-encoder-only",
                             "--ssl-certfile", "/var/run/kserve/tls/tls.crt",
                             "--ssl-keyfile", "/var/run/kserve/tls/tls.key",
@@ -2869,7 +2896,7 @@ def _create_llmis(
                         },
                         "readinessProbe": {
                             "httpGet": {
-                                "path": "/health/ready",
+                                "path": ready_path,
                                 "port": "https",
                                 "scheme": "HTTPS",
                             }
@@ -2881,6 +2908,14 @@ def _create_llmis(
     }
     if scheduler:
         llmis["spec"]["router"]["scheduler"] = {}
+    if echo:
+        # The simulator was OOMKilled at 1Gi after a few hundred 470 KB echoes.
+        llmis["spec"]["template"]["containers"][0]["resources"] = {
+            "requests": {"cpu": "100m", "memory": "512Mi"},
+            "limits": {"cpu": "1", "memory": "2Gi"},
+        }
+    if spec_annotations:
+        llmis["spec"]["annotations"] = dict(spec_annotations)
     _apply_cr(llmis)
 
 
