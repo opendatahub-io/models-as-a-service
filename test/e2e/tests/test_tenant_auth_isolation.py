@@ -29,9 +29,9 @@ from multitenancy_helpers import (
     select_subscription_at,
     tenant_internal_url,
     validate_api_key_at,
+    wait_until,
 )
-from test_helper import _wait_for_subscription_trlp_status
-from test_helper import _delete_cr, _delete_governance_and_wait, _get_cluster_token
+from test_helper import SUBSCRIPTION_TRLP_STATUS_TIMEOUT, _delete_cr, _delete_governance_and_wait, _get_cluster_token
 
 pytestmark = pytest.mark.xdist_group("tenant_iso_auth")
 
@@ -322,19 +322,28 @@ class TestTenantAuthIsolation:
     def test_api_key_subscription_selection_uses_tenant_namespace(self, tenant_auth_setup, tenant_api_keys):
         """3.x/4.x: Internal subscription selection reports the tenant-local subscription namespace."""
         tenant_a = tenant_auth_setup["tenant_a"]
-        # Setup skips TRLP wait for faster auth-only cases; selection needs mirrored limits ready.
-        _wait_for_subscription_trlp_status(
-            tenant_auth_setup["subscription"],
-            expected_ready=True,
-            namespace=tenant_a["namespace"],
-        )
-        response = select_subscription_at(
-            tenant_internal_url(tenant_a["name"]),
-            tenant_api_keys["a"]["key"],
-            "e2e-auth-user",
-            ["system:authenticated"],
-            requested_subscription=tenant_auth_setup["subscription"],
-            requested_model=f"{tenant_a['model_namespace']}/{tenant_a['model_name']}",
+
+        def select():
+            response = select_subscription_at(
+                tenant_internal_url(tenant_a["name"]),
+                tenant_api_keys["a"]["key"],
+                "e2e-auth-user",
+                ["system:authenticated"],
+                requested_subscription=tenant_auth_setup["subscription"],
+                requested_model=f"{tenant_a['model_namespace']}/{tenant_a['model_name']}",
+            )
+            # maas-api rejects the model until its own informer cache sees the
+            # subscription's rate limits as ready, which can trail the CR status.
+            # Any other answer is final.
+            data = response.json() if response.status_code == 200 else {}
+            assert not (
+                data.get("error") == "model_unhealthy"
+                and "rate limiting policies are not ready" in (data.get("message") or "")
+            ), redact_sensitive(data)
+            return response
+
+        response = wait_until(
+            select, SUBSCRIPTION_TRLP_STATUS_TIMEOUT, "maas-api did not see the subscription rate limits as ready"
         )
         assert response.status_code == 200
         data = response.json()
