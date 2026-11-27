@@ -1279,3 +1279,36 @@ func TestAggregateWarningsAndSetDegraded(t *testing.T) {
 		})
 	}
 }
+
+// The compressor/decompressor EnvoyFilter lives in the gateway namespace, where the
+// tenant's owner references cannot reach it: deleting the tenant has to delete it.
+func TestTenantCleanup_RemovesGatewayContentEncodingEnvoyFilter(t *testing.T) {
+	g := NewWithT(t)
+	s := tenantTestScheme(t)
+	ctx := context.Background()
+
+	const tenantName = "team-encoding-delete"
+	tenant := newAITenantManagedTenantConfig("ai-tenant-"+tenantName, tenantName)
+	key := client.ObjectKey{
+		Name:      tenantreconcile.GatewayContentEncodingEnvoyFilterName(tenantName),
+		Namespace: testTenantGatewayNamespace,
+	}
+	existing := &unstructured.Unstructured{}
+	existing.SetGroupVersionKind(tenantreconcile.GVKEnvoyFilter)
+	existing.SetName(key.Name)
+	existing.SetNamespace(key.Namespace)
+
+	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(tenant, existing).Build()
+	r := &TenantReconciler{
+		Client:           cl,
+		Scheme:           s,
+		AppNamespace:     "opendatahub",
+		GatewayNamespace: testTenantGatewayNamespace,
+	}
+
+	g.Expect(r.cleanupTenantResources(ctx, ctrl.Log, tenant)).To(Succeed())
+
+	got := &unstructured.Unstructured{}
+	got.SetGroupVersionKind(tenantreconcile.GVKEnvoyFilter)
+	g.Expect(apierrors.IsNotFound(cl.Get(ctx, key, got))).To(BeTrue(), "EnvoyFilter %s should be deleted with its tenant", key)
+}

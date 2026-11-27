@@ -821,6 +821,11 @@ func (r *TenantReconciler) cleanupTenantResources(ctx context.Context, log logr.
 			namespace: gatewayNs,
 		},
 		{
+			gvk:       tenantreconcile.GVKEnvoyFilter,
+			name:      tenantreconcile.GatewayContentEncodingEnvoyFilterName(tenantID),
+			namespace: gatewayNs,
+		},
+		{
 			gvk:       tenantreconcile.GVKNetworkPolicy,
 			name:      tenantreconcile.PayloadProcessingNetworkPolicyName(tenantID),
 			namespace: gatewayNs,

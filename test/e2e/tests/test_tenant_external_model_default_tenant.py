@@ -484,6 +484,47 @@ class TestDefaultTenantServesModelWithoutGatewayRefs:
             SUBSCRIPTION_HEADER_VALUE
         ], f"provider headers: {redact_sensitive(echo_headers(response))}"
 
+    @pytest.mark.parametrize(
+        ("accept_encoding", "client_encoding"),
+        [
+            # httpx with the brotli package installed (the OpenAI and Anthropic Python SDKs).
+            ("gzip, deflate, br", "gzip"),
+            # The Gateway only compresses with gzip, so this client gets a plain body.
+            ("br", None),
+            ("identity", None),
+        ],
+    )
+    def test_provider_is_asked_for_gzip_only(
+        self, gateway_url, implicit_model, accept_encoding, client_encoding
+    ):
+        """The Gateway takes the client's Accept-Encoding off the request and asks
+        the provider for gzip, the one encoding it decodes before the token counter
+        reads the response; the client still gets the encoding it asked for.
+
+        Without that a provider answers in whatever the client accepts, the counter
+        cannot parse the body and the request is never counted (RHAI-48855). The
+        echo endpoint compresses on request, so every case also sends a compressed
+        provider response through the Gateway.
+        """
+        response = _infer(
+            gateway_url,
+            implicit_model["model"],
+            implicit_model["api_key"],
+            extra_headers={"Accept-Encoding": accept_encoding},
+        )
+        assert response.status_code == 200, (
+            f"expected 200 through {DEFAULT_GATEWAY_NAME}, got {response.status_code}: "
+            f"{redact_sensitive(response.text)}"
+        )
+        assert _provider_header_values(response, "accept-encoding") == ["gzip"], (
+            f"client sent Accept-Encoding: {accept_encoding}; "
+            f"provider headers: {redact_sensitive(echo_headers(response))}"
+        )
+        assert response.headers.get("Content-Encoding") == client_encoding, (
+            f"client sent Accept-Encoding: {accept_encoding}, "
+            f"got Content-Encoding: {response.headers.get('Content-Encoding')}"
+        )
+
 
 # ─── Implicit attachment lifecycle ──────────────────────────────────────────
 

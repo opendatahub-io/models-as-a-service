@@ -1,0 +1,104 @@
+apiVersion: networking.istio.io/v1alpha3
+kind: EnvoyFilter
+metadata:
+  name: maas-gateway-encoding
+  namespace: openshift-ingress
+  labels:
+    app.kubernetes.io/component: gateway
+    app.kubernetes.io/name: maas
+spec:
+  # Kuadrant's wasm filter reads token usage (and the telemetry model label) from the
+  # response body and has no Content-Encoding handling: a compressed body fails its JSON
+  # parse, nothing reaches Limitador and the client still gets the 200. Most SDKs ask for
+  # gzip by default, so a provider that honours Accept-Encoding went uncounted (RHAI-48855).
+  #
+  # Two filters fix that without taking compression away from clients:
+  #   compressor (first)             takes the client's Accept-Encoding off the request, and
+  #                                  re-encodes the response for clients that asked for gzip
+  #   decompressor (before router)   asks the provider for gzip only, and decodes the reply
+  #                                  before any other filter reads it
+  # Response path: router -> decompressor -> EPP -> ext_proc -> wasm -> ... -> compressor.
+  #
+  # Must be applied AFTER every other EnvoyFilter that inserts HTTP filters on the gateway:
+  # Kuadrant's (priority 0), payload-processing (10, rendered by maas-controller for legacy
+  # IPP and by ai-gateway-controller for praxis) and usage logs (20, maas-model-access-logs).
+  # Those INSERT_FIRST and INSERT_BEFORE the router too, and all of their filters have to
+  # end up between the compressor and the decompressor: usage logs read tokens from the
+  # response body as well. Patch sets are applied in ascending priority and equal ones by
+  # creation time, so this value has to be strictly the highest.
+  # The tenant controller rewrites this filter's name, namespace and selector for each
+  # resolved Gateway.
+  priority: 100
+  workloadSelector:
+    labels:
+      gateway.networking.k8s.io/gateway-name: maas-default-gateway
+  configPatches:
+    # No subFilter: INSERT_FIRST puts the compressor at the front of the HTTP filter list,
+    # whatever Kuadrant or Istio name their filters.
+    - applyTo: HTTP_FILTER
+      match:
+        context: GATEWAY
+        listener:
+          filterChain:
+            filter:
+              name: "envoy.filters.network.http_connection_manager"
+      patch:
+        operation: INSERT_FIRST
+        value:
+          name: envoy.filters.http.compressor
+          typed_config:
+            "@type": type.googleapis.com/envoy.extensions.filters.http.compressor.v3.Compressor
+            response_direction_config:
+              # The filter keeps the client's value for its own decision and removes the
+              # header, so the provider only sees what the decompressor advertises. Without
+              # this a client asking for br or zstd gets a body the decompressor cannot decode.
+              remove_accept_encoding_header: true
+            # Default content types: JSON is compressed, text/event-stream is not, so
+            # streamed responses are passed through as they arrive.
+            compressor_library:
+              name: gzip
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.compression.gzip.compressor.v3.Gzip
+    - applyTo: HTTP_FILTER
+      match:
+        context: GATEWAY
+        listener:
+          filterChain:
+            filter:
+              name: "envoy.filters.network.http_connection_manager"
+              subFilter:
+                name: envoy.filters.http.router
+      patch:
+        operation: INSERT_BEFORE
+        value:
+          name: envoy.filters.http.decompressor
+          typed_config:
+            "@type": type.googleapis.com/envoy.extensions.filters.http.decompressor.v3.Decompressor
+            decompressor_library:
+              name: gzip
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.compression.gzip.decompressor.v3.Gzip
+                # Envoy stops decoding, and silently truncates the body, when a read of
+                # compressed input inflates to more than this many times its size. The
+                # default of 100 is within reach of a real completion: one that repeats a
+                # sentence for 16K tokens compresses 105:1, and the reads from its tail
+                # 350:1. Truncated JSON is a response the token counter cannot read, so
+                # the cap is raised to the most the gzip format can produce and no valid
+                # response is cut off.
+                # The price: the cap no longer limits how far a hostile provider can make
+                # one read expand (100 times before, 1032 now). Nothing is allocated up
+                # front, so every other response takes the memory it did before.
+                max_inflate_ratio: 1032
+            # Request bodies are left as the client sent them: by the time a request gets
+            # here every filter that reads it has already run. Advertising gzip to the
+            # provider depends on response decompression, not on this flag.
+            request_direction_config:
+              common_config:
+                enabled:
+                  default_value: false
+                  runtime_key: maas_gateway_request_decompression_enabled
+            response_direction_config:
+              common_config:
+                # A provider's Cache-Control: no-transform must not leave a compressed body
+                # in front of the token counter.
+                ignore_no_transform_header: true

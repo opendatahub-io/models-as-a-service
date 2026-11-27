@@ -10,6 +10,10 @@ chain is read from the live Envoy config of every gateway replica, and traffic t
 pool is checked against the EPP's own log: every authenticated request reaches it, a
 rejected one does not.
 
+The same chains carry the compressor and decompressor of the maas-gateway-encoding
+EnvoyFilter. Every other filter has to sit between the two, where responses are decoded:
+a compressed response is not counted against the token budget, and still answers 200.
+
 Environment Variables:
 - E2E_EPP_POOL_TIMEOUT: Seconds to wait for the pool backend and for the first response
   picked by its EPP (default: 300)
@@ -71,6 +75,8 @@ EPP = "envoy.filters.http.ext_proc"
 WASM = "envoy.filters.http.wasm"
 WASMPLUGIN_PREFIX = "extensions.istio.io/wasmplugin/"
 ROUTER = "envoy.filters.http.router"
+COMPRESSOR = "envoy.filters.http.compressor"
+DECOMPRESSOR = "envoy.filters.http.decompressor"
 MODEL_HEADER = "x-gateway-model-name"
 # Set by the endpoint picker on responses it processed (Gateway API Inference Extension,
 # response header handling; upstream calls it a debugging aid, llm-d's own tests rely on
@@ -167,10 +173,22 @@ def _auth_index(names: list[str]) -> int:
     return -1
 
 
+def _assert_content_encoding(pod: str, listener: str, names: list[str]):
+    """The compressor is the first HTTP filter and the decompressor the last one before
+    the router, on both dataplanes."""
+    for name in (COMPRESSOR, DECOMPRESSOR):
+        assert names.count(name) == 1, f"{pod} {listener}: {name} x{names.count(name)} in {names}"
+    assert names[0] == COMPRESSOR and names[-2:] == [DECOMPRESSOR, ROUTER], (
+        f"{pod} {listener}: expected {COMPRESSOR} first and {DECOMPRESSOR} directly in front "
+        f"of the router, got {names}"
+    )
+
+
 def _assert_chain(pod: str, listener: str, filters: list[dict]):
     names = [f.get("name") for f in filters]
     for name in (IPP_PRE, IPP, EPP, ROUTER):
         assert names.count(name) == 1, f"{pod} {listener}: {name} x{names.count(name)} in {names}"
+    _assert_content_encoding(pod, listener, names)
     order = [names.index(IPP_PRE), names.index(IPP), names.index(EPP), names.index(ROUTER)]
     auth = _auth_index(names)
     if auth >= 0:
@@ -189,6 +207,7 @@ def _assert_praxis_chain(pod: str, listener: str, filters: list[dict]):
     names = [f.get("name") for f in filters]
     for name in (IPP_PRE, IPP, ROUTER):
         assert names.count(name) == 1, f"{pod} {listener}: {name} x{names.count(name)} in {names}"
+    _assert_content_encoding(pod, listener, names)
     order = [names.index(IPP_PRE), names.index(IPP), names.index(ROUTER)]
     auth = _auth_index(names)
     if auth >= 0:

@@ -32,6 +32,20 @@ const (
 	MaxGatewayBodyBufferLimitMB               int64 = 64
 	GatewayBodyBufferLimitEnvoyFilterBaseName       = "maas-gateway-body-buffer-limit"
 
+	// GatewayContentEncodingEnvoyFilterBaseName names the EnvoyFilter that decodes
+	// compressed provider responses before Kuadrant's wasm filter reads token usage
+	// from them, and re-encodes them for clients that asked for compression.
+	GatewayContentEncodingEnvoyFilterBaseName = "maas-gateway-encoding"
+	// GatewayContentEncodingEnvoyFilterPriority orders that EnvoyFilter after every other
+	// one that inserts HTTP filters on the gateway: Kuadrant's (0), payload-processing
+	// (PayloadProcessingEnvoyFilterPriority; maas-controller's for legacy IPP and
+	// ai-gateway-controller's for praxis) and usage logs (20). Those insert first and in
+	// front of the router too, and all of their filters have to end up between the
+	// compressor and the decompressor, where responses are decoded. Istio orders equal
+	// priorities by creation time, so the value has to be strictly higher; it is well
+	// above the others so that a filter added between them does not have to move this one.
+	GatewayContentEncodingEnvoyFilterPriority int64 = 100
+
 	// AnnotationMaaSAPIReplicas overrides the maas-api Deployment replica count for a tenant.
 	// spec.maasApi.replicas takes precedence when both are set.
 	AnnotationMaaSAPIReplicas = "maas.opendatahub.io/maas-api-replicas"
@@ -287,6 +301,12 @@ func GatewayBodyBufferLimitEnvoyFilterName(tenantID string) string {
 		return GatewayBodyBufferLimitEnvoyFilterBaseName
 	}
 	return resourceNameForTenant("maas-gateway-buffer", tenantID)
+}
+
+// GatewayContentEncodingEnvoyFilterName returns the name of the compressor/decompressor
+// EnvoyFilter serving one tenant Gateway.
+func GatewayContentEncodingEnvoyFilterName(tenantID string) string {
+	return resourceNameForTenant(GatewayContentEncodingEnvoyFilterBaseName, tenantID)
 }
 
 func GatewayTokenRateLimitDefaultDenyPolicyName(tenantID string) string {

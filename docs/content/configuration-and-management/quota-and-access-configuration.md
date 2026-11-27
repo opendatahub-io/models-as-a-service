@@ -208,6 +208,16 @@ How to enable this depends on the model server:
 
 **Other servers** — ensure the server includes a `usage` object with `total_tokens` in every `/v1/chat/completions` response, including streamed (SSE) responses. The gateway extracts this field for rate limiting regardless of which server produced it.
 
+### Compressed responses
+
+The token counter reads `usage.total_tokens` from the response body and cannot read a compressed body. Most clients ask for compression without being told to: the OpenAI and Anthropic SDKs, Python `requests` and Node `fetch` all send `Accept-Encoding: gzip` by default. MaaS gateways therefore handle compression themselves:
+
+- The gateway removes the client's `Accept-Encoding` header and asks the model server or external provider for `gzip` only.
+- A gzip response is decoded at the gateway before tokens are counted, so usage is counted whether or not the provider compresses.
+- A client that accepts `gzip` gets a JSON response back gzip-compressed, unless the provider sent it with `Cache-Control: no-transform`. Everything else is returned uncompressed: the gateway does not compress with `br` or `zstd`, and it does not compress streamed (`text/event-stream`) responses.
+
+maas-controller renders this as the `maas-gateway-encoding` EnvoyFilter (`maas-gateway-encoding-<tenant>` for other tenants) in the gateway namespace, one per tenant Gateway. It must be applied after the other EnvoyFilters on the gateway, which its `priority` takes care of. Do not remove it or lower its priority: responses would still be served, but compressed ones would no longer be counted, and usage logs would lose their token counts.
+
 !!! note "Namespace requirements"
     Both **MaaSAuthPolicy** and **MaaSSubscription** must be installed in the `models-as-a-service` namespace. Each `modelRefs` entry must specify the `namespace` where the MaaSModelRef lives (e.g. `llm`).
 
@@ -321,6 +331,10 @@ When a user belongs to multiple groups that each have a subscription, the access
 **Cause:** The model server is not returning `usage.total_tokens` in responses. The gateway sees 0 tokens consumed and never triggers the rate limit. This commonly affects streaming chat completion requests.
 
 **Fix:** Ensure the model server returns `usage.total_tokens` in every response. For vLLM / llm-d, start with `--enable-force-include-usage`; for other servers, use the equivalent option. See [Model server must include usage data](#model-server-must-include-usage-data) for server-specific instructions.
+
+**Cause:** The provider's responses reach the token counter compressed. This happens when the `maas-gateway-encoding` EnvoyFilter is missing from the gateway namespace or is not applied last (see [Compressed responses](#compressed-responses)). For each such response the gateway pod logs a wasm `JSON parse error: UnexpectedByte(31)` (byte 31 is the first byte of a gzip stream).
+
+**Fix:** Check that the EnvoyFilter exists for the tenant's Gateway, and that in the gateway's Envoy configuration `envoy.filters.http.compressor` is the first HTTP filter and `envoy.filters.http.decompressor` is the one directly in front of `envoy.filters.http.router`.
 
 ### Policies not enforced
 
