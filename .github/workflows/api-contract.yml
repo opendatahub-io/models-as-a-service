@@ -1,0 +1,45 @@
+# API contract compatibility checks — pinned to @latest (red-hat-data-services/api-contract-tests).
+# See docs/releasing.md in that repository for upgrade and pinning options.
+name: API contract
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  api-contract:
+    permissions:
+      contents: read
+    uses: red-hat-data-services/api-contract-tests/.github/workflows/provider-openapi-check.yml@latest
+    with:
+      contract-set: .rhoai/contracts.yaml
+      contract-id: maas-api-v1
+      # v0.2.1 — newest GA tag on opendatahub-io/models-as-a-service (2026-07-28)
+      baseline-refs: 8ee0617b3aa3efb0dad62a3a7f8a7f9e809948b0
+      oasdiff-version: "1.33.0"
+      yq-version: "4.45.1"
+      mode: enforce
+
+  crd-contract:
+    permissions:
+      contents: read
+    uses: red-hat-data-services/api-contract-tests/.github/workflows/provider-crd-check.yml@latest
+    with:
+      crd-glob: deployment/base/maas-controller/crd/bases/maas.opendatahub.io_*.yaml
+      # v0.2.1 — newest GA tag on opendatahub-io/models-as-a-service (2026-07-28)
+      baseline-refs: 8ee0617b3aa3efb0dad62a3a7f8a7f9e809948b0
+      mode: enforce
+
+  api-contract-coverage:
+    permissions:
+      contents: read
+    uses: red-hat-data-services/api-contract-tests/.github/workflows/provider-coverage-check.yml@latest
+    with:
+      contract-set: .rhoai/contracts.yaml
+      # v0.2.1 — newest GA tag on opendatahub-io/models-as-a-service (2026-07-28)
+      baseline-refs: 8ee0617b3aa3efb0dad62a3a7f8a7f9e809948b0
+      yq-version: "4.45.1"
+      crd-globs: deployment/base/maas-controller/crd/bases/maas.opendatahub.io_*.yaml
+      # CRD of another project (inference.opendatahub.io group), bundled here for deployment
+      crd-exclude-globs: deployment/base/maas-controller/crd/bases/inference.opendatahub.io_external*.yaml
+      mode: enforce

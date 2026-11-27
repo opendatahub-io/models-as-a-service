@@ -1,0 +1,22 @@
+apiVersion: contracts.rhoai.io/v1alpha1
+kind: ContractSet
+metadata:
+  name: models-as-a-service
+spec:
+  contracts:
+    - id: maas-api-v1
+      type: openapi
+      declaredArtifact: maas-api/openapi3.yaml
+      # Scoped to /v1/ consumer-facing paths; /health and /health/database are
+      # cluster-internal operational endpoints and not part of the consumer contract.
+      matchPath: "^/v1(/|$)"
+      generator:
+        adapter: openapi.static
+        source: maas-api/openapi3.yaml
+      policy:
+        oasdiffVersion: "1.33.0"
+        yqVersion: "4.45.1"
+        flattenAllOf: true
+  exclusions:
+    - path: docs/content/api/openapi3.yaml
+      reason: Symlink to maas-api/openapi3.yaml; documentation copy, not a separate contract
