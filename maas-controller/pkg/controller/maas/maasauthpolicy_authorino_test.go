@@ -13,17 +13,20 @@ import (
 	"testing"
 
 	envoytype "github.com/envoyproxy/go-control-plane/envoy/type/v3"
+
+	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/platform/tenantreconcile"
 )
 
 // The cases run each request through newAuthorinoGateway and assert what other
 // components get: the calls maas-api receives, the headers sent upstream, the identity
-// TokenRateLimitPolicy reads and the deny response. A failure Authorino logs also fails
-// the case.
+// TokenRateLimitPolicy reads and the deny response. Every failure the harness reports
+// also fails the case.
 
 const (
 	celTestOrganizationID = "42c3e46f-2477-44d7-a85b-d3b43f6b31fa"
 	celTestKeyID          = "8f0c2f9e-5d1a-4b7e-9c3d-2a6b1e4f7c90"
 	celTestModelPath      = "/llm/model-a/v1/chat/completions"
+	celTestInfraNamespace = "maas-system"
 )
 
 // celTestAPIKeyValidation is maas-api's validate response for a valid key. groups is
@@ -119,7 +122,7 @@ func celPolicyVariants() map[string]celPolicyVariant {
 func (v celPolicyVariant) spec(t *testing.T) map[string]any {
 	t.Helper()
 	r := &MaaSAuthPolicyReconciler{
-		InfraNamespace:   "maas-system",
+		InfraNamespace:   celTestInfraNamespace,
 		GatewayName:      "maas-default-gateway",
 		GatewayNamespace: "gateway-ns",
 		ClusterAudience:  "https://kubernetes.default.svc",
@@ -151,10 +154,15 @@ type gatewayPolicyCase struct {
 	// wantIdentityClaims are claims the X-MaaS-Identity envelope must carry. maas-api
 	// rejects an envelope without sub or aud. Nil skips the check.
 	wantIdentityClaims map[string]any
-	// wantRateLimitIdentity says whether TokenRateLimitPolicy gets auth.identity.
-	wantRateLimitIdentity bool
-	wantDenyBody          string
-	wantReason            string
+	// wantRateLimitIdentity says whether TokenRateLimitPolicy gets auth.identity, and
+	// wantRateLimitIdentityFields are fields it must carry. Nil skips the fields.
+	wantRateLimitIdentity       bool
+	wantRateLimitIdentityFields map[string]any
+	wantDenyBody                string
+	wantReason                  string
+	// wantDeniedBy is the authorization rule that denies the request. Set it only when
+	// that rule alone denies; with several, which one Authorino reports is chance.
+	wantDeniedBy string
 }
 
 func gatewayPolicyCases() []gatewayPolicyCase {
@@ -172,6 +180,32 @@ func gatewayPolicyCases() []gatewayPolicyCase {
 		request.headers["x-gateway-model-name"] = model
 		return request
 	}
+	// A Kubernetes service account token is a JWT. The OIDC method rejects it, and
+	// TokenReview authenticates it at the next priority.
+	serviceAccountJWTRequest := tokenReviewRequest(celTestModelPath, []string{"system:authenticated", "dev"})
+	serviceAccountJWTRequest.headers["authorization"] = "Bearer aaa.bbb.ccc"
+	// Each of these breaks one rule while every other rule allows the request, so
+	// that rule alone denies it.
+	subscription := func(change func(map[string]any)) map[string]any {
+		info := celTestSubscriptionInfo()
+		change(info)
+		return info
+	}
+	validationExpiring := func(expiresAt string) map[string]any {
+		validation := celTestAPIKeyValidation("system:authenticated")
+		validation["expiresAt"] = expiresAt
+		return validation
+	}
+	oidcClaims := func(change func(map[string]any)) map[string]any {
+		claims := celTestOIDCClaims()
+		change(claims)
+		return claims
+	}
+	clientIdentityHeaderRequest := apiKeyRequest(celTestModelPath)
+	clientIdentityHeaderRequest.headers["x-maas-username"] = "mallory"
+	bodyRoutedRequest := apiKeyRequest("/v1/chat/completions")
+	bodyRoutedRequest.headers["x-gateway-model-name"] = "llm/model-b"
+	validKey := celTestAPIKeyValidation("system:authenticated")
 
 	return []gatewayPolicyCase{
 		{
@@ -191,8 +225,19 @@ func gatewayPolicyCases() []gatewayPolicyCase {
 				"x-maas-subscription-rate-limit-id": "a1b2c3",
 				"x-maas-cost-center":                "cc-42",
 				"x-maas-organization-id":            celTestOrganizationID,
+				"x-maas-keyname":                    "ci",
 			},
 			wantRateLimitIdentity: true,
+			wantRateLimitIdentityFields: map[string]any{
+				"userid":                    "alice",
+				"groups":                    []any{"system:authenticated", "dev"},
+				"groups_str":                "system:authenticated,dev",
+				"keyId":                     celTestKeyID,
+				"keyName":                   "ci",
+				"selected_subscription":     "gold",
+				"selected_subscription_id":  "a1b2c3",
+				"selected_subscription_key": "models-as-a-service/gold@llm/model-a",
+			},
 		},
 		{
 			name:     "valid API key without groups selects a subscription",
@@ -367,9 +412,31 @@ func gatewayPolicyCases() []gatewayPolicyCase {
 			wantReason:       "unauthorized",
 		},
 		{
-			name:                  "TokenReview identity on a model route",
-			variants:              everyVariant,
-			request:               tokenReviewRequest(celTestModelPath, []string{"system:authenticated", "dev"}),
+			name:             "TokenReview identity on a model route",
+			variants:         everyVariant,
+			request:          tokenReviewRequest(celTestModelPath, []string{"system:authenticated", "dev"}),
+			maasAPI:          maasAPIReplies{selectEndpoint: celTestSubscriptionInfo()},
+			wantAllowed:      true,
+			wantMaaSAPICalls: []string{selectEndpoint},
+			wantSelectBody: map[string]any{
+				"groups":                []any{"system:authenticated", "dev"},
+				"username":              "system:serviceaccount:ns:sa",
+				"requestedSubscription": "gold",
+				"requestedModel":        "llm/model-a",
+			},
+			wantHeaders:           map[string]string{"x-maas-username": "system:serviceaccount:ns:sa"},
+			wantRateLimitIdentity: true,
+			wantRateLimitIdentityFields: map[string]any{
+				"userid":                "system:serviceaccount:ns:sa",
+				"groups":                []any{"system:authenticated", "dev"},
+				"keyId":                 "",
+				"selected_subscription": "gold",
+			},
+		},
+		{
+			name:                  "service account JWT on an OIDC gateway is a TokenReview identity",
+			variants:              oidcVariants,
+			request:               serviceAccountJWTRequest,
 			maasAPI:               maasAPIReplies{selectEndpoint: celTestSubscriptionInfo()},
 			wantAllowed:           true,
 			wantMaaSAPICalls:      []string{selectEndpoint},
@@ -402,6 +469,13 @@ func gatewayPolicyCases() []gatewayPolicyCase {
 			maasAPI:          maasAPIReplies{selectEndpoint: celTestSubscriptionInfo()},
 			wantAllowed:      true,
 			wantMaaSAPICalls: []string{selectEndpoint},
+			// Groups of an organization-scoped token are qualified with the organization.
+			wantSelectBody: map[string]any{
+				"groups":                []any{celTestOrganizationID + "/users"},
+				"username":              "alice",
+				"requestedSubscription": "",
+				"requestedModel":        "llm/model-a",
+			},
 			wantHeaders: map[string]string{
 				"x-maas-username":        "alice",
 				"x-maas-organization-id": celTestOrganizationID,
@@ -409,6 +483,10 @@ func gatewayPolicyCases() []gatewayPolicyCase {
 			// Organization-scoped tokens carry no group header.
 			wantNoHeaders:         []string{"x-maas-group"},
 			wantRateLimitIdentity: true,
+			wantRateLimitIdentityFields: map[string]any{
+				"userid": "alice",
+				"groups": []any{celTestOrganizationID + "/users"},
+			},
 		},
 		{
 			name:     "OIDC identity with a single string aud on a model route",
@@ -459,6 +537,185 @@ func gatewayPolicyCases() []gatewayPolicyCase {
 			},
 			wantNoHeaders: []string{"x-maas-identity"},
 		},
+		{
+			name:             "invalid API key on a maas-api route is denied",
+			variants:         everyVariant,
+			request:          apiKeyRequest("/maas-api/v1/models"),
+			maasAPI:          maasAPIReplies{validateEndpoint: celTestInvalidAPIKey},
+			wantMaaSAPICalls: []string{validateEndpoint},
+			wantDenyBody:     accessDenied,
+			wantReason:       "unauthorized",
+			wantDeniedBy:     "auth-valid",
+		},
+		{
+			name:             "expired API key is denied",
+			variants:         everyVariant,
+			request:          apiKeyRequest(celTestModelPath),
+			maasAPI:          maasAPIReplies{validateEndpoint: validationExpiring("2020-01-01T00:00:00Z"), selectEndpoint: celTestSubscriptionInfo()},
+			wantMaaSAPICalls: validateAndSelect,
+			wantDenyBody:     accessDenied,
+			wantReason:       "unauthorized",
+			wantDeniedBy:     "auth-valid",
+		},
+		{
+			// Rego parses expiry to nanoseconds, so a date past 2262 doesn't parse.
+			name:                  "API key that expires later is allowed",
+			variants:              everyVariant,
+			request:               apiKeyRequest(celTestModelPath),
+			maasAPI:               maasAPIReplies{validateEndpoint: validationExpiring("2099-01-01T00:00:00Z"), selectEndpoint: celTestSubscriptionInfo()},
+			wantAllowed:           true,
+			wantMaaSAPICalls:      validateAndSelect,
+			wantRateLimitIdentity: true,
+		},
+		{
+			name:     "pending subscription is denied",
+			variants: everyVariant,
+			request:  apiKeyRequest(celTestModelPath),
+			maasAPI: maasAPIReplies{
+				validateEndpoint: validKey,
+				selectEndpoint:   subscription(func(info map[string]any) { info["phase"] = "Pending" }),
+			},
+			wantMaaSAPICalls: validateAndSelect,
+			wantDenyBody:     accessDenied,
+			wantReason:       "unauthorized",
+			wantDeniedBy:     "subscription-valid",
+		},
+		{
+			name:     "degraded subscription is allowed",
+			variants: everyVariant,
+			request:  apiKeyRequest(celTestModelPath),
+			maasAPI: maasAPIReplies{
+				validateEndpoint: validKey,
+				selectEndpoint:   subscription(func(info map[string]any) { info["phase"] = "Degraded" }),
+			},
+			wantAllowed:           true,
+			wantMaaSAPICalls:      validateAndSelect,
+			wantRateLimitIdentity: true,
+		},
+		{
+			name:     "subscription being deleted is denied",
+			variants: everyVariant,
+			request:  apiKeyRequest(celTestModelPath),
+			maasAPI: maasAPIReplies{
+				validateEndpoint: validKey,
+				selectEndpoint:   subscription(func(info map[string]any) { info["deletionTimestamp"] = "2026-11-26T10:00:00Z" }),
+			},
+			wantMaaSAPICalls: validateAndSelect,
+			wantDenyBody:     accessDenied,
+			wantReason:       "unauthorized",
+			wantDeniedBy:     "subscription-valid",
+		},
+		{
+			name:     "subscription without a name is denied",
+			variants: everyVariant,
+			request:  apiKeyRequest(celTestModelPath),
+			maasAPI: maasAPIReplies{
+				validateEndpoint: validKey,
+				selectEndpoint:   subscription(func(info map[string]any) { info["name"] = "" }),
+			},
+			wantMaaSAPICalls: validateAndSelect,
+			wantDenyBody:     accessDenied,
+			wantReason:       "unauthorized",
+			wantDeniedBy:     "subscription-valid",
+		},
+		{
+			name:     "subscription that doesn't grant access is denied",
+			variants: everyVariant,
+			request:  apiKeyRequest(celTestModelPath),
+			maasAPI: maasAPIReplies{
+				validateEndpoint: validKey,
+				selectEndpoint:   subscription(func(info map[string]any) { info["accessAllowed"] = false }),
+			},
+			wantMaaSAPICalls: validateAndSelect,
+			wantDenyBody:     accessDenied,
+			wantReason:       "unauthorized",
+			wantDeniedBy:     "require-group-membership",
+		},
+		{
+			name:             "API key on the key-management API is denied",
+			variants:         everyVariant,
+			request:          apiKeyRequest("/maas-api/v1/api-keys"),
+			maasAPI:          maasAPIReplies{validateEndpoint: validKey},
+			wantMaaSAPICalls: []string{validateEndpoint},
+			wantDenyBody:     accessDenied,
+			wantReason:       "unauthorized",
+			wantDeniedBy:     "deny-api-key-management",
+		},
+		{
+			name:             "client-supplied identity header is denied",
+			variants:         everyVariant,
+			request:          clientIdentityHeaderRequest,
+			maasAPI:          maasAPIReplies{validateEndpoint: validKey, selectEndpoint: celTestSubscriptionInfo()},
+			wantMaaSAPICalls: validateAndSelect,
+			wantDenyBody:     accessDenied,
+			wantReason:       "unauthorized",
+			wantDeniedBy:     "deny-client-identity-headers",
+		},
+		{
+			name:     "API key on a body-routed endpoint selects the header model",
+			variants: everyVariant,
+			request:  bodyRoutedRequest,
+			maasAPI:  maasAPIReplies{validateEndpoint: validKey, selectEndpoint: celTestSubscriptionInfo()},
+			wantSelectBody: map[string]any{
+				"groups":                []any{"system:authenticated"},
+				"username":              "alice",
+				"requestedSubscription": "gold",
+				"requestedModel":        "llm/model-b",
+			},
+			wantAllowed:           true,
+			wantMaaSAPICalls:      validateAndSelect,
+			wantRateLimitIdentity: true,
+		},
+		{
+			name:         "OIDC token for another client is denied",
+			variants:     oidcVariants,
+			request:      oidcRequest("/v1/me", oidcClaims(func(claims map[string]any) { claims["azp"] = "other-client" })),
+			wantDenyBody: accessDenied,
+			wantReason:   "unauthorized",
+			wantDeniedBy: "oidc-client-bound",
+		},
+		{
+			name:         "OIDC token from another issuer is denied",
+			variants:     oidcVariants,
+			request:      oidcRequest("/v1/me", oidcClaims(func(claims map[string]any) { claims["iss"] = "https://other.example.com" })),
+			wantDenyBody: accessDenied,
+			wantReason:   "unauthorized",
+			wantDeniedBy: "oidc-client-bound",
+		},
+		{
+			name:         "OIDC token for other audiences is denied",
+			variants:     []string{"oidc-audience"},
+			request:      oidcRequest("/v1/me", oidcClaims(func(claims map[string]any) { claims["aud"] = []any{"other"} })),
+			wantDenyBody: accessDenied,
+			wantReason:   "unauthorized",
+			wantDeniedBy: "oidc-client-bound",
+		},
+		{
+			name:         "OIDC token with a single other audience is denied",
+			variants:     []string{"oidc-audience"},
+			request:      oidcRequest("/v1/me", oidcClaims(func(claims map[string]any) { claims["aud"] = "other" })),
+			wantDenyBody: accessDenied,
+			wantReason:   "unauthorized",
+			wantDeniedBy: "oidc-client-bound",
+		},
+		{
+			name:         "OIDC token of another purpose is denied",
+			variants:     []string{"oidc-audience"},
+			request:      oidcRequest("/v1/me", oidcClaims(func(claims map[string]any) { claims["token_use"] = "id" })),
+			wantDenyBody: accessDenied,
+			wantReason:   "unauthorized",
+			wantDeniedBy: "oidc-client-bound",
+		},
+		{
+			// An organization-scoped token's groups are qualified by the gateway, so a
+			// group that already looks qualified could claim another organization's.
+			name:         "OIDC token with an already-qualified group is denied",
+			variants:     oidcVariants,
+			request:      oidcRequest("/v1/me", oidcClaims(func(claims map[string]any) { claims["groups"] = []any{celTestOrganizationID + "/users"} })),
+			wantDenyBody: accessDenied,
+			wantReason:   "unauthorized",
+			wantDeniedBy: "oidc-groups-safe",
+		},
 	}
 }
 
@@ -478,11 +735,26 @@ func TestGatewayAuthPolicyOnAuthorino(t *testing.T) {
 				outcome := gateway.evaluate(t, tc.request)
 
 				// then
-				for _, failure := range outcome.failures {
-					t.Errorf("Authorino: %s", failure)
-				}
 				if got := outcome.calledEndpoints(); !slices.Equal(got, tc.wantMaaSAPICalls) {
 					t.Errorf("maas-api calls = %v, want %v", got, tc.wantMaaSAPICalls)
+				}
+				// The gateway calls the TLS port of the maas-api Service the tenant reconcile
+				// creates in the infrastructure namespace.
+				wantOrigin := "https://" + tenantreconcile.MaaSAPIServiceName(variant.tenantID) + "." + celTestInfraNamespace + ".svc.cluster.local:8443"
+				for _, call := range outcome.maasAPICalls {
+					if origin := call.scheme + "://" + call.host; origin != wantOrigin {
+						t.Errorf("maas-api %s called on %s, want %s", call.endpoint, origin, wantOrigin)
+					}
+				}
+				if outcome.authenticatedBy != tc.request.authMethod {
+					t.Errorf("authenticated by %q, want %q", outcome.authenticatedBy, tc.request.authMethod)
+				}
+				// API-key requests carry sk-oai-key; maas-api validates it without the
+				// Bearer prefix.
+				if slices.Contains(outcome.calledEndpoints(), validateEndpoint) {
+					if got := outcome.callBody(validateEndpoint); !reflect.DeepEqual(got, map[string]any{"key": "sk-oai-key"}) {
+						t.Errorf("API key validation body = %#v, want the bare key", got)
+					}
 				}
 				if got := outcome.callBody(selectEndpoint); tc.wantSelectBody != nil && !reflect.DeepEqual(got, tc.wantSelectBody) {
 					t.Errorf("subscription selection body = %#v, want %#v", got, tc.wantSelectBody)
@@ -492,6 +764,9 @@ func TestGatewayAuthPolicyOnAuthorino(t *testing.T) {
 				}
 				if !tc.wantAllowed {
 					assertDenyResponse(t, outcome, tc.wantDenyBody, tc.wantReason)
+					if tc.wantDeniedBy != "" && outcome.deniedBy != tc.wantDeniedBy {
+						t.Errorf("denied by %q, want %q", outcome.deniedBy, tc.wantDeniedBy)
+					}
 					return
 				}
 				for name, want := range tc.wantHeaders {
@@ -507,8 +782,17 @@ func TestGatewayAuthPolicyOnAuthorino(t *testing.T) {
 				if tc.wantIdentityClaims != nil {
 					assertIdentityClaims(t, outcome.headers["x-maas-identity"], tc.wantIdentityClaims)
 				}
-				if _, got := outcome.metadata["identity"]; got != tc.wantRateLimitIdentity {
+				identity, got := outcome.metadata["identity"]
+				if got != tc.wantRateLimitIdentity {
 					t.Errorf("rate-limit identity set = %v, want %v", got, tc.wantRateLimitIdentity)
+				}
+				if tc.wantRateLimitIdentityFields != nil {
+					fields, _ := identity.(map[string]any)
+					for field, want := range tc.wantRateLimitIdentityFields {
+						if got := fields[field]; !reflect.DeepEqual(got, want) {
+							t.Errorf("rate-limit identity %s = %#v, want %#v", field, got, want)
+						}
+					}
 				}
 			})
 		}
@@ -550,11 +834,43 @@ func assertDenyResponse(t *testing.T, outcome gatewayOutcome, wantBody, wantReas
 	}
 }
 
-// The policy variants the cases run on also compile on RHCL's Authorino.
+// Every policy variant compiles on RHCL's Authorino. newAuthorinoGateway runs the same
+// check; this one fails fast, without starting Authorino.
 func TestGatewayAuthPolicyCELCompilesForRHCL(t *testing.T) {
 	for name, variant := range celPolicyVariants() {
 		t.Run(name, func(t *testing.T) {
 			assertAllAuthPolicyCEL_RHCLCompatible(t, variant.spec(t))
+		})
+	}
+}
+
+// A request without an Authorization header is unauthenticated, and no authentication
+// `when` fails on the missing header.
+func TestGatewayAuthPolicyWithoutAuthorizationHeader(t *testing.T) {
+	variants := celPolicyVariants()
+	oidcVariant, ok := variants["oidc-audience"]
+	if !ok {
+		t.Fatal("celPolicyVariants has no oidc-audience variant")
+	}
+	// With x-api-key and OIDC both on, the OIDC `when` reads the header past the
+	// API-key check.
+	variants["oidc-x-api-key"] = celPolicyVariant{
+		oidc:           oidcVariant.oidc,
+		xAPIKeyEnabled: true,
+		guardrails:     []guardrailHeader{},
+	}
+	for name, variant := range variants {
+		t.Run(name, func(t *testing.T) {
+			// given
+			gateway := newAuthorinoGateway(t, variant.spec(t), nil)
+
+			// when
+			outcome := gateway.evaluate(t, gatewayRequest{path: celTestModelPath})
+
+			// then
+			if outcome.allowed || outcome.status != envoytype.StatusCode_Unauthorized || outcome.authenticatedBy != "" {
+				t.Errorf("allowed = %v, status = %v, authenticated by %q, want Unauthorized", outcome.allowed, outcome.status, outcome.authenticatedBy)
+			}
 		})
 	}
 }
