@@ -388,13 +388,14 @@ func (h *externalModelHandler) NotReadyReason() (maasv1alpha1.ConditionReason, s
 // Path-based HTTPRoute rules remain for backward-compatible clients.
 func (h *externalModelHandler) GetModelEndpoint(ctx context.Context, log logr.Logger, model *maasv1alpha1.MaaSModelRef) (string, error) {
 	extModelName := model.Spec.ModelRef.Name
-	if len(model.Status.HTTPRouteHostnames) > 0 {
-		return fmt.Sprintf("https://%s", model.Status.HTTPRouteHostnames[0]), nil
-	}
-
-	// Status calls this only once ReconcileRoute has validated the route against this gateway.
 	gatewayName := model.Status.HTTPRouteGatewayName
 	gatewayNS := model.Status.HTTPRouteGatewayNamespace
+
+	if len(model.Status.HTTPRouteHostnames) > 0 {
+		return h.r.withOpenShiftRouteFallback(
+			ctx, log, fmt.Sprintf("https://%s", model.Status.HTTPRouteHostnames[0]), gatewayName, gatewayNS)
+	}
+
 	gateway := &gatewayapiv1.Gateway{}
 	key := client.ObjectKey{Name: gatewayName, Namespace: gatewayNS}
 	if err := h.r.Get(ctx, key, gateway); err != nil {
@@ -403,19 +404,22 @@ func (h *externalModelHandler) GetModelEndpoint(ctx context.Context, log logr.Lo
 
 	for _, listener := range gateway.Spec.Listeners {
 		if listener.Hostname != nil {
-			return fmt.Sprintf("https://%s", string(*listener.Hostname)), nil
+			return h.r.withOpenShiftRouteFallback(
+				ctx, log, fmt.Sprintf("https://%s", string(*listener.Hostname)), gatewayName, gatewayNS)
 		}
 	}
 
 	for _, addr := range gateway.Status.Addresses {
 		if addr.Type != nil && *addr.Type == gatewayapiv1.HostnameAddressType {
-			return fmt.Sprintf("https://%s", addr.Value), nil
+			return h.r.withOpenShiftRouteFallback(
+				ctx, log, fmt.Sprintf("https://%s", addr.Value), gatewayName, gatewayNS)
 		}
 	}
 	if len(gateway.Status.Addresses) > 0 {
 		log.Info("Using IP-based gateway address; TLS hostname verification may fail",
 			"address", gateway.Status.Addresses[0].Value, "model", extModelName)
-		return fmt.Sprintf("https://%s", gateway.Status.Addresses[0].Value), nil
+		return h.r.withOpenShiftRouteFallback(
+			ctx, log, fmt.Sprintf("https://%s", gateway.Status.Addresses[0].Value), gatewayName, gatewayNS)
 	}
 
 	return "", fmt.Errorf("unable to determine endpoint: gateway %s/%s has no hostname or addresses", gatewayNS, gatewayName)

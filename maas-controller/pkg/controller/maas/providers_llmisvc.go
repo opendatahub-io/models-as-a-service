@@ -139,6 +139,17 @@ func (h *llmisvcHandler) Status(ctx context.Context, log logr.Logger, model *maa
 		if err != nil {
 			return "", false, err
 		}
+	} else {
+		gatewayName := model.Status.HTTPRouteGatewayName
+		gatewayNS := model.Status.HTTPRouteGatewayNamespace
+		if gatewayName == "" {
+			gatewayName = h.r.gatewayName()
+			gatewayNS = h.r.gatewayNamespace()
+		}
+		endpoint, err = h.r.withOpenShiftRouteFallback(ctx, log, endpoint, gatewayName, gatewayNS)
+		if err != nil {
+			return "", false, err
+		}
 	}
 	return endpoint, true, nil
 }
@@ -152,18 +163,17 @@ func (h *llmisvcHandler) NotReadyReason() (maasv1alpha1.ConditionReason, string)
 // Used when LLMInferenceService status does not expose an endpoint. ExternalModel and other kinds
 // implement their own logic and need not use these path assumptions.
 func (h *llmisvcHandler) GetModelEndpoint(ctx context.Context, log logr.Logger, model *maasv1alpha1.MaaSModelRef) (string, error) {
-	if len(model.Status.HTTPRouteHostnames) > 0 {
-		hostname := model.Status.HTTPRouteHostnames[0]
-		return fmt.Sprintf("https://%s/%s", hostname, model.Name), nil
-	}
-
-	// Use the gateway from the model's status (populated by validateLLMISvcHTTPRoute)
-	// which is tenant-aware. Fall back to default gateway if not set.
 	gatewayName := model.Status.HTTPRouteGatewayName
 	gatewayNS := model.Status.HTTPRouteGatewayNamespace
 	if gatewayName == "" {
 		gatewayName = h.r.gatewayName()
 		gatewayNS = h.r.gatewayNamespace()
+	}
+
+	if len(model.Status.HTTPRouteHostnames) > 0 {
+		hostname := model.Status.HTTPRouteHostnames[0]
+		return h.r.withOpenShiftRouteFallback(
+			ctx, log, fmt.Sprintf("https://%s/%s", hostname, model.Name), gatewayName, gatewayNS)
 	}
 
 	gateway := &gatewayapiv1.Gateway{}
@@ -174,17 +184,22 @@ func (h *llmisvcHandler) GetModelEndpoint(ctx context.Context, log logr.Logger, 
 	if len(gateway.Spec.Listeners) > 0 {
 		for _, listener := range gateway.Spec.Listeners {
 			if listener.Hostname != nil {
-				return fmt.Sprintf("https://%s/%s", string(*listener.Hostname), model.Name), nil
+				return h.r.withOpenShiftRouteFallback(
+					ctx, log, fmt.Sprintf("https://%s/%s", string(*listener.Hostname), model.Name),
+					gatewayName, gatewayNS)
 			}
 		}
 	}
 	if len(gateway.Status.Addresses) > 0 {
 		for _, addr := range gateway.Status.Addresses {
 			if addr.Type != nil && *addr.Type == gatewayapiv1.HostnameAddressType {
-				return fmt.Sprintf("https://%s/%s", addr.Value, model.Name), nil
+				return h.r.withOpenShiftRouteFallback(
+					ctx, log, fmt.Sprintf("https://%s/%s", addr.Value, model.Name), gatewayName, gatewayNS)
 			}
 		}
-		return fmt.Sprintf("https://%s/%s", gateway.Status.Addresses[0].Value, model.Name), nil
+		return h.r.withOpenShiftRouteFallback(
+			ctx, log, fmt.Sprintf("https://%s/%s", gateway.Status.Addresses[0].Value, model.Name),
+			gatewayName, gatewayNS)
 	}
 	return "", fmt.Errorf("unable to determine endpoint: gateway %s/%s has no hostname or addresses", gatewayNS, gatewayName)
 }

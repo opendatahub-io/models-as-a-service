@@ -17,6 +17,8 @@ Prerequisites:
 import contextlib
 import json
 import logging
+import os
+from urllib.parse import urlsplit
 
 import pytest
 import requests
@@ -224,6 +226,33 @@ class TestTenantModelInference:
             f"got {status.get('httpRouteGatewayName')}"
         )
         assert status.get("httpRouteGatewayNamespace") == GATEWAY_NAMESPACE
+
+    def test_model_endpoint_uses_open_shift_route_in_ocproute_mode(self, tenant_inference_cases):
+        """Verify a tenant model endpoint is exposed through its OpenShift Route."""
+        if os.environ.get("INGRESS_MODE", "loadbalancer") != "ocproute":
+            pytest.skip("OpenShift Route fallback is exercised only in INGRESS_MODE=ocproute")
+
+        case_a, _ = tenant_inference_cases
+        model_ref = get_json_or_none(
+            "maasmodelref", case_a["model_name"], case_a["tenant_ns"]
+        )
+        assert model_ref is not None, (
+            f"MaaSModelRef {case_a['tenant_ns']}/{case_a['model_name']} not found"
+        )
+
+        endpoint = model_ref.get("status", {}).get("endpoint")
+        assert endpoint, "MaaSModelRef status.endpoint is empty"
+
+        gateway_url = _get_tenant_gateway_url(case_a["gateway_name"])
+        endpoint_host = urlsplit(endpoint).hostname
+        gateway_host = urlsplit(gateway_url).hostname
+
+        assert endpoint_host == gateway_host, (
+            f"Expected MaaSModelRef endpoint host {gateway_host!r}, got {endpoint_host!r}"
+        )
+        assert not endpoint_host.endswith(".svc.cluster.local"), (
+            "MaaSModelRef endpoint still uses the cluster-local Gateway address"
+        )
 
     @pytest.mark.parametrize("tenant_index", [0, 1], ids=["tenant_a", "tenant_b"])
     def test_inference_succeeds_through_tenant_gateway(self, tenant_inference_cases, tenant_index):
