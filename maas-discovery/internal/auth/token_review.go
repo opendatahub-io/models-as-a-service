@@ -3,16 +3,13 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
-	authv1 "k8s.io/api/authentication/v1"
-	authzv1 "k8s.io/api/authorization/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/kubernetes"
 )
 
 const (
@@ -26,15 +23,11 @@ const (
 	ContextKeyIsAdmin = "auth.isAdmin"
 )
 
-// TokenReviewMiddleware validates bearer tokens via Kubernetes TokenReview and
-// verifies the caller is authenticated via SubjectAccessReview. It also checks
-// whether the caller can list AITenants in aitenantNamespace and marks those
-// callers as admin-visible for tenant discovery.
-func TokenReviewMiddleware(log *slog.Logger, kubeClient kubernetes.Interface, aitenantNamespace string) gin.HandlerFunc {
+// TokenReviewMiddleware authenticates the request's bearer token through the
+// given Reviewer (typically a ReviewCache wrapping a TokenReviewer) and
+// rejects unauthenticated or unauthorized callers before the handler runs.
+func TokenReviewMiddleware(log *slog.Logger, reviewer Reviewer) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		ctx, cancel := context.WithTimeout(c.Request.Context(), kubeAPITimeout)
-		defer cancel()
-
 		authHeader := c.GetHeader("Authorization")
 		if authHeader == "" || !strings.HasPrefix(authHeader, "Bearer ") {
 			log.Debug("missing or invalid Authorization header")
@@ -48,22 +41,31 @@ func TokenReviewMiddleware(log *slog.Logger, kubeClient kubernetes.Interface, ai
 
 		token := strings.TrimPrefix(authHeader, "Bearer ")
 
-		tr := &authv1.TokenReview{
-			Spec: authv1.TokenReviewSpec{Token: token},
-		}
-		result, err := kubeClient.AuthenticationV1().TokenReviews().Create(ctx, tr, metav1.CreateOptions{})
+		ctx, cancel := context.WithTimeout(c.Request.Context(), kubeAPITimeout)
+		defer cancel()
+
+		result, err := reviewer.Review(ctx, token)
 		if err != nil {
-			log.Error("TokenReview failed", "error", err)
-			c.JSON(http.StatusUnauthorized, gin.H{
-				"error":   "Authentication failed",
-				"details": "Token validation error",
-			})
+			switch {
+			case errors.Is(err, ErrTokenValidation):
+				c.JSON(http.StatusUnauthorized, gin.H{
+					"error":   "Authentication failed",
+					"details": "Token validation error",
+				})
+			default:
+				// ErrAuthorizationCheck and anything unexpected.
+				log.Error("authorization check failed", "error", err)
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"error":   "Authorization check failed",
+					"details": "Unable to verify authenticated user status",
+				})
+			}
 			c.Abort()
 			return
 		}
 
-		if !result.Status.Authenticated {
-			log.Debug("token not authenticated", "error", result.Status.Error)
+		if !result.Authenticated {
+			log.Debug("token not authenticated")
 			c.JSON(http.StatusUnauthorized, gin.H{
 				"error":   "Authentication failed",
 				"details": "Invalid token",
@@ -72,34 +74,8 @@ func TokenReviewMiddleware(log *slog.Logger, kubeClient kubernetes.Interface, ai
 			return
 		}
 
-		username := result.Status.User.Username
-		groups := result.Status.User.Groups
-
-		sar := &authzv1.SubjectAccessReview{
-			Spec: authzv1.SubjectAccessReviewSpec{
-				User:   username,
-				Groups: groups,
-				ResourceAttributes: &authzv1.ResourceAttributes{
-					Group:    "authorization.k8s.io",
-					Resource: "selfsubjectaccessreviews",
-					Verb:     "create",
-				},
-			},
-		}
-
-		sarResult, err := kubeClient.AuthorizationV1().SubjectAccessReviews().Create(ctx, sar, metav1.CreateOptions{})
-		if err != nil {
-			log.Error("SubjectAccessReview failed", "error", err)
-			c.JSON(http.StatusInternalServerError, gin.H{
-				"error":   "Authorization check failed",
-				"details": "Unable to verify authenticated user status",
-			})
-			c.Abort()
-			return
-		}
-
-		if !sarResult.Status.Allowed {
-			log.Debug("access denied - not an authenticated user", "reason", sarResult.Status.Reason)
+		if !result.Authorized {
+			log.Debug("access denied - not an authenticated user")
 			c.JSON(http.StatusForbidden, gin.H{
 				"error":   "Insufficient permissions",
 				"details": "User is not authorized to access cluster resources",
@@ -108,34 +84,11 @@ func TokenReviewMiddleware(log *slog.Logger, kubeClient kubernetes.Interface, ai
 			return
 		}
 
-		isAdmin := false
-		if aitenantNamespace != "" {
-			adminSAR := &authzv1.SubjectAccessReview{
-				Spec: authzv1.SubjectAccessReviewSpec{
-					User:   username,
-					Groups: groups,
-					ResourceAttributes: &authzv1.ResourceAttributes{
-						Namespace: aitenantNamespace,
-						Verb:      "list",
-						Group:     "maas.opendatahub.io",
-						Resource:  "aitenants",
-					},
-				},
-			}
+		log.Debug("authenticated user access granted", "username", result.Username, "isAdmin", result.IsAdmin)
 
-			adminResult, adminErr := kubeClient.AuthorizationV1().SubjectAccessReviews().Create(ctx, adminSAR, metav1.CreateOptions{})
-			if adminErr != nil {
-				log.Error("admin SubjectAccessReview failed", "error", adminErr)
-			} else {
-				isAdmin = adminResult.Status.Allowed
-			}
-		}
-
-		log.Debug("authenticated user access granted", "username", username, "isAdmin", isAdmin)
-
-		c.Set(ContextKeyUsername, username)
-		c.Set(ContextKeyGroups, groups)
-		c.Set(ContextKeyIsAdmin, isAdmin)
+		c.Set(ContextKeyUsername, result.Username)
+		c.Set(ContextKeyGroups, result.Groups)
+		c.Set(ContextKeyIsAdmin, result.IsAdmin)
 		c.Next()
 	}
 }

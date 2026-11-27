@@ -52,6 +52,9 @@ func run() error {
 	tenantNamespace := flag.String("aitenant-namespace", "ai-tenants", "namespace where AITenant CRs are created")
 	gatewayNamespace := flag.String("gateway-namespace", "openshift-ingress", "namespace of Gateway resources")
 	logLevel := flag.String("log-level", "info", "log level: debug, info, warn, error")
+	authCacheTTL := flag.Duration("auth-cache-ttl", 30*time.Second, "TTL for cached successful token auth decisions; 0 disables caching")
+	authCacheNegativeTTL := flag.Duration("auth-cache-negative-ttl", 2*time.Second, "TTL for cached rejected token auth decisions")
+	authCacheMaxEntries := flag.Int("auth-cache-max-entries", 8192, "maximum cached token auth decisions (LRU eviction)")
 	flag.Parse()
 
 	level, err := parseLogLevel(*logLevel)
@@ -103,7 +106,13 @@ func run() error {
 		if clientErr != nil {
 			return fmt.Errorf("creating kubernetes client for auth: %w", clientErr)
 		}
-		authMiddleware = append(authMiddleware, auth.TokenReviewMiddleware(log, kubeClient, *tenantNamespace))
+		reviewer := auth.NewTokenReviewer(log, kubeClient, *tenantNamespace)
+		cachedReviewer := auth.NewReviewCache(reviewer, auth.ReviewCacheOptions{
+			TTL:         *authCacheTTL,
+			NegativeTTL: *authCacheNegativeTTL,
+			MaxEntries:  *authCacheMaxEntries,
+		})
+		authMiddleware = append(authMiddleware, auth.TokenReviewMiddleware(log, cachedReviewer))
 	}
 	h.RegisterRoutes(engine, authMiddleware...)
 
