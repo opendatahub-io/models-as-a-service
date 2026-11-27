@@ -28,6 +28,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	batcv1 "k8s.io/api/batch/v1"
@@ -114,6 +115,20 @@ type AITenantReconciler struct {
 	DeletionTimeout time.Duration
 	// Recorder emits Kubernetes events for deletion timeout warnings.
 	Recorder events.EventRecorder
+
+	// OIDCProbe overrides the OIDC issuer probe used for the OIDCReady
+	// condition. Nil uses oidcprobe.Probe. Injected by tests.
+	OIDCProbe oidcProbeFunc
+
+	// oidcProbeMu guards oidcProbeLast and oidcConfigLast.
+	oidcProbeMu sync.Mutex
+	// oidcProbeLast caches the most recent OIDC probe per issuer so
+	// watch-driven reconciles do not hammer the issuer.
+	oidcProbeLast map[string]oidcProbeCacheEntry
+	// oidcConfigLast caches the most recent client-config evaluation per
+	// AITenant so watch-driven reconciles do not re-read the clientSecretRef
+	// Secret (an uncached API read) when nothing changed.
+	oidcConfigLast map[types.NamespacedName]oidcConfigCacheEntry
 }
 
 // +kubebuilder:rbac:groups=maas.opendatahub.io,resources=aitenants,verbs=get;list;watch;create;update;patch;delete
@@ -150,6 +165,14 @@ func (r *AITenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	}
 
 	statusSnapshot := aitenant.Status.DeepCopy()
+
+	// Clear a stale OIDCReady before any early return: the failed/pending
+	// paths below skip reconcileOIDCReady, so without this, removing
+	// spec.oidc on a failed tenant would leave the old condition behind.
+	// Every early path persists status, so the removal lands in their writes.
+	if !oidcConfigured(&aitenant) {
+		apimeta.RemoveStatusCondition(&aitenant.Status.Conditions, maasv1alpha1.AITenantConditionOIDCReady)
+	}
 
 	if err := r.validateAITenantPlacement(&aitenant); err != nil {
 		setAITenantPhase(&aitenant, "Failed", "InvalidPlacement", err.Error())
@@ -293,6 +316,9 @@ func (r *AITenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	}
 
 	if !tenantConfigReady {
+		// The infra namespace is known here, so the OIDC condition can be
+		// reported even while the tenant config is still coming up.
+		r.reconcileOIDCReady(ctx, &aitenant)
 		setAITenantPhase(&aitenant, "Pending", "TenantConfigNotReady", "waiting for MaasTenantConfig to report Ready")
 		if err := r.updateAITenantStatus(ctx, &aitenant, statusSnapshot); err != nil {
 			return ctrl.Result{}, err
@@ -300,12 +326,25 @@ func (r *AITenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 
+	// OIDC problems never fail the reconcile or change Ready/phase: API-key
+	// access keeps working during an OIDC outage. The condition is set before
+	// updateAITenantStatus so it lands in the same status write.
+	r.reconcileOIDCReady(ctx, &aitenant)
 	setAITenantPhase(&aitenant, "Active", "Reconciled", "AITenant bootstrap resources are reconciled")
 	if err := r.updateAITenantStatus(ctx, &aitenant, statusSnapshot); err != nil {
 		return ctrl.Result{}, err
 	}
 	if namespaceLabelsFailed {
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+	// Re-probe the issuer only while it is unhealthy. The requeue re-runs the
+	// whole bootstrap reconcile, so a healthy tenant pays nothing: a healthy
+	// issuer that breaks later is noticed on the next AITenant or
+	// watch-driven reconcile, not on a timer. While unhealthy, the requeue
+	// picks up issuer recovery and trusted-CA fixes without editing the
+	// AITenant.
+	if oidcReadyIsFalse(&aitenant) {
+		return ctrl.Result{RequeueAfter: oidcRequeueInterval}, nil
 	}
 	return ctrl.Result{}, nil
 }
@@ -1964,6 +2003,38 @@ func setAITenantPhase(aitenant *maasv1alpha1.AITenant, phase, reason, message st
 // stay missing for minutes (observed in CI as "AITenant is not DeployReady
 // yet" loops). Retry on conflict with a fresh read so the stamp converges
 // promptly.
+// aitenantOwnedConditionTypes are the condition types this controller owns
+// on the AITenant status. Other condition types are owned by other
+// controllers (for example the consumer portal's PortalProxyReady, written by
+// ai-gateway-controller) and must survive this controller's full-status
+// writes: per-condition ownership is the contract that allows more than one
+// writer on the AITenant status subresource.
+var aitenantOwnedConditionTypes = map[string]struct{}{ //nolint:gochecknoglobals // Constant set.
+	maasv1alpha1.AITenantConditionReady:     {},
+	maasv1alpha1.AITenantConditionOIDCReady: {},
+	tenantreconcile.ConditionTypeDegraded:   {},
+	aitenantAPIKeysRevokedCondition:         {},
+}
+
+// mergeAITenantConditions keeps this controller's own condition types from
+// desired (its fresh values) and every other type from live (whoever wrote it
+// last), so a full-status write cannot clobber a foreign condition — not even
+// a stale copy of one carried in desired from an older cached read.
+func mergeAITenantConditions(desired, live []metav1.Condition) []metav1.Condition {
+	merged := make([]metav1.Condition, 0, len(desired)+len(live))
+	for _, condition := range desired {
+		if _, owned := aitenantOwnedConditionTypes[condition.Type]; owned {
+			merged = append(merged, condition)
+		}
+	}
+	for _, condition := range live {
+		if _, owned := aitenantOwnedConditionTypes[condition.Type]; !owned {
+			merged = append(merged, condition)
+		}
+	}
+	return merged
+}
+
 func (r *AITenantReconciler) updateAITenantStatus(ctx context.Context, aitenant *maasv1alpha1.AITenant, statusSnapshot *maasv1alpha1.AITenantStatus) error {
 	if equality.Semantic.DeepEqual(*statusSnapshot, aitenant.Status) {
 		return nil
@@ -1977,7 +2048,9 @@ func (r *AITenantReconciler) updateAITenantStatus(ctx context.Context, aitenant 
 		if err := r.get(ctx, client.ObjectKeyFromObject(aitenant), live); err != nil {
 			return err
 		}
+		liveConditions := live.Status.Conditions
 		live.Status = *desired
+		live.Status.Conditions = mergeAITenantConditions(desired.Conditions, liveConditions)
 		if err := r.Status().Update(ctx, live); err != nil {
 			return err
 		}
