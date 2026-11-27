@@ -1,0 +1,102 @@
+name: PR Workflow Retry Help
+
+on:
+  workflow_run:
+    workflows:
+      - "*"
+      - "!PR Workflow Retry Help"
+    types: [completed]
+
+permissions: {}
+
+concurrency:
+  # Keep the shared PR comment serialized across pushes, including fork PRs
+  # whose workflow_run.pull_requests array may be empty.
+  group: rerun-help-${{ github.event.workflow_run.head_repository.id }}-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: false
+  # Late failures from older commits must not replace a queued current failure.
+  queue: max
+
+jobs:
+  notify:
+    if: >-
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.conclusion == 'failure'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      # Check whether this failure was superseded before suggesting a retry.
+      actions: read
+      pull-requests: write
+    steps:
+      # Never check out or execute PR code in this privileged workflow.
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const run = context.payload.workflow_run;
+            const {owner, repo} = context.repo;
+            // workflow_run.pull_requests can be empty for fork PRs. Resolve
+            // by head branch and repository, then verify the current SHA.
+            const headOwner = run.head_repository?.owner?.login;
+            if (!headOwner) return;
+            const runs = await github.paginate(github.rest.actions.listWorkflowRuns, {
+              owner, repo, workflow_id: run.workflow_id, head_sha: run.head_sha,
+              event: 'pull_request', per_page: 100,
+            });
+            const latest = runs
+              .filter(candidate => candidate.head_repository?.id === run.head_repository.id &&
+                candidate.head_branch === run.head_branch)
+              .reduce((newest, candidate) => !newest || candidate.run_number > newest.run_number
+                ? candidate : newest, null);
+            if (!latest || latest.id !== run.id || latest.run_attempt !== run.run_attempt ||
+                latest.status !== 'completed' || latest.conclusion !== 'failure') return;
+            const pulls = await github.paginate(github.rest.pulls.list, {
+              owner, repo, state: 'open', head: `${headOwner}:${run.head_branch}`,
+              per_page: 100,
+            });
+            for (const pr of pulls) {
+              if (pr.head.sha !== run.head_sha ||
+                  pr.head.repo?.id !== run.head_repository.id) continue;
+              const marker = '<!-- maas-rerun-help -->';
+              const guide = `https://github.com/${owner}/${repo}/blob/HEAD/CONTRIBUTING.md#retrying-github-actions`;
+              const workflowName = run.name.replace(/[\\`*_{}[\]()<>#+.!|]/g, '\\$&').replace(/[\r\n]/g, ' ');
+              const body = [
+                marker,
+                `### ${workflowName} failed`,
+                '',
+                `1. **[Inspect the failure](${run.html_url})** for commit \`${run.head_sha.slice(0, 12)}\`. Fix code, lint, or test errors before retrying.`,
+                '2. **For a transient failure, post a new PR comment:**',
+                '',
+                '```text',
+                '/rerun-failed',
+                '```',
+                '',
+                '<details>',
+                '<summary>Other retry options and who can use them</summary>',
+                '',
+                '| To retry… | Post this as a new PR comment |',
+                '|---|---|',
+                '| All jobs in failed or cancelled workflows | `/rerun-all` |',
+                '| One failed or cancelled workflow | `/rerun-workflow "workflow name"` |',
+                '',
+                'Owners, organization members, collaborators, and previous contributors can retry failed fork PR workflows. Retrying a branch in this repository or any cancelled workflow requires current repository write access. If you are new to this repository, ask a maintainer to post the command.',
+                '',
+                'These commands retry GitHub Actions for the latest PR commit. They do not retry Konflux/Prow checks or approve blocked workflows.',
+                '',
+                `[Full retry guide](${guide})`,
+                '',
+                '</details>',
+              ].join('\n');
+              const comments = await github.paginate(github.rest.issues.listComments, {
+                owner, repo, issue_number: pr.number, per_page: 100,
+              });
+              const existing = comments.find(comment =>
+                comment.user?.login === 'github-actions[bot]' && comment.body?.includes(marker));
+              if (existing) {
+                if (existing.body !== body) await github.rest.issues.updateComment({
+                  owner, repo, comment_id: existing.id, body,
+                });
+              } else {
+                await github.rest.issues.createComment({owner, repo, issue_number: pr.number, body});
+              }
+            }

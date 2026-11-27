@@ -125,6 +125,38 @@ Konflux builds multi-arch container images (x86_64, arm64, ppc64le, s390x) for b
 
 **Workflows requiring owner approval:** Some CI workflows (e.g. those that run on infrastructure or deploy) require approval from an [OWNERS](OWNERS) approver before they can run. If your PR’s workflows are blocked, ping an owner in the PR to request approval. Before asking, validate that the workflow would succeed by running the same steps locally where possible (for example, the Prow-style E2E script below).
 
+### Retrying GitHub Actions
+
+For a transient failure, owners, organization members, collaborators, and previous
+contributors can retry failed fork PR workflows by posting one of these commands on its
+own line in a PR comment. Retrying a branch in this repository requires current
+repository write access, because those workflows can use write permissions and
+secrets. A permission lookup failure denies the request; ask a maintainer to retry.
+Cancelled workflows also require current repository write access, including on
+fork PRs: cancellation alone does not establish that GitHub approved execution.
+
+| Command | Effect |
+|---------|--------|
+| `/rerun-failed` | Retry failed jobs and their dependent jobs in failed workflows. |
+| `/rerun-all` | Retry all jobs in failed or cancelled workflows. |
+| `/rerun-workflow MaaS Controller` | Retry all jobs in the named failed or cancelled workflow (quotes around the name are optional). |
+
+Only completed `pull_request` workflow runs for the PR's **current head commit**
+are eligible. Only the newest run of each workflow is considered, so a successful
+or active replacement leaves older failures alone. Cancelled workflows are always
+retried in full, including with
+`/rerun-failed`, to recover cancelled prerequisites. Successful and running
+workflows are left alone. The command workflow must be merged into the default
+branch before comments can trigger it.
+
+These commands do not retry Konflux or Prow checks, approve blocked workflows, or
+retry `pull_request_target` workflows. Check the failure logs first: code, lint, and
+manifest errors need a fix rather than repeated retries.
+
+On GitHub Actions failure, a bot posts or updates one comment per PR linking the
+failed run and these instructions. It ignores failures from older PR commits
+and superseded runs of the same workflow.
+
 **Run locally before pushing:**
 
 - Kustomize: `./scripts/ci/validate-manifests.sh` (from repo root; requires kustomize 5.7.x).
