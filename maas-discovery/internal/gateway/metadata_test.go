@@ -60,6 +60,18 @@ func routeObj(host, svc string, tls, admitted bool) unstructured.Unstructured {
 	return routeObjWithSpecHost(host, host, svc, tls, admitted, "", nil)
 }
 
+// routeObjWithPort builds an admitted, host-only, TLS Route whose backend
+// targets the given Service port (an IntOrString value: number or name).
+func routeObjWithPort(host, svc string, targetPort any) unstructured.Unstructured {
+	route := routeObj(host, svc, true, true)
+	spec, ok := route.Object["spec"].(map[string]any)
+	if !ok {
+		panic("route spec is not a map")
+	}
+	spec["port"] = map[string]any{"targetPort": targetPort}
+	return route
+}
+
 // routeObjWithSpecHost builds a Route whose spec.host may differ from the host
 // published by the admitting status.ingress entry, with an optional path and
 // backend weight.
@@ -119,7 +131,7 @@ func TestExtractMetadata_HTTPS(t *testing.T) {
 		nil,
 	)
 
-	meta, err := gateway.ExtractMetadata(gw, "my-gw", "gw-ns")
+	meta, err := gateway.ExtractMetadata(gw, "my-gw", "gw-ns", nil, nil)
 	require.NoError(t, err)
 	assert.Equal(t, "my-gw", meta.Name)
 	assert.Equal(t, "gw-ns", meta.Namespace)
@@ -135,7 +147,7 @@ func TestExtractMetadata_HTTPSNonStandardPort(t *testing.T) {
 		nil,
 	)
 
-	meta, err := gateway.ExtractMetadata(gw, "my-gw", "gw-ns")
+	meta, err := gateway.ExtractMetadata(gw, "my-gw", "gw-ns", nil, nil)
 	require.NoError(t, err)
 	assert.Equal(t, "https://gw.example.com:8443", meta.ExternalURL)
 	assert.Equal(t, int64(8443), meta.Port)
@@ -148,7 +160,7 @@ func TestExtractMetadata_HTTP(t *testing.T) {
 		nil,
 	)
 
-	meta, err := gateway.ExtractMetadata(gw, "my-gw", "gw-ns")
+	meta, err := gateway.ExtractMetadata(gw, "my-gw", "gw-ns", nil, nil)
 	require.NoError(t, err)
 	assert.Equal(t, "http", meta.Protocol)
 	assert.Equal(t, "http://gw.example.com", meta.ExternalURL)
@@ -168,7 +180,7 @@ func TestExtractMetadata_PrefersHTTPSOverHTTP(t *testing.T) {
 		nil,
 	)
 
-	meta, err := gateway.ExtractMetadata(gw, "my-gw", "gw-ns")
+	meta, err := gateway.ExtractMetadata(gw, "my-gw", "gw-ns", nil, nil)
 	require.NoError(t, err)
 	assert.Equal(t, "https", meta.Protocol)
 	assert.Equal(t, int64(443), meta.Port)
@@ -181,7 +193,7 @@ func TestExtractMetadata_FallsBackToStatusAddresses(t *testing.T) {
 		[]any{map[string]any{"value": "lb.example.com", "type": "Hostname"}},
 	)
 
-	meta, err := gateway.ExtractMetadata(gw, "my-gw", "gw-ns")
+	meta, err := gateway.ExtractMetadata(gw, "my-gw", "gw-ns", nil, nil)
 	require.NoError(t, err)
 	assert.Equal(t, "https://lb.example.com", meta.ExternalURL)
 }
@@ -193,7 +205,7 @@ func TestExtractMetadata_RejectsInternalHostname(t *testing.T) {
 		[]any{map[string]any{"value": "my-svc.default.svc.cluster.local"}},
 	)
 
-	_, err := gateway.ExtractMetadata(gw, "my-gw", "gw-ns")
+	_, err := gateway.ExtractMetadata(gw, "my-gw", "gw-ns", nil, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "internal service name")
 }
@@ -205,20 +217,20 @@ func TestExtractMetadata_NoExternalHostname(t *testing.T) {
 		nil,
 	)
 
-	_, err := gateway.ExtractMetadata(gw, "my-gw", "gw-ns")
+	_, err := gateway.ExtractMetadata(gw, "my-gw", "gw-ns", nil, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "could not determine external hostname")
 }
 
 func TestExtractMetadata_NoSpec(t *testing.T) {
 	gw := map[string]any{"status": map[string]any{}}
-	_, err := gateway.ExtractMetadata(gw, "gw", "ns")
+	_, err := gateway.ExtractMetadata(gw, "gw", "ns", nil, nil)
 	assert.Error(t, err)
 }
 
 func TestExtractMetadata_NoStatus(t *testing.T) {
 	gw := map[string]any{"spec": map[string]any{"listeners": []any{}}}
-	_, err := gateway.ExtractMetadata(gw, "gw", "ns")
+	_, err := gateway.ExtractMetadata(gw, "gw", "ns", nil, nil)
 	assert.Error(t, err)
 }
 
@@ -228,7 +240,7 @@ func TestExtractMetadata_NoListeners(t *testing.T) {
 		[]any{readyStatus("https", int64(1))},
 		nil,
 	)
-	_, err := gateway.ExtractMetadata(gw, "gw", "ns")
+	_, err := gateway.ExtractMetadata(gw, "gw", "ns", nil, nil)
 	assert.Error(t, err)
 }
 
@@ -239,7 +251,7 @@ func TestExtractMetadata_NoReadyListeners(t *testing.T) {
 		nil,
 	)
 
-	_, err := gateway.ExtractMetadata(gw, "gw", "ns")
+	_, err := gateway.ExtractMetadata(gw, "gw", "ns", nil, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no ready listeners")
 }
@@ -251,7 +263,7 @@ func TestExtractMetadata_NoReadyListenersWithAddresses(t *testing.T) {
 		[]any{map[string]any{"value": "lb.example.com", "type": "Hostname"}},
 	)
 
-	_, err := gateway.ExtractMetadata(gw, "gw", "ns")
+	_, err := gateway.ExtractMetadata(gw, "gw", "ns", nil, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no ready listeners",
 		"should not produce a valid URL when no listener has attached routes")
@@ -272,7 +284,7 @@ func TestExtractMetadata_Float64Port(t *testing.T) {
 		nil,
 	)
 
-	meta, err := gateway.ExtractMetadata(gw, "gw", "ns")
+	meta, err := gateway.ExtractMetadata(gw, "gw", "ns", nil, nil)
 	require.NoError(t, err)
 	assert.Equal(t, int64(8443), meta.Port)
 }
@@ -284,15 +296,16 @@ func TestExtractMetadata_RouteHostFallback(t *testing.T) {
 		[]any{map[string]any{"value": "my-gw-svc.gw-ns.svc.cluster.local"}},
 	)
 
-	routeHosts := map[string]gateway.RouteHostInfo{
-		"my-gw-svc": {
+	routeHosts := map[string][]gateway.RouteHostInfo{
+		"my-gw-svc": {{
 			Host:   "maas.apps.example.com",
 			Scheme: "https",
 			Port:   443,
-		},
+		}},
 	}
+	gwServices := gateway.GatewayServices{"my-gw-svc": {{Name: "https", Port: 443, TargetPort: 443}}}
 
-	meta, err := gateway.ExtractMetadata(gw, "my-gw", "gw-ns", routeHosts)
+	meta, err := gateway.ExtractMetadata(gw, "my-gw", "gw-ns", routeHosts, gwServices)
 	require.NoError(t, err)
 	assert.Equal(t, "https://maas.apps.example.com", meta.ExternalURL)
 }
@@ -304,15 +317,16 @@ func TestExtractMetadata_RouteHostFallbackUsesRouteSchemeAndPort(t *testing.T) {
 		[]any{map[string]any{"value": "my-gw-svc.gw-ns.svc.cluster.local"}},
 	)
 
-	routeHosts := map[string]gateway.RouteHostInfo{
-		"my-gw-svc": {
+	routeHosts := map[string][]gateway.RouteHostInfo{
+		"my-gw-svc": {{
 			Host:   "maas.apps.example.com",
 			Scheme: "https",
 			Port:   443,
-		},
+		}},
 	}
+	gwServices := gateway.GatewayServices{"my-gw-svc": {{Name: "http", Port: 80, TargetPort: 80}}}
 
-	meta, err := gateway.ExtractMetadata(gw, "my-gw", "gw-ns", routeHosts)
+	meta, err := gateway.ExtractMetadata(gw, "my-gw", "gw-ns", routeHosts, gwServices)
 	require.NoError(t, err)
 	assert.Equal(t, "https", meta.Protocol)
 	assert.Equal(t, int64(443), meta.Port)
@@ -326,17 +340,96 @@ func TestExtractMetadata_RouteHostFallbackNoMatch(t *testing.T) {
 		[]any{map[string]any{"value": "my-gw-svc.gw-ns.svc.cluster.local"}},
 	)
 
-	routeHosts := map[string]gateway.RouteHostInfo{
-		"other-svc": {
+	routeHosts := map[string][]gateway.RouteHostInfo{
+		"other-svc": {{
 			Host:   "other.apps.example.com",
 			Scheme: "https",
 			Port:   443,
-		},
+		}},
 	}
-
-	_, err := gateway.ExtractMetadata(gw, "my-gw", "gw-ns", routeHosts)
+	_, err := gateway.ExtractMetadata(gw, "my-gw", "gw-ns", routeHosts, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "internal service name")
+}
+
+// TestExtractMetadata_RouteHostFallbackMatchesSelectorService covers the
+// selector-based matching: the Route targets a Service whose name differs
+// from the Gateway's internal hostname prefix, but which selects the Gateway
+// via the gateway.networking.k8s.io/gateway-name selector label.
+func TestExtractMetadata_RouteHostFallbackMatchesSelectorService(t *testing.T) {
+	gw := makeGateway(
+		[]any{httpsListener("", int64(443))},
+		[]any{readyStatus("https", int64(1))},
+		[]any{map[string]any{"value": "my-gw.gw-ns.svc.cluster.local"}},
+	)
+
+	routeHosts := map[string][]gateway.RouteHostInfo{
+		"custom-edge-svc": {{
+			Host:   "maas.apps.example.com",
+			Scheme: "https",
+			Port:   443,
+		}},
+	}
+	gwServices := gateway.GatewayServices{"custom-edge-svc": {{Name: "https", Port: 443, TargetPort: 443}}}
+
+	meta, err := gateway.ExtractMetadata(gw, "my-gw", "gw-ns", routeHosts, gwServices)
+	require.NoError(t, err)
+	assert.Equal(t, "https://maas.apps.example.com", meta.ExternalURL)
+}
+
+// TestExtractMetadata_RouteFallbackIgnoresServiceWithoutSelector ensures that
+// a Route targeting a Service named like the internal hostname prefix is NOT
+// matched unless that Service actually selects the Gateway.
+func TestExtractMetadata_RouteFallbackIgnoresServiceWithoutSelector(t *testing.T) {
+	gw := makeGateway(
+		[]any{httpsListener("", int64(443))},
+		[]any{readyStatus("https", int64(1))},
+		[]any{map[string]any{"value": "my-gw-svc.gw-ns.svc.cluster.local"}},
+	)
+
+	routeHosts := map[string][]gateway.RouteHostInfo{
+		"my-gw-svc": {{
+			Host:   "unrelated.apps.example.com",
+			Scheme: "https",
+			Port:   443,
+		}},
+	}
+	gwServices := gateway.GatewayServices{"some-other-svc": {{Name: "https", Port: 443, TargetPort: 443}}}
+
+	_, err := gateway.ExtractMetadata(gw, "my-gw", "gw-ns", routeHosts, gwServices)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "internal service name")
+}
+
+// TestExtractMetadata_RouteFallbackMultipleServicesDeterministic: when several
+// selector-matching Services have Route endpoints, the winner is chosen
+// deterministically — HTTPS preferred, then lexicographically by host —
+// independent of map iteration order.
+func TestExtractMetadata_RouteFallbackMultipleServicesDeterministic(t *testing.T) {
+	gw := makeGateway(
+		[]any{httpListener("", int64(8080))},
+		[]any{readyStatus("http", int64(1))},
+		[]any{map[string]any{"value": "my-gw.gw-ns.svc.cluster.local"}},
+	)
+
+	routeHosts := map[string][]gateway.RouteHostInfo{
+		"svc-a": {{Host: "zeta.apps.example.com", Scheme: "https", Port: 443}},
+		"svc-b": {{Host: "alpha.apps.example.com", Scheme: "https", Port: 443}},
+		"svc-c": {{Host: "aaa.apps.example.com", Scheme: "http", Port: 80}},
+	}
+	gwServices := gateway.GatewayServices{
+		"svc-a": {{Name: "http", Port: 8080, TargetPort: 8080}},
+		"svc-b": {{Name: "http", Port: 8080, TargetPort: 8080}},
+		"svc-c": {{Name: "http", Port: 8080, TargetPort: 8080}},
+	}
+
+	for range 50 {
+		meta, err := gateway.ExtractMetadata(gw, "my-gw", "gw-ns", routeHosts, gwServices)
+		require.NoError(t, err)
+		assert.Equal(t, "https", meta.Protocol, "HTTPS endpoint must win over HTTP")
+		assert.Equal(t, "https://alpha.apps.example.com", meta.ExternalURL,
+			"lexicographically smallest HTTPS host must win")
+	}
 }
 
 func TestBuildRouteHostMap(t *testing.T) {
@@ -346,12 +439,14 @@ func TestBuildRouteHostMap(t *testing.T) {
 	}
 
 	m := gateway.BuildRouteHostMap(routes)
-	assert.Equal(t, "maas.apps.example.com", m["maas-gw-svc"].Host)
-	assert.Equal(t, "https", m["maas-gw-svc"].Scheme)
-	assert.Equal(t, int64(443), m["maas-gw-svc"].Port)
-	assert.Equal(t, "other.apps.example.com", m["other-svc"].Host)
-	assert.Equal(t, "http", m["other-svc"].Scheme)
-	assert.Equal(t, int64(80), m["other-svc"].Port)
+	require.Len(t, m["maas-gw-svc"], 1)
+	assert.Equal(t, "maas.apps.example.com", m["maas-gw-svc"][0].Host)
+	assert.Equal(t, "https", m["maas-gw-svc"][0].Scheme)
+	assert.Equal(t, int64(443), m["maas-gw-svc"][0].Port)
+	require.Len(t, m["other-svc"], 1)
+	assert.Equal(t, "other.apps.example.com", m["other-svc"][0].Host)
+	assert.Equal(t, "http", m["other-svc"][0].Scheme)
+	assert.Equal(t, int64(80), m["other-svc"][0].Port)
 	assert.Len(t, m, 2)
 }
 
@@ -362,7 +457,8 @@ func TestBuildRouteHostMap_SkipsNonAdmittedRoutes(t *testing.T) {
 	}
 
 	m := gateway.BuildRouteHostMap(routes)
-	assert.Equal(t, "accepted.apps.example.com", m["shared-svc"].Host)
+	require.Len(t, m["shared-svc"], 1)
+	assert.Equal(t, "accepted.apps.example.com", m["shared-svc"][0].Host)
 }
 
 func TestBuildRouteHostMap_PrefersTLSEndpointForService(t *testing.T) {
@@ -372,9 +468,11 @@ func TestBuildRouteHostMap_PrefersTLSEndpointForService(t *testing.T) {
 	}
 
 	m := gateway.BuildRouteHostMap(routes)
-	assert.Equal(t, "https.apps.example.com", m["shared-svc"].Host)
-	assert.Equal(t, "https", m["shared-svc"].Scheme)
-	assert.Equal(t, int64(443), m["shared-svc"].Port)
+	require.Len(t, m["shared-svc"], 2)
+	// Candidates are sorted best-first: HTTPS preferred.
+	assert.Equal(t, "https.apps.example.com", m["shared-svc"][0].Host)
+	assert.Equal(t, "https", m["shared-svc"][0].Scheme)
+	assert.Equal(t, int64(443), m["shared-svc"][0].Port)
 }
 
 func TestBuildRouteHostMap_Empty(t *testing.T) {
@@ -394,7 +492,7 @@ func TestExtractMetadata_TLSListener(t *testing.T) {
 		nil,
 	)
 
-	meta, err := gateway.ExtractMetadata(gw, "gw", "ns")
+	meta, err := gateway.ExtractMetadata(gw, "gw", "ns", nil, nil)
 	require.NoError(t, err)
 	assert.Equal(t, "https", meta.Protocol)
 }
@@ -406,7 +504,7 @@ func TestExtractMetadata_IPv6AddressBracketed(t *testing.T) {
 		[]any{map[string]any{"value": "fd00::1"}},
 	)
 
-	meta, err := gateway.ExtractMetadata(gw, "gw", "ns")
+	meta, err := gateway.ExtractMetadata(gw, "gw", "ns", nil, nil)
 	require.NoError(t, err)
 	assert.Equal(t, "https://[fd00::1]:8443", meta.ExternalURL)
 	assert.Equal(t, int64(8443), meta.Port)
@@ -419,15 +517,17 @@ func TestExtractMetadata_RouteHostFallbackForSvcSuffix(t *testing.T) {
 		[]any{map[string]any{"value": "my-gw-svc.gw-ns.svc"}},
 	)
 
-	routeHosts := map[string]gateway.RouteHostInfo{
-		"my-gw-svc": {
+	routeHosts := map[string][]gateway.RouteHostInfo{
+		"my-gw-svc": {{
 			Host:   "maas.apps.example.com",
 			Scheme: "https",
 			Port:   443,
-		},
+		}},
 	}
 
-	meta, err := gateway.ExtractMetadata(gw, "my-gw", "gw-ns", routeHosts)
+	gwServices := gateway.GatewayServices{"my-gw-svc": {{Name: "https", Port: 443, TargetPort: 443}}}
+
+	meta, err := gateway.ExtractMetadata(gw, "my-gw", "gw-ns", routeHosts, gwServices)
 	require.NoError(t, err)
 	assert.Equal(t, "https://maas.apps.example.com", meta.ExternalURL)
 }
@@ -439,7 +539,8 @@ func TestBuildRouteHostMap_IgnoresPathBasedRoutes(t *testing.T) {
 	}
 
 	m := gateway.BuildRouteHostMap(routes)
-	assert.Equal(t, "root.apps.example.com", m["maas-gw-svc"].Host)
+	require.Len(t, m["maas-gw-svc"], 1)
+	assert.Equal(t, "root.apps.example.com", m["maas-gw-svc"][0].Host)
 }
 
 func TestBuildRouteHostMap_UsesAdmittedIngressHost(t *testing.T) {
@@ -448,7 +549,8 @@ func TestBuildRouteHostMap_UsesAdmittedIngressHost(t *testing.T) {
 	}
 
 	m := gateway.BuildRouteHostMap(routes)
-	assert.Equal(t, "sharded.apps.example.com", m["maas-gw-svc"].Host)
+	require.Len(t, m["maas-gw-svc"], 1)
+	assert.Equal(t, "sharded.apps.example.com", m["maas-gw-svc"][0].Host)
 }
 
 func TestBuildRouteHostMap_SkipsDisabledBackends(t *testing.T) {
@@ -462,8 +564,8 @@ func TestBuildRouteHostMap_SkipsDisabledBackends(t *testing.T) {
 }
 
 func TestBuildRouteHostMap_DeterministicTieBreak(t *testing.T) {
-	// Two plain-HTTP Routes for the same Service: the lexicographically smaller
-	// host must win regardless of the order the informer delivers them in.
+	// Two plain-HTTP Routes for the same Service: the candidate list must be
+	// sorted the same way regardless of the order the informer delivers them in.
 	forward := []unstructured.Unstructured{
 		routeObj("zeta.apps.example.com", "shared-svc", false, true),
 		routeObj("alpha.apps.example.com", "shared-svc", false, true),
@@ -475,6 +577,375 @@ func TestBuildRouteHostMap_DeterministicTieBreak(t *testing.T) {
 
 	forwardMap := gateway.BuildRouteHostMap(forward)
 	reverseMap := gateway.BuildRouteHostMap(reverse)
-	assert.Equal(t, "alpha.apps.example.com", forwardMap["shared-svc"].Host)
+	assert.Equal(t, "alpha.apps.example.com", forwardMap["shared-svc"][0].Host)
 	assert.Equal(t, forwardMap["shared-svc"], reverseMap["shared-svc"])
+}
+
+func makeServiceObj(name string, selector map[string]any, ports ...any) unstructured.Unstructured {
+	svc := unstructured.Unstructured{Object: map[string]any{
+		"metadata": map[string]any{"name": name, "namespace": "gw-ns"},
+		"spec":     map[string]any{},
+	}}
+	spec, ok := svc.Object["spec"].(map[string]any)
+	if !ok {
+		panic("service spec is not a map")
+	}
+	if selector != nil {
+		spec["selector"] = selector
+	}
+	if len(ports) > 0 {
+		spec["ports"] = ports
+	}
+	return svc
+}
+
+func TestSelectGatewayServices(t *testing.T) {
+	gwLabel := map[string]any{"gateway.networking.k8s.io/gateway-name": "my-gw"}
+	services := []unstructured.Unstructured{
+		makeServiceObj("my-gw", gwLabel,
+			map[string]any{"name": "https", "port": int64(443)},
+			map[string]any{"name": "metrics", "port": int64(8082), "targetPort": int64(8082)},
+		),
+		makeServiceObj("custom-edge-svc", gwLabel,
+			map[string]any{"port": int64(443), "targetPort": int64(8443)},
+		),
+		makeServiceObj("other-gw-svc", map[string]any{"gateway.networking.k8s.io/gateway-name": "other-gw"}),
+		makeServiceObj("no-selector-svc", nil),
+		makeServiceObj("wrong-label-svc", map[string]any{"app": "my-gw"}),
+	}
+
+	selected := gateway.SelectGatewayServices(services, "my-gw")
+	assert.Equal(t, gateway.GatewayServices{
+		"my-gw": {
+			// targetPort defaults to the frontend port when unset.
+			{Name: "https", Port: 443, TargetPort: 443},
+			{Name: "metrics", Port: 8082, TargetPort: 8082},
+		},
+		"custom-edge-svc": {
+			{Port: 443, TargetPort: 8443},
+		},
+	}, selected)
+}
+
+func TestSelectGatewayServices_UnresolvableTargetPort(t *testing.T) {
+	gwLabel := map[string]any{"gateway.networking.k8s.io/gateway-name": "my-gw"}
+	services := []unstructured.Unstructured{
+		makeServiceObj("my-gw", gwLabel,
+			map[string]any{"name": "https", "port": int64(443), "targetPort": "web"},
+		),
+	}
+
+	selected := gateway.SelectGatewayServices(services, "my-gw")
+	assert.Equal(t, gateway.GatewayServices{
+		"my-gw": {{Name: "https", Port: 443, TargetPortName: "web"}},
+	}, selected)
+}
+
+func TestSelectGatewayServices_Empty(t *testing.T) {
+	assert.Empty(t, gateway.SelectGatewayServices(nil, "my-gw"))
+}
+
+// TestBuildRouteHostMap_RetainsTargetPort ensures the Route's backend port is
+// carried through for listener validation: numeric, numeric-string, and named
+// IntOrString forms must all be extracted.
+func TestBuildRouteHostMap_RetainsTargetPort(t *testing.T) {
+	routes := []unstructured.Unstructured{
+		routeObjWithPort("named.apps.example.com", "named-svc", "https"),
+		routeObjWithPort("numeric.apps.example.com", "numeric-svc", int64(443)),
+		routeObjWithPort("numeric-string.apps.example.com", "string-svc", "8080"),
+	}
+
+	m := gateway.BuildRouteHostMap(routes)
+	require.Len(t, m["named-svc"], 1)
+	assert.Equal(t, "https", m["named-svc"][0].TargetPortName)
+	assert.Equal(t, int64(0), m["named-svc"][0].TargetPort)
+	require.Len(t, m["numeric-svc"], 1)
+	assert.Equal(t, int64(443), m["numeric-svc"][0].TargetPort)
+	assert.Empty(t, m["numeric-svc"][0].TargetPortName)
+	require.Len(t, m["string-svc"], 1)
+	assert.Equal(t, int64(8080), m["string-svc"][0].TargetPort)
+	assert.Empty(t, m["string-svc"][0].TargetPortName)
+}
+
+// TestExtractMetadata_RouteFallbackRejectsNonListenerPort covers the backend
+// port validation: a Service that selects the Gateway pods can expose
+// non-listener ports such as metrics, and a Route targeting such a port must
+// not provide the Gateway's external URL.
+func TestExtractMetadata_RouteFallbackRejectsNonListenerPort(t *testing.T) {
+	gw := makeGateway(
+		[]any{httpsListener("", int64(443))},
+		[]any{readyStatus("https", int64(1))},
+		[]any{map[string]any{"value": "my-gw.gw-ns.svc.cluster.local"}},
+	)
+
+	routeHosts := map[string][]gateway.RouteHostInfo{
+		"my-gw-metrics": {{Host: "metrics.apps.example.com", Scheme: "https", Port: 443}},
+	}
+	gwServices := gateway.GatewayServices{"my-gw-metrics": {{Name: "metrics", Port: 8082, TargetPort: 8082}}}
+
+	_, err := gateway.ExtractMetadata(gw, "my-gw", "gw-ns", routeHosts, gwServices)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "internal service name")
+}
+
+// TestExtractMetadata_RouteFallbackPrefersListenerBackedRoute: when both a
+// metrics-backed and a listener-backed Route exist, only the listener-backed
+// one is a candidate, even when its host would lose the deterministic tie-break.
+func TestExtractMetadata_RouteFallbackPrefersListenerBackedRoute(t *testing.T) {
+	gw := makeGateway(
+		[]any{httpsListener("", int64(443))},
+		[]any{readyStatus("https", int64(1))},
+		[]any{map[string]any{"value": "my-gw.gw-ns.svc.cluster.local"}},
+	)
+
+	routeHosts := map[string][]gateway.RouteHostInfo{
+		"my-gw-metrics": {{Host: "aaa.metrics.apps.example.com", Scheme: "https", Port: 443}},
+		"my-gw-svc":     {{Host: "zzz.apps.example.com", Scheme: "https", Port: 443}},
+	}
+	gwServices := gateway.GatewayServices{
+		"my-gw-metrics": {{Name: "metrics", Port: 8082, TargetPort: 8082}},
+		"my-gw-svc":     {{Name: "https", Port: 443, TargetPort: 443}},
+	}
+
+	meta, err := gateway.ExtractMetadata(gw, "my-gw", "gw-ns", routeHosts, gwServices)
+	require.NoError(t, err)
+	assert.Equal(t, "https://zzz.apps.example.com", meta.ExternalURL)
+}
+
+// TestExtractMetadata_RouteFallbackTargetPortValidation exercises the Route's
+// spec.port.targetPort resolution against Services with translated and
+// identity port mappings, including the cases from the review: a numeric
+// Route targetPort is the pod port and must match the Service's targetPort,
+// not its frontend port.
+func TestExtractMetadata_RouteFallbackTargetPortValidation(t *testing.T) {
+	gw := makeGateway(
+		[]any{httpsListener("", int64(443))},
+		[]any{readyStatus("https", int64(1))},
+		[]any{map[string]any{"value": "my-gw.gw-ns.svc.cluster.local"}},
+	)
+
+	tests := []struct {
+		name           string
+		targetPort     int64
+		targetPortName string
+		svcPorts       []gateway.ServicePort
+		wantURL        string
+		wantErr        string
+	}{
+		{
+			name:           "named port reaching listener",
+			targetPortName: "https",
+			svcPorts: []gateway.ServicePort{
+				{Name: "https", Port: 443, TargetPort: 443},
+				{Name: "metrics", Port: 8082, TargetPort: 8082},
+			},
+			wantURL: "https://maas.apps.example.com",
+		},
+		{
+			name:           "named metrics port rejected",
+			targetPortName: "metrics",
+			svcPorts: []gateway.ServicePort{
+				{Name: "https", Port: 443, TargetPort: 443},
+				{Name: "metrics", Port: 8082, TargetPort: 8082},
+			},
+			wantErr: "internal service name",
+		},
+		{
+			name:       "numeric pod port through translated service port",
+			targetPort: 8443,
+			svcPorts:   []gateway.ServicePort{{Name: "https", Port: 443, TargetPort: 8443}},
+			wantURL:    "https://maas.apps.example.com",
+		},
+		{
+			name:       "numeric frontend port rejected against translated service port",
+			targetPort: 443,
+			svcPorts:   []gateway.ServicePort{{Name: "https", Port: 443, TargetPort: 8443}},
+			wantErr:    "internal service name",
+		},
+		{
+			name:       "numeric port through identity-mapped service port",
+			targetPort: 443,
+			svcPorts:   []gateway.ServicePort{{Name: "https", Port: 443, TargetPort: 443}},
+			wantURL:    "https://maas.apps.example.com",
+		},
+		{
+			name:       "numeric port not exposed by service rejected",
+			targetPort: 9090,
+			svcPorts:   []gateway.ServicePort{{Name: "https", Port: 443, TargetPort: 443}},
+			wantErr:    "internal service name",
+		},
+		{
+			name:       "numeric port against unresolvable service targetPort rejected",
+			targetPort: 443,
+			svcPorts:   []gateway.ServicePort{{Name: "https", Port: 443, TargetPortName: "web"}},
+			wantErr:    "internal service name",
+		},
+		{
+			name:     "omitted route port against single-port service",
+			svcPorts: []gateway.ServicePort{{Name: "https", Port: 443, TargetPort: 443}},
+			wantURL:  "https://maas.apps.example.com",
+		},
+		{
+			name: "omitted route port against multi-port service rejected",
+			svcPorts: []gateway.ServicePort{
+				{Name: "https", Port: 443, TargetPort: 443},
+				{Name: "metrics", Port: 8082, TargetPort: 8082},
+			},
+			wantErr: "internal service name",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			routeHosts := map[string][]gateway.RouteHostInfo{
+				"my-gw-svc": {{
+					Host:           "maas.apps.example.com",
+					Scheme:         "https",
+					Port:           443,
+					TargetPort:     test.targetPort,
+					TargetPortName: test.targetPortName,
+				}},
+			}
+			gwServices := gateway.GatewayServices{"my-gw-svc": test.svcPorts}
+
+			meta, err := gateway.ExtractMetadata(gw, "my-gw", "gw-ns", routeHosts, gwServices)
+			if test.wantErr != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), test.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, test.wantURL, meta.ExternalURL)
+		})
+	}
+}
+
+// TestExtractMetadata_RouteFallbackCompetingRoutesSameService: when Routes
+// targeting the same Service include both a metrics-backed Route (which would
+// win the deterministic tie-break by host) and a listener-backed Route, the
+// listener-backed one must be selected — candidates must not be collapsed to
+// one per Service before port validation.
+func TestExtractMetadata_RouteFallbackCompetingRoutesSameService(t *testing.T) {
+	gw := makeGateway(
+		[]any{httpsListener("", int64(443))},
+		[]any{readyStatus("https", int64(1))},
+		[]any{map[string]any{"value": "my-gw.gw-ns.svc.cluster.local"}},
+	)
+
+	routes := []unstructured.Unstructured{
+		routeObjWithPort("aaa.metrics.apps.example.com", "my-gw-svc", int64(8082)),
+		routeObjWithPort("zzz.apps.example.com", "my-gw-svc", int64(443)),
+	}
+	routeHosts := gateway.BuildRouteHostMap(routes)
+	// The metrics Route wins the pre-validation ordering (smaller host).
+	assert.Equal(t, "aaa.metrics.apps.example.com", routeHosts["my-gw-svc"][0].Host)
+
+	services := []unstructured.Unstructured{
+		makeServiceObj("my-gw-svc", map[string]any{"gateway.networking.k8s.io/gateway-name": "my-gw"},
+			map[string]any{"name": "https", "port": int64(443), "targetPort": int64(443)},
+			map[string]any{"name": "metrics", "port": int64(8082), "targetPort": int64(8082)},
+		),
+	}
+	gwServices := gateway.SelectGatewayServices(services, "my-gw")
+
+	meta, err := gateway.ExtractMetadata(gw, "my-gw", "gw-ns", routeHosts, gwServices)
+	require.NoError(t, err)
+	assert.Equal(t, "https://zzz.apps.example.com", meta.ExternalURL,
+		"the listener-backed Route must win over the metrics-backed Route")
+}
+
+// TestExtractMetadata_RouteFallbackTrustedTranslation covers the trusted
+// listener-to-pod-port mapping. The Gateway's own Service — identified by the
+// first DNS label of its internal hostname — maps listener frontend 443 to
+// pod port 8443. A second selector-matching Service reuses frontend 443 but
+// translates it to a metrics pod port 8082. A Route targeting the metrics
+// translation must be rejected even though its frontend port is a listener
+// port and its host would win the tie-break, while a Route through the
+// trusted translation stays accepted.
+func TestExtractMetadata_RouteFallbackTrustedTranslation(t *testing.T) {
+	gw := makeGateway(
+		[]any{httpsListener("", int64(443))},
+		[]any{readyStatus("https", int64(1))},
+		[]any{map[string]any{"value": "my-gw-svc.gw-ns.svc.cluster.local"}},
+	)
+
+	routeHosts := map[string][]gateway.RouteHostInfo{
+		"metrics-svc": {{Host: "aaa.metrics.apps.example.com", Scheme: "https", Port: 443, TargetPort: 8082}},
+		"my-gw-svc":   {{Host: "zzz.apps.example.com", Scheme: "https", Port: 443, TargetPort: 8443}},
+	}
+	gwServices := gateway.GatewayServices{
+		"metrics-svc": {{Name: "https", Port: 443, TargetPort: 8082}},
+		"my-gw-svc":   {{Name: "https", Port: 443, TargetPort: 8443}},
+	}
+
+	meta, err := gateway.ExtractMetadata(gw, "my-gw", "gw-ns", routeHosts, gwServices)
+	require.NoError(t, err)
+	assert.Equal(t, "https://zzz.apps.example.com", meta.ExternalURL,
+		"the Route through the trusted translation must win over the metrics translation")
+
+	// With only the metrics-backed Route, no endpoint may be published.
+	onlyMetrics := map[string][]gateway.RouteHostInfo{
+		"metrics-svc": routeHosts["metrics-svc"],
+	}
+	_, err = gateway.ExtractMetadata(gw, "my-gw", "gw-ns", onlyMetrics, gwServices)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "internal service name")
+}
+
+// TestExtractMetadata_RouteFallbackUnresolvableHostnameRequiresUnanimity:
+// when the internal hostname does not identify a selector-matching Service,
+// a listener frontend is only trusted when every matching Service exposing
+// it agrees on the pod port. Two Services translating frontend 443 to
+// different pod ports must yield no trusted port: Routes resolving to either
+// pod port are rejected rather than risking a metrics endpoint.
+func TestExtractMetadata_RouteFallbackUnresolvableHostnameRequiresUnanimity(t *testing.T) {
+	gw := makeGateway(
+		[]any{httpsListener("", int64(443))},
+		[]any{readyStatus("https", int64(1))},
+		[]any{map[string]any{"value": "my-gw.gw-ns.svc.cluster.local"}},
+	)
+
+	gwServices := gateway.GatewayServices{
+		"svc-a": {{Name: "https", Port: 443, TargetPort: 8443}},
+		"svc-b": {{Name: "https", Port: 443, TargetPort: 8082}},
+	}
+
+	for _, tc := range []struct {
+		svcName    string
+		targetPort int64
+	}{
+		{"svc-a", 8443},
+		{"svc-b", 8082},
+	} {
+		routeHosts := map[string][]gateway.RouteHostInfo{
+			tc.svcName: {{Host: "aaa.apps.example.com", Scheme: "https", Port: 443, TargetPort: tc.targetPort}},
+		}
+		_, err := gateway.ExtractMetadata(gw, "my-gw", "gw-ns", routeHosts, gwServices)
+		require.Error(t, err, "pod port %d must not be trusted while translations disagree", tc.targetPort)
+		assert.Contains(t, err.Error(), "internal service name")
+	}
+}
+
+// TestExtractMetadata_RouteFallbackUnresolvableHostnameUnanimousAccepted:
+// without a hostname-identified Service, an agreed-upon translation is still
+// trusted, so the Route fallback keeps working for Gateways whose status
+// address does not name their Service.
+func TestExtractMetadata_RouteFallbackUnresolvableHostnameUnanimousAccepted(t *testing.T) {
+	gw := makeGateway(
+		[]any{httpsListener("", int64(443))},
+		[]any{readyStatus("https", int64(1))},
+		[]any{map[string]any{"value": "my-gw.gw-ns.svc.cluster.local"}},
+	)
+
+	routeHosts := map[string][]gateway.RouteHostInfo{
+		"svc-a": {{Host: "maas.apps.example.com", Scheme: "https", Port: 443, TargetPort: 8443}},
+	}
+	gwServices := gateway.GatewayServices{
+		"svc-a": {{Name: "https", Port: 443, TargetPort: 8443}},
+		"svc-b": {{Name: "https", Port: 443, TargetPort: 8443}},
+	}
+
+	meta, err := gateway.ExtractMetadata(gw, "my-gw", "gw-ns", routeHosts, gwServices)
+	require.NoError(t, err)
+	assert.Equal(t, "https://maas.apps.example.com", meta.ExternalURL)
 }

@@ -7,9 +7,11 @@ import (
 	goruntime "runtime"
 	"testing"
 
+	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
@@ -236,6 +238,25 @@ func TestEnsureDiscoveryService(t *testing.T) {
 		got.SetGroupVersionKind(gvkRole)
 		g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: discoveryGatewayRBAC, Namespace: gatewayNS}, got)).
 			To(Succeed(), "Role should be created in gateway namespace")
+
+		// The gateway Role must include core Services read access: the
+		// discovery service watches Services to match Routes to Gateways via
+		// the gateway-name selector label.
+		gatewayRules, found, err := unstructured.NestedSlice(got.Object, "rules")
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(found).To(BeTrue())
+		hasServicesRule := false
+		for _, rule := range gatewayRules {
+			ruleMap, ok := rule.(map[string]any)
+			g.Expect(ok).To(BeTrue())
+			resources, _, _ := unstructured.NestedStringSlice(ruleMap, "resources")
+			for _, res := range resources {
+				if res == "services" {
+					hasServicesRule = true
+				}
+			}
+		}
+		g.Expect(hasServicesRule).To(BeTrue(), "gateway Role must grant get/list/watch on services")
 
 		got = &unstructured.Unstructured{}
 		got.SetGroupVersionKind(gvkRoleBinding)
@@ -653,6 +674,16 @@ func TestBuildDiscoveryCrossNamespaceRBAC(t *testing.T) {
 	g.Expect(ok).To(BeTrue())
 	g.Expect(subj["namespace"]).To(Equal("opendatahub"))
 	g.Expect(subj["name"]).To(Equal(discoveryDeploymentName))
+
+	// The gateway Role must grant read access to Services so discovery can
+	// match Routes to Gateways via the gateway-name selector label.
+	var gatewayRBAC rbacv1.Role
+	g.Expect(runtime.DefaultUnstructuredConverter.FromUnstructured(resources[2].Object, &gatewayRBAC)).To(Succeed())
+	g.Expect(gatewayRBAC.Rules).To(ContainElement(rbacv1.PolicyRule{
+		APIGroups: []string{""},
+		Resources: []string{"services"},
+		Verbs:     []string{"get", "list", "watch"},
+	}))
 
 	sameNS := buildDiscoveryCrossNamespaceRBAC("opendatahub", "shared", "shared")
 	g.Expect(sameNS).To(HaveLen(4))

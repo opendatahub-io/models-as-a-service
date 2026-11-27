@@ -22,34 +22,34 @@ func TestExtractMetadata_LocalHostnameDetection(t *testing.T) {
 		local   bool
 		wantURL string
 		wantErr string
-		routes  map[string]gateway.RouteHostInfo
+		routes  map[string][]gateway.RouteHostInfo
 	}{
 		{
 			name:    "cluster.local suffix triggers fallback",
 			address: "internal-gw-svc.gw-ns.svc.cluster.local",
 			local:   true,
-			routes:  map[string]gateway.RouteHostInfo{"internal-gw-svc": {Host: "maas.apps.example.com", Scheme: "https", Port: 443}},
+			routes:  map[string][]gateway.RouteHostInfo{"internal-gw-svc": {{Host: "maas.apps.example.com", Scheme: "https", Port: 443}}},
 			wantURL: "https://maas.apps.example.com",
 		},
 		{
 			name:    "svc suffix triggers fallback",
 			address: "internal-gw-svc.gw-ns.svc",
 			local:   true,
-			routes:  map[string]gateway.RouteHostInfo{"internal-gw-svc": {Host: "maas.apps.example.com", Scheme: "https", Port: 443}},
+			routes:  map[string][]gateway.RouteHostInfo{"internal-gw-svc": {{Host: "maas.apps.example.com", Scheme: "https", Port: 443}}},
 			wantURL: "https://maas.apps.example.com",
 		},
 		{
 			name:    "local suffix triggers fallback",
 			address: "internal-gw-svc.gw-ns.local",
 			local:   true,
-			routes:  map[string]gateway.RouteHostInfo{"internal-gw-svc": {Host: "maas.apps.example.com", Scheme: "https", Port: 443}},
+			routes:  map[string][]gateway.RouteHostInfo{"internal-gw-svc": {{Host: "maas.apps.example.com", Scheme: "https", Port: 443}}},
 			wantURL: "https://maas.apps.example.com",
 		},
 		{
 			name:    "internal suffix triggers fallback",
 			address: "internal-gw-svc.internal",
 			local:   true,
-			routes:  map[string]gateway.RouteHostInfo{"internal-gw-svc": {Host: "maas.apps.example.com", Scheme: "https", Port: 443}},
+			routes:  map[string][]gateway.RouteHostInfo{"internal-gw-svc": {{Host: "maas.apps.example.com", Scheme: "https", Port: 443}}},
 			wantURL: "https://maas.apps.example.com",
 		},
 		{
@@ -104,7 +104,15 @@ func TestExtractMetadata_LocalHostnameDetection(t *testing.T) {
 				[]any{map[string]any{"value": test.address}},
 			)
 
-			meta, err := gateway.ExtractMetadata(gw, "gw", "gw-ns", test.routes)
+			// The Service selecting the gateway is named after the local
+			// hostname's first label in these fixtures; it exposes the
+			// Gateway's 443 listener port.
+			gwServices := make(gateway.GatewayServices, len(test.routes))
+			for svcName := range test.routes {
+				gwServices[svcName] = []gateway.ServicePort{{Name: "https", Port: 443, TargetPort: 443}}
+			}
+
+			meta, err := gateway.ExtractMetadata(gw, "gw", "gw-ns", test.routes, gwServices)
 			if test.wantErr != "" {
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), test.wantErr)
