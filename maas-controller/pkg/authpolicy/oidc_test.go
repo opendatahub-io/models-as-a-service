@@ -30,7 +30,7 @@ func TestOIDCTokenBoundPatterns(t *testing.T) {
 				map[string]any{"selector": "auth.identity.iss", "operator": "eq", "value": "https://issuer.example.com"},
 				map[string]any{"selector": "auth.identity.azp", "operator": "eq", "value": "maas-api"},
 				map[string]any{
-					"predicate": `has(auth.identity.aud) && (auth.identity.aud == "maas-api" || "maas-api" in auth.identity.aud)`,
+					"predicate": `has(auth.identity.aud) && (type(auth.identity.aud) == string ? auth.identity.aud == "maas-api" : type(auth.identity.aud) == list && "maas-api" in auth.identity.aud)`,
 				},
 				map[string]any{"selector": "auth.identity.token_use", "operator": "eq", "value": "access"},
 			},
@@ -64,13 +64,24 @@ func TestOIDCTokenBoundWhen(t *testing.T) {
 	if !ok {
 		t.Fatalf("OIDCTokenBoundWhen() predicate is not a string: %#v", got[0])
 	}
+	if guard := `"authorization" in request.headers && `; !strings.HasPrefix(predicate, guard) {
+		t.Errorf("predicate %q does not start with %q", predicate, guard)
+	}
 	for _, required := range []string{
 		`!request.headers.authorization.startsWith("Bearer sk-oai-")`,
-		`request.headers.authorization.matches("^Bearer [^.]+\\.[^.]+\\.[^.]+$")`,
+		ExternalJWTShape,
 		`has(auth.identity.iss)`,
 	} {
 		if !strings.Contains(predicate, required) {
 			t.Errorf("predicate %q does not contain %q", predicate, required)
 		}
+	}
+}
+
+// An uncapped split gives the same result as split(".", 4) and only costs more,
+// so no equivalence test sees it.
+func TestExternalJWTShapeCapsSplit(t *testing.T) {
+	if want := `split(".", 4)`; !strings.Contains(ExternalJWTShape, want) {
+		t.Errorf("ExternalJWTShape %q does not contain %q", ExternalJWTShape, want)
 	}
 }
