@@ -483,6 +483,39 @@ func TestValidateAPIKey_RecordsUnauthorizedRejection(t *testing.T) {
 	assert.Equal(t, "unauthorized", spy.rejections[0])
 }
 
+// TestValidateAPIKeyHandler_EmptyGroupsInResponse verifies that the HTTP
+// response body from ValidateAPIKeyHandler includes "groups":[] when the
+// key was created with no groups. With omitempty the field would be dropped,
+// causing the gateway CEL expression to fail with "no such key" → 403.
+func TestValidateAPIKeyHandler_EmptyGroupsInResponse(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store := NewMockStore()
+	cfg := &config.Config{}
+	service := NewServiceWithLogger(store, cfg, fixedSubSelector{}, logger.Development())
+	spy := &spyMetricsRecorder{}
+	handler := NewHandler(logger.Development(), service, newMockAdminChecker(), spy, noopSubscriptionAdminResolver{})
+
+	// Create a key with no groups (nil)
+	resp, err := service.CreateAPIKey(
+		t.Context(), "alice", nil,
+		"Empty Groups Key", "", nil, false, "", "redteam", nil,
+	)
+	require.NoError(t, err)
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/internal/v1/api-keys/validate", nil)
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Request.Body = io.NopCloser(strings.NewReader(
+		fmt.Sprintf(`{"key": "%s"}`, resp.Key)))
+
+	handler.ValidateAPIKeyHandler(c)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), `"groups":[]`,
+		"HTTP response body must include groups key even when empty")
+}
+
 func TestIsAuthorizedForKey(t *testing.T) {
 	store := NewMockStore()
 	handler := NewHandler(
