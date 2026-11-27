@@ -114,7 +114,7 @@ func SetupTestRouter() (*gin.Engine, func() error) {
 	tokenHandler := token.NewHandler(testLogger, "test")
 
 	protected := router.Group("/v1")
-	protected.Use(tokenHandler.ExtractUserInfo())
+	protected.Use(tokenHandler.ExtractUserInfo(token.AuthModeGateway))
 
 	cleanup := func() error {
 		return nil

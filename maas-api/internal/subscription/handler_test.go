@@ -1763,8 +1763,8 @@ func TestListSubscriptions_NoAuthContext(t *testing.T) {
 	tokenHandler := token.NewHandler(log, "test-tenant")
 
 	// Use ExtractUserInfoOptional — same as production wiring.
-	router.GET("/v1/subscriptions", tokenHandler.ExtractUserInfoOptional(), handler.ListSubscriptions)
-	router.GET("/v1/model/:model-id/subscriptions", tokenHandler.ExtractUserInfoOptional(), handler.ListSubscriptionsForModel)
+	router.GET("/v1/subscriptions", tokenHandler.ExtractUserInfoOptional(token.AuthModeGateway), handler.ListSubscriptions)
+	router.GET("/v1/model/:model-id/subscriptions", tokenHandler.ExtractUserInfoOptional(token.AuthModeGateway), handler.ListSubscriptionsForModel)
 
 	t.Run("returns empty list when no auth headers at all", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/v1/subscriptions", nil)
@@ -1831,7 +1831,7 @@ func TestListSubscriptions_NoAuthContext(t *testing.T) {
 	t.Run("returns normal response when all auth headers present", func(t *testing.T) {
 		gin.SetMode(gin.TestMode)
 		authedRouter := gin.New()
-		authedRouter.GET("/v1/subscriptions", tokenHandler.ExtractUserInfoOptional(), handler.ListSubscriptions)
+		authedRouter.GET("/v1/subscriptions", tokenHandler.ExtractUserInfoOptional(token.AuthModeGateway), handler.ListSubscriptions)
 
 		req := httptest.NewRequest(http.MethodGet, "/v1/subscriptions", nil)
 		req.Header.Set("Authorization", "Bearer valid-token")
