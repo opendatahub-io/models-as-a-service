@@ -29,6 +29,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
+	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/authpolicy"
 	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/platform/tenantreconcile"
 )
 
@@ -467,7 +468,7 @@ func TestBuildGatewayAuthPolicySpec_OIDCClientBound(t *testing.T) {
 	audiencePattern, ok := patterns[2].(map[string]any)
 	assert.True(t, ok)
 	assert.Equal(t,
-		`has(auth.identity.aud) && (auth.identity.aud == "maas-api" || "maas-api" in auth.identity.aud)`,
+		`has(auth.identity.aud) && (type(auth.identity.aud) == string ? auth.identity.aud == "maas-api" : type(auth.identity.aud) == list && "maas-api" in auth.identity.aud)`,
 		audiencePattern["predicate"],
 	)
 	expectPattern(t, patterns[3], "auth.identity.token_use", "eq", oidc.AccessTokenPurpose)
@@ -480,26 +481,8 @@ func TestBuildGatewayAuthPolicySpec_OIDCClientBound(t *testing.T) {
 	predicate, _ := whenMap["predicate"].(string)
 	assert.Contains(t, predicate, "has(auth.identity.iss)",
 		"when predicate must select external OIDC identities")
-	assert.Contains(t, predicate, `Bearer [^.]+\\.[^.]+\\.[^.]+`,
+	assert.Contains(t, predicate, authpolicy.ExternalJWTShape,
 		"when predicate should match only JWT-shaped Bearer tokens")
-}
-
-func TestBuildGatewayAuthPolicySpec_DeniesNewClientIdentityHeaders(t *testing.T) {
-	obj := gatewayAuthPolicySpecTestObject(t, nil)
-	rule := nestedMapRequired(t, obj, "spec", "defaults", "rules", "authorization", "deny-client-identity-headers")
-	patterns, found, err := unstructured.NestedSlice(rule, "patternMatching", "patterns")
-	assert.NoError(t, err)
-	assert.True(t, found)
-
-	predicates := make(map[string]bool)
-	for _, pattern := range patterns {
-		patternMap, ok := pattern.(map[string]any)
-		assert.True(t, ok)
-		predicate, _ := patternMap["predicate"].(string)
-		predicates[predicate] = true
-	}
-	assert.True(t, predicates[`!("x-maas-identity" in request.headers)`])
-	assert.True(t, predicates[`!("x-maas-admin-scope" in request.headers)`])
 }
 
 func expectPattern(t *testing.T, pattern any, selector, operator, value string) {

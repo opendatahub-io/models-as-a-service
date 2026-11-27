@@ -112,7 +112,9 @@ def wait_for_key_denied(
         ):
             return
         # A status that cannot represent propagation should fail immediately.
-        invalid = {404, 429, 500, 501, 502, 503, 504}
+        # Rate limits can coexist with a cached authorization while revocation
+        # propagates, so 429 remains retryable until the polling deadline.
+        invalid = {404, 500, 501, 502, 503, 504}
         if last_model.status_code in invalid or last_list.status_code in invalid:
             raise AssertionError(
                 f"denial for {case.expected_catalog_id} received non-auth response: "

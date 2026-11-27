@@ -18,6 +18,8 @@ MULTITENANCY_PHASE_TIMEOUT = int(os.environ.get("E2E_MULTITENANCY_PHASE_TIMEOUT"
 # Parallel workers can create many simulators at once; 180s was flaking on
 # MinimumReplicasUnavailable under Konflux group-test load (see PR #1521 run).
 MODEL_BACKEND_READY_TIMEOUT = int(os.environ.get("E2E_MODEL_BACKEND_READY_TIMEOUT", "300"))
+# Per-tenant Gateway Programmed wait (oc wait); Shepard nightly sets 600 on shared pools.
+GATEWAY_PROGRAMMED_TIMEOUT = int(os.environ.get("E2E_GATEWAY_PROGRAMMED_TIMEOUT", "300"))
 
 from test_helper import (
     DEPLOYMENT_NAMESPACE,
@@ -111,14 +113,29 @@ def env_bool(name: str, default: bool = False) -> bool:
 
 
 def external_oidc_from_env() -> Optional[dict[str, str]]:
-    """Return the deployed OIDC config used by the default tenant, when enabled."""
+    """Return the deployed OIDC config used by the default tenant, when enabled.
+
+    When Shepard gather-maas-test-config exports Konflux parity fields, include the
+    same strict audience/purpose contract on every AITenant so worker tenants match
+    the config tenant (models-as-a-service on maas-default-gateway).
+    """
     issuer = os.environ.get("OIDC_ISSUER_URL", "")
     if not env_bool("EXTERNAL_OIDC") or not issuer:
         return None
-    return {
+    oidc: dict[str, str] = {
         "issuerUrl": issuer,
         "clientId": os.environ.get("OIDC_CLIENT_ID", "test-client"),
     }
+    audience = os.environ.get("OIDC_AUDIENCE", "").strip()
+    purpose_claim = os.environ.get("OIDC_ACCESS_TOKEN_PURPOSE_CLAIM", "").strip()
+    purpose = os.environ.get("OIDC_ACCESS_TOKEN_PURPOSE", "").strip()
+    if audience:
+        oidc["audience"] = audience
+    if purpose_claim:
+        oidc["accessTokenPurposeClaim"] = purpose_claim
+    if purpose:
+        oidc["accessTokenPurpose"] = purpose
+    return oidc
 
 
 def tenant_b_external_oidc_from_env() -> Optional[dict[str, str]]:
@@ -183,11 +200,9 @@ def is_gateway_auth_denial(response: requests.Response) -> bool:
     """True when a 401/403 is the gateway AuthPolicy's verdict, not a reload gap.
 
     Authorino's denials carry ``x-ext-auth-reason`` and the wasm-shim forwards it
-    even when the body is empty. Unknown API keys get exactly that: maas-api
-    validation returns no groups, the ``subscription-info`` metadata is never
-    fetched, and the policy's unauthorized body expression renders empty. The
-    header's value varies across Authorino versions, so only its presence counts.
-    Empty 401/403 without it stay transient (``_is_transient_gateway_response``).
+    even when the body is empty. The header's value varies across Authorino
+    versions, so only its presence counts. Without it, empty 401/403 and the
+    generic 403 body stay transient (``_is_transient_gateway_response``).
     """
     if response.status_code not in (401, 403):
         return False
@@ -288,9 +303,11 @@ def wait_for_json(
     namespace: Optional[str] = None,
     *,
     predicate=None,
-    timeout: int = 180,
+    timeout: Optional[int] = None,
     interval: int = 5,
 ) -> dict:
+    if timeout is None:
+        timeout = int(os.environ.get("E2E_AITENANT_READY_TIMEOUT", "180"))
     deadline = time.time() + timeout
     last_obj = None
     while time.time() < deadline:
@@ -781,10 +798,11 @@ def cluster_domain_from_default_route() -> str:
     raise RuntimeError(f"could not determine cluster apps domain from routes in {GATEWAY_NAMESPACE}")
 
 
-def wait_for_gateway_programmed(gateway_name: str, *, timeout: int = 300) -> None:
-    # 300s: on a fresh cluster the first per-tenant gateway reconcile waits
-    # on cold image pulls and istiod warm-up; the second tenant can exceed
-    # a tighter window even though nothing is wrong.
+def wait_for_gateway_programmed(
+    gateway_name: str, *, timeout: int | None = None
+) -> None:
+    if timeout is None:
+        timeout = GATEWAY_PROGRAMMED_TIMEOUT
     result = _oc_run(
         [
             "wait",
@@ -1452,9 +1470,17 @@ def deployment_log_snapshot(
         ["logs", f"deployment/{deployment_name}", "-n", namespace, f"--since={since}"],
         ["logs", f"deployment/{deployment_name}", "-n", namespace, f"--since={since}", "--tail=300"],
     ):
-        result = _oc_run(args, timeout=120)
-        if result.returncode == 0 and (result.stdout or "").strip():
-            return result.stdout
+        proc = subprocess.run(
+            [_oc_bin(), *args],
+            capture_output=True,
+            timeout=120,
+            check=False,
+        )
+        if proc.returncode != 0:
+            continue
+        raw = (proc.stdout or b"").decode("utf-8", errors="replace")
+        if raw.strip():
+            return raw
     return ""
 
 

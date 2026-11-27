@@ -87,8 +87,8 @@ type MaaSAuthPolicyReconciler struct {
 	// Applies to apiKeyValidation and subscription-info metadata evaluators.
 	MetadataCacheTTL int64
 
-	// AuthzCacheTTL is the TTL in seconds for Authorino OPA authorization caching.
-	// Applies to auth-valid, subscription-valid, and require-group-membership authorization evaluators.
+	// AuthzCacheTTL is deprecated and has no effect. Authorization results are
+	// recomputed from metadata on every request.
 	AuthzCacheTTL int64
 
 	// Recorder emits Kubernetes events for conflict detection warnings.
@@ -113,28 +113,6 @@ type oidcConfig struct {
 	AccessTokenPurposeClaim string
 	AccessTokenPurpose      string
 	TTL                     int
-}
-
-// authzCacheTTL returns the safe TTL for authorization caches that depend on metadata.
-// Authorization cache entries must not outlive their dependent metadata cache entries,
-// otherwise stale metadata can lead to incorrect authorization decisions.
-// Returns the minimum of AuthzCacheTTL and MetadataCacheTTL, clamped to non-negative values.
-func (r *MaaSAuthPolicyReconciler) authzCacheTTL() int64 {
-	metadata := r.MetadataCacheTTL
-	authz := r.AuthzCacheTTL
-
-	// Defensive: clamp negative values to 0 (should be caught at startup, but defensive)
-	if metadata < 0 {
-		metadata = 0
-	}
-	if authz < 0 {
-		authz = 0
-	}
-
-	if authz < metadata {
-		return authz
-	}
-	return metadata
 }
 
 // fetchTenantIdentifier fetches the tenant identifier from the tenant config in the given namespace.
@@ -379,7 +357,7 @@ func (r *MaaSAuthPolicyReconciler) hasLegacyModelAuthPolicy(ctx context.Context,
 	return false, nil
 }
 
-// CEL sub-expressions reused across Authorino cache-key selectors.
+// CEL sub-expressions reused across Authorino cache-key expressions.
 // These handle API keys, OIDC tokens, and Kubernetes tokens.
 const (
 	// celUserID extracts user ID from API key, OIDC, or K8s token
@@ -422,8 +400,10 @@ const (
 	celTokenReviewGroups = `(has(auth.identity.user.groups) && ` +
 		celTokenReviewGroupsSafe + ` ? auth.identity.user.groups : [])`
 	celNonAPIKeyGroups = `(has(auth.identity.iss) ? ` + celOIDCTransportGroups + ` : ` + celTokenReviewGroups + `)`
-	celGroups          = `(has(auth.metadata) && has(auth.metadata.apiKeyValidation)) ` +
-		`? auth.metadata.apiKeyValidation.groups : ` + celNonAPIKeyGroups
+	// maas-api omits an empty groups list, so the API-key branch defaults it.
+	celGroups = `(has(auth.metadata) && has(auth.metadata.apiKeyValidation)) ` +
+		`? (has(auth.metadata.apiKeyValidation.groups) ? auth.metadata.apiKeyValidation.groups : []) : ` +
+		celNonAPIKeyGroups
 	celAPIKeyGroupsHeaderJSON = `(has(auth.metadata.apiKeyValidation.groupsJSON) ` +
 		`? auth.metadata.apiKeyValidation.groupsJSON ` +
 		`: (has(auth.metadata.apiKeyValidation.groups) ` +
@@ -436,16 +416,25 @@ const (
 	celCanonicalOrganizationID        = `^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`
 	celCanonicalOrganizationIDPattern = celCanonicalOrganizationID + `$`
 	celOrganizationQualifiedGroup     = celCanonicalOrganizationID + `/`
-	celOIDCOrganizationIDSafe         = `type(auth.identity["org_id"]) == string && ` +
+	// celIsOrganizationQualifiedGroup tests a string group g against
+	// celOrganizationQualifiedGroup. Authorino compiles a matches() pattern on
+	// every evaluation, and this one is the costliest per group. A '/' at code
+	// point 36 is necessary for the pattern to match, so the guard skips the
+	// regex for nearly every group without changing the result. A list or map
+	// g with more than 36 entries still errors, so every use must follow a
+	// type(g) == string check.
+	celIsOrganizationQualifiedGroup = `(size(g) > 36 && g.charAt(36) == "/" && ` +
+		`g.matches('` + celOrganizationQualifiedGroup + `'))`
+	celOIDCOrganizationIDSafe = `type(auth.identity["org_id"]) == string && ` +
 		`auth.identity["org_id"].matches('` + celCanonicalOrganizationIDPattern + `')`
 	celOIDCLegacyGroupsSafe = celOIDCGroupsSafe + ` && ` +
-		`auth.identity.groups.all(g, !g.matches('` + celOrganizationQualifiedGroup + `'))`
+		`auth.identity.groups.all(g, !` + celIsOrganizationQualifiedGroup + `)`
 	celTokenReviewGroupsSafe = `auth.identity.user.groups.all(g, ` +
 		`type(g) == string && g.matches('` + safeGroupNamePattern + `') && ` +
-		`!g.matches('` + celOrganizationQualifiedGroup + `'))`
+		`!` + celIsOrganizationQualifiedGroup + `)`
 	celOIDCFlatGroupsSafe = `size(auth.identity.groups) <= 128 && auth.identity.groups.all(g, ` +
 		`type(g) == string && g.matches('` + safeGroupNamePattern + `') && ` +
-		`!g.matches('` + celOrganizationQualifiedGroup + `'))`
+		`!` + celIsOrganizationQualifiedGroup + `)`
 	celIdentityOrganizationID = `(has(auth.metadata) && has(auth.metadata.apiKeyValidation)) ? "" : ` +
 		`("org_id" in auth.identity && ` + celOIDCOrganizationIDSafe + ` ? auth.identity["org_id"] : "")`
 
@@ -465,6 +454,21 @@ const (
 	celSubscription = `(has(auth.metadata) && has(auth.metadata.apiKeyValidation)) ` +
 		`? auth.metadata.apiKeyValidation.subscription : ` +
 		`("x-maas-subscription" in request.headers ? request.headers["x-maas-subscription"] : "")`
+
+	// celSubscriptionInfoPresent is true when the subscription-info metadata call ran and
+	// returned JSON. The call is skipped off model routes and for rejected API keys, and
+	// fails when maas-api cannot be reached.
+	celSubscriptionInfoPresent = `(has(auth.metadata) && "subscription-info" in auth.metadata)`
+
+	// celAPIKeyIdentity is true when an API-key method authenticated the request: their
+	// plain identity is the credential string, while token methods produce a claims map.
+	// Unlike the header predicates it does not depend on which header carried the key.
+	celAPIKeyIdentity = `type(auth.identity) == string` //nolint:gosec // CEL expression, not a credential
+
+	// celAPIKeyValid is true when maas-api accepted the API key. Authorino stores any JSON
+	// response, including a non-2xx error without "valid", so every step is guarded.
+	celAPIKeyValid = `(has(auth.metadata) && "apiKeyValidation" in auth.metadata && ` +
+		`has(auth.metadata.apiKeyValidation.valid) && auth.metadata.apiKeyValidation.valid == true)`
 )
 
 // celModelIdentity extracts model identity from the request at gateway level.
@@ -488,9 +492,24 @@ const (
 		` : ("x-gateway-model-name" in request.headers` +
 		`   ? request.headers["x-gateway-model-name"]` +
 		`   : ""))`
+	// ExternalModel requests are routed after auth by X-Gateway-Model-Name
+	// (the body model), not by the path, so a path-routed request must carry
+	// the subscription-info.bodyRoutedModel maas-api reports for the path
+	// model. celBodyRoutedModelMatches indexes the header, so it is evaluated
+	// only once celPathRoutedBodyModel holds. An absent field (LLMInferenceService,
+	// or an older maas-api during a rollout) passes; an empty one matches no
+	// header, not even an empty one.
+	celPathRoutedBodyModel    = `(` + celPathModelIdentityAvailable + ` && "x-gateway-model-name" in request.headers)`
+	celBodyRoutedModelPresent = `(has(auth.metadata) && "subscription-info" in auth.metadata && ` +
+		`has(auth.metadata["subscription-info"].bodyRoutedModel))`
+	celBodyRoutedModelMatches = `(!` + celBodyRoutedModelPresent + ` || ` +
+		`(auth.metadata["subscription-info"].bodyRoutedModel != "" && ` +
+		`auth.metadata["subscription-info"].bodyRoutedModel == request.headers["x-gateway-model-name"]))`
+	celBodyRoutedModelMismatch = `(` + celPathRoutedBodyModel + ` && !` + celBodyRoutedModelMatches + `)`
 	// Prefer MaaSModelRef identity resolved by subscription select (handles BBR
 	// publisher IDs). Fall back to path/header identity for path-based routing.
-	celResolvedModelIdentity = `(has(auth.metadata["subscription-info"].resolvedModel) && ` +
+	celResolvedModelIdentity = `(` + celSubscriptionInfoPresent + ` && ` +
+		`has(auth.metadata["subscription-info"].resolvedModel) && ` +
 		`auth.metadata["subscription-info"].resolvedModel != "" ` +
 		`? auth.metadata["subscription-info"].resolvedModel ` +
 		`: ` + celModelIdentity + `)`
@@ -504,13 +523,19 @@ const maasGatewayAuthPolicyName = "maas-gateway-auth"
 // favor of maas-gateway-auth. Kept only for upgrade cleanup of stale cluster resources.
 const legacyGatewayDefaultAuthPolicyName = "gateway-default-auth"
 
-// subscriptionGatewayCacheKeySelector builds a collision-safe key for gateway-level selection.
+// subscriptionGatewayCacheKeyExpression builds a collision-safe key for gateway-level selection.
 // It length-prefixes every value so opaque group names cannot collide with separators.
-func subscriptionGatewayCacheKeySelector() string {
+//
+// The key must cover every input of the subscription-info request body. For an API key,
+// maas-api returns groups, username and subscription from the stored key row, which never
+// changes. The API-key key still carries the username and subscription, which are cheap,
+// and leaves out only the group list, which is what grows. Other identities, and API keys
+// without a key ID, use the full key.
+func subscriptionGatewayCacheKeyExpression() string {
 	//nolint:gosec // CEL expression, not a credential
 	apiKey := `(has(auth.metadata) && has(auth.metadata.apiKeyValidation))`
+	hasAPIKeyID := `(` + apiKey + ` && "keyId" in auth.metadata.apiKeyValidation && auth.metadata.apiKeyValidation.keyId != "")`
 	identitySource := `(` + apiKey + ` ? "api-key" : (has(auth.identity.iss) ? "oidc" : "token-review"))`
-	apiKeyID := `(` + apiKey + ` && "keyId" in auth.metadata.apiKeyValidation ? auth.metadata.apiKeyValidation.keyId : "")`
 	issuer := `(!` + apiKey + ` && has(auth.identity.iss) ? auth.identity.iss : "")`
 	subject := `(!` + apiKey + ` && has(auth.identity.sub) ? auth.identity.sub : "")`
 	requestedSubscription := `("x-maas-subscription" in request.headers ? request.headers["x-maas-subscription"] : "")`
@@ -518,10 +543,16 @@ func subscriptionGatewayCacheKeySelector() string {
 	groups := `string(size(` + groupList + `)) + ":" + ` +
 		groupList + `.map(g, string(size(g)) + ":" + g).join("")`
 	model := `(` + celModelIdentity + `)`
-	values := []string{
+	apiKeyCacheKey := lengthPrefixedCacheKey(
+		`"api-key-id"`,
+		`auth.metadata.apiKeyValidation.keyId`,
+		`auth.metadata.apiKeyValidation.username`,
+		`auth.metadata.apiKeyValidation.subscription`,
+		model,
+	)
+	fullCacheKey := lengthPrefixedCacheKey(
 		identitySource,
 		celUserID,
-		apiKeyID,
 		celUsername,
 		issuer,
 		subject,
@@ -530,11 +561,38 @@ func subscriptionGatewayCacheKeySelector() string {
 		celSubscription,
 		requestedSubscription,
 		model,
-	}
+	)
+	return `(` + hasAPIKeyID + ` ? ` + apiKeyCacheKey + ` : ` + fullCacheKey + `)`
+}
+
+// lengthPrefixedCacheKey joins CEL string expressions as "<length>:<value>". Each value must
+// evaluate to a string; the length prefixes then make the encoding unambiguous, so keys built
+// from different values stay distinct.
+func lengthPrefixedCacheKey(values ...string) string {
+	parts := make([]string, len(values))
 	for i, value := range values {
-		values[i] = `string(size(` + value + `)) + ":" + (` + value + `)`
+		parts[i] = `string(size(` + value + `)) + ":" + (` + value + `)`
 	}
-	return strings.Join(values, ` + `)
+	return strings.Join(parts, ` + `)
+}
+
+// withMetadataCache adds a cache block when caching is enabled. Authorino
+// replaces a TTL of zero with its default TTL, so zero must omit the block.
+//
+// The key is wrapped in a one-element list. Authorino's cache stores a string
+// key as it is but any other key as its MD5 (gocache v1.2.0 getCacheKey), so a
+// key that grows with the user's groups no longer counts against Authorino's
+// per-entry size limit, and raw API keys are never stored. Once Authorino hashes
+// keys itself (Kuadrant/authorino#706) the list is still hashed exactly once, so
+// drop the wrap when every supported RHCL ships that.
+func (r *MaaSAuthPolicyReconciler) withMetadataCache(rule map[string]any, expression string) map[string]any {
+	if r.MetadataCacheTTL > 0 {
+		rule["cache"] = map[string]any{
+			"key": map[string]any{"expression": "[" + expression + "]"},
+			"ttl": r.MetadataCacheTTL,
+		}
+	}
+	return rule
 }
 
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=maasauthpolicies,verbs=get;list;watch;create;update;patch;delete
@@ -798,18 +856,51 @@ type authPolicyRef struct {
 	ModelNamespace string
 }
 
+// clientIdentityHeaders are set by Authorino after authentication, so a client copy is
+// never legitimate. Names are lowercase: Envoy normalizes header names before Authorino
+// evaluates CEL.
+var clientIdentityHeaders = []string{
+	"x-maas-username",
+	"x-maas-group",
+	"x-maas-exact-groups",
+	"x-maas-keyname",
+	"x-maas-subscription-rate-limit-id",
+	"x-maas-organization-id",
+	"x-maas-cost-center",
+	"x-maas-identity",
+	"x-maas-admin-scope",
+}
+
+// clientIdentityHeadersDenyPredicate is true when the request carries none of
+// clientIdentityHeaders, no x-aigateway-guardrail-* header and no x-grid-* header other than
+// the configured subscriptionHeaders. It is a single predicate because Authorino re-parses
+// the authorization JSON for every CEL pattern it evaluates.
+func clientIdentityHeadersDenyPredicate(subscriptionHeaders []string) string {
+	gridHeader := `!name.startsWith("` + subscriptionHeaderPrefix + `")`
+	if len(subscriptionHeaders) > 0 {
+		gridHeader = `(` + gridHeader + ` || name in ` + celStringList(subscriptionHeaders) + `)`
+	}
+	return `request.headers.all(name, !(name in ` + celStringList(clientIdentityHeaders) + `) && ` +
+		`!name.startsWith("x-aigateway-guardrail-") && ` + gridHeader + `)`
+}
+
+// celStringList renders names as a CEL list literal. The names are HTTP header tokens, which
+// JSON quotes the same way CEL does.
+func celStringList(names []string) string {
+	encoded, err := json.Marshal(names)
+	if err != nil {
+		panic(fmt.Sprintf("marshal header names: %v", err))
+	}
+	return string(encoded)
+}
+
 // subscriptionInfoStringHeader injects a non-empty field from the resolved
 // MaaSSubscription (Authorino subscription-info metadata) as an X-MaaS-* header.
 func subscriptionInfoStringHeader(jsonField string) map[string]any {
-	path := fmt.Sprintf(`auth.metadata["subscription-info"].%s`, jsonField)
 	return map[string]any{
-		"when": []any{
-			map[string]any{
-				"predicate": fmt.Sprintf(`has(%s) && %s != ""`, path, path),
-			},
-		},
+		"when": nonEmptyWhen("auth.metadata.subscription-info." + jsonField),
 		"plain": map[string]any{
-			"expression": path,
+			"expression": fmt.Sprintf(`auth.metadata["subscription-info"].%s`, jsonField),
 		},
 		"metrics":  false,
 		"priority": int64(0),
@@ -838,7 +929,7 @@ func (r *MaaSAuthPolicyReconciler) buildGatewayAuthPolicySpec(oidc *oidcConfig, 
   "requestedModel": %s
 }`, celGroups, celUsername, celModelIdentity)
 
-	celIsAPIKey, celIsNotAPIKey, celExtractKey := apiKeyCELPredicates(xAPIKeyEnabled)
+	celIsAPIKey, celIsNotAPIKey, _ := apiKeyCELPredicates(xAPIKeyEnabled)
 
 	authenticationRules := map[string]any{
 		"api-keys": map[string]any{
@@ -903,16 +994,17 @@ func (r *MaaSAuthPolicyReconciler) buildGatewayAuthPolicySpec(oidc *oidcConfig, 
 				"ttl":       int64(oidc.TTL),
 			},
 			"when": []any{
+				// The JWT match reads the Authorization header unguarded, and so does
+				// celIsNotAPIKey when x-api-key is off. Authorino skips the method on an
+				// error as on false, so the guard only removes the error.
 				map[string]any{
-					"predicate": celIsNotAPIKey + ` && request.headers.authorization.matches("^Bearer [^.]+\\.[^.]+\\.[^.]+$")`,
+					"predicate": `"authorization" in request.headers && ` + celIsNotAPIKey + ` && ` + authpolicy.ExternalJWTShape,
 				},
 			},
 			"metrics":  false,
 			"priority": int64(1),
 		}
 	}
-	authValidCacheKey := `"api-key|" + (` + celExtractKey + `) + "|" + ` + celModelIdentity
-
 	requireGroupMembershipRego := `allow {
   object.get(input.auth.metadata["subscription-info"], "accessAllowed", false) == true
 }`
@@ -937,43 +1029,13 @@ func (r *MaaSAuthPolicyReconciler) buildGatewayAuthPolicySpec(oidc *oidcConfig, 
 			},
 		},
 		// Reject client-supplied identity headers; Authorino injects these after auth.
+		// applySubscriptionHeaders replaces the pattern once the allowed x-grid-* names are known.
 		"deny-client-identity-headers": map[string]any{
 			"metrics":  false,
 			"priority": int64(0),
 			"patternMatching": map[string]any{
 				"patterns": []any{
-					map[string]any{
-						// CEL has() only works on message fields; use `in` for map keys.
-						"predicate": `!("x-maas-username" in request.headers)`,
-					},
-					map[string]any{
-						"predicate": `!("x-maas-group" in request.headers)`,
-					},
-					map[string]any{
-						"predicate": `!("x-maas-exact-groups" in request.headers)`,
-					},
-					map[string]any{
-						"predicate": `!("x-maas-keyname" in request.headers)`,
-					},
-					map[string]any{
-						"predicate": `!("x-maas-subscription-rate-limit-id" in request.headers)`,
-					},
-					map[string]any{
-						"predicate": `!("x-maas-organization-id" in request.headers)`,
-					},
-					map[string]any{
-						"predicate": `!("x-maas-cost-center" in request.headers)`,
-					},
-					map[string]any{
-						"predicate": `!("x-maas-identity" in request.headers)`,
-					},
-					map[string]any{
-						"predicate": `!("x-maas-admin-scope" in request.headers)`,
-					},
-					map[string]any{
-						// Envoy normalizes HTTP header names to lowercase before Authorino evaluates CEL.
-						"predicate": `request.headers.all(name, !name.startsWith("x-aigateway-guardrail-"))`,
-					},
+					map[string]any{"predicate": clientIdentityHeadersDenyPredicate(nil)},
 				},
 			},
 		},
@@ -984,16 +1046,17 @@ func (r *MaaSAuthPolicyReconciler) buildGatewayAuthPolicySpec(oidc *oidcConfig, 
 				"rego": `allow {
   object.get(input.auth.metadata, "apiKeyValidation", {})
   input.auth.metadata.apiKeyValidation.valid == true
+  unexpired
 }
 allow {
   not input.auth.metadata.apiKeyValidation
+}
+unexpired {
+  not input.auth.metadata.apiKeyValidation.expiresAt
+}
+unexpired {
+  time.now_ns() < time.parse_rfc3339_ns(input.auth.metadata.apiKeyValidation.expiresAt)
 }`,
-			},
-			"cache": map[string]any{
-				"key": map[string]any{
-					"selector": authValidCacheKey,
-				},
-				"ttl": r.authzCacheTTL(),
 			},
 		},
 		"subscription-valid": map[string]any{
@@ -1013,12 +1076,6 @@ allow {
 	object.get(input.auth.metadata["subscription-info"], "deletionTimestamp", "") == ""
 }`,
 			},
-			"cache": map[string]any{
-				"key": map[string]any{
-					"selector": subscriptionGatewayCacheKeySelector(),
-				},
-				"ttl": r.authzCacheTTL(),
-			},
 		},
 		"require-group-membership": map[string]any{
 			"when": []any{
@@ -1031,11 +1088,20 @@ allow {
 			"opa": map[string]any{
 				"rego": requireGroupMembershipRego,
 			},
-			"cache": map[string]any{
-				"key": map[string]any{
-					"selector": subscriptionGatewayCacheKeySelector(),
+		},
+		// Not cached: the header is not part of any cache key.
+		"body-routed-model-matches": map[string]any{
+			"when": []any{
+				map[string]any{
+					"predicate": celPathRoutedBodyModel,
 				},
-				"ttl": r.authzCacheTTL(),
+			},
+			"metrics":  false,
+			"priority": int64(0),
+			"patternMatching": map[string]any{
+				"patterns": []any{
+					map[string]any{"predicate": celBodyRoutedModelMatches},
+				},
 			},
 		},
 	}
@@ -1187,17 +1253,20 @@ allow {
 
 	defaultsRules := map[string]any{
 		"metadata": map[string]any{
-			"apiKeyValidation": map[string]any{
+			"apiKeyValidation": r.withMetadataCache(map[string]any{
 				// Use auth.identity (set by the winning auth method) rather than a
 				// header-based CEL expression.  In Authorino's proto-map CEL context,
 				// accessing an absent header via bracket notation throws an error that
-				// silently suppresses the metadata call; auth.identity is always a
-				// safe string after authentication succeeds.
+				// silently suppresses the metadata call.
 				// api-keys sets identity = "Bearer sk-oai-…", api-keys-x-api-key sets
 				// identity = "sk-oai-…" — both start with "sk-oai-" after stripping.
+				// Token identities are objects, which the selector reads as JSON text
+				// starting with "{", so they never match.
 				"when": []any{
 					map[string]any{
-						"predicate": `auth.identity.matches("^(Bearer )?sk-oai-.*")`,
+						"selector": "auth.identity",
+						"operator": "matches",
+						"value":    "^(Bearer )?sk-oai-.*",
 					},
 				},
 				"http": map[string]any{
@@ -1208,19 +1277,15 @@ allow {
 						"expression": `{"key": auth.identity.replace("Bearer ", "")}`,
 					},
 				},
-				"cache": map[string]any{
-					"key": map[string]any{
-						"selector": `auth.identity.replace("Bearer ", "")`,
-					},
-					"ttl": r.MetadataCacheTTL,
-				},
 				"metrics":  false,
 				"priority": int64(0),
-			},
-			"subscription-info": map[string]any{
+			}, `auth.identity.replace("Bearer ", "")`),
+			"subscription-info": r.withMetadataCache(map[string]any{
+				// Rejected API keys carry no groups or username, so selection is skipped
+				// for them rather than left to a failing request body.
 				"when": []any{
 					map[string]any{
-						"predicate": celModelIdentityAvailable,
+						"predicate": celModelIdentityAvailable + ` && (!(` + celAPIKeyIdentity + `) || ` + celAPIKeyValid + `)`,
 					},
 				},
 				"http": map[string]any{
@@ -1231,15 +1296,9 @@ allow {
 						"expression": subscriptionInfoBody,
 					},
 				},
-				"cache": map[string]any{
-					"key": map[string]any{
-						"selector": subscriptionGatewayCacheKeySelector(),
-					},
-					"ttl": r.MetadataCacheTTL,
-				},
 				"metrics":  false,
 				"priority": int64(1),
-			},
+			}, subscriptionGatewayCacheKeyExpression()),
 		},
 		"authentication": authenticationRules,
 		"authorization":  authorizationRules,
@@ -1247,11 +1306,7 @@ allow {
 			"success": map[string]any{
 				"headers": map[string]any{
 					"X-MaaS-Username": map[string]any{
-						"when": []any{
-							map[string]any{
-								"predicate": celIsAPIKey,
-							},
-						},
+						"when": apiKeyWhen(xAPIKeyEnabled),
 						"plain": map[string]any{
 							"selector": "auth.metadata.apiKeyValidation.username",
 						},
@@ -1272,11 +1327,7 @@ allow {
 						"priority": int64(1),
 					},
 					"X-MaaS-Group": map[string]any{
-						"when": []any{
-							map[string]any{
-								"predicate": celIsAPIKey,
-							},
-						},
+						"when": apiKeyWhen(xAPIKeyEnabled),
 						"plain": map[string]any{
 							"expression": celAPIKeyGroupsHeaderJSON,
 						},
@@ -1300,11 +1351,7 @@ allow {
 					// client header, which subscription-info uses to select a subscription.
 					// Re-injecting that header produces duplicate values in usage logs.
 					"X-MaaS-Subscription": map[string]any{
-						"when": []any{
-							map[string]any{
-								"predicate": `has(auth.metadata) && has(auth.metadata.apiKeyValidation) && auth.metadata.apiKeyValidation.subscription != ""`,
-							},
-						},
+						"when": nonEmptyWhen("auth.metadata.apiKeyValidation.subscription"),
 						"plain": map[string]any{
 							"expression": celSubscription,
 						},
@@ -1314,11 +1361,7 @@ allow {
 					// Short rate-limit identity for TokenRateLimitPolicy (does not replace
 					// X-MaaS-Subscription). Populated from maas-api subscription select.
 					"X-MaaS-Subscription-Rate-Limit-Id": map[string]any{
-						"when": []any{
-							map[string]any{
-								"predicate": `has(auth.metadata["subscription-info"].rateLimitId) && auth.metadata["subscription-info"].rateLimitId != ""`,
-							},
-						},
+						"when": nonEmptyWhen("auth.metadata.subscription-info.rateLimitId"),
 						"plain": map[string]any{
 							"expression": `auth.metadata["subscription-info"].rateLimitId`,
 						},
@@ -1326,11 +1369,7 @@ allow {
 						"priority": int64(0),
 					},
 					"X-MaaS-KeyName": map[string]any{
-						"when": []any{
-							map[string]any{
-								"predicate": celIsAPIKey,
-							},
-						},
+						"when": apiKeyWhen(xAPIKeyEnabled),
 						"plain": map[string]any{
 							"expression": `auth.metadata.apiKeyValidation.keyName`,
 						},
@@ -1377,7 +1416,7 @@ allow {
 									"expression": `(has(auth.metadata) && has(auth.metadata.apiKeyValidation)) ? auth.metadata.apiKeyValidation.keyName : ""`,
 								},
 								"selected_subscription": map[string]any{
-									"expression": `has(auth.metadata["subscription-info"].name) ? auth.metadata["subscription-info"].name : ""`,
+									"expression": subscriptionInfoFieldExpr("name"),
 								},
 								// Model-scoped subscription key: namespace/name@modelIdentity
 								// Prefer resolvedModel from subscription-info (MaaSModelRef
@@ -1386,11 +1425,10 @@ allow {
 								// match this field when maas-api omits rateLimitId.
 								"selected_subscription_key": map[string]any{
 									"expression": fmt.Sprintf(
-										`(has(auth.metadata["subscription-info"].namespace) && `+
-											`has(auth.metadata["subscription-info"].name)) `+
+										`(%s && %s) `+
 											`? auth.metadata["subscription-info"].namespace + "/" `+
 											`+ auth.metadata["subscription-info"].name + "@" + %s : ""`,
-										celResolvedModelIdentity,
+										subscriptionInfoHas("namespace"), subscriptionInfoHas("name"), celResolvedModelIdentity,
 									),
 								},
 								// Short hash from maas-api (subscription-info.rateLimitId) for
@@ -1398,16 +1436,16 @@ allow {
 								// identity). New TRLP limits match this field; legacy limits
 								// match selected_subscription_key instead.
 								"selected_subscription_id": map[string]any{
-									"expression": `has(auth.metadata["subscription-info"].rateLimitId) ? auth.metadata["subscription-info"].rateLimitId : ""`,
+									"expression": subscriptionInfoFieldExpr("rateLimitId"),
 								},
 								"subscription_info": map[string]any{
-									"expression": `has(auth.metadata["subscription-info"].name) ? auth.metadata["subscription-info"] : {}`,
+									"expression": subscriptionInfoHas("name") + ` ? auth.metadata["subscription-info"] : {}`,
 								},
 								"subscription_error": map[string]any{
-									"expression": `has(auth.metadata["subscription-info"].error) ? auth.metadata["subscription-info"].error : ""`,
+									"expression": subscriptionInfoFieldExpr("error"),
 								},
 								"subscription_error_message": map[string]any{
-									"expression": `has(auth.metadata["subscription-info"].message) ? auth.metadata["subscription-info"].message : ""`,
+									"expression": subscriptionInfoFieldExpr("message"),
 								},
 							},
 						},
@@ -1432,15 +1470,20 @@ allow {
 			"unauthorized": map[string]any{
 				"code": int64(403),
 				"body": map[string]any{
-					"expression": `'{"error":{"message":"' + (has(auth.metadata["subscription-info"].message)` +
+					// subscription-info is absent for rejected API keys and when maas-api cannot be
+					// reached. Authorino sends an empty value for an expression that fails.
+					"expression": `'{"error":{"message":"' + (` + subscriptionInfoHas("message") +
 						` ? auth.metadata["subscription-info"].message` +
 						`.replace('\\', '\\\\').replace('"', '\\"')` +
 						`.replace('\n', '\\n').replace('\r', '\\r').replace('\t', '\\t')` +
-						` : "Access denied") + '","type":"authorization_error","code":403}}'`,
+						` : (` + celBodyRoutedModelMismatch +
+						` ? "Access denied: model in the request body does not match model in the request path"` +
+						` : "Access denied")) + '","type":"authorization_error","code":403}}'`,
 				},
 				"headers": map[string]any{
 					"x-ext-auth-reason": map[string]any{
-						"expression": `has(auth.metadata["subscription-info"].error) ? auth.metadata["subscription-info"].error : "unauthorized"`,
+						"expression": subscriptionInfoHas("error") + ` ? auth.metadata["subscription-info"].error : ` +
+							`(` + celBodyRoutedModelMismatch + ` ? "model_mismatch" : "unauthorized")`,
 					},
 					"content-type": map[string]any{
 						"value": "application/json",
@@ -1500,14 +1543,16 @@ func subscriptionInfoHeader(field string) map[string]any {
 	}
 }
 
+// selectedGuardrailHeader is set on model requests only. An allowed request that targets a
+// model has subscription-info: it runs under celModelIdentityAvailable, and
+// guardrail-checks-known, under the same guard and never cached, denies a request without a
+// selection. Testing for subscription-info avoids a CEL evaluation per guardrail header.
 func selectedGuardrailHeader(checkID string) map[string]any {
 	selected := `auth.metadata["subscription-info"].selectedGuardrailChecks`
 	return map[string]any{
-		"when": []any{
-			map[string]any{"predicate": celModelIdentityAvailable},
-		},
+		"when": nonEmptyWhen("auth.metadata.subscription-info"),
 		"plain": map[string]any{
-			"expression": fmt.Sprintf(`(has(%s) && %q in %s && %s[%q] == true) ? "true" : "false"`, selected, checkID, selected, selected, checkID),
+			"expression": fmt.Sprintf(`(%s && %q in %s && %s[%q] == true) ? "true" : "false"`, subscriptionInfoHas("selectedGuardrailChecks"), checkID, selected, selected, checkID),
 		},
 		"metrics":  false,
 		"priority": int64(0),
@@ -1538,8 +1583,14 @@ allow {
 
 // subscriptionInfoFieldExpr is a CEL expression for a subscription-info field, or "" when absent.
 func subscriptionInfoFieldExpr(field string) string {
-	return fmt.Sprintf(`has(auth.metadata) && "subscription-info" in auth.metadata && `+
-		`has(auth.metadata["subscription-info"].%[1]s) ? auth.metadata["subscription-info"].%[1]s : ""`, field)
+	return fmt.Sprintf(`%s ? auth.metadata["subscription-info"].%s : ""`, subscriptionInfoHas(field), field)
+}
+
+// subscriptionInfoHas is a CEL presence check for a subscription-info field. has() guards only
+// the last field, so has(auth.metadata["subscription-info"].x) fails with "no such key" whenever
+// subscription-info was not fetched. Authorino then drops the expression's value.
+func subscriptionInfoHas(field string) string {
+	return fmt.Sprintf(`(%s && has(auth.metadata["subscription-info"].%s))`, celSubscriptionInfoPresent, field)
 }
 
 func (r *MaaSAuthPolicyReconciler) gatewayAuthPolicyName(gatewayNamespace, gatewayName string) string {
@@ -1590,6 +1641,24 @@ func (r *MaaSAuthPolicyReconciler) gatewayAuthPolicyReady(ctx context.Context, g
 		message = "Accepted and Enforced conditions are not both True"
 	}
 	return ready, message, nil
+}
+
+// cachesRulesNotDesired reports whether a live policy retains a cache block
+// that the desired spec no longer emits. This is needed because
+// specMatchesDesired intentionally ignores current-only fields.
+func cachesRulesNotDesired(desired, current map[string]any) bool {
+	for _, section := range []string{"metadata", "authorization"} {
+		currentRules, _, _ := unstructured.NestedMap(current, "defaults", "rules", section)
+		for name := range currentRules {
+			if _, cached, _ := unstructured.NestedFieldNoCopy(currentRules, name, "cache"); !cached {
+				continue
+			}
+			if _, wanted, _ := unstructured.NestedFieldNoCopy(desired, "defaults", "rules", section, name, "cache"); !wanted {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // specMatchesDesired reports whether the current spec (from the API server)
@@ -1841,7 +1910,7 @@ func (r *MaaSAuthPolicyReconciler) reconcileGatewayAuthPolicyWithHeaders(
 	if gateway != nil {
 		setGatewayOwnerReference(gateway, existing)
 	}
-	if specMatchesDesired(spec, currentSpec) &&
+	if specMatchesDesired(spec, currentSpec) && !cachesRulesNotDesired(spec, currentSpec) &&
 		(guardrailHeaders != nil || !basePolicyHasStaleGuardrailFields(currentSpec)) &&
 		!basePolicyHasStaleSubscriptionHeaderFields(currentSpec, subscriptionHeaders) {
 		log.Info("gateway AuthPolicy unchanged, skipping update", "name", authPolicyName)
@@ -2091,10 +2160,20 @@ func (r *MaaSAuthPolicyReconciler) handleDeletion(ctx context.Context, log logr.
 	return ctrl.Result{}, nil
 }
 
-// ensureBaseGatewayAuthPolicy bootstraps maas-gateway-auth with empty model access when
-// missing. On the shared default gateway it also removes legacy gateway-default-auth left
-// over from pre-#912 clusters. Existing policies are left unchanged.
-func (r *MaaSAuthPolicyReconciler) ensureBaseGatewayAuthPolicy(
+// ensureGatewayAuthPolicy creates the gateway-level AuthPolicy when missing
+// (bootstrap) and reconciles it when present, so platform context learned after
+// bootstrap — notably AITenant spec.oidc changes — propagates without requiring
+// a MaaSAuthPolicy CR to exist (RHAI-27142). On the shared default gateway it
+// also removes legacy gateway-default-auth left over from pre-#912 clusters.
+//
+// Bootstrap does not depend on guardrail resolution: a cluster whose guardrail
+// catalog cannot be resolved yet must still receive the empty default-deny
+// policy. Updates go through the full reconcile path (guardrail and
+// subscription headers included) so this ensure computes the same desired state
+// as MaaSAuthPolicy-driven reconciliations and cannot strip fields they wrote.
+// When the policy exists and guardrail resolution fails closed, the error is
+// returned so the caller requeues instead of updating with partial inputs.
+func (r *MaaSAuthPolicyReconciler) ensureGatewayAuthPolicy(
 	ctx context.Context, log logr.Logger,
 	oidc *oidcConfig, xAPIKeyEnabled bool, tenantNamespace, tenantID, gatewayNamespace, gatewayName string,
 ) error {
@@ -2105,13 +2184,36 @@ func (r *MaaSAuthPolicyReconciler) ensureBaseGatewayAuthPolicy(
 
 	existing := &unstructured.Unstructured{}
 	existing.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
-	if err := r.Get(ctx, client.ObjectKey{Name: authPolicyName, Namespace: gatewayNamespace}, existing); err == nil {
-		return nil
-	} else if !apierrors.IsNotFound(err) {
+	err := r.Get(ctx, client.ObjectKey{Name: authPolicyName, Namespace: gatewayNamespace}, existing)
+	if err == nil {
+		// Mirror the MaaSAuthPolicy reconcile's upgrade cutover gate: while a
+		// legacy route-level policy is still the working auth path, defer
+		// rewriting the gateway-wide callbacks until the replacement maas-api
+		// Service has a ready endpoint. Returning an error requeues the caller.
+		legacyPolicyExists, legacyErr := r.hasLegacyModelAuthPolicy(ctx, tenantNamespace)
+		if legacyErr != nil {
+			return fmt.Errorf("failed to check for legacy model AuthPolicy: %w", legacyErr)
+		}
+		if legacyPolicyExists {
+			targetReady, readyErr := r.targetMaaSAPIReady(ctx, tenantID)
+			if readyErr != nil {
+				return fmt.Errorf("failed to check target maas-api readiness: %w", readyErr)
+			}
+			if !targetReady {
+				return fmt.Errorf(
+					"deferring gateway AuthPolicy update: legacy model AuthPolicy present and target maas-api Service %s/%s has no ready endpoint",
+					r.InfraNamespace, tenantreconcile.MaaSAPIServiceName(tenantID),
+				)
+			}
+		}
+		_, err := r.reconcileGatewayAuthPolicy(ctx, log, oidc, xAPIKeyEnabled, tenantNamespace, tenantID, gatewayNamespace, gatewayName)
+		return err
+	}
+	if !apierrors.IsNotFound(err) {
 		return fmt.Errorf("failed to check gateway AuthPolicy %s/%s: %w", gatewayNamespace, authPolicyName, err)
 	}
 
-	_, err := r.reconcileGatewayAuthPolicyWithHeaders(
+	_, err = r.reconcileGatewayAuthPolicyWithHeaders(
 		ctx, log, oidc, xAPIKeyEnabled, tenantNamespace, tenantID, gatewayNamespace, gatewayName, nil,
 	)
 	return err
@@ -2188,19 +2290,47 @@ func (r *MaaSAuthPolicyReconciler) discoverXAPIKeyNeeded(ctx context.Context, lo
 // keys from the x-api-key header (Anthropic SDK format).
 func apiKeyCELPredicates(xAPIKeyEnabled bool) (isAPIKey, isNotAPIKey, extractRawKey string) {
 	if !xAPIKeyEnabled {
-		return `request.headers.authorization.matches("^Bearer sk-oai-.*")`,
+		return `request.headers.authorization.startsWith("Bearer sk-oai-")`,
 			`!request.headers.authorization.startsWith("Bearer sk-oai-")`,
 			`request.headers.authorization.replace("Bearer ", "")`
 	}
-	authorizationAPIKey := `("authorization" in request.headers && request.headers["authorization"].matches("^Bearer sk-oai-.*"))`
-	//nolint:gosec // sk-oai- is a CEL pattern for API key format validation, not a credential
-	xAPIKey := `("x-api-key" in request.headers && request.headers["x-api-key"].matches("^sk-oai-.*"))`
+	authorizationAPIKey := `("authorization" in request.headers && request.headers["authorization"].startsWith("Bearer sk-oai-"))`
+	//nolint:gosec // sk-oai- is the API key prefix, not a credential
+	xAPIKey := `("x-api-key" in request.headers && request.headers["x-api-key"].startsWith("sk-oai-"))`
 	isAPIKey = authorizationAPIKey + ` || ` + xAPIKey
 	isNotAPIKey = `!(` + isAPIKey + `)`
 	extractRawKey = `(` +
 		authorizationAPIKey + ` ? request.headers["authorization"].replace("Bearer ", "") : ` +
 		xAPIKey + ` ? request.headers["x-api-key"] : "")`
 	return isAPIKey, isNotAPIKey, extractRawKey
+}
+
+// apiKeyWhen is the `when` of rules that apply to API-key requests only. It matches the
+// same requests as isAPIKey from apiKeyCELPredicates, but as selector conditions: Authorino
+// reads them with gjson instead of re-parsing the authorization JSON for CEL. An absent
+// header reads as "" and doesn't match, which skips the rule like the CEL error did.
+func apiKeyWhen(xAPIKeyEnabled bool) []any {
+	authorization := map[string]any{
+		"selector": "request.headers.authorization",
+		"operator": "matches",
+		"value":    "^Bearer sk-oai-.*",
+	}
+	if !xAPIKeyEnabled {
+		return []any{authorization}
+	}
+	xAPIKey := map[string]any{
+		"selector": "request.headers.x-api-key",
+		"operator": "matches",
+		"value":    "^sk-oai-.*",
+	}
+	return []any{map[string]any{"any": []any{authorization, xAPIKey}}}
+}
+
+// nonEmptyWhen is the `when` of a rule that needs a non-empty value at selector, a gjson
+// path into the authorization JSON. A missing field and JSON null read as "", so no CEL
+// evaluation is needed to guard against them.
+func nonEmptyWhen(selector string) []any {
+	return []any{map[string]any{"selector": selector, "operator": "neq", "value": ""}}
 }
 
 func (r *MaaSAuthPolicyReconciler) updateAuthPolicyRefStatus(ctx context.Context, log logr.Logger, policy *maasv1alpha1.MaaSAuthPolicy, refs []authPolicyRef) {
@@ -2355,13 +2485,10 @@ func (r *MaaSAuthPolicyReconciler) updateStatus(ctx context.Context, policy *maa
 }
 
 // ValidateCacheTTLs validates that cache TTL configuration is valid.
-// Returns an error if either TTL is negative (fail-closed validation).
+// Returns an error if the metadata TTL is negative (fail-closed validation).
 func (r *MaaSAuthPolicyReconciler) ValidateCacheTTLs() error {
 	if r.MetadataCacheTTL < 0 {
 		return fmt.Errorf("metadata cache TTL must be non-negative, got %d", r.MetadataCacheTTL)
-	}
-	if r.AuthzCacheTTL < 0 {
-		return fmt.Errorf("authorization cache TTL must be non-negative, got %d", r.AuthzCacheTTL)
 	}
 	return nil
 }
@@ -2377,14 +2504,6 @@ func (r *MaaSAuthPolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	// Reject negative TTL values
 	if err := r.ValidateCacheTTLs(); err != nil {
 		return err
-	}
-
-	if r.AuthzCacheTTL > r.MetadataCacheTTL {
-		log.Info("WARNING: Authorization cache TTL exceeds metadata cache TTL. "+
-			"Authorization caches will be capped at metadata TTL to prevent stale authorization decisions.",
-			"authzCacheTTL", r.AuthzCacheTTL,
-			"metadataCacheTTL", r.MetadataCacheTTL,
-			"effectiveAuthzTTL", r.authzCacheTTL())
 	}
 
 	// Watch Tenant so we re-reconcile when OIDC configuration changes.

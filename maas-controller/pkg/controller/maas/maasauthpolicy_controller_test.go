@@ -19,6 +19,8 @@ package maas
 import (
 	"context"
 	"errors"
+	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -40,6 +42,7 @@ import (
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
+	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/authpolicy"
 	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/platform/tenantreconcile"
 )
 
@@ -944,7 +947,7 @@ func TestMaaSAuthPolicyReconciler_MultiplePoliciesDeletion(t *testing.T) {
 	}
 }
 
-func TestMaaSAuthPolicyReconciler_EnsureBaseGatewayAuthPolicyDoesNotResolveGuardrails(t *testing.T) {
+func TestMaaSAuthPolicyReconciler_EnsureGatewayAuthPolicyDoesNotResolveGuardrails(t *testing.T) {
 	const (
 		gatewayNamespace = "openshift-ingress"
 		gatewayName      = "maas-default-gateway"
@@ -977,10 +980,10 @@ func TestMaaSAuthPolicyReconciler_EnsureBaseGatewayAuthPolicyDoesNotResolveGuard
 	if _, err := r.reconcileGatewayAuthPolicy(context.Background(), logr.Discard(), nil, false, tenantNamespace, "", gatewayNamespace, gatewayName); err == nil {
 		t.Fatal("reconcileGatewayAuthPolicy() error = nil, want guardrail resolution failure")
 	}
-	if err := r.ensureBaseGatewayAuthPolicy(
+	if err := r.ensureGatewayAuthPolicy(
 		context.Background(), logr.Discard(), nil, false, tenantNamespace, "", gatewayNamespace, gatewayName,
 	); err != nil {
-		t.Fatalf("ensureBaseGatewayAuthPolicy() error = %v", err)
+		t.Fatalf("ensureGatewayAuthPolicy() error = %v", err)
 	}
 
 	policy := &unstructured.Unstructured{}
@@ -998,6 +1001,266 @@ func TestMaaSAuthPolicyReconciler_EnsureBaseGatewayAuthPolicyDoesNotResolveGuard
 		if strings.HasPrefix(strings.ToLower(name), "x-aigateway-guardrail-") {
 			t.Fatalf("base gateway AuthPolicy must not include guardrail response header %q", name)
 		}
+	}
+}
+
+// TestMaaSAuthPolicyReconciler_EnsureGatewayAuthPolicyUpdatesExistingPolicy covers the
+// RHAI-27142 regression: the tenant reconcile path must diff-and-update an existing
+// gateway AuthPolicy when the resolved OIDC config changes, without requiring a
+// MaaSAuthPolicy CR to exist. The AITenant-managed label is intentionally absent so
+// guardrail resolution stays on the legacy (no headers, no error) path.
+func TestMaaSAuthPolicyReconciler_EnsureGatewayAuthPolicyUpdatesExistingPolicy(t *testing.T) {
+	const (
+		gatewayNamespace = "openshift-ingress"
+		gatewayName      = "maas-default-gateway"
+		tenantNamespace  = "legacy-tenant"
+	)
+
+	tenantConfig := &maasv1alpha1.MaasTenantConfig{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      maasv1alpha1.MaasTenantConfigInstanceName,
+			Namespace: tenantNamespace,
+		},
+	}
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(testRESTMapper()).
+		WithObjects(tenantConfig).
+		Build()
+	r := &MaaSAuthPolicyReconciler{
+		Client:           c,
+		Scheme:           scheme,
+		GatewayNamespace: gatewayNamespace,
+		GatewayName:      gatewayName,
+	}
+
+	issuerA := &oidcConfig{IssuerURL: "https://issuer-a.example.com/realms/e2e", TTL: 300}
+	issuerB := &oidcConfig{IssuerURL: "https://issuer-b.example.com/realms/e2e", TTL: 300}
+
+	// Bootstrap with the first issuer.
+	if err := r.ensureGatewayAuthPolicy(
+		context.Background(), logr.Discard(), issuerA, false, tenantNamespace, "", gatewayNamespace, gatewayName,
+	); err != nil {
+		t.Fatalf("ensureGatewayAuthPolicy() bootstrap error = %v", err)
+	}
+
+	getPolicy := func() *unstructured.Unstructured {
+		t.Helper()
+		policy := &unstructured.Unstructured{}
+		policy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
+		if err := c.Get(context.Background(), types.NamespacedName{Name: maasGatewayAuthPolicyName, Namespace: gatewayNamespace}, policy); err != nil {
+			t.Fatalf("Get gateway AuthPolicy: %v", err)
+		}
+		return policy
+	}
+	issuerOf := func(policy *unstructured.Unstructured) string {
+		t.Helper()
+		jwt := nestedMapRequired(t, policy, "spec", "defaults", "rules", "authentication", "oidc-identities", "jwt")
+		issuer, _ := jwt["issuerUrl"].(string)
+		return issuer
+	}
+
+	if got := issuerOf(getPolicy()); got != issuerA.IssuerURL {
+		t.Fatalf("after bootstrap issuerUrl = %q, want %q", got, issuerA.IssuerURL)
+	}
+
+	// OIDC config changed on the tenant: ensure must update the existing policy.
+	if err := r.ensureGatewayAuthPolicy(
+		context.Background(), logr.Discard(), issuerB, false, tenantNamespace, "", gatewayNamespace, gatewayName,
+	); err != nil {
+		t.Fatalf("ensureGatewayAuthPolicy() update error = %v", err)
+	}
+	updated := getPolicy()
+	if got := issuerOf(updated); got != issuerB.IssuerURL {
+		t.Fatalf("after update issuerUrl = %q, want %q", got, issuerB.IssuerURL)
+	}
+
+	// Re-ensuring the same config must not issue a spurious update.
+	version := updated.GetResourceVersion()
+	if err := r.ensureGatewayAuthPolicy(
+		context.Background(), logr.Discard(), issuerB, false, tenantNamespace, "", gatewayNamespace, gatewayName,
+	); err != nil {
+		t.Fatalf("ensureGatewayAuthPolicy() no-op error = %v", err)
+	}
+	if got := getPolicy(); got.GetResourceVersion() != version {
+		t.Fatalf("unchanged OIDC config must not update the gateway AuthPolicy (resourceVersion %q -> %q)", version, got.GetResourceVersion())
+	}
+}
+
+// TestMaaSAuthPolicyReconciler_EnsureGatewayAuthPolicyFailsClosedOnUnresolvableGuardrails
+// guards the update half of the ensure: when the gateway AuthPolicy already carries a
+// guardrail catalog but guardrail resolution fails closed, the ensure must return an
+// error (so the caller requeues) instead of updating with partial inputs and stripping
+// the catalog. Bootstrap without an existing policy is covered by
+// TestMaaSAuthPolicyReconciler_EnsureGatewayAuthPolicyDoesNotResolveGuardrails.
+func TestMaaSAuthPolicyReconciler_EnsureGatewayAuthPolicyFailsClosedOnUnresolvableGuardrails(t *testing.T) {
+	const (
+		gatewayNamespace = "openshift-ingress"
+		gatewayName      = "maas-default-gateway"
+		tenantNamespace  = "tenant-without-aitenant"
+	)
+
+	// A tenant config with the AITenant-managed label but no resolvable owning
+	// AITenant makes guardrail resolution fail closed.
+	tenantConfig := &maasv1alpha1.MaasTenantConfig{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      maasv1alpha1.MaasTenantConfigInstanceName,
+			Namespace: tenantNamespace,
+			Labels: map[string]string{
+				tenantreconcile.LabelManagedByAITenant: "true",
+			},
+		},
+	}
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(testRESTMapper()).
+		WithObjects(tenantConfig).
+		Build()
+	r := &MaaSAuthPolicyReconciler{
+		Client:           c,
+		Scheme:           scheme,
+		GatewayNamespace: gatewayNamespace,
+		GatewayName:      gatewayName,
+	}
+
+	// Seed an existing managed policy that carries a guardrail catalog.
+	if _, err := r.reconcileGatewayAuthPolicyWithHeaders(
+		context.Background(), logr.Discard(), nil, false, tenantNamespace, "", gatewayNamespace, gatewayName,
+		[]guardrailHeader{{ID: "check-a", Name: "x-aigateway-guardrail-check-a"}},
+	); err != nil {
+		t.Fatalf("seed gateway AuthPolicy with guardrail catalog: %v", err)
+	}
+
+	oidc := &oidcConfig{IssuerURL: "https://issuer.example.com/realms/e2e", TTL: 300}
+	if err := r.ensureGatewayAuthPolicy(
+		context.Background(), logr.Discard(), oidc, false, tenantNamespace, "", gatewayNamespace, gatewayName,
+	); err == nil {
+		t.Fatal("ensureGatewayAuthPolicy() error = nil, want guardrail resolution failure")
+	}
+
+	// The failed ensure must leave the existing policy untouched: catalog intact,
+	// no OIDC identities written.
+	policy := &unstructured.Unstructured{}
+	policy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
+	if err := c.Get(context.Background(), types.NamespacedName{Name: maasGatewayAuthPolicyName, Namespace: gatewayNamespace}, policy); err != nil {
+		t.Fatalf("Get gateway AuthPolicy: %v", err)
+	}
+	authorizationRules := nestedMapRequired(t, policy, "spec", "defaults", "rules", "authorization")
+	if _, exists := authorizationRules["guardrail-checks-known"]; !exists {
+		t.Fatal("failed ensure must not strip the guardrail catalog validation rule")
+	}
+	successHeaders := nestedMapRequired(t, policy, "spec", "defaults", "rules", "response", "success", "headers")
+	if _, exists := successHeaders["x-aigateway-guardrail-check-a"]; !exists {
+		t.Fatal("failed ensure must not strip the guardrail response header")
+	}
+	authenticationRules := nestedMapRequired(t, policy, "spec", "defaults", "rules", "authentication")
+	if _, exists := authenticationRules["oidc-identities"]; exists {
+		t.Fatal("failed ensure must not write OIDC identities with partial inputs")
+	}
+}
+
+// TestMaaSAuthPolicyReconciler_EnsureGatewayAuthPolicyDefersLegacyCutover pins the
+// upgrade gate mirrored from the MaaSAuthPolicy reconcile path: while a legacy
+// route-level model AuthPolicy is the working auth path and the replacement
+// maas-api Service has no ready endpoint, the tenant-driven ensure must defer the
+// gateway AuthPolicy update instead of rewriting gateway-wide callbacks.
+func TestMaaSAuthPolicyReconciler_EnsureGatewayAuthPolicyDefersLegacyCutover(t *testing.T) {
+	const (
+		gatewayNamespace = "openshift-ingress"
+		gatewayName      = "maas-default-gateway"
+		tenantNamespace  = "legacy-tenant"
+		modelNamespace   = "legacy-models"
+		modelName        = "legacy-model"
+		infraNamespace   = "opendatahub"
+	)
+
+	tenantConfig := &maasv1alpha1.MaasTenantConfig{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      maasv1alpha1.MaasTenantConfigInstanceName,
+			Namespace: tenantNamespace,
+		},
+	}
+	maasPolicy := &maasv1alpha1.MaaSAuthPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "legacy-policy", Namespace: tenantNamespace},
+		Spec: maasv1alpha1.MaaSAuthPolicySpec{
+			ModelRefs: []maasv1alpha1.ModelRef{{Name: modelName, Namespace: modelNamespace}},
+			Subjects:  maasv1alpha1.SubjectSpec{Groups: []maasv1alpha1.GroupReference{{Name: "system:authenticated"}}},
+		},
+	}
+	legacyModelPolicy := &unstructured.Unstructured{}
+	legacyModelPolicy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
+	legacyModelPolicy.SetName(fmt.Sprintf("maas-auth-%s", modelName))
+	legacyModelPolicy.SetNamespace(modelNamespace)
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(testRESTMapper()).
+		WithObjects(tenantConfig, maasPolicy, legacyModelPolicy).
+		Build()
+	r := &MaaSAuthPolicyReconciler{
+		Client:           c,
+		Scheme:           scheme,
+		InfraNamespace:   infraNamespace,
+		GatewayNamespace: gatewayNamespace,
+		GatewayName:      gatewayName,
+	}
+
+	issuerA := &oidcConfig{IssuerURL: "https://issuer-a.example.com/realms/e2e", TTL: 300}
+	issuerB := &oidcConfig{IssuerURL: "https://issuer-b.example.com/realms/e2e", TTL: 300}
+
+	if err := r.ensureGatewayAuthPolicy(
+		context.Background(), logr.Discard(), issuerA, false, tenantNamespace, "", gatewayNamespace, gatewayName,
+	); err != nil {
+		t.Fatalf("ensureGatewayAuthPolicy() bootstrap error = %v", err)
+	}
+
+	getIssuer := func() string {
+		t.Helper()
+		policy := &unstructured.Unstructured{}
+		policy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
+		if err := c.Get(context.Background(), types.NamespacedName{Name: maasGatewayAuthPolicyName, Namespace: gatewayNamespace}, policy); err != nil {
+			t.Fatalf("Get gateway AuthPolicy: %v", err)
+		}
+		jwt := nestedMapRequired(t, policy, "spec", "defaults", "rules", "authentication", "oidc-identities", "jwt")
+		issuer, _ := jwt["issuerUrl"].(string)
+		return issuer
+	}
+
+	// The legacy model AuthPolicy exists and maas-api has no ready endpoint: the
+	// OIDC update must be deferred with an error so the caller requeues.
+	err := r.ensureGatewayAuthPolicy(
+		context.Background(), logr.Discard(), issuerB, false, tenantNamespace, "", gatewayNamespace, gatewayName,
+	)
+	if err == nil || !strings.Contains(err.Error(), "deferring gateway AuthPolicy update") {
+		t.Fatalf("ensureGatewayAuthPolicy() error = %v, want legacy cutover deferral", err)
+	}
+	if got := getIssuer(); got != issuerA.IssuerURL {
+		t.Fatalf("deferred update changed issuerUrl to %q, want %q", got, issuerA.IssuerURL)
+	}
+
+	// Once the target maas-api Service has a ready endpoint the update proceeds.
+	ready := true
+	tlsPort := int32(8443)
+	endpointSlice := &discv1.EndpointSlice{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "maas-api-ready",
+			Namespace: infraNamespace,
+			Labels:    map[string]string{discv1.LabelServiceName: "maas-api"},
+		},
+		AddressType: discv1.AddressTypeIPv4,
+		Ports:       []discv1.EndpointPort{{Port: &tlsPort}},
+		Endpoints:   []discv1.Endpoint{{Conditions: discv1.EndpointConditions{Ready: &ready}}},
+	}
+	if err := c.Create(context.Background(), endpointSlice); err != nil {
+		t.Fatalf("Create ready EndpointSlice: %v", err)
+	}
+	if err := r.ensureGatewayAuthPolicy(
+		context.Background(), logr.Discard(), issuerB, false, tenantNamespace, "", gatewayNamespace, gatewayName,
+	); err != nil {
+		t.Fatalf("ensureGatewayAuthPolicy() post-cutover error = %v", err)
+	}
+	if got := getIssuer(); got != issuerB.IssuerURL {
+		t.Fatalf("after cutover issuerUrl = %q, want %q", got, issuerB.IssuerURL)
 	}
 }
 
@@ -1214,11 +1477,9 @@ func TestMaaSAuthPolicyReconciler_MisidentifiedTenantDoesNotPoisonDefaultGateway
 	}
 }
 
-// TestMaaSAuthPolicyReconciler_CachingConfiguration verifies that the controller
-// generates cache blocks on metadata and authorization evaluators with configurable TTLs.
-//
-// In gateway-only mode all authorization evaluators, including require-group-membership,
-// live in the singleton gateway AuthPolicy.
+// TestMaaSAuthPolicyReconciler_CachingConfiguration verifies that metadata rules
+// honor the configured TTL, TTL zero disables caching, and authorization rules
+// are never cached.
 func TestMaaSAuthPolicyReconciler_CachingConfiguration(t *testing.T) {
 	const (
 		modelName      = "llm"
@@ -1228,52 +1489,12 @@ func TestMaaSAuthPolicyReconciler_CachingConfiguration(t *testing.T) {
 		maasPolicyName = "policy-a"
 	)
 
-	tests := []struct {
-		name            string
-		metadataTTL     int64
-		authzTTL        int64
-		wantMetadataTTL int64
-		wantAuthzTTL    int64
-	}{
-		{
-			name:            "default TTLs (60s)",
-			metadataTTL:     60,
-			authzTTL:        60,
-			wantMetadataTTL: 60,
-			wantAuthzTTL:    60,
-		},
-		{
-			name:            "custom metadata TTL (300s)",
-			metadataTTL:     300,
-			authzTTL:        60,
-			wantMetadataTTL: 300,
-			wantAuthzTTL:    60,
-		},
-		{
-			name:            "custom authz TTL (30s)",
-			metadataTTL:     60,
-			authzTTL:        30,
-			wantMetadataTTL: 60,
-			wantAuthzTTL:    30,
-		},
-		{
-			name:            "both custom (5min metadata, 1min authz)",
-			metadataTTL:     300,
-			authzTTL:        60,
-			wantMetadataTTL: 300,
-			wantAuthzTTL:    60,
-		},
-		{
-			name:            "authz TTL capped at metadata TTL (authz=300, metadata=60)",
-			metadataTTL:     60,
-			authzTTL:        300,
-			wantMetadataTTL: 60,
-			wantAuthzTTL:    60, // Should be capped at metadata TTL
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
+	for caseName, metadataTTL := range map[string]int64{
+		"default 60s":         60,
+		"custom 300s":         300,
+		"zero disables cache": 0,
+	} {
+		t.Run(caseName, func(t *testing.T) {
 			model := newMaaSModelRef(modelName, namespace, "ExternalModel", modelName)
 			route := newHTTPRoute(httpRouteName, namespace)
 			maasPolicy := newMaaSAuthPolicy(maasPolicyName, namespace, "team-a", maasv1alpha1.ModelRef{Name: modelName, Namespace: namespace})
@@ -1291,8 +1512,7 @@ func TestMaaSAuthPolicyReconciler_CachingConfiguration(t *testing.T) {
 				InfraNamespace:   "maas-system",
 				GatewayName:      "maas-default-gateway",
 				GatewayNamespace: gatewayNS,
-				MetadataCacheTTL: tc.metadataTTL,
-				AuthzCacheTTL:    tc.authzTTL,
+				MetadataCacheTTL: metadataTTL,
 			}
 
 			req := ctrl.Request{NamespacedName: types.NamespacedName{Name: maasPolicyName, Namespace: namespace}}
@@ -1307,74 +1527,110 @@ func TestMaaSAuthPolicyReconciler_CachingConfiguration(t *testing.T) {
 				t.Fatalf("Get gateway AuthPolicy %q: %v", "maas-gateway-auth", err)
 			}
 
-			// Verify apiKeyValidation metadata has cache with correct TTL (on gateway policy)
-			apiKeyValTTL, found, err := unstructured.NestedInt64(gwPolicy.Object, "spec", "defaults", "rules", "metadata", "apiKeyValidation", "cache", "ttl")
-			if err != nil || !found {
-				t.Errorf("apiKeyValidation cache.ttl missing or invalid: found=%v err=%v", found, err)
-			} else if apiKeyValTTL != tc.wantMetadataTTL {
-				t.Errorf("apiKeyValidation cache.ttl = %d, want %d", apiKeyValTTL, tc.wantMetadataTTL)
+			for _, name := range []string{"apiKeyValidation", "subscription-info"} {
+				cache, found, err := unstructured.NestedMap(gwPolicy.Object, "spec", "defaults", "rules", "metadata", name, "cache")
+				if err != nil {
+					t.Fatalf("%s cache: %v", name, err)
+				}
+				if metadataTTL == 0 {
+					if found {
+						t.Errorf("%s must not be cached with a TTL of zero: %#v", name, cache)
+					}
+					continue
+				}
+				if !found {
+					t.Fatalf("%s cache block missing", name)
+				}
+				if ttl, _, _ := unstructured.NestedInt64(cache, "ttl"); ttl != metadataTTL {
+					t.Errorf("%s cache.ttl = %d, want %d", name, ttl, metadataTTL)
+				}
+				if expression, _, _ := unstructured.NestedString(cache, "key", "expression"); expression == "" {
+					t.Errorf("%s cache.key.expression is empty", name)
+				}
 			}
 
-			// Verify apiKeyValidation has cache key (on gateway policy)
-			apiKeyValCacheKey, found, err := unstructured.NestedString(gwPolicy.Object, "spec", "defaults", "rules", "metadata", "apiKeyValidation", "cache", "key", "selector")
-			if err != nil || !found {
-				t.Errorf("apiKeyValidation cache.key.selector missing: found=%v err=%v", found, err)
-			} else if apiKeyValCacheKey == "" {
-				t.Errorf("apiKeyValidation cache.key.selector is empty")
+			authorizationRules, _, err := unstructured.NestedMap(gwPolicy.Object, "spec", "defaults", "rules", "authorization")
+			if err != nil {
+				t.Fatalf("authorization rules: %v", err)
+			}
+			for _, name := range []string{"auth-valid", "subscription-valid", "require-group-membership"} {
+				if _, exists := authorizationRules[name]; !exists {
+					t.Fatalf("authorization rule %q missing", name)
+				}
+			}
+			for name := range authorizationRules {
+				if _, cached, _ := unstructured.NestedFieldNoCopy(authorizationRules, name, "cache"); cached {
+					t.Errorf("authorization rule %q must not be cached", name)
+				}
+			}
+		})
+	}
+}
+
+func TestMaaSAuthPolicyReconciler_RemovesStaleCaches(t *testing.T) {
+	const (
+		modelName      = "llm"
+		namespace      = "default"
+		gatewayNS      = "gateway-ns"
+		maasPolicyName = "policy-a"
+	)
+	staleCache := map[string]any{
+		"key": map[string]any{"expression": `"stale"`},
+		"ttl": int64(60),
+	}
+	tests := []struct {
+		name        string
+		metadataTTL int64
+		staleRule   []string
+	}{
+		{name: "authorization cache from an earlier controller", metadataTTL: 60, staleRule: []string{"authorization", "auth-valid"}},
+		{name: "metadata cache after the TTL is set to zero", metadataTTL: 0, staleRule: []string{"metadata", "apiKeyValidation"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			model := newMaaSModelRef(modelName, namespace, "ExternalModel", modelName)
+			route := newHTTPRoute("maas-"+modelName, namespace)
+			maasPolicy := newMaaSAuthPolicy(maasPolicyName, namespace, "team-a", maasv1alpha1.ModelRef{Name: modelName, Namespace: namespace})
+			client := fake.NewClientBuilder().
+				WithScheme(scheme).
+				WithRESTMapper(testRESTMapper()).
+				WithObjects(legacyNamespace(namespace), model, route, maasPolicy).
+				WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
+				Build()
+			reconciler := &MaaSAuthPolicyReconciler{
+				Client:           client,
+				Scheme:           scheme,
+				InfraNamespace:   "maas-system",
+				GatewayName:      "maas-default-gateway",
+				GatewayNamespace: gatewayNS,
+				MetadataCacheTTL: tc.metadataTTL,
+			}
+			request := ctrl.Request{NamespacedName: types.NamespacedName{Name: maasPolicyName, Namespace: namespace}}
+			if _, err := reconciler.Reconcile(context.Background(), request); err != nil {
+				t.Fatalf("Reconcile: %v", err)
 			}
 
-			// Verify subscription-info metadata has cache with correct TTL (on gateway policy)
-			subInfoTTL, found, err := unstructured.NestedInt64(gwPolicy.Object, "spec", "defaults", "rules", "metadata", "subscription-info", "cache", "ttl")
-			if err != nil || !found {
-				t.Errorf("subscription-info cache.ttl missing or invalid: found=%v err=%v", found, err)
-			} else if subInfoTTL != tc.wantMetadataTTL {
-				t.Errorf("subscription-info cache.ttl = %d, want %d", subInfoTTL, tc.wantMetadataTTL)
+			key := types.NamespacedName{Name: "maas-gateway-auth", Namespace: gatewayNS}
+			gatewayPolicy := &unstructured.Unstructured{}
+			gatewayPolicy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
+			if err := client.Get(context.Background(), key, gatewayPolicy); err != nil {
+				t.Fatalf("Get gateway AuthPolicy: %v", err)
 			}
-
-			// Verify auth-valid authorization has cache with correct TTL (on gateway policy)
-			authValidTTL, found, err := unstructured.NestedInt64(gwPolicy.Object, "spec", "defaults", "rules", "authorization", "auth-valid", "cache", "ttl")
-			if err != nil || !found {
-				t.Errorf("auth-valid cache.ttl missing or invalid: found=%v err=%v", found, err)
-			} else if authValidTTL != tc.wantAuthzTTL {
-				t.Errorf("auth-valid cache.ttl = %d, want %d", authValidTTL, tc.wantAuthzTTL)
+			cachePath := append([]string{"spec", "defaults", "rules"}, append(tc.staleRule, "cache")...)
+			if err := unstructured.SetNestedField(gatewayPolicy.Object, staleCache, cachePath...); err != nil {
+				t.Fatalf("set stale cache: %v", err)
 			}
-
-			// Verify subscription-valid authorization has cache with correct TTL (on gateway policy)
-			subValidTTL, found, err := unstructured.NestedInt64(gwPolicy.Object, "spec", "defaults", "rules", "authorization", "subscription-valid", "cache", "ttl")
-			if err != nil || !found {
-				t.Errorf("subscription-valid cache.ttl missing or invalid: found=%v err=%v", found, err)
-			} else if subValidTTL != tc.wantAuthzTTL {
-				t.Errorf("subscription-valid cache.ttl = %d, want %d", subValidTTL, tc.wantAuthzTTL)
+			if err := client.Update(context.Background(), gatewayPolicy); err != nil {
+				t.Fatalf("Update gateway AuthPolicy: %v", err)
 			}
-
-			// Verify require-group-membership authorization has cache with correct TTL (on gateway policy)
-			groupMembershipTTL, found, err := unstructured.NestedInt64(gwPolicy.Object, "spec", "defaults", "rules", "authorization", "require-group-membership", "cache", "ttl")
-			if err != nil || !found {
-				t.Errorf("require-group-membership cache.ttl missing or invalid: found=%v err=%v", found, err)
-			} else if groupMembershipTTL != tc.wantAuthzTTL {
-				t.Errorf("require-group-membership cache.ttl = %d, want %d", groupMembershipTTL, tc.wantAuthzTTL)
+			if _, err := reconciler.Reconcile(context.Background(), request); err != nil {
+				t.Fatalf("Reconcile: %v", err)
 			}
-
-			// Verify cache keys are present and non-empty (on gateway policy)
-			authValidCacheKey, found, err := unstructured.NestedString(gwPolicy.Object, "spec", "defaults", "rules", "authorization", "auth-valid", "cache", "key", "selector")
-			if err != nil || !found {
-				t.Errorf("auth-valid cache.key.selector missing: found=%v err=%v", found, err)
-			} else if authValidCacheKey == "" {
-				t.Errorf("auth-valid cache.key.selector is empty")
+			if err := client.Get(context.Background(), key, gatewayPolicy); err != nil {
+				t.Fatalf("Get gateway AuthPolicy: %v", err)
 			}
-
-			subValidCacheKey, found, err := unstructured.NestedString(gwPolicy.Object, "spec", "defaults", "rules", "authorization", "subscription-valid", "cache", "key", "selector")
-			if err != nil || !found {
-				t.Errorf("subscription-valid cache.key.selector missing: found=%v err=%v", found, err)
-			} else if subValidCacheKey == "" {
-				t.Errorf("subscription-valid cache.key.selector is empty")
-			}
-
-			groupMembershipCacheKey, found, err := unstructured.NestedString(gwPolicy.Object, "spec", "defaults", "rules", "authorization", "require-group-membership", "cache", "key", "selector")
-			if err != nil || !found {
-				t.Errorf("require-group-membership cache.key.selector missing: found=%v err=%v", found, err)
-			} else if groupMembershipCacheKey == "" {
-				t.Errorf("require-group-membership cache.key.selector is empty")
+			if _, found, _ := unstructured.NestedFieldNoCopy(gatewayPolicy.Object, cachePath...); found {
+				t.Errorf("stale cache at %v survived reconcile", cachePath)
 			}
 		})
 	}
@@ -1386,40 +1642,17 @@ func TestMaaSAuthPolicyReconciler_NegativeTTLRejection(t *testing.T) {
 	tests := []struct {
 		name            string
 		metadataTTL     int64
-		authzTTL        int64
 		expectSetupFail bool
 	}{
-		{
-			name:            "positive TTLs allowed",
-			metadataTTL:     60,
-			authzTTL:        30,
-			expectSetupFail: false,
-		},
-		{
-			name:            "zero TTLs allowed",
-			metadataTTL:     0,
-			authzTTL:        0,
-			expectSetupFail: false,
-		},
-		{
-			name:            "negative metadata TTL rejected",
-			metadataTTL:     -10,
-			authzTTL:        60,
-			expectSetupFail: true,
-		},
-		{
-			name:            "negative authz TTL rejected",
-			metadataTTL:     60,
-			authzTTL:        -10,
-			expectSetupFail: true,
-		},
+		{name: "positive TTL allowed", metadataTTL: 60},
+		{name: "zero TTL allowed", metadataTTL: 0},
+		{name: "negative metadata TTL rejected", metadataTTL: -10, expectSetupFail: true},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			r := &MaaSAuthPolicyReconciler{
 				MetadataCacheTTL: tc.metadataTTL,
-				AuthzCacheTTL:    tc.authzTTL,
 			}
 
 			// Test the validation logic used by SetupWithManager
@@ -1432,12 +1665,6 @@ func TestMaaSAuthPolicyReconciler_NegativeTTLRejection(t *testing.T) {
 			} else {
 				if err != nil {
 					t.Errorf("Expected validation to succeed, but got error: %v", err)
-				}
-
-				// Also verify authzCacheTTL() defensive clamp never returns negative
-				effectiveTTL := r.authzCacheTTL()
-				if effectiveTTL < 0 {
-					t.Errorf("authzCacheTTL() returned negative value %d, should be clamped to 0", effectiveTTL)
 				}
 			}
 		})
@@ -1489,7 +1716,7 @@ func TestMaaSAuthPolicyReconciler_CacheKeyIsolation(t *testing.T) {
 		t.Fatalf("Reconcile: unexpected error: %v", err)
 	}
 
-	// Gateway policy holds apiKeyValidation, subscription-info, auth-valid, subscription-valid
+	// Gateway policy holds the two cached metadata evaluators.
 	gwPolicy := &unstructured.Unstructured{}
 	gwPolicy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
 	if err := c.Get(context.Background(), types.NamespacedName{Name: "maas-gateway-auth", Namespace: gatewayNS}, gwPolicy); err != nil {
@@ -1500,68 +1727,21 @@ func TestMaaSAuthPolicyReconciler_CacheKeyIsolation(t *testing.T) {
 	t.Run("apiKeyValidation includes API key", func(t *testing.T) {
 		assertCacheKeyContains(t, gwPolicy,
 			[]string{`replace("Bearer ", "")`},
-			"spec", "defaults", "rules", "metadata", "apiKeyValidation", "cache", "key", "selector",
+			"spec", "defaults", "rules", "metadata", "apiKeyValidation", "cache", "key", "expression",
 		)
 	})
 
-	// Test 2: subscription-info cache key must include userId, username, groups, and dynamic model identity (gateway policy)
-	t.Run("subscription-info includes username, groups, model", func(t *testing.T) {
+	// Test 2: the full subscription-info cache key, used for token identities, must include
+	// userId, username, groups, and dynamic model identity (gateway policy). API keys use the
+	// key ID instead; TestSubscriptionInfoCacheKeyCoversRequestBody covers both branches.
+	t.Run("subscription-info full key includes username, groups, model", func(t *testing.T) {
 		key := assertCacheKeyContains(t, gwPolicy,
 			[]string{"userId", "username", "groups", "join"},
-			"spec", "defaults", "rules", "metadata", "subscription-info", "cache", "key", "selector",
+			"spec", "defaults", "rules", "metadata", "subscription-info", "cache", "key", "expression",
 		)
 		// Model identity is dynamic via CEL (X-Gateway-Model-Name header or path extraction).
 		if !contains(key, "x-gateway-model-name") && !contains(key, "request.path") {
 			t.Errorf("subscription-info cache key must include dynamic model identity (header or path), got: %s", key)
-		}
-	})
-
-	// Test 3: auth-valid cache key must include API key identity and model (gateway policy)
-	t.Run("auth-valid includes API key identity and model", func(t *testing.T) {
-		key := assertCacheKeyContains(t, gwPolicy,
-			nil,
-			"spec", "defaults", "rules", "authorization", "auth-valid", "cache", "key", "selector",
-		)
-		if !contains(key, "api-key") {
-			t.Errorf("auth-valid cache key must include api-key prefix, got: %s", key)
-		}
-		if !contains(key, "x-gateway-model-name") && !contains(key, "request.path") {
-			t.Errorf("auth-valid cache key must include dynamic model identity (header or path), got: %s", key)
-		}
-		if !contains(key, `replace("Bearer ", "")`) {
-			t.Errorf("auth-valid cache key must include API key extraction expression, got: %s", key)
-		}
-	})
-
-	// Test 4: subscription-valid cache key must match subscription-info for coherence (gateway policy)
-	t.Run("subscription-valid matches subscription-info key", func(t *testing.T) {
-		subValidKey := assertCacheKeyContains(t, gwPolicy,
-			[]string{"userId", "username", "groups"},
-			"spec", "defaults", "rules", "authorization", "subscription-valid", "cache", "key", "selector",
-		)
-		subInfoKey := assertCacheKeyContains(t, gwPolicy,
-			nil,
-			"spec", "defaults", "rules", "metadata", "subscription-info", "cache", "key", "selector",
-		)
-		if subValidKey != subInfoKey {
-			t.Errorf("subscription-valid cache key should match subscription-info for cache coherence\nsubscription-valid: %s\nsubscription-info:  %s", subValidKey, subInfoKey)
-		}
-		if !contains(subValidKey, "x-gateway-model-name") && !contains(subValidKey, "request.path") {
-			t.Errorf("subscription-valid cache key must include dynamic model identity, got: %s", subValidKey)
-		}
-	})
-
-	// Test 5: require-group-membership cache key must match subscription-info (same dimensions).
-	t.Run("require-group-membership matches subscription-info cache key", func(t *testing.T) {
-		key := assertCacheKeyContains(t, gwPolicy,
-			[]string{"username", "groups", "join"},
-			"spec", "defaults", "rules", "authorization", "require-group-membership", "cache", "key", "selector",
-		)
-		subInfoKey, _, _ := unstructured.NestedString(gwPolicy.Object,
-			"spec", "defaults", "rules", "metadata", "subscription-info", "cache", "key", "selector",
-		)
-		if key != subInfoKey {
-			t.Errorf("require-group-membership cache key should match subscription-info for cache coherence\nrequire-group-membership: %s\nsubscription-info:        %s", key, subInfoKey)
 		}
 	})
 }
@@ -1623,38 +1803,41 @@ func TestMaaSAuthPolicyReconciler_CacheKeyOrganizationIsolation(t *testing.T) {
 			"groups":             groups,
 		}}
 	}
-	selector := subscriptionGatewayCacheKeySelector()
-	keyA := evaluateGatewayCELString(t, selector, makeAuth(organizationA, []any{"users"}))
-	keyB := evaluateGatewayCELString(t, selector, makeAuth(organizationB, []any{"users"}))
+	expression := subscriptionGatewayCacheKeyExpression()
+	keyA := evaluateGatewayCELString(t, expression, makeAuth(organizationA, []any{"users"}))
+	keyB := evaluateGatewayCELString(t, expression, makeAuth(organizationB, []any{"users"}))
 	if keyA == keyB {
 		t.Fatalf("cache key is shared across organizations for equal groups: %q", keyA)
 	}
 
-	emptyKeyA := evaluateGatewayCELString(t, selector, makeAuth(organizationA, []any{}))
-	emptyKeyB := evaluateGatewayCELString(t, selector, makeAuth(organizationB, []any{}))
+	emptyKeyA := evaluateGatewayCELString(t, expression, makeAuth(organizationA, []any{}))
+	emptyKeyB := evaluateGatewayCELString(t, expression, makeAuth(organizationB, []any{}))
 	if emptyKeyA == emptyKeyB {
 		t.Fatalf("cache key is shared across organizations with empty groups: %q", emptyKeyA)
 	}
 }
 
 func TestSubscriptionCacheKeySeparatesOpaqueGroupsAndMatchingModes(t *testing.T) {
+	// Groups are part of the key only for token identities; API keys key on the key ID.
 	makeAuth := func(groups []any) map[string]any {
 		return map[string]any{
-			"metadata": map[string]any{"apiKeyValidation": map[string]any{
-				"userId":       "same-key-id",
-				"keyId":        "same-key-id",
-				"username":     "same-user",
-				"subscription": "bound-subscription",
-				"groups":       groups,
+			"identity": map[string]any{"user": map[string]any{
+				"username": "same-user",
+				"groups":   groups,
 			}},
-			"identity": map[string]any{},
 		}
 	}
-	selector := subscriptionGatewayCacheKeySelector()
-	commaGroup := evaluateGatewayCELString(t, selector, makeAuth([]any{"a,b"}))
-	twoGroups := evaluateGatewayCELString(t, selector, makeAuth([]any{"a", "b"}))
-	if commaGroup == twoGroups {
-		t.Fatalf("cache key collides for one comma group and two groups: %q", commaGroup)
+	expression := subscriptionGatewayCacheKeyExpression()
+	// Same group count on both sides, so only the per-group length prefix keeps them apart.
+	for _, pair := range [][2][]any{
+		{{"a", "bc"}, {"ab", "c"}},
+		{{"a:b", "c"}, {"a", "b:c"}},
+	} {
+		first := evaluateGatewayCELString(t, expression, makeAuth(pair[0]))
+		second := evaluateGatewayCELString(t, expression, makeAuth(pair[1]))
+		if first == second {
+			t.Fatalf("cache key collides for groups %v and %v: %q", pair[0], pair[1], first)
+		}
 	}
 }
 
@@ -1733,10 +1916,9 @@ func TestMaaSAuthPolicyReconciler_CacheKeyModelIsolation(t *testing.T) {
 		t.Fatalf("Reconcile policy-2: %v", err)
 	}
 
-	// Singleton gateway policy: subscription-info/auth-valid/subscription-valid use dynamic
-	// celModelIdentity for runtime isolation, so the CEL expression is the same string in
-	// both reconciles (they're writing to the same policy). Verify it contains the model
-	// identity extractor expression rather than static model names.
+	// The singleton gateway policy uses dynamic celModelIdentity for runtime model
+	// isolation. Verify its cache key contains the model identity extractor rather
+	// than static model names.
 	gwPolicy := &unstructured.Unstructured{}
 	gwPolicy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
 	if err := c.Get(context.Background(), types.NamespacedName{Name: "maas-gateway-auth", Namespace: gatewayNS}, gwPolicy); err != nil {
@@ -1747,9 +1929,7 @@ func TestMaaSAuthPolicyReconciler_CacheKeyModelIsolation(t *testing.T) {
 		name string
 		path []string
 	}{
-		{"subscription-info", []string{"spec", "defaults", "rules", "metadata", "subscription-info", "cache", "key", "selector"}},
-		{"auth-valid", []string{"spec", "defaults", "rules", "authorization", "auth-valid", "cache", "key", "selector"}},
-		{"subscription-valid", []string{"spec", "defaults", "rules", "authorization", "subscription-valid", "cache", "key", "selector"}},
+		{"subscription-info", []string{"spec", "defaults", "rules", "metadata", "subscription-info", "cache", "key", "expression"}},
 	}
 
 	for _, eval := range gatewayEvaluators {
@@ -1764,20 +1944,6 @@ func TestMaaSAuthPolicyReconciler_CacheKeyModelIsolation(t *testing.T) {
 			}
 		})
 	}
-
-	t.Run("require-group-membership matches subscription-info cache key", func(t *testing.T) {
-		groupPath := []string{"spec", "defaults", "rules", "authorization", "require-group-membership", "cache", "key", "selector"}
-		groupKey, found, err := unstructured.NestedString(gwPolicy.Object, groupPath...)
-		if err != nil || !found {
-			t.Fatalf("gateway require-group-membership cache key missing: found=%v err=%v", found, err)
-		}
-		subInfoKey, _, _ := unstructured.NestedString(gwPolicy.Object,
-			"spec", "defaults", "rules", "metadata", "subscription-info", "cache", "key", "selector",
-		)
-		if groupKey != subInfoKey {
-			t.Errorf("require-group-membership cache key should match subscription-info\nrequire-group-membership: %s\nsubscription-info:        %s", groupKey, subInfoKey)
-		}
-	})
 }
 
 // TestMaaSAuthPolicyReconciler_IdentityHeadersUpstream verifies that identity headers
@@ -1952,14 +2118,8 @@ func assertNonEmptySubscriptionHeader(t *testing.T, headers map[string]any, head
 	if expr != wantExpr {
 		t.Errorf("%s expression = %q, want %q", header, expr, wantExpr)
 	}
-	when, _ := raw["when"].([]any)
-	if len(when) == 0 {
-		t.Fatalf("%s should inject only when %s is non-empty", header, field)
-	}
-	when0, _ := when[0].(map[string]any)
-	pred, _ := when0["predicate"].(string)
-	if !strings.Contains(pred, wantExpr) || !strings.Contains(pred, `!= ""`) {
-		t.Errorf("%s when predicate = %q, want non-empty check on %s", header, pred, wantExpr)
+	if want := nonEmptyWhen("auth.metadata.subscription-info." + field); !reflect.DeepEqual(raw["when"], want) {
+		t.Errorf("%s when = %#v, want %#v so it is set only when %s is non-empty", header, raw["when"], want, field)
 	}
 }
 
@@ -2147,61 +2307,27 @@ func TestBuildGatewayAuthPolicySpec_ErrorResponses(t *testing.T) {
 	})
 }
 
-func TestBuildGatewayAuthPolicySpec_DenyClientIdentityHeaders(t *testing.T) {
+// Authorino re-parses the authorization JSON for every CEL pattern, so the deny rule stays a
+// single pattern. TestGatewayAuthPolicyDeniesClientIdentityHeaders covers what it denies.
+func TestBuildGatewayAuthPolicySpec_DenyClientIdentityHeadersIsOnePattern(t *testing.T) {
 	obj := gatewayAuthPolicySpecTestObject(t, nil)
 
 	patterns, found, err := unstructured.NestedSlice(
 		obj.Object,
 		"spec", "defaults", "rules", "authorization", "deny-client-identity-headers", "patternMatching", "patterns",
 	)
-
-	if err != nil || !found || len(patterns) != 10 {
-		t.Fatalf("deny-client-identity-headers patterns missing: found=%v len=%d err=%v", found, len(patterns), err)
-	}
-
-	got := make([]string, 0, len(patterns))
-	for i, p := range patterns {
-		m, ok := p.(map[string]any)
-		if !ok {
-			t.Fatalf("patterns[%d] is not a map: %T", i, p)
-		}
-		pred, ok := m["predicate"].(string)
-		if !ok {
-			t.Fatalf("patterns[%d] missing predicate string", i)
-		}
-		got = append(got, pred)
-	}
-
-	want := []string{
-		`!("x-maas-username" in request.headers)`,
-		`!("x-maas-group" in request.headers)`,
-		`!("x-maas-exact-groups" in request.headers)`,
-		`!("x-maas-keyname" in request.headers)`,
-		`!("x-maas-subscription-rate-limit-id" in request.headers)`,
-		`!("x-maas-organization-id" in request.headers)`,
-		`!("x-maas-cost-center" in request.headers)`,
-		`!("x-maas-identity" in request.headers)`,
-		`!("x-maas-admin-scope" in request.headers)`,
-		`request.headers.all(name, !name.startsWith("x-aigateway-guardrail-"))`,
-	}
-	if len(got) != len(want) {
-		t.Fatalf("deny-client-identity-headers predicates = %#v, want %#v", got, want)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("deny-client-identity-headers predicates = %#v, want %#v", got, want)
-		}
+	if err != nil || !found || len(patterns) != 1 {
+		t.Fatalf("deny-client-identity-headers patterns = %#v (found=%v, err=%v), want one pattern", patterns, found, err)
 	}
 }
 
 func TestBuildGatewayAuthPolicySpec_SubscriptionHeaderInjection(t *testing.T) {
 	obj := gatewayAuthPolicySpecTestObject(t, nil)
 
-	predicate := nestedWhenPredicateRequired(t, obj,
+	when, _, _ := unstructured.NestedSlice(obj.Object,
 		"spec", "defaults", "rules", "response", "success", "headers", "X-MaaS-Subscription", "when")
-	wantPredicate := `has(auth.metadata) && has(auth.metadata.apiKeyValidation) && auth.metadata.apiKeyValidation.subscription != ""`
-	if predicate != wantPredicate {
-		t.Errorf("subscription header must be injected only for API keys with a subscription: got %q, want %q", predicate, wantPredicate)
+	if want := nonEmptyWhen("auth.metadata.apiKeyValidation.subscription"); !reflect.DeepEqual(when, want) {
+		t.Errorf("subscription header must be injected only for API keys with a subscription: got %#v, want %#v", when, want)
 	}
 
 	// User tokens still use the client header for subscription selection, without
@@ -2216,7 +2342,7 @@ func TestBuildGatewayAuthPolicySpec_SubscriptionHeaderInjection(t *testing.T) {
 	}
 
 	cacheKey := nestedStringRequired(t, obj,
-		"spec", "defaults", "rules", "metadata", "subscription-info", "cache", "key", "selector")
+		"spec", "defaults", "rules", "metadata", "subscription-info", "cache", "key", "expression")
 	if !strings.Contains(cacheKey, wantSelection) {
 		t.Errorf("subscription-info cache key must include the client header selection, got %q", cacheKey)
 	}
@@ -2232,14 +2358,8 @@ func TestSubscriptionInfoStringHeader(t *testing.T) {
 	if expr != `auth.metadata["subscription-info"].organizationId` {
 		t.Errorf("expression = %q", expr)
 	}
-	when, _ := h["when"].([]any)
-	if len(when) != 1 {
-		t.Fatalf("when length = %d, want 1", len(when))
-	}
-	when0, _ := when[0].(map[string]any)
-	pred, _ := when0["predicate"].(string)
-	if !strings.Contains(pred, `auth.metadata["subscription-info"].organizationId != ""`) {
-		t.Errorf("predicate = %q, want non-empty organizationId check", pred)
+	if want := nonEmptyWhen("auth.metadata.subscription-info.organizationId"); !reflect.DeepEqual(h["when"], want) {
+		t.Errorf("when = %#v, want %#v", h["when"], want)
 	}
 }
 
@@ -2327,6 +2447,11 @@ func TestBuildGatewayAuthPolicySpec_OIDCAuth(t *testing.T) {
 	if issuer != oidc.IssuerURL {
 		t.Errorf("oidc issuerUrl = %v, want %v", issuer, oidc.IssuerURL)
 	}
+	_, isNotAPIKey, _ := apiKeyCELPredicates(false)
+	identityWhen := nestedWhenPredicateRequired(t, obj, "spec", "defaults", "rules", "authentication", "oidc-identities", "when")
+	if want := `"authorization" in request.headers && ` + isNotAPIKey + ` && ` + authpolicy.ExternalJWTShape; identityWhen != want {
+		t.Errorf("oidc-identities when predicate = %q, want %q", identityWhen, want)
+	}
 	rego := nestedStringRequired(t, obj, "spec", "defaults", "rules", "authorization", "oidc-groups-safe", "opa", "rego")
 	if !contains(rego, safeGroupNamePattern) || !contains(rego, "unsafe_group") {
 		t.Errorf("oidc-groups-safe rego should reject unsafe group names, got: %s", rego)
@@ -2374,6 +2499,16 @@ func TestBuildGatewayAuthPolicySpec_RouteScopedRules(t *testing.T) {
 		rego := nestedStringRequired(t, obj, "spec", "defaults", "rules", "authorization", "auth-valid", "opa", "rego")
 		if !contains(rego, "not input.auth.metadata.apiKeyValidation") {
 			t.Errorf("auth-valid rego should allow non-API-key tokens, got: %s", rego)
+		}
+	})
+
+	t.Run("auth-valid checks cached API key expiry", func(t *testing.T) {
+		rego := nestedStringRequired(t, obj, "spec", "defaults", "rules", "authorization", "auth-valid", "opa", "rego")
+		if !contains(rego, "time.now_ns() < time.parse_rfc3339_ns(input.auth.metadata.apiKeyValidation.expiresAt)") {
+			t.Errorf("auth-valid rego should compare cached expiry to the current time, got: %s", rego)
+		}
+		if !contains(rego, "not input.auth.metadata.apiKeyValidation.expiresAt") {
+			t.Errorf("auth-valid rego should allow cached responses without an expiry, got: %s", rego)
 		}
 	})
 }
@@ -2436,18 +2571,11 @@ func TestBuildGatewayAuthPolicySpec_XAPIKeyEnabled(t *testing.T) {
 	if err != nil || !found || len(apiKeyWhen) == 0 {
 		t.Fatalf("apiKeyValidation when missing: found=%v err=%v", found, err)
 	}
+	// Metadata validation reads auth.identity, not a header: both API key methods set it, with
+	// or without the "Bearer " prefix. TestGatewayAuthPolicyAllowedRequests covers the outcome.
 	whenMap, ok := apiKeyWhen[0].(map[string]any)
-	if !ok {
-		t.Fatalf("apiKeyValidation when[0] is not a map")
-	}
-	pred, ok := whenMap["predicate"].(string)
-	if !ok {
-		t.Fatal("apiKeyValidation when should use predicate (not selector) when x-api-key enabled")
-	}
-	// Metadata validation uses auth.identity (post-auth, safe) which works for both Bearer and x-api-key
-	// Both auth methods populate auth.identity with an API key format (with or without "Bearer " prefix)
-	if !contains(pred, "auth.identity") || !contains(pred, "sk-oai") {
-		t.Errorf("apiKeyValidation when predicate should check auth.identity for API key format, got: %s", pred)
+	if !ok || whenMap["selector"] != "auth.identity" {
+		t.Errorf("apiKeyValidation when should test auth.identity, got: %#v", apiKeyWhen)
 	}
 
 	// openshift-identities intentionally has no `when` guard (see comments in code).
@@ -4001,25 +4129,25 @@ func TestMaaSAuthPolicyReconciler_ReconcileErrorPreservedOnStatusFailure(t *test
 }
 
 func TestCacheKeyKeepsIdentityDiscriminatorsWithoutExactGroups(t *testing.T) {
-	cacheKeySelector := subscriptionGatewayCacheKeySelector()
+	cacheKeyExpression := subscriptionGatewayCacheKeyExpression()
 
-	if !strings.Contains(cacheKeySelector, `"api-key"`) {
-		t.Errorf("cache key missing identity-source discriminator (api-key): %s", cacheKeySelector)
+	if !strings.Contains(cacheKeyExpression, `"api-key"`) {
+		t.Errorf("cache key missing identity-source discriminator (api-key): %s", cacheKeyExpression)
 	}
-	if !strings.Contains(cacheKeySelector, `"oidc"`) {
-		t.Errorf("cache key missing identity-source discriminator (oidc): %s", cacheKeySelector)
+	if !strings.Contains(cacheKeyExpression, `"oidc"`) {
+		t.Errorf("cache key missing identity-source discriminator (oidc): %s", cacheKeyExpression)
 	}
-	if !strings.Contains(cacheKeySelector, `"token-review"`) {
-		t.Errorf("cache key missing identity-source discriminator (token-review): %s", cacheKeySelector)
+	if !strings.Contains(cacheKeyExpression, `"token-review"`) {
+		t.Errorf("cache key missing identity-source discriminator (token-review): %s", cacheKeyExpression)
 	}
-	if !strings.Contains(cacheKeySelector, `keyId`) {
-		t.Errorf("cache key missing API-key ID term: %s", cacheKeySelector)
+	if !strings.Contains(cacheKeyExpression, `keyId`) {
+		t.Errorf("cache key missing API-key ID term: %s", cacheKeyExpression)
 	}
-	if strings.Contains(cacheKeySelector, "exactGroups") {
-		t.Errorf("cache key contains exactGroups term (should be removed): %s", cacheKeySelector)
+	if strings.Contains(cacheKeyExpression, "exactGroups") {
+		t.Errorf("cache key contains exactGroups term (should be removed): %s", cacheKeyExpression)
 	}
-	if strings.Contains(cacheKeySelector, "celExactGroups") {
-		t.Errorf("cache key contains celExactGroups term (should be removed): %s", cacheKeySelector)
+	if strings.Contains(cacheKeyExpression, "celExactGroups") {
+		t.Errorf("cache key contains celExactGroups term (should be removed): %s", cacheKeyExpression)
 	}
 }
 

@@ -20,6 +20,10 @@ import (
 
 const subscriptionHeadersAnnotation = "experimental.maas.opendatahub.io/headers"
 
+// subscriptionHeaderPrefix starts every subscription header name, in lowercase. The gateway
+// AuthPolicy denies a client header with this prefix unless a MaaSSubscription configures it.
+const subscriptionHeaderPrefix = "x-grid-"
+
 func (r *MaaSAuthPolicyReconciler) subscriptionHeaderNames(ctx context.Context, namespace string) ([]string, error) {
 	var subscriptions maasv1alpha1.MaaSSubscriptionList
 	if err := r.List(ctx, &subscriptions, client.InNamespace(namespace)); err != nil {
@@ -77,9 +81,13 @@ func applySubscriptionHeaders(spec map[string]any, names []string) error {
 	if !found {
 		return errors.New("gateway identity-header deny patterns are missing")
 	}
-	patterns = append(patterns, map[string]any{"predicate": subscriptionHeadersDenyPredicate(names)})
+	// The pattern is rebuilt with the configured names, so any other pattern would be lost.
+	if len(patterns) != 1 {
+		return fmt.Errorf("gateway identity-header deny rule has %d patterns, want 1", len(patterns))
+	}
 	return unstructured.SetNestedSlice(
-		spec, patterns, "defaults", "rules", "authorization", "deny-client-identity-headers", "patternMatching", "patterns",
+		spec, []any{map[string]any{"predicate": clientIdentityHeadersDenyPredicate(names)}},
+		"defaults", "rules", "authorization", "deny-client-identity-headers", "patternMatching", "patterns",
 	)
 }
 
@@ -100,7 +108,7 @@ func basePolicyHasStaleSubscriptionHeaderFields(current map[string]any, names []
 }
 
 func managedSubscriptionHeaderName(name string) bool {
-	return strings.HasPrefix(strings.ToLower(name), "x-grid-")
+	return strings.HasPrefix(strings.ToLower(name), subscriptionHeaderPrefix)
 }
 
 func managedSubscriptionHeaderNames(names []string) map[string]struct{} {
@@ -109,21 +117,6 @@ func managedSubscriptionHeaderNames(names []string) map[string]struct{} {
 		managedNames[name] = struct{}{}
 	}
 	return managedNames
-}
-
-func subscriptionHeadersDenyPredicate(names []string) string {
-	if len(names) == 0 {
-		return `request.headers.all(name, !name.startsWith("x-grid-"))`
-	}
-
-	encodedNames, err := json.Marshal(names)
-	if err != nil {
-		panic(fmt.Sprintf("marshal subscription header names: %v", err))
-	}
-	return fmt.Sprintf(
-		`request.headers.all(name, !name.startsWith("x-grid-") || name in %s)`,
-		encodedNames,
-	)
 }
 
 func subscriptionInfoHeadersExpr(name string) map[string]any {
@@ -201,12 +194,7 @@ func (r *MaaSAuthPolicyReconciler) warnInvalidSubscriptionHeaders(
 }
 
 func validSubscriptionHeaderName(name string) bool {
-	if !httpguts.ValidHeaderFieldName(name) {
-		return false
-	}
-
-	lowerName := strings.ToLower(name)
-	return strings.HasPrefix(lowerName, "x-grid-")
+	return httpguts.ValidHeaderFieldName(name) && managedSubscriptionHeaderName(name)
 }
 
 func validSubscriptionHeaderValue(value string) bool {

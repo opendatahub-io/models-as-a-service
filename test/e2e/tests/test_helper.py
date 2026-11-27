@@ -43,6 +43,9 @@ Environment variables (all optional unless noted):
   - E2E_TRLP_TEST_MODEL_REF: TRLP test model ref (default: e2e-trlp-test-simulated)                                                                                                   
   - E2E_TRLP_TEST_MODEL_PATH: Path to TRLP test model (default: /llm/e2e-trlp-test-simulated)
   - E2E_TRLP_TEST_MODEL_ID: Model ID for TRLP test model (default: test/e2e-trlp-test-model)
+  - E2E_SLOW_STREAM_MODEL_REF: Paced streaming model ref (default: e2e-slow-stream-simulated)
+  - E2E_SLOW_STREAM_MODEL_PATH: Path to paced streaming model (default: /llm/e2e-slow-stream-simulated)
+  - E2E_SLOW_STREAM_MODEL_ID: Model ID for paced streaming model (default: test/e2e-slow-stream-model)
   - E2E_GATEWAY_AUTH_POLICY_NAME: Gateway Kuadrant AuthPolicy name (default: maas-gateway-auth)
   - E2E_GATEWAY_PROPAGATION_RETRIES: Retries for empty 401/403 / AUTH_FAILURE / proxy 500/503 (default: 6)
   - E2E_GATEWAY_PROPAGATION_DELAY: Delay between gateway retries in seconds (default: 5)
@@ -288,6 +291,9 @@ REQUIRE_TRLP_ENFORCED = os.environ.get("E2E_REQUIRE_TRLP_ENFORCED", "").lower() 
 # refuses a request, and only then call it a failure. Covers Limitador lagging
 # the policy status by a few seconds.
 RATE_LIMIT_ENFORCEMENT_TIMEOUT = int(os.environ.get("E2E_RATE_LIMIT_ENFORCEMENT_TIMEOUT", "60"))
+# Authorino caches maas-api lookups for --metadata-cache-ttl (60s by default),
+# so access changes can lag for a credential that already passed.
+AUTH_CACHE_TIMEOUT = int(os.environ.get("E2E_AUTH_CACHE_TIMEOUT", "90"))
 OC_TIMEOUT = int(os.environ.get("E2E_OC_TIMEOUT", "60"))
 # An API server blip (TLS handshake timeout, admission webhook unreachable while
 # maas-controller restarts) must not fail a test or skip a teardown delete.
@@ -327,8 +333,11 @@ E2E_CURL_IMAGE = os.environ.get("E2E_CURL_IMAGE", "registry.access.redhat.com/ub
 # responses carry usage.total_tokens; --mode echo responses do not.
 LLM_D_INFERENCE_SIM_IMAGE = (
     "ghcr.io/llm-d/llm-d-inference-sim@"
-    "sha256:c3ba435081a4d032676b218ea34eb3a1c54507da0fade2f6297f9c37894fe0d1"
+    "sha256:c6838d8616c9818f4cdb0e9ef7597e483a71c081b869d34c7eafac1481d76c60"
 )
+# Echo-mode models created by _create_llmis use the tag the echo fixtures pin;
+# docs/samples/models/echo-simulator/model.yaml says why random mode can't.
+LLM_D_INFERENCE_SIM_ECHO_IMAGE = "ghcr.io/llm-d/llm-d-inference-sim:v0.9.0"
 E2E_CURL_CA_CONFIGMAP = os.environ.get("E2E_CURL_CA_CONFIGMAP", "")
 E2E_CURL_CA_CONFIGMAP_KEY = os.environ.get("E2E_CURL_CA_CONFIGMAP_KEY", "service-ca.crt")
 SIMULATOR_SUBSCRIPTION = os.environ.get("E2E_SIMULATOR_SUBSCRIPTION", "simulator-subscription")
@@ -366,7 +375,31 @@ EMBEDDING_MODEL_CANONICAL_ID = os.environ.get(
     "E2E_EMBEDDING_MODEL_CANONICAL_ID",
     f"publishers/{MODEL_NAMESPACE}/models/{EMBEDDING_MODEL_NAME}",
 )
-
+# Paced simulator (fixtures/slow-stream): 2s to first token, then 100ms/token.
+SLOW_STREAM_MODEL_REF = os.environ.get("E2E_SLOW_STREAM_MODEL_REF", "e2e-slow-stream-simulated")
+SLOW_STREAM_MODEL_PATH = os.environ.get("E2E_SLOW_STREAM_MODEL_PATH", "/llm/e2e-slow-stream-simulated")
+SLOW_STREAM_MODEL_ID = os.environ.get("E2E_SLOW_STREAM_MODEL_ID", "test/e2e-slow-stream-model")
+JSON_BBR_MODEL_REF = os.environ.get("E2E_JSON_BBR_MODEL_REF", "e2e-rerank-simulated")
+JSON_BBR_MODEL_PATH = os.environ.get("E2E_JSON_BBR_MODEL_PATH", "/llm/e2e-rerank-simulated")
+JSON_BBR_MODEL_NAME = os.environ.get("E2E_JSON_BBR_MODEL_NAME", "test/e2e-rerank-model")
+JSON_BBR_MODEL_CANONICAL_ID = os.environ.get(
+    "E2E_JSON_BBR_MODEL_CANONICAL_ID",
+    f"publishers/{MODEL_NAMESPACE}/models/{JSON_BBR_MODEL_NAME}",
+)
+RERANK_MODEL_REF = os.environ.get("E2E_RERANK_MODEL_REF", JSON_BBR_MODEL_REF)
+RERANK_MODEL_PATH = os.environ.get("E2E_RERANK_MODEL_PATH", JSON_BBR_MODEL_PATH)
+RERANK_MODEL_NAME = os.environ.get("E2E_RERANK_MODEL_NAME", JSON_BBR_MODEL_NAME)
+if os.environ.get("E2E_RERANK_MODEL_CANONICAL_ID"):
+    RERANK_MODEL_CANONICAL_ID = os.environ["E2E_RERANK_MODEL_CANONICAL_ID"]
+elif (
+    os.environ.get("E2E_RERANK_MODEL_REF") is not None
+    or os.environ.get("E2E_RERANK_MODEL_NAME") is not None
+):
+    RERANK_MODEL_CANONICAL_ID = (
+        f"publishers/{MODEL_NAMESPACE}/models/{RERANK_MODEL_NAME}"
+    )
+else:
+    RERANK_MODEL_CANONICAL_ID = JSON_BBR_MODEL_CANONICAL_ID
 
 # ---------------------------------------------------------------------------
 # Environment / URL helpers
@@ -751,12 +784,35 @@ def _get_cluster_token():
 # API Key Management
 # ---------------------------------------------------------------------------
 
+GATEWAY_GENERIC_DENIAL = {"message": "Access denied", "type": "authorization_error", "code": 403}
+
+
+def _is_generic_gateway_denial(response) -> bool:
+    """True for the gateway AuthPolicy's 403 body when maas-api gave no reason.
+
+    The body is sent for every denial without a subscription selection
+    (rejected API key, maas-api unreachable, any denial off a model route),
+    which used to get an empty body and was retried. It is also sent for
+    model-route denials maas-api gave no reason for, such as
+    ``accessAllowed: false``, which already got it and are now retried too.
+    """
+    if response.status_code != 403:
+        return False
+    try:
+        return response.json() == {"error": GATEWAY_GENERIC_DENIAL}
+    except ValueError:
+        return False
+
+
 def _is_transient_gateway_response(response, *, auth_denial_is_transient=True) -> bool:
     """True when the gateway/Authorino response is a known propagation flake.
 
     Retryable signals:
     - Empty 401/403: Envoy has not loaded the AuthPolicy yet (common after
-      MaaSAuthPolicy churn; some gateways return 401 instead of 403). Pass
+      MaaSAuthPolicy churn; some gateways return 401 instead of 403).
+    - 403 with the generic gateway deny body (``_is_generic_gateway_denial``):
+      the tenant's maas-api is not answering yet, or a denial maas-api gave no
+      reason for has not caught up with a MaaSAuthPolicy change. Pass
       ``auth_denial_is_transient=False`` for negative tests where a denial is
       the expected answer: retrying there only burns the retry budget and
       pollutes the flake report with denials that were never flaky.
@@ -770,7 +826,7 @@ def _is_transient_gateway_response(response, *, auth_denial_is_transient=True) -
       rollout artifact, never a maas-api response.
     """
     body = (response.text or "").strip()
-    if response.status_code in (401, 403) and not body:
+    if response.status_code in (401, 403) and (not body or _is_generic_gateway_denial(response)):
         return auth_denial_is_transient
     if response.status_code not in (500, 502, 503):
         return False
@@ -824,6 +880,8 @@ def _transient_body_kind(response) -> str:
         return "no_healthy_upstream"
     if body.startswith("<"):
         return "html_error_page"
+    if _is_generic_gateway_denial(response):
+        return "generic_denial"
     if "\n" not in body and len(body) <= 64:
         return "plaintext"
     return "other"
@@ -1626,6 +1684,20 @@ def _poll_status(api_key, expected, path=None, extra_headers=None, model_name=No
     raise AssertionError(err_msg)
 
 
+def _assert_status_holds(api_key, expected, duration, poll_interval=5, **kwargs):
+    """Fail unless every inference request answers expected for duration seconds."""
+    deadline = time.time() + duration
+    while True:
+        response = _inference(api_key, **kwargs)
+        assert response.status_code == expected, (
+            f"Expected {expected} to hold for {duration}s, got {response.status_code}: "
+            f"{(response.text or '')[:200]}"
+        )
+        if time.time() >= deadline:
+            return response
+        time.sleep(poll_interval)
+
+
 # ---------------------------------------------------------------------------
 # HTTP helpers (used by test_smoke.py)
 # ---------------------------------------------------------------------------
@@ -1678,25 +1750,64 @@ def assert_inference_response(response: requests.Response, *, min_bytes: int = 5
 
 
 def chat(prompt: str, model_v1: str, headers: dict, model_name: str, *,
-         stream: bool = False, max_tokens: Optional[int] = None):
+         stream: bool = False, max_tokens: Optional[int] = None, timeout: int = 30):
     url = f"{model_v1}/chat/completions"
     body = {"model": model_name, "messages": [{"role": "user", "content": prompt}]}
     if max_tokens is not None:
         body["max_tokens"] = max_tokens
     if stream:
         body["stream"] = True
-    return requests.post(url, headers=headers, json=body, timeout=30, verify=TLS_VERIFY, stream=stream)
+    return requests.post(url, headers=headers, json=body, timeout=timeout, verify=TLS_VERIFY, stream=stream)
 
 
 OPENAI_SSE_DONE_LINE = "data: [DONE]"
 
 
-def assert_openai_sse_chat_stream(response: requests.Response) -> list[str]:
+def assert_openai_sse_chat_stream(
+    response: requests.Response,
+    *,
+    min_inter_chunk_gap_sec: Optional[float] = None,
+    min_first_data_sec: Optional[float] = None,
+    started_at: Optional[float] = None,
+) -> list[str]:
     """
     Given a streaming chat/completions Response (stream=True), assert OpenAI-style SSE:
     HTTP 200, text/event-stream, multiple parseable data: JSON chunks, and data: [DONE].
     Returns non-empty event lines (including the terminal [DONE] line).
+
+    Timings are measured per line as it is read off the socket, so they reflect when
+    the client could act on each token -- not when the model finished.
+
+    min_inter_chunk_gap_sec:
+        Assert the response body is delivered incrementally: the *largest* gap between
+        consecutive ``data:`` chunks must be at least this long, meaning the client had
+        to wait for the next chunk at least once instead of receiving everything at
+        completion. A proxy that buffers the whole response (ext_proc
+        ``response_body_mode: BUFFERED``) delivers every chunk in one burst, so every
+        gap collapses to ~0 no matter how long generation took -- that is what
+        distinguishes real streaming from a stream-shaped single burst.
+
+        The largest gap rather than the first-to-last span, so the assertion does not
+        depend on how many tokens the backend produces or on how fast it generates
+        when tokens are batched: intermediaries coalesce writes, so some gaps are ~0
+        even while the body is streamed. A buffered body has no gap at all. Requires at
+        least 3 chunks to be meaningful; pass ``None`` (default) to skip, which is what
+        every caller on a fast backend must do -- see ``min_first_data_sec``.
+
+    min_first_data_sec:
+        Assert the first ``data:`` chunk did not arrive earlier than this, measured from
+        ``started_at`` when given. Only useful alongside ``min_inter_chunk_gap_sec``, to
+        prove the backend really is paced: without it a backend that generates
+        instantly fails the gap assertion and looks like a buffering regression.
+
+    started_at:
+        ``time.monotonic()`` from before the request was issued, used as the zero point
+        for the timings. Pass it whenever ``min_first_data_sec`` is set: the gateway
+        holds the response headers until the first body bytes arrive, so ``stream=True``
+        does not return until TTFT and the first chunk then reads at ~0s against this
+        function's own start.
     """
+    start = started_at if started_at is not None else time.monotonic()
     assert response.status_code == 200, (
         f"expected streaming HTTP 200, got {response.status_code}: {(response.text or '')[:500]}"
     )
@@ -1704,7 +1815,14 @@ def assert_openai_sse_chat_stream(response: requests.Response) -> list[str]:
     assert "text/event-stream" in content_type, (
         f"expected text/event-stream, got content-type={content_type!r}"
     )
-    events = [line for line in response.iter_lines(decode_unicode=True) if line]
+    events: list[str] = []
+    data_times: list[float] = []
+    for line in response.iter_lines(decode_unicode=True):
+        if not line:
+            continue
+        if line.startswith("data: {"):
+            data_times.append(time.monotonic() - start)
+        events.append(line)
     assert events, "streaming response contained no SSE lines"
     assert events[-1] == OPENAI_SSE_DONE_LINE, f"stream did not end with [DONE]: {events[-3:]}"
     data_chunks = [e for e in events[:-1] if e.startswith("data: {")]
@@ -1722,6 +1840,41 @@ def assert_openai_sse_chat_stream(response: requests.Response) -> list[str]:
     assert "".join(aggregated).strip(), (
         "streaming response carried no non-empty content in SSE data chunks"
     )
+
+    if min_first_data_sec is not None:
+        assert data_times, "stream carried no timed data chunks"
+        assert data_times[0] >= min_first_data_sec, (
+            f"first SSE data chunk arrived after {data_times[0]:.3f}s, expected "
+            f">= {min_first_data_sec:.3f}s. The backend is not paced, so this test "
+            "cannot tell streaming from buffering -- check the simulator args of the "
+            "paced fixture (fixtures/slow-stream) before reading the gap assertion."
+        )
+
+    if min_inter_chunk_gap_sec is not None:
+        assert len(data_times) >= 3, (
+            f"stream carried only {len(data_times)} data chunk(s), cannot measure "
+            "inter-chunk delivery gaps"
+        )
+        gaps = [b - a for a, b in zip(data_times, data_times[1:])]
+        largest_gap = max(gaps)
+        log.info(
+            "[sse] %d data chunks over %.3fs (first at %.3fs), largest gap %.3fs",
+            len(data_times),
+            data_times[-1] - data_times[0],
+            data_times[0],
+            largest_gap,
+        )
+        assert largest_gap >= min_inter_chunk_gap_sec, (
+            f"SSE response was delivered in a single burst: the largest gap between "
+            f"{len(data_times)} data chunks was {largest_gap:.3f}s, expected "
+            f">= {min_inter_chunk_gap_sec:.3f}s (chunks arrived at "
+            f"{[round(t, 3) for t in data_times][:8]}...). The client could not act on "
+            "a token until generation completed, so something in front of the model is "
+            "buffering the response body. Check response_body_mode on the "
+            "payload-processing ext_proc filter (BUFFERED holds the body until the "
+            "whole response exists; STREAMED forwards it as it is generated)."
+        )
+
     return events
 
 
@@ -1751,6 +1904,31 @@ def _embedding_inference(api_key, path=None, extra_headers=None, model_name=None
         json={"model": model_name, "input": "Hello world"},
         timeout=TIMEOUT, verify=TLS_VERIFY,
     )
+
+
+def _json_bbr_post(api_key, path_suffix, body, bbr=True, path=None):
+    """POST a JSON BBR path with API key at {gateway}/v1/{suffix} or path-prefixed URL."""
+    path_suffix = path_suffix.lstrip("/")
+    if bbr:
+        url = f"{_gateway_url()}/{path_suffix}"
+    else:
+        path = path or JSON_BBR_MODEL_PATH
+        url = f"{_gateway_url()}{path}/{path_suffix}"
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    return requests.post(url, headers=headers, json=body, timeout=TIMEOUT, verify=TLS_VERIFY)
+
+
+def _rerank_inference(api_key, path=None, model_name=None, bbr=False):
+    """POST /v1/rerank with API key (path-based or BBR at gateway root)."""
+    model_name = model_name or RERANK_MODEL_NAME
+    if not bbr and path is None:
+        path = RERANK_MODEL_PATH
+    body = {
+        "model": model_name,
+        "query": "what is a vector database?",
+        "documents": ["A vector DB stores embeddings.", "Unrelated text."],
+    }
+    return _json_bbr_post(api_key, "v1/rerank", body, bbr=bbr, path=path)
 
 
 # ---------------------------------------------------------------------------
@@ -2621,6 +2799,9 @@ def _create_llmis(
     gateway_namespace: str = "openshift-ingress",
     model_name: str = "facebook/opt-125m",
     scheduler: bool = False,
+    *,
+    echo: bool = False,
+    spec_annotations: Optional[dict] = None,
 ):
     """Create a simulated LLMInferenceService pointing to a specific gateway.
 
@@ -2634,7 +2815,28 @@ def _create_llmis(
             scenarios where two LLMISs intentionally share a model name.
         scheduler: Serve the model through an InferencePool and its endpoint picker
             instead of a plain Service.
+        echo: Run the simulator in echo mode: the completion repeats the last user
+            message, so a test sizes the response with its prompt and can compare
+            them. Needs a model_name that does not resolve on HuggingFace
+            (test/e2e/fixtures/README.md).
+        spec_annotations: spec.annotations, which KServe reads for per-service
+            settings such as serving.kserve.io/route-rule-naming.
     """
+    if echo and model_name == "facebook/opt-125m":
+        raise ValueError(
+            "echo=True needs a made-up model_name: on the echo simulator image "
+            "facebook/opt-125m takes the real-tokenizer path"
+        )
+    if echo:
+        image = LLM_D_INFERENCE_SIM_ECHO_IMAGE
+        # The simulator rejects a prompt over --max-model-len (default 1024 tokens)
+        # with a 400, and in echo mode the prompt is the payload under test.
+        mode_args = ["--mode", "echo", "--max-model-len", "131072"]
+        ready_path = "/ready"
+    else:
+        image = LLM_D_INFERENCE_SIM_IMAGE
+        mode_args = ["--mode", "random"]
+        ready_path = "/health/ready"
     llmis = {
         "apiVersion": "serving.kserve.io/v1alpha1",
         "kind": "LLMInferenceService",
@@ -2668,12 +2870,12 @@ def _create_llmis(
                 "containers": [
                     {
                         "name": "main",
-                        "image": LLM_D_INFERENCE_SIM_IMAGE,
+                        "image": image,
                         "command": ["/app/llm-d-inference-sim"],
                         "args": [
                             "--port", "8000",
                             "--model", model_name,
-                            "--mode", "random",
+                            *mode_args,
                             "--no-mm-encoder-only",
                             "--ssl-certfile", "/var/run/kserve/tls/tls.crt",
                             "--ssl-keyfile", "/var/run/kserve/tls/tls.key",
@@ -2694,7 +2896,7 @@ def _create_llmis(
                         },
                         "readinessProbe": {
                             "httpGet": {
-                                "path": "/ready",
+                                "path": ready_path,
                                 "port": "https",
                                 "scheme": "HTTPS",
                             }
@@ -2706,6 +2908,14 @@ def _create_llmis(
     }
     if scheduler:
         llmis["spec"]["router"]["scheduler"] = {}
+    if echo:
+        # The simulator was OOMKilled at 1Gi after a few hundred 470 KB echoes.
+        llmis["spec"]["template"]["containers"][0]["resources"] = {
+            "requests": {"cpu": "100m", "memory": "512Mi"},
+            "limits": {"cpu": "1", "memory": "2Gi"},
+        }
+    if spec_annotations:
+        llmis["spec"]["annotations"] = dict(spec_annotations)
     _apply_cr(llmis)
 
 
