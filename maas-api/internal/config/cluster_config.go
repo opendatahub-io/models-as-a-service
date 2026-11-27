@@ -238,7 +238,39 @@ func (c *ClusterConfig) StartAndWaitForSync(stopCh <-chan struct{}) bool {
 // gateway.networking.k8s.io/gateway-name=<gatewayName> in gatewayNamespace.
 // Only Services owned by a Gateway resource (via ownerReferences) and exposing
 // port 443 are considered. Returns "<service-name>.<namespace>.svc.cluster.local".
+//
+// When no matching service is found, it retries with exponential backoff (2s, 4s,
+// 8s, capped at 15s) until the context expires. This handles the case where the
+// gateway infrastructure (e.g. istiod) is still starting up.
 func ResolveGatewayInternalHost(ctx context.Context, clientset kubernetes.Interface, gatewayName, gatewayNamespace string) (string, error) {
+	const (
+		initialBackoff = 2 * time.Second
+		maxBackoff     = 15 * time.Second
+	)
+
+	backoff := initialBackoff
+	for {
+		host, err := resolveGatewayServiceOnce(ctx, clientset, gatewayName, gatewayNamespace)
+		if err != nil {
+			return "", err
+		}
+		if host != "" {
+			return host, nil
+		}
+
+		select {
+		case <-ctx.Done():
+			return "", nil
+		case <-time.After(backoff):
+		}
+		backoff *= 2
+		if backoff > maxBackoff {
+			backoff = maxBackoff
+		}
+	}
+}
+
+func resolveGatewayServiceOnce(ctx context.Context, clientset kubernetes.Interface, gatewayName, gatewayNamespace string) (string, error) {
 	labelSelector := fmt.Sprintf("gateway.networking.k8s.io/gateway-name=%s", gatewayName)
 	svcs, err := clientset.CoreV1().Services(gatewayNamespace).List(ctx, metav1.ListOptions{
 		LabelSelector: labelSelector,
@@ -270,9 +302,6 @@ func ResolveGatewayInternalHost(ctx context.Context, clientset kubernetes.Interf
 
 	switch len(candidates) {
 	case 0:
-		// No gateway service found - this is expected for test gateways or gateways
-		// without proper infrastructure. Return empty string to allow startup.
-		// Model access checks will be disabled.
 		return "", nil
 	case 1:
 		return fmt.Sprintf("%s.%s.svc.cluster.local", candidates[0], gatewayNamespace), nil

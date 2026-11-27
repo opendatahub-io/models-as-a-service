@@ -83,6 +83,11 @@ type Config struct {
 	// window are excluded (fail-closed). Default: 15 seconds. Minimum: 1 second.
 	AccessCheckTimeoutSeconds int
 
+	// GatewayResolveTimeoutSeconds bounds how long maas-api waits at startup for the
+	// gateway Service to appear. The gateway infrastructure (istiod, OSSM) may still
+	// be starting when maas-api first comes up. Default: 120 seconds.
+	GatewayResolveTimeoutSeconds int
+
 	// SARCacheMaxSize is the maximum number of entries in the SAR admin-check cache.
 	// Bounds memory usage under high-cardinality user traffic. Default: 8192.
 	SARCacheMaxSize int
@@ -151,6 +156,7 @@ func Load() *Config {
 	secure, _ := env.GetBool("SECURE", false)
 	maxExpirationDays, _ := env.GetInt("API_KEY_MAX_EXPIRATION_DAYS", constant.DefaultAPIKeyMaxExpirationDays)
 	accessCheckTimeoutSeconds, _ := env.GetInt("ACCESS_CHECK_TIMEOUT_SECONDS", 15)
+	gatewayResolveTimeoutSeconds, _ := env.GetInt("GATEWAY_RESOLVE_TIMEOUT_SECONDS", 120)
 	sarCacheMaxSize, _ := env.GetInt("SAR_CACHE_MAX_SIZE", constant.DefaultSARCacheMaxSize)
 	lastUsedDebounceSecs, _ := env.GetInt("LAST_USED_DEBOUNCE_SECS", 60)
 	apiKeyDeletionRetentionDays, _ := env.GetInt("API_KEY_DELETION_RETENTION_DAYS", defaultAPIKeyDeletionRetentionDays)
@@ -176,36 +182,37 @@ func Load() *Config {
 	aitenantNamespace := env.GetString("AITENANT_NAMESPACE", "ai-tenants")
 
 	c := &Config{
-		Name:                        env.GetString("INSTANCE_NAME", gatewayName),
-		Namespace:                   env.GetString("NAMESPACE", constant.DefaultNamespace),
-		GatewayName:                 gatewayName,
-		GatewayNamespace:            env.GetString("GATEWAY_NAMESPACE", constant.DefaultGatewayNamespace),
-		MaaSSubscriptionNamespace:   env.GetString("MAAS_SUBSCRIPTION_NAMESPACE", constant.DefaultMaaSSubscriptionNamespace),
-		TenantName:                  tenantName,
-		AITenantName:                aitenantName,
-		AITenantNamespace:           aitenantNamespace,
-		Address:                     env.GetString("ADDRESS", ""),
-		Secure:                      secure,
-		TLS:                         loadTLSConfig(),
-		DebugMode:                   debugMode,
-		LogFormat:                   logFormat,
-		DBConnectionURL:             "", // Loaded from K8s secret via LoadDatabaseURLs()
-		DBReadConnectionURL:         "", // Loaded from K8s secret via LoadDatabaseURLs()
-		APIKeyMaxExpirationDays:     maxExpirationDays,
-		AccessCheckTimeoutSeconds:   accessCheckTimeoutSeconds,
-		SARCacheMaxSize:             sarCacheMaxSize,
-		LastUsedDebounceSecs:        lastUsedDebounceSecs,
-		APIKeyDeletionRetentionDays: apiKeyDeletionRetentionDays,
-		MetricsPort:                 metricsPort,
-		MetricsSecure:               metricsSecure,
-		MetricsCertDir:              metricsCertDir,
-		DiscoveryEnableHTTP2:        discoveryEnableHTTP2,
-		LokiReadEndpoint:            env.GetString("LOKI_READ_ENDPOINT", ""),
-		LokiReadToken:               env.GetString("LOKI_READ_TOKEN", ""),
-		LokiReadCA:                  env.GetString("LOKI_READ_CA", ""),
-		OTELEndpoint:                env.GetString("OTEL_EXPORTER_OTLP_ENDPOINT", ""),
-		OTELInsecure:                otelInsecure,
-		OTELSampleRate:              otelSampleRate,
+		Name:                         env.GetString("INSTANCE_NAME", gatewayName),
+		Namespace:                    env.GetString("NAMESPACE", constant.DefaultNamespace),
+		GatewayName:                  gatewayName,
+		GatewayNamespace:             env.GetString("GATEWAY_NAMESPACE", constant.DefaultGatewayNamespace),
+		MaaSSubscriptionNamespace:    env.GetString("MAAS_SUBSCRIPTION_NAMESPACE", constant.DefaultMaaSSubscriptionNamespace),
+		TenantName:                   tenantName,
+		AITenantName:                 aitenantName,
+		AITenantNamespace:            aitenantNamespace,
+		Address:                      env.GetString("ADDRESS", ""),
+		Secure:                       secure,
+		TLS:                          loadTLSConfig(),
+		DebugMode:                    debugMode,
+		LogFormat:                    logFormat,
+		DBConnectionURL:              "", // Loaded from K8s secret via LoadDatabaseURLs()
+		DBReadConnectionURL:          "", // Loaded from K8s secret via LoadDatabaseURLs()
+		APIKeyMaxExpirationDays:      maxExpirationDays,
+		AccessCheckTimeoutSeconds:    accessCheckTimeoutSeconds,
+		GatewayResolveTimeoutSeconds: gatewayResolveTimeoutSeconds,
+		SARCacheMaxSize:              sarCacheMaxSize,
+		LastUsedDebounceSecs:         lastUsedDebounceSecs,
+		APIKeyDeletionRetentionDays:  apiKeyDeletionRetentionDays,
+		MetricsPort:                  metricsPort,
+		MetricsSecure:                metricsSecure,
+		MetricsCertDir:               metricsCertDir,
+		DiscoveryEnableHTTP2:         discoveryEnableHTTP2,
+		LokiReadEndpoint:             env.GetString("LOKI_READ_ENDPOINT", ""),
+		LokiReadToken:                env.GetString("LOKI_READ_TOKEN", ""),
+		LokiReadCA:                   env.GetString("LOKI_READ_CA", ""),
+		OTELEndpoint:                 env.GetString("OTEL_EXPORTER_OTLP_ENDPOINT", ""),
+		OTELInsecure:                 otelInsecure,
+		OTELSampleRate:               otelSampleRate,
 		// Deprecated env var (backward compatibility with pre-TLS version)
 		deprecatedHTTPPort: env.GetString("PORT", ""),
 	}
@@ -308,8 +315,8 @@ func (c *Config) Validate() error {
 		return errors.New("API_KEY_MAX_EXPIRATION_DAYS must be at least 1")
 	}
 
-	if c.AccessCheckTimeoutSeconds < 1 {
-		return errors.New("ACCESS_CHECK_TIMEOUT_SECONDS must be at least 1")
+	if err := validateTimeouts(c.AccessCheckTimeoutSeconds, c.GatewayResolveTimeoutSeconds); err != nil {
+		return err
 	}
 
 	if c.LastUsedDebounceSecs < 0 {
@@ -341,6 +348,16 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	return nil
+}
+
+func validateTimeouts(accessCheck, gatewayResolve int) error {
+	if accessCheck < 1 {
+		return errors.New("ACCESS_CHECK_TIMEOUT_SECONDS must be at least 1")
+	}
+	if gatewayResolve < 1 {
+		return errors.New("GATEWAY_RESOLVE_TIMEOUT_SECONDS must be at least 1")
+	}
 	return nil
 }
 

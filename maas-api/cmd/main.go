@@ -288,15 +288,16 @@ func registerHandlers(
 			cluster.AIGuardrailGetter,
 		)))
 
-	resolveCtx, resolveCancel := context.WithTimeout(ctx, time.Duration(cfg.AccessCheckTimeoutSeconds)*time.Second)
+	log.Info("Waiting for gateway service to appear...", "gateway", cfg.GatewayNamespace+"/"+cfg.GatewayName, "timeout", fmt.Sprintf("%ds", cfg.GatewayResolveTimeoutSeconds))
+	resolveCtx, resolveCancel := context.WithTimeout(ctx, time.Duration(cfg.GatewayResolveTimeoutSeconds)*time.Second)
 	gatewayInternalHost, err := config.ResolveGatewayInternalHost(resolveCtx, cluster.ClientSet, cfg.GatewayName, cfg.GatewayNamespace)
 	resolveCancel()
 	if err != nil {
 		return fmt.Errorf("failed to resolve gateway internal address: %w", err)
 	}
 	if gatewayInternalHost == "" {
-		return fmt.Errorf("gateway service not found for %s/%s: model access probes require a resolvable gateway internal host",
-			cfg.GatewayNamespace, cfg.GatewayName)
+		return fmt.Errorf("gateway service not found for %s/%s after %ds: the gateway infrastructure (istiod/OSSM) may not be running — check GatewayClass and Istio CR status",
+			cfg.GatewayNamespace, cfg.GatewayName, cfg.GatewayResolveTimeoutSeconds)
 	}
 	log.Info("Resolved gateway internal host for access probes", "host", gatewayInternalHost)
 
