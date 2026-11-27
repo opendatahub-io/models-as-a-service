@@ -1,0 +1,132 @@
+rule_files:
+  - maas-auth-alerting.rules.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # Recording rule: maas:auth_decisions:rate5m produces per-authconfig, per-status rates
+  - interval: 1m
+    input_series:
+      - series: auth_server_authconfig_response_status{authconfig="abc123",namespace="kuadrant-system",status="OK"}
+        values: "0+60x10"
+      - series: auth_server_authconfig_response_status{authconfig="abc123",namespace="kuadrant-system",status="UNAUTHENTICATED"}
+        values: "0+10x10"
+    promql_expr_test:
+      - eval_time: 5m
+        expr: maas:auth_decisions:rate5m{authconfig="abc123",status="OK"}
+        exp_samples:
+          - labels: 'maas:auth_decisions:rate5m{authconfig="abc123",namespace="kuadrant-system",status="OK"}'
+            value: 1
+
+  # Recording rule: maas:auth_deny_ratio:rate5m computes deny ratio (25% denied)
+  - interval: 1m
+    input_series:
+      - series: auth_server_authconfig_response_status{authconfig="abc123",namespace="kuadrant-system",status="OK"}
+        values: "0+75x10"
+      - series: auth_server_authconfig_response_status{authconfig="abc123",namespace="kuadrant-system",status="UNAUTHENTICATED"}
+        values: "0+25x10"
+    promql_expr_test:
+      - eval_time: 5m
+        expr: maas:auth_deny_ratio:rate5m{authconfig="abc123"}
+        exp_samples:
+          - labels: 'maas:auth_deny_ratio:rate5m{authconfig="abc123",namespace="kuadrant-system"}'
+            value: 0.25
+
+  # Recording rule: deny ratio is 0 when all requests are allowed
+  - interval: 1m
+    input_series:
+      - series: auth_server_authconfig_response_status{authconfig="abc123",namespace="kuadrant-system",status="OK"}
+        values: "0+100x10"
+    promql_expr_test:
+      - eval_time: 5m
+        expr: maas:auth_deny_ratio:rate5m{authconfig="abc123"}
+        exp_samples:
+          - labels: 'maas:auth_deny_ratio:rate5m{authconfig="abc123",namespace="kuadrant-system"}'
+            value: 0
+
+  # Recording rule: maas:auth_latency_p95:5m produces P95 latency
+  # Bucket distribution: 50% <= 1ms, 80% <= 10ms, 95% <= 100ms, 100% <= +Inf
+  # P95 falls at the top of the 10ms-100ms bucket → interpolates to ~0.1
+  - interval: 1m
+    input_series:
+      - series: auth_server_authconfig_duration_seconds_bucket{authconfig="abc123",namespace="kuadrant-system",le="0.001"}
+        values: "0+50x10"
+      - series: auth_server_authconfig_duration_seconds_bucket{authconfig="abc123",namespace="kuadrant-system",le="0.01"}
+        values: "0+80x10"
+      - series: auth_server_authconfig_duration_seconds_bucket{authconfig="abc123",namespace="kuadrant-system",le="0.1"}
+        values: "0+95x10"
+      - series: auth_server_authconfig_duration_seconds_bucket{authconfig="abc123",namespace="kuadrant-system",le="+Inf"}
+        values: "0+100x10"
+    promql_expr_test:
+      - eval_time: 5m
+        expr: maas:auth_latency_p95:5m{authconfig="abc123"}
+        exp_samples:
+          - labels: 'maas:auth_latency_p95:5m{authconfig="abc123",namespace="kuadrant-system"}'
+            value: 0.1
+
+  # Alert: MaaSHighAuthDenyRate fires when deny ratio > 10% for 10m
+  - interval: 1m
+    input_series:
+      - series: auth_server_authconfig_response_status{authconfig="abc123",namespace="kuadrant-system",status="OK"}
+        values: "0+80x20"
+      - series: auth_server_authconfig_response_status{authconfig="abc123",namespace="kuadrant-system",status="UNAUTHENTICATED"}
+        values: "0+20x20"
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: MaaSHighAuthDenyRate
+        exp_alerts:
+          - exp_labels:
+              alertname: MaaSHighAuthDenyRate
+              severity: warning
+              authconfig: abc123
+              namespace: kuadrant-system
+            exp_annotations:
+              summary: High auth denial rate for an Authorino AuthConfig
+              description: >-
+                More than 10% of auth decisions for AuthConfig abc123
+                in namespace kuadrant-system have been denied over the last 10 minutes.
+                Investigate AuthPolicy configuration, credential validity, and Authorino logs.
+
+  # Alert: MaaSHighAuthDenyRate does NOT fire when deny ratio <= 10%
+  - interval: 1m
+    input_series:
+      - series: auth_server_authconfig_response_status{authconfig="abc123",namespace="kuadrant-system",status="OK"}
+        values: "0+95x20"
+      - series: auth_server_authconfig_response_status{authconfig="abc123",namespace="kuadrant-system",status="UNAUTHENTICATED"}
+        values: "0+5x20"
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: MaaSHighAuthDenyRate
+        exp_alerts: []
+
+  # Alert: MaaSHighAuthDenyRate does NOT fire before 10m sustained
+  - interval: 1m
+    input_series:
+      - series: auth_server_authconfig_response_status{authconfig="abc123",namespace="kuadrant-system",status="OK"}
+        values: "0+80x20"
+      - series: auth_server_authconfig_response_status{authconfig="abc123",namespace="kuadrant-system",status="UNAUTHENTICATED"}
+        values: "0+20x20"
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: MaaSHighAuthDenyRate
+        exp_alerts: []
+
+  # Alert: MaaSHighAuthDenyRate does NOT fire with negligible traffic
+  - interval: 1m
+    input_series:
+      - series: auth_server_authconfig_response_status{authconfig="abc123",namespace="kuadrant-system",status="UNAUTHENTICATED"}
+        values: "0 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1"
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: MaaSHighAuthDenyRate
+        exp_alerts: []
+
+  # Recording rules: namespace filtering excludes other namespaces
+  - interval: 1m
+    input_series:
+      - series: auth_server_authconfig_response_status{authconfig="abc123",namespace="other-namespace",status="OK"}
+        values: "0+100x10"
+    promql_expr_test:
+      - eval_time: 5m
+        expr: maas:auth_decisions:rate5m
+        exp_samples: []

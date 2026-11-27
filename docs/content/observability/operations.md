@@ -110,7 +110,8 @@ How you remove resources depends on how they were applied. `./scripts/observabil
 | Deployment mode | How applied | Ownership | Cleanup |
 |-----------------|-------------|-----------|---------|
 | **Operator** (recommended) | Metrics Usage dashboard via `usageMetricsDashboard` on `Config`. Usage-log dashboards are always reconciled while `Config/default` exists (`usageLogging` does not gate them). | Controller `ownerReference` on `Config` (`configs.maas.opendatahub.io/default`); field manager `maas-controller`. | Metrics Usage: set `usageMetricsDashboard=false`. Usage-log dashboards are recreated while the controller runs. See [Operator-managed dashboards](#operator-managed-dashboards) below. |
-| **Kustomize** (development) | `kustomize build` of `deployment/components/observability/observability/dashboards/` (and optionally `usage-logs/dsci-managed/`). | Label `app.kubernetes.io/managed-by: maas-observability` on the metrics Usage dashboard. No `Config` controller reference. | Delete `dashboard-3-maas-usage-admin` by name. For usage-logs, `kubectl delete -k` only sticks when the operator is not also reconciling those objects. |
+| **Operator** — auth decisions (unconditional) | `LifecycleReconciler.ensureAuthDecisionsDashboard` renders `deployment/components/observability/observability/dashboards/auth-decisions/` whenever `Config/default` exists and the monitoring namespace is present. Deliberately **not** gated by `usageMetricsDashboard`: that gate defaults to `false` and deletes controller-owned dashboards when off. | Controller `ownerReference` on `Config`; field manager `maas-controller`. | Deleted with `Config/default`. There is no feature gate to disable it. |
+| **Kustomize** (development) | `kustomize build` of `deployment/components/observability/observability/dashboards/` for the metrics Usage dashboard, `dashboards/auth-decisions/` for the auth decisions dashboard (and optionally `usage-logs/dsci-managed/`). | Label `app.kubernetes.io/managed-by: maas-observability` on the metrics Usage dashboard. No `Config` controller reference. | Delete `dashboard-3-maas-usage-admin` or `dashboard-4-maas-auth-decisions-admin` by name. For usage-logs, `kubectl delete -k` only sticks when the operator is not also reconciling those objects. |
 | **`install-observability.sh`** | TelemetryPolicy, Istio Telemetry, and the conditional monitors/rules in the table above. | `app.kubernetes.io/managed-by: maas-observability` on the kustomize base and gateway Service/ServiceMonitor. Limitador monitor and PrometheusRules do not all carry that label. | Delete the applied objects by name (see [Telemetry and ServiceMonitors](#telemetry-and-servicemonitors)). Dashboards are unaffected. |
 
 Identify operator-owned dashboards:
@@ -140,7 +141,9 @@ they are available.
 
 Requires a running **maas-controller** (`LifecycleReconciler`), a `Config` instance, a monitoring namespace, and Perses CRDs (`PersesAvailable`). See [Setup](setup.md).
 
-Usage-log dashboards (`dashboard-4`, `dashboard-5`) are reconciled whenever `Config/default` exists. Setting `usageLogging` does not remove them. Deleting `Config/default` garbage-collects controller-owned copies.
+Usage-log dashboards (`dashboard-4-maas-usage-logs-admin`, `dashboard-5-maas-usage-logs`) are reconciled whenever `Config/default` exists. Setting `usageLogging` does not remove them. Deleting `Config/default` garbage-collects controller-owned copies.
+
+The auth decisions dashboard (`dashboard-4-maas-auth-decisions-admin`) is reconciled on the same terms — whenever `Config/default` exists — from its own kustomize root. It is intentionally independent of `usageMetricsDashboard`; disabling that gate removes only `dashboard-3-maas-usage-admin`.
 
 ```bash
 # Metrics Usage dashboard (dashboard-3): operator deletes the CR it owns
