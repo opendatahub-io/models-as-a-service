@@ -151,6 +151,27 @@ This guide helps you diagnose and resolve common issues with MaaS Platform deplo
 
       - [ ] Upgrade RHCL to v1.4.1 or later
 
+17. **Gateway pod OOMKilled or CPU-throttled under load**: The default istio-proxy resource limits (2 CPU, 1Gi memory) can be too low for high-concurrency workloads.
+      - [ ] Check for OOMKill events: `kubectl get events -n openshift-ingress --field-selector reason=OOMKilling`
+      - [ ] Check pod restarts: `kubectl get pods -n openshift-ingress -l gateway.networking.k8s.io/gateway-name=maas-default-gateway`
+      - [ ] Check for CPU throttling. `nr_throttled` is a cumulative counter, not a rate, so a single high reading may just reflect an earlier load spike. Sample it twice while the workload is running and compare the deltas:
+
+      ```bash
+      POD=$(kubectl get pods -n openshift-ingress -l gateway.networking.k8s.io/gateway-name=maas-default-gateway -o jsonpath='{.items[0].metadata.name}')
+      read_cpu_stat() {
+        kubectl exec -n openshift-ingress "$POD" -c istio-proxy -- cat /sys/fs/cgroup/cpu/cpu.stat 2>/dev/null \
+          || kubectl exec -n openshift-ingress "$POD" -c istio-proxy -- cat /sys/fs/cgroup/cpu.stat
+      }
+      read_cpu_stat > /tmp/cpu.stat.before
+      sleep 60
+      read_cpu_stat > /tmp/cpu.stat.after
+      diff /tmp/cpu.stat.before /tmp/cpu.stat.after
+      ```
+
+      Compare the growth in `nr_throttled` against the growth in `nr_periods` over the interval. A throttled share of more than a few percent means the container is hitting its CPU limit during the test.
+
+      - [ ] Follow the resource tuning procedures in [Gateway Resource Tuning](../advanced-administration/gateway-resource-tuning.md)
+
 ## Conflicting AuthPolicy Detection
 
 MaaS automatically detects non-MaaS AuthPolicies (e.g., from KServe or other controllers) that target the same HTTPRoutes used by MaaS-governed models. When a conflict is detected, MaaS sets a `ConflictingAuthPolicy` condition on the affected MaaSAuthPolicy resource and emits a Kubernetes warning event.

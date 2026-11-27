@@ -9,6 +9,7 @@ and troubleshooting guidance for common failure modes.
 - Default MaaS Gateway setup: [Install MaaS Components — Create Gateway](../install/maas-setup.md#create-gateway)
 - Attaching models to the Gateway: [Model Setup Guide](model-setup.md)
 - End-to-end TLS: [TLS Configuration](tls-configuration.md)
+- Gateway pod resource limits: [Gateway Resource Tuning](../advanced-administration/gateway-resource-tuning.md)
 
 ## Pattern index
 
