@@ -76,7 +76,7 @@ Tests are organized into **xdist groups** for parallel execution. All tests in a
 | `tenant_ipp_ext_*` | `test_tenant_external_model_*.py` (one group per file, e.g. `tenant_ipp_ext_attach`) | AGC/Praxis external models on tenant gateways (pass 1; split for wall clock) |
 | `tenant_ipp_extproc_*` | `test_praxis_extproc_restart.py`, `test_praxis_extproc_secret_rotation.py` | Praxis extproc lifecycle |
 | `tenant_auto_resolve` | `test_tenant_auto_resolve.py` | MaaSModelRef tenant auto-resolution from gateway parentRef |
-| `inference_priority` | `test_inference_priority.py` | Subscription `inferencePriority` / InferenceObjective (`serial`) |
+| `inference_priority` | `test_inference_priority.py`, `test_pool_payload_fidelity.py` | Pool-backed models on the default gateway: subscription `inferencePriority` / InferenceObjective, payload fidelity through the EPP (`serial`) |
 | `echo_io` | `test_echo_large_io.py` | Large payload echo (`serial`) |
 | `large_io` | `test_large_io.py` | Large payload streaming inference (~3.2MB prompt / ~145MB SSE, gated by `E2E_LARGE_IO=1`); validates WASM/ext_proc/Envoy buffer limits and progressive SSE delivery on the streaming path (`serial`) |
 | `external` | `test_external_oidc.py`, `test_external_model_routing.py`, Grid governance modules | Externally gated OIDC/routing/admin tests |

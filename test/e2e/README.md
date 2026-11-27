@@ -81,6 +81,7 @@ paced. Tests on the shared fast simulators must leave both unset.
 | `test_namespace_scoping.py` | Namespace wiring |
 | `test_external_models.py` | External model refs; deterministic ExternalModel token-rate exhaustion runs in the serial pass against the dedicated, MaaS-unbound `external-token-limit` simulator Service, using the OpenShift service CA mounted in the gateway proxy |
 | `test_inference_priority.py` | Subscription `inferencePriority` (llm-d flow control): InferenceObjective lifecycle, status, gateway headers; skips without the `inferenceobjectives.llm-d.ai` CRD |
+| `test_pool_payload_fidelity.py` | Responses from a pool-backed (EPP) echo model reach the client byte for byte: 2 KB non-streaming and 470 KB SSE, body-routed, judged by payload and the EPP response header (`serial`, `full_suite`) |
 | `test_tenant.py` | `default-tenant` (subscription namespace): Ready/phase, optional payload-processing (gateway namespace), user CRs not owned by Tenant |
 | `test_aitenant_lifecycle.py` | `AITenant` bootstrap create/delete; reserved namespace rejection; **serial:** revocation operand recovery when `maas-api-cleanup` SA is removed mid-delete |
 | `test_tenant_namespace_discovery.py` | Multi-tenant namespace discovery (S1), webhooks (S6); smoke enables `ENABLE_TENANT_NAMESPACE_DISCOVERY=true` by default |
