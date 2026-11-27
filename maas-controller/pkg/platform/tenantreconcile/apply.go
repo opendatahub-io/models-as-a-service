@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -123,8 +124,12 @@ func isLiveResourceUnmanaged(ctx context.Context, c client.Client, rendered *uns
 	if err := c.Get(ctx, key, live); err != nil {
 		return false
 	}
-	ann := live.GetAnnotations()
-	return ann != nil && ann[AnnotationManaged] == "false"
+	return isUnmanaged(live)
+}
+
+// isUnmanaged reports whether obj opted out of reconciliation with opendatahub.io/managed=false.
+func isUnmanaged(obj metav1.Object) bool {
+	return obj.GetAnnotations()[AnnotationManaged] == "false"
 }
 
 // isPayloadProcessingPluginsConfigMap reports whether u is the IPP plugins ConfigMap
@@ -133,11 +138,14 @@ func isPayloadProcessingPluginsConfigMap(u *unstructured.Unstructured) bool {
 	if u == nil || u.GetKind() != "ConfigMap" {
 		return false
 	}
-	name := u.GetName()
-	if name == PayloadProcessingPluginsConfigMapName {
-		return true
-	}
-	return strings.HasPrefix(name, PayloadProcessingPluginsConfigMapName+"-")
+	return IsPayloadProcessingPluginsConfigMapName(u.GetName())
+}
+
+// IsPayloadProcessingPluginsConfigMapName reports whether name is an IPP plugins ConfigMap
+// name: the default one or a per-tenant suffix.
+func IsPayloadProcessingPluginsConfigMapName(name string) bool {
+	return name == PayloadProcessingPluginsConfigMapName ||
+		strings.HasPrefix(name, PayloadProcessingPluginsConfigMapName+"-")
 }
 
 // preparePayloadProcessingPluginsConfigMapApply stamps opendatahub.io/managed on the
@@ -189,7 +197,12 @@ func isOwnedByExternalController(ctx context.Context, c client.Client, rendered 
 	if err := c.Get(ctx, key, live); err != nil {
 		return false
 	}
-	for _, ref := range live.GetOwnerReferences() {
+	return isControlledByOther(live, configUID)
+}
+
+// isControlledByOther reports whether obj has a controller owner other than the Config.
+func isControlledByOther(obj metav1.Object, configUID types.UID) bool {
+	for _, ref := range obj.GetOwnerReferences() {
 		if ref.Controller != nil && *ref.Controller && ref.UID != configUID {
 			return true
 		}

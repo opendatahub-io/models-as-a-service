@@ -49,6 +49,10 @@ spec:
               timeout: 300s
             message_timeout: 300s
     # Stage 2: must run AFTER the WasmPlugin (needs auth to have completed).
+    # maas-controller rewrites the response modes of every ext_proc.ipp insert to
+    # SKIP/NONE/SKIP when no profile in the plugins ConfigMap has response plugins: next to
+    # the EPP, which also streams the response body, a streamed ipp response leaves bodies
+    # empty or stalled on Envoy without envoyproxy/envoy#45355.
     - applyTo: HTTP_FILTER
       match:
         context: GATEWAY

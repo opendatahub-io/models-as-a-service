@@ -152,6 +152,15 @@ func RunPlatformWithReader(
 		return nil, fmt.Errorf("resolve maas-api egress preserve-on-upgrade: %w", err)
 	}
 
+	if !params.SkipIPP {
+		off, reason, err := resolveIPPResponseOff(ctx, apiReader, rendered, params, configUID(mcfg), false)
+		if err != nil {
+			return nil, fmt.Errorf("resolve ipp response processing: %w", err)
+		}
+		params.IPPResponseOff = off
+		log.V(1).Info("Resolved ipp response processing", "off", off, "reason", reason)
+	}
+
 	resources, err := PostRender(ctx, log, tenant, rendered, params)
 	if err != nil {
 		return nil, fmt.Errorf("post-render: %w", err)

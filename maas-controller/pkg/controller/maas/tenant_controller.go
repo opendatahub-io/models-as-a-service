@@ -33,6 +33,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -291,8 +292,25 @@ func (r *TenantReconciler) mapNetworkPolicyToMaasTenantConfigs(ctx context.Conte
 	if !r.isTenantPlatformNamespace(np.GetNamespace()) || !isManagedTenantNetworkPolicyLabels(np.GetLabels()) {
 		return nil
 	}
+	return r.enqueueLabeledTenant(ctx, obj)
+}
+
+// mapPluginsConfigMapToMaasTenantConfigs enqueues the tenant whose ipp response modes the
+// plugins ConfigMap decides, so adding or removing a response plugin re-renders the
+// payload-processing EnvoyFilter.
+func (r *TenantReconciler) mapPluginsConfigMapToMaasTenantConfigs(ctx context.Context, obj client.Object) []reconcile.Request {
+	cm, ok := obj.(*corev1.ConfigMap)
+	if !ok || !r.isTenantPlatformNamespace(cm.GetNamespace()) || !isIPPPluginsConfigMap(cm) {
+		return nil
+	}
+	return r.enqueueLabeledTenant(ctx, obj)
+}
+
+// enqueueLabeledTenant enqueues the tenant named by obj's tenant-namespace tracking label
+// when namespace discovery is on, and the default tenant otherwise.
+func (r *TenantReconciler) enqueueLabeledTenant(ctx context.Context, obj client.Object) []reconcile.Request {
 	if r.TenantNamespaceDiscoveryEnabled {
-		tenantNs := np.GetLabels()[tenantreconcile.LabelTenantNamespace]
+		tenantNs := obj.GetLabels()[tenantreconcile.LabelTenantNamespace]
 		if tenantNs != "" {
 			return []reconcile.Request{{NamespacedName: types.NamespacedName{
 				Name:      maasv1alpha1.MaasTenantConfigInstanceName,
@@ -301,6 +319,28 @@ func (r *TenantReconciler) mapNetworkPolicyToMaasTenantConfigs(ctx context.Conte
 		}
 	}
 	return r.enqueueDefaultTenant(ctx, obj)
+}
+
+// isIPPPluginsConfigMap matches a tenant's IPP plugins ConfigMap by name and by the IPP
+// config key; ai-gateway-controller writes praxis ConfigMaps under the same names.
+func isIPPPluginsConfigMap(obj client.Object) bool {
+	cm, ok := obj.(*corev1.ConfigMap)
+	return ok && tenantreconcile.IsPayloadProcessingPluginsConfigMapName(cm.GetName()) &&
+		tenantreconcile.HasIPPProcessingConfig(cm)
+}
+
+// ippPluginsConfigMapChanged passes events for IPP plugins ConfigMaps. An update passes when
+// either side is one, so removing the IPP config also re-renders. ConfigMap edits do not
+// bump metadata.generation, so no generation predicate applies.
+func ippPluginsConfigMapChanged() predicate.Predicate {
+	return predicate.Funcs{
+		CreateFunc: func(e event.CreateEvent) bool { return isIPPPluginsConfigMap(e.Object) },
+		UpdateFunc: func(e event.UpdateEvent) bool {
+			return isIPPPluginsConfigMap(e.ObjectOld) || isIPPPluginsConfigMap(e.ObjectNew)
+		},
+		DeleteFunc:  func(e event.DeleteEvent) bool { return isIPPPluginsConfigMap(e.Object) },
+		GenericFunc: func(e event.GenericEvent) bool { return isIPPPluginsConfigMap(e.Object) },
+	}
 }
 
 func authenticationClusterSingleton() predicate.Predicate {
@@ -362,6 +402,13 @@ func (r *TenantReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			&netwv1.NetworkPolicy{},
 			handler.EnqueueRequestsFromMapFunc(r.mapNetworkPolicyToMaasTenantConfigs),
 			builder.WithPredicates(r.inTenantPlatformNamespaces(), managedTenantNetworkPolicy()),
+		).
+		// The plugins ConfigMap decides the ipp response modes in the payload-processing
+		// EnvoyFilter. The IPP itself still loads it only on restart.
+		Watches(
+			&corev1.ConfigMap{},
+			handler.EnqueueRequestsFromMapFunc(r.mapPluginsConfigMapToMaasTenantConfigs),
+			builder.WithPredicates(r.inTenantPlatformNamespaces(), ippPluginsConfigMapChanged()),
 		)
 
 	const authCRD = "authentications.config.openshift.io"

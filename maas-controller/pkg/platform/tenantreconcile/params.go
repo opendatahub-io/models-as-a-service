@@ -105,6 +105,12 @@ type PlatformParams struct {
 	// and maas-controller should not render or apply IPP resources.
 	SkipIPP bool
 
+	// IPPResponseOff renders ext_proc.ipp with response SKIP/NONE/SKIP because no profile in
+	// the tenant's plugins ConfigMap processes responses. Next to the EPP, which also streams
+	// the response body, a streamed ipp response leaves bodies empty or stalled on Envoy
+	// without envoyproxy/envoy#45355 (envoyproxy/envoy#47449).
+	IPPResponseOff bool
+
 	// PayloadProcessingResources overrides resource requests/limits for the payload-processing container.
 	// Full replacement: when set, the entire resources block is replaced (not merged with base manifest).
 	PayloadProcessingResources *corev1.ResourceRequirements
@@ -1685,6 +1691,12 @@ func patchPayloadProcessingEnvoyFilter(log logr.Logger, r *unstructured.Unstruct
 	default:
 		return fmt.Errorf("EnvoyFilter configPatches: expected %d wasm or %d router filter patches, got %d",
 			wasmFilterPatchCount, routerFallbackPatchCount, filterPatchCount)
+	}
+
+	if params.IPPResponseOff {
+		if err := disableIPPResponseProcessing(configPatches[:filterPatchCount]); err != nil {
+			return err
+		}
 	}
 
 	// Route patches disable ext_proc on all non-inference maas-api routes; the EPP reorder
