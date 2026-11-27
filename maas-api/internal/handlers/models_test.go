@@ -1696,3 +1696,66 @@ type spyModelsMetrics struct {
 func (s *spyModelsMetrics) RecordRejection(reason string) {
 	s.rejections = append(s.rejections, reason)
 }
+
+// TestListModels_StandaloneBypassesSubscriptionsAndModelManager verifies that a
+// disabled subscription backend lists ready models with an unbound API key:
+// no X-Maas-Subscription header, no subscription selection, and no model manager.
+func TestListModels_StandaloneBypassesSubscriptionsAndModelManager(t *testing.T) {
+	testLogger := logger.Development()
+
+	lister := fakeMaaSModelRefLister{
+		fixtures.TestNamespace: []*unstructured.Unstructured{
+			maasModelRefUnstructured("ready-model", fixtures.TestNamespace, "http://example.invalid", true, nil),
+			maasModelRefUnstructured("not-ready-model", fixtures.TestNamespace, "http://example.invalid", false, nil),
+		},
+	}
+	modelsHandler := handlers.NewModelsHandler(testLogger, nil, subscription.DisabledSelector{}, lister, nil)
+
+	router, _ := fixtures.SetupTestServer(t, fixtures.TestServerConfig{})
+	tokenHandler := token.NewHandler(testLogger, fixtures.TestTenant)
+	v1 := router.Group("/v1")
+	v1.GET("/models", tokenHandler.ExtractUserInfoOptional(), modelsHandler.ListLLMs)
+
+	w := httptest.NewRecorder()
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/models", nil)
+	require.NoError(t, err)
+	req.Header.Set("Authorization", "Bearer sk-oai-standalone")
+	req.Header.Set(constant.HeaderUsername, "test-user@example.com")
+	req.Header.Set(constant.HeaderGroup, `["free-users"]`)
+	// Deliberately no X-Maas-Subscription: standalone keys are unbound.
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, "no-store", w.Header().Get("Cache-Control"))
+	assert.NotEmpty(t, w.Header().Get("X-Access-Checked-At"))
+
+	var response pagination.Page[models.Model]
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+	assert.Equal(t, "list", response.Object)
+	require.Len(t, response.Data, 1)
+	assert.Equal(t, "ready-model", response.Data[0].ID)
+}
+
+// TestListModels_StandaloneWithoutModelSource verifies that standalone mode
+// returns an empty list instead of failing when no MaaSModelRef source exists.
+func TestListModels_StandaloneWithoutModelSource(t *testing.T) {
+	testLogger := logger.Development()
+	modelsHandler := handlers.NewModelsHandler(testLogger, nil, subscription.DisabledSelector{}, nil, nil)
+
+	router, _ := fixtures.SetupTestServer(t, fixtures.TestServerConfig{})
+	tokenHandler := token.NewHandler(testLogger, fixtures.TestTenant)
+	v1 := router.Group("/v1")
+	v1.GET("/models", tokenHandler.ExtractUserInfoOptional(), modelsHandler.ListLLMs)
+
+	w := httptest.NewRecorder()
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/models", nil)
+	require.NoError(t, err)
+	req.Header.Set(constant.HeaderUsername, "test-user@example.com")
+	req.Header.Set(constant.HeaderGroup, `["free-users"]`)
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var response pagination.Page[models.Model]
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+	assert.Empty(t, response.Data)
+}

@@ -1,0 +1,145 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: maas-db-config
+type: Opaque
+stringData:
+  DB_CONNECTION_URL: postgresql://maas:maas@postgres:5432/maas?sslmode=disable
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: maas-api
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: maas-api
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: maas-api
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: maas-api
+subjects:
+  - kind: ServiceAccount
+    name: maas-api
+---
+# The MaaSModelRef informer watches all namespaces. The binding is harmless
+# when the CRD is not installed, which is the phase-1 standalone case.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: maas-standalone-e2e-maasmodelrefs
+rules:
+  - apiGroups: ["maas.opendatahub.io"]
+    resources: ["maasmodelrefs"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: maas-standalone-e2e-maasmodelrefs
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: maas-standalone-e2e-maasmodelrefs
+subjects:
+  - kind: ServiceAccount
+    name: maas-api
+    namespace: maas-standalone-e2e
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: maas-api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: maas-api
+  template:
+    metadata:
+      labels:
+        app: maas-api
+    spec:
+      serviceAccountName: maas-api
+      securityContext:
+        runAsNonRoot: true
+      containers:
+        - name: maas-api
+          image: maas-api
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+              name: http
+            - containerPort: 9090
+              name: metrics
+          env:
+            - name: NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: SECURE
+              value: "false"
+            - name: METRICS_SECURE
+              value: "false"
+            - name: METRICS_PORT
+              value: "9090"
+            - name: LOG_FORMAT
+              value: "zap"
+            - name: MAAS_SUBSCRIPTION_MODE
+              value: "standalone"
+            - name: TENANT_NAME
+              value: "standalone-e2e"
+            - name: API_KEY_MAX_EXPIRATION_DAYS
+              value: "30"
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 3
+            timeoutSeconds: 2
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            seccompProfile:
+              type: RuntimeDefault
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "256Mi"
+              cpu: "500m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: maas-api
+spec:
+  selector:
+    app: maas-api
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http

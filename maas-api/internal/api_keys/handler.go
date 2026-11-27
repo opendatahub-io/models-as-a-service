@@ -45,6 +45,7 @@ type AdminChecker interface {
 }
 
 type SubscriptionAdminResolver interface {
+	Enabled() bool
 	ResolveSubscriptionAdmin(identity *token.VerifiedIdentity, requestedSubscription string) (*subscription.AdminScope, error)
 	ResolveSubscriptionAdminScopes(identity *token.VerifiedIdentity) ([]*subscription.AdminScope, error)
 	CanonicalizeSubscription(requestedSubscription string) (string, error)
@@ -102,7 +103,7 @@ func NewHandler(
 		panic("adminChecker cannot be nil")
 	}
 	if adminResolver == nil {
-		panic("adminResolver cannot be nil")
+		adminResolver = subscription.DisabledSelector{}
 	}
 	return &Handler{
 		service:       service,
@@ -660,7 +661,8 @@ func (h *Handler) CreateAPIKey(c *gin.Context) {
 	)
 	if err != nil {
 		h.logger.Error("Failed to create API key", "error", err)
-		if errors.Is(err, ErrExpirationNotPositive) || errors.Is(err, ErrExpirationExceedsMax) || errors.Is(err, ErrInvalidGroupName) {
+		if errors.Is(err, ErrExpirationNotPositive) || errors.Is(err, ErrExpirationExceedsMax) || errors.Is(err, ErrInvalidGroupName) ||
+			errors.Is(err, ErrSubscriptionsDisabled) {
 			h.recordTokenMint(user.Tenant, "rejected")
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
@@ -726,6 +728,14 @@ func rejectAPIKeyManagement(c *gin.Context) bool {
 		return false
 	}
 	c.JSON(http.StatusForbidden, gin.H{"error": "API keys cannot manage API keys"})
+	return true
+}
+
+func (h *Handler) rejectSubscriptionWhenDisabled(c *gin.Context, requestedSubscription string) bool {
+	if requestedSubscription == "" || h.adminResolver.Enabled() {
+		return false
+	}
+	c.JSON(http.StatusBadRequest, gin.H{"error": ErrSubscriptionsDisabled.Error()})
 	return true
 }
 
@@ -929,6 +939,17 @@ func applySearchAPIKeysDefaults(req *SearchAPIKeysRequest) {
 	}
 }
 
+func extractRequestedSubscription(req *SearchAPIKeysRequest) string {
+	if req.Filters == nil || req.Filters.Subscription == nil {
+		return ""
+	}
+	requested := strings.TrimSpace(*req.Filters.Subscription)
+	if requested == "" {
+		req.Filters.Subscription = nil
+	}
+	return requested
+}
+
 func validateSearchAPIKeysRequest(c *gin.Context, req *SearchAPIKeysRequest) bool {
 	for _, status := range req.Filters.Status {
 		trimmed := strings.TrimSpace(status)
@@ -1029,12 +1050,9 @@ func (h *Handler) SearchAPIKeys(c *gin.Context) {
 	}
 
 	targetUsername := strings.TrimSpace(req.Filters.Username)
-	requestedSubscription := ""
-	if req.Filters.Subscription != nil {
-		requestedSubscription = strings.TrimSpace(*req.Filters.Subscription)
-		if requestedSubscription == "" {
-			req.Filters.Subscription = nil
-		}
+	requestedSubscription := extractRequestedSubscription(&req)
+	if h.rejectSubscriptionWhenDisabled(c, requestedSubscription) {
+		return
 	}
 
 	delegatedAdmin := false
@@ -1337,6 +1355,9 @@ func (h *Handler) BulkRevokeAPIKeys(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": "at least one of username or subscription is required",
 		})
+		return
+	}
+	if h.rejectSubscriptionWhenDisabled(c, req.Subscription) {
 		return
 	}
 
