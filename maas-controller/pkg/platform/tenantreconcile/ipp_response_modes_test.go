@@ -11,6 +11,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -397,4 +398,162 @@ func renderedPluginsConfigMap(processing string) *unstructured.Unstructured {
 		ippProcessingConfigKey:    processing,
 	}, "data")
 	return cm
+}
+
+const customRequestOnlyProcessingYAML = `apiVersion: llm-d.ai/v1alpha1
+kind: PayloadProcessorConfig
+plugins:
+- type: custom-only
+profiles:
+- name: default
+  plugins:
+    request:
+    - pluginRef: custom-only
+    response: []
+`
+
+const customResponseProcessingYAML = `apiVersion: llm-d.ai/v1alpha1
+kind: PayloadProcessorConfig
+plugins:
+- type: custom-only
+profiles:
+- name: default
+  plugins:
+    request:
+    - pluginRef: custom-only
+    response:
+    - pluginRef: custom-only
+`
+
+func TestRunPlatformRendersEnvoyFilterWhileMigrationBlocked(t *testing.T) {
+	const (
+		tenantName = "praxis-team"
+		appNs      = "ai-tenant-praxis-team"
+		gwNS       = "openshift-ingress"
+		gwName     = "praxis-gateway"
+	)
+	tests := []struct {
+		name         string
+		processing   string
+		wantHeader   string
+		wantBody     string
+		wantTrailers string
+	}{
+		{
+			name:         "customized profile without response plugins",
+			processing:   customRequestOnlyProcessingYAML,
+			wantHeader:   "SKIP",
+			wantBody:     "NONE",
+			wantTrailers: "SKIP",
+		},
+		{
+			name:         "customized profile with a response plugin",
+			processing:   customResponseProcessingYAML,
+			wantHeader:   "SEND",
+			wantBody:     "FULL_DUPLEX_STREAMED",
+			wantTrailers: "SEND",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			scheme := praxisTestScheme(t)
+			tenant := praxisTenantConfig(appNs, tenantName)
+			mcfg := &maasv1alpha1.Config{
+				ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName, UID: types.UID("cfg-uid")},
+			}
+			gateway := &gwapiv1.Gateway{ObjectMeta: metav1.ObjectMeta{Name: gwName, Namespace: gwNS}}
+			ippDeployment := unstructuredIPPObject(GVKDeployment, gwNS, PayloadProcessingDeploymentName(tenantName), nil)
+			setConfigControllerOwnerRef(ippDeployment, mcfg.UID)
+			pluginsCM := &corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{Name: PayloadProcessingPluginsConfigMapForTenant(tenantName), Namespace: gwNS},
+				Data: map[string]string{
+					ippPreProcessingConfigKey: defaultPreProcessingYAML,
+					ippProcessingConfigKey:    tt.processing,
+				},
+			}
+			var applied []appliedResource
+			cl := runPlatformTestClient(t, scheme, []client.Object{
+				mcfg, gateway, tenant, readyMaaSAPIDeployment(appNs, tenantName), ippDeployment, pluginsCM,
+			}, &applied)
+
+			result, err := RunPlatform(t.Context(), logr.Discard(), cl, scheme, tenant,
+				PlatformContext{GatewayRef: maasv1alpha1.TenantGatewayRef{Namespace: gwNS, Name: gwName}, SkipIPP: true, Source: "aitenant"},
+				platformOverlayManifestPath(t), appNs, "controller-ns", "https://kubernetes.default.svc", "opendatahub", mcfg)
+			require.NoError(t, err)
+			require.True(t, result.DeploymentPending)
+			require.Contains(t, result.Detail, AnnotationForcePayloadProcessingMigration, "migration should be blocked")
+
+			legacyNames := map[string]bool{
+				PayloadProcessingDeploymentName(tenantName):            true,
+				PayloadPreProcessingDeploymentName(tenantName):         true,
+				PayloadProcessingServiceName(tenantName):               true,
+				PayloadPreProcessingServiceName(tenantName):            true,
+				PayloadProcessingServiceAccountName(tenantName):        true,
+				PayloadProcessingPluginsConfigMapForTenant(tenantName): true,
+				PayloadProcessingNetworkPolicyName(tenantName):         true,
+				PayloadProcessingEnvoyFilterName(tenantName):           true,
+			}
+			var appliedLegacy []string
+			for _, res := range applied {
+				if res.namespace == gwNS && legacyNames[res.name] {
+					appliedLegacy = append(appliedLegacy, res.gvk.Kind+"/"+res.name)
+				}
+			}
+			assert.Equal(t, []string{"EnvoyFilter/" + PayloadProcessingEnvoyFilterName(tenantName)}, appliedLegacy,
+				"only the EnvoyFilter of the legacy IPP objects is applied while blocked")
+
+			ef := &unstructured.Unstructured{}
+			ef.SetGroupVersionKind(GVKEnvoyFilter)
+			require.NoError(t, cl.Get(t.Context(), types.NamespacedName{Namespace: gwNS, Name: PayloadProcessingEnvoyFilterName(tenantName)}, ef))
+			modes := extProcModesByFilter(t, ef)[ippFilterName]
+			require.NotEmpty(t, modes)
+			for _, mode := range modes {
+				assert.Equal(t, tt.wantHeader, mode["response_header_mode"])
+				assert.Equal(t, tt.wantBody, mode["response_body_mode"])
+				assert.Equal(t, tt.wantTrailers, mode["response_trailer_mode"])
+			}
+		})
+	}
+}
+
+func TestRunPlatformSteadyPraxisTenantLeavesIPPEnvoyFilter(t *testing.T) {
+	const (
+		tenantName = "praxis-team"
+		appNs      = "ai-tenant-praxis-team"
+		gwNS       = "openshift-ingress"
+		gwName     = "praxis-gateway"
+	)
+	scheme := praxisTestScheme(t)
+	tenant := praxisTenantConfig(appNs, tenantName)
+	tenant.Annotations[AnnotationPayloadProcessingStatus] = PayloadProcessingStatusCleanupComplete
+	mcfg := &maasv1alpha1.Config{
+		ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName, UID: types.UID("cfg-uid")},
+	}
+	gateway := &gwapiv1.Gateway{ObjectMeta: metav1.ObjectMeta{Name: gwName, Namespace: gwNS}}
+	pluginsName := PayloadProcessingPluginsConfigMapForTenant(tenantName)
+	efName := PayloadProcessingEnvoyFilterName(tenantName)
+	pluginsReads, efApplies := 0, 0
+	cl := newSSAFakeClientBuilder(scheme).
+		WithObjects(mcfg, gateway, tenant, readyMaaSAPIDeployment(appNs, tenantName)).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+				if key.Namespace == gwNS && key.Name == pluginsName {
+					pluginsReads++
+				}
+				return c.Get(ctx, key, obj, opts...)
+			},
+			Apply: func(ctx context.Context, c client.WithWatch, obj runtime.ApplyConfiguration, opts ...client.ApplyOption) error {
+				if u, ok := obj.(interface{ GetName() string }); ok && u.GetName() == efName {
+					efApplies++
+				}
+				return c.Apply(ctx, obj, opts...)
+			},
+		}).Build()
+
+	_, err := RunPlatform(t.Context(), logr.Discard(), cl, scheme, tenant,
+		PlatformContext{GatewayRef: maasv1alpha1.TenantGatewayRef{Namespace: gwNS, Name: gwName}, SkipIPP: true, Source: "aitenant"},
+		platformOverlayManifestPath(t), appNs, "controller-ns", "https://kubernetes.default.svc", "opendatahub", mcfg)
+	require.NoError(t, err)
+	assert.Zero(t, efApplies, "ai-gateway-controller owns the EnvoyFilter of a steady praxis tenant")
+	assert.Zero(t, pluginsReads, "a steady praxis tenant has no IPP plugins ConfigMap to read")
 }

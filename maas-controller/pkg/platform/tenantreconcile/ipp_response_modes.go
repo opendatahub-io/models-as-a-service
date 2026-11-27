@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -150,4 +151,75 @@ func disableIPPResponseProcessing(configPatches []any) error {
 		return errors.New("EnvoyFilter configPatches: no " + ippFilterName + " insert")
 	}
 	return nil
+}
+
+// resolvePayloadProcessingAnchors picks the filter the ipp patches anchor on: Kuadrant's
+// wasm auth filter when the gateway has it, the router otherwise.
+func resolvePayloadProcessingAnchors(
+	ctx context.Context,
+	log logr.Logger,
+	c client.Client,
+	gatewayRef maasv1alpha1.TenantGatewayRef,
+	params *PlatformParams,
+) error {
+	gateway := gatewayRef.Namespace + "/" + gatewayRef.Name
+	wasmPresent, warning, err := gatewayHasKuadrantWasmAuth(ctx, c, gatewayRef.Namespace, gatewayRef.Name)
+	if err != nil {
+		return fmt.Errorf("detect gateway kuadrant wasm: %w", err)
+	}
+	if warning != "" {
+		log.Info(warning, "gateway", gateway)
+		params.KuadrantDetectionWarning = warning
+	}
+	params.PayloadProcessingRouterExtProcFallback = !wasmPresent
+	if params.PayloadProcessingRouterExtProcFallback {
+		log.Info("Kuadrant WASM auth not found on gateway; enabling ext_proc router fallback patches", "gateway", gateway)
+	}
+	return nil
+}
+
+// renderedPayloadProcessingEnvoyFilter returns a copy of the rendered payload-processing
+// EnvoyFilter, or nil when the render has none.
+func renderedPayloadProcessingEnvoyFilter(rendered []unstructured.Unstructured) *unstructured.Unstructured {
+	for i := range rendered {
+		if rendered[i].GroupVersionKind() == GVKEnvoyFilter && rendered[i].GetName() == PayloadProcessingName {
+			return rendered[i].DeepCopy()
+		}
+	}
+	return nil
+}
+
+// renderEnvoyFilterWhileMigrationBlocked renders the payload-processing EnvoyFilter for a
+// praxis tenant whose IPP to praxis migration is blocked. ai-gateway-controller waits for the
+// IPP cleanup, so the legacy IPP keeps serving the tenant, and its EnvoyFilter gets the same
+// anchors and ipp response modes as an ipp tenant's. The other legacy IPP objects are left as
+// they are. Nothing applies the rendered plugins ConfigMap for this tenant, so the live one
+// decides the response modes.
+func renderEnvoyFilterWhileMigrationBlocked(
+	ctx context.Context,
+	log logr.Logger,
+	c client.Client,
+	reader client.Reader,
+	ef *unstructured.Unstructured,
+	params *PlatformParams,
+	gatewayRef maasv1alpha1.TenantGatewayRef,
+	cfgUID types.UID,
+) (*unstructured.Unstructured, error) {
+	ippParams := *params
+	ippParams.SkipIPP = false
+	if err := resolvePayloadProcessingAnchors(ctx, log, c, gatewayRef, &ippParams); err != nil {
+		return nil, err
+	}
+	off, reason, err := resolveIPPResponseOff(ctx, reader, nil, ippParams, cfgUID, true)
+	if err != nil {
+		return nil, fmt.Errorf("resolve ipp response processing: %w", err)
+	}
+	ippParams.IPPResponseOff = off
+	log.V(1).Info("Rendering the legacy payload-processing EnvoyFilter while migration is blocked",
+		"ippResponseOff", off, "reason", reason)
+	if err := patchResource(log, ef, ippParams); err != nil {
+		return nil, err
+	}
+	params.KuadrantDetectionWarning = ippParams.KuadrantDetectionWarning
+	return ef, nil
 }

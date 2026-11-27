@@ -129,18 +129,8 @@ func RunPlatformWithReader(
 	}
 
 	if !params.SkipIPP {
-		wasmPresent, warning, err := gatewayHasKuadrantWasmAuth(ctx, c, platformContext.GatewayRef.Namespace, platformContext.GatewayRef.Name)
-		if err != nil {
-			return nil, fmt.Errorf("detect gateway kuadrant wasm: %w", err)
-		}
-		if warning != "" {
-			log.Info(warning, "gateway", platformContext.GatewayRef.Namespace+"/"+platformContext.GatewayRef.Name)
-			params.KuadrantDetectionWarning = warning
-		}
-		params.PayloadProcessingRouterExtProcFallback = !wasmPresent
-		if params.PayloadProcessingRouterExtProcFallback {
-			log.Info("Kuadrant WASM auth not found on gateway; enabling ext_proc router fallback patches",
-				"gateway", platformContext.GatewayRef.Namespace+"/"+platformContext.GatewayRef.Name)
+		if err := resolvePayloadProcessingAnchors(ctx, log, c, platformContext.GatewayRef, &params); err != nil {
+			return nil, err
 		}
 	}
 
@@ -152,7 +142,11 @@ func RunPlatformWithReader(
 		return nil, fmt.Errorf("resolve maas-api egress preserve-on-upgrade: %w", err)
 	}
 
-	if !params.SkipIPP {
+	var legacyEnvoyFilter *unstructured.Unstructured
+	if params.SkipIPP {
+		// Kept for a blocked migration, where the legacy IPP still serves the tenant.
+		legacyEnvoyFilter = renderedPayloadProcessingEnvoyFilter(rendered)
+	} else {
 		off, reason, err := resolveIPPResponseOff(ctx, apiReader, rendered, params, configUID(mcfg), false)
 		if err != nil {
 			return nil, fmt.Errorf("resolve ipp response processing: %w", err)
@@ -189,6 +183,14 @@ func RunPlatformWithReader(
 			Warnings:                 params.Warnings,
 			KuadrantDetectionWarning: params.KuadrantDetectionWarning,
 		}, nil
+	}
+	if switchOutcome.blockedReason != "" && legacyEnvoyFilter != nil {
+		ef, err := renderEnvoyFilterWhileMigrationBlocked(ctx, log, c, apiReader, legacyEnvoyFilter, &params,
+			platformContext.GatewayRef, configUID(mcfg))
+		if err != nil {
+			return nil, err
+		}
+		resources = append(resources, *ef)
 	}
 
 	if err := ApplyRendered(ctx, c, scheme, tenant, appNs, mcfg, resources); err != nil {
