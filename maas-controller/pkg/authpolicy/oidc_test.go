@@ -69,11 +69,19 @@ func TestOIDCTokenBoundWhen(t *testing.T) {
 	}
 	for _, required := range []string{
 		`!request.headers.authorization.startsWith("Bearer sk-oai-")`,
-		`request.headers.authorization.matches("^Bearer [^.]+\\.[^.]+\\.[^.]+$")`,
+		ExternalJWTShape,
 		`has(auth.identity.iss)`,
 	} {
 		if !strings.Contains(predicate, required) {
 			t.Errorf("predicate %q does not contain %q", predicate, required)
 		}
+	}
+}
+
+// An uncapped split gives the same result as split(".", 4) and only costs more,
+// so no equivalence test sees it.
+func TestExternalJWTShapeCapsSplit(t *testing.T) {
+	if want := `split(".", 4)`; !strings.Contains(ExternalJWTShape, want) {
+		t.Errorf("ExternalJWTShape %q does not contain %q", ExternalJWTShape, want)
 	}
 }

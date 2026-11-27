@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -147,13 +148,15 @@ func TestGatewayAuthPolicySpec_AllCEL_RHCLCompatible(t *testing.T) {
 	}
 
 	cases := []struct {
-		name           string
-		oidc           *oidcConfig
-		xAPIKeyEnabled bool
-		tenantID       string
-		tenantName     string
-		gatewayNS      string
-		gatewayName    string
+		name                string
+		oidc                *oidcConfig
+		xAPIKeyEnabled      bool
+		tenantID            string
+		tenantName          string
+		gatewayNS           string
+		gatewayName         string
+		guardrails          []guardrailHeader
+		subscriptionHeaders []string
 	}{
 		{
 			name:           "default_gateway",
@@ -188,15 +191,44 @@ func TestGatewayAuthPolicySpec_AllCEL_RHCLCompatible(t *testing.T) {
 			gatewayNS:      "tenant-gw-ns",
 			gatewayName:    "tenant-gateway",
 		},
+		{
+			name:                "oidc_x_api_key_guardrails_subscription_headers",
+			oidc:                sampleOIDC,
+			xAPIKeyEnabled:      true,
+			tenantName:          "models-as-a-service",
+			gatewayNS:           "gateway-ns",
+			gatewayName:         "maas-default-gateway",
+			guardrails:          []guardrailHeader{{ID: "pii", Name: "x-aigateway-guardrail-pii"}},
+			subscriptionHeaders: []string{"x-grid-team"},
+		},
 	}
 
+	unusedRegex := slices.Clone(allowedCELRegex)
+	ran := 0
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			ran++
 			spec := r.buildGatewayAuthPolicySpec(
-				tc.oidc, tc.xAPIKeyEnabled, tc.tenantID, tc.tenantName, tc.gatewayNS, tc.gatewayName, nil,
+				tc.oidc, tc.xAPIKeyEnabled, tc.tenantID, tc.tenantName, tc.gatewayNS, tc.gatewayName, tc.guardrails,
 			)
+			if err := applySubscriptionHeaders(spec, tc.subscriptionHeaders); err != nil {
+				t.Fatalf("applySubscriptionHeaders: %v", err)
+			}
 			assertAllAuthPolicyCEL_RHCLCompatible(t, spec)
+			occurrences := collectAuthPolicyCEL("spec", spec)
+			assertOnlyAllowedRegexCEL(t, occurrences)
+			unusedRegex = slices.DeleteFunc(unusedRegex, func(allowed string) bool {
+				return slices.ContainsFunc(occurrences, func(occ authPolicyCELOccurrence) bool {
+					return strings.Contains(occ.Expr, allowed)
+				})
+			})
 		})
+	}
+	// A -run filter that skips cases leaves their entries unused.
+	if ran == len(cases) && !t.Failed() {
+		for _, allowed := range unusedRegex {
+			t.Errorf("no case uses allowedCELRegex entry %q, remove it", allowed)
+		}
 	}
 }
 

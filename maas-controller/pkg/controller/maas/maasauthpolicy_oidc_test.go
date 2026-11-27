@@ -29,6 +29,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
+	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/authpolicy"
 	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/platform/tenantreconcile"
 )
 
@@ -480,7 +481,7 @@ func TestBuildGatewayAuthPolicySpec_OIDCClientBound(t *testing.T) {
 	predicate, _ := whenMap["predicate"].(string)
 	assert.Contains(t, predicate, "has(auth.identity.iss)",
 		"when predicate must select external OIDC identities")
-	assert.Contains(t, predicate, `Bearer [^.]+\\.[^.]+\\.[^.]+`,
+	assert.Contains(t, predicate, authpolicy.ExternalJWTShape,
 		"when predicate should match only JWT-shaped Bearer tokens")
 }
 

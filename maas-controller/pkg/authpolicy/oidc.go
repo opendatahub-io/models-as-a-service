@@ -5,7 +5,17 @@ import (
 	"strconv"
 )
 
-const externalJWTShape = `request.headers.authorization.matches("^Bearer [^.]+\\.[^.]+\\.[^.]+$")`
+// ExternalJWTShape accepts exactly what ^Bearer [^.]+\.[^.]+\.[^.]+$ accepts:
+// "Bearer " has no dot, so three non-empty parts means two dots, no empty part
+// at either end and no "..". Authorino compiles a matches() pattern on every
+// evaluation, and the oidc-identities guard runs on every request that does
+// not carry an API key. split stops at four parts, so a header full of dots
+// costs no more than a JWT.
+const ExternalJWTShape = `(request.headers.authorization.startsWith("Bearer ") && ` +
+	`size(request.headers.authorization.split(".", 4)) == 3 && ` +
+	`!request.headers.authorization.startsWith("Bearer .") && ` +
+	`!request.headers.authorization.endsWith(".") && ` +
+	`!request.headers.authorization.contains(".."))`
 
 // OIDCTokenBoundWhen selects an externally authenticated JWT while leaving
 // OpenShift TokenReview and MaaS API-key identities on their existing paths.
@@ -17,7 +27,7 @@ const externalJWTShape = `request.headers.authorization.matches("^Bearer [^.]+\\
 func OIDCTokenBoundWhen(notAPIKeyPredicate string) []any {
 	return []any{
 		map[string]any{
-			"predicate": `"authorization" in request.headers && ` + notAPIKeyPredicate + ` && ` + externalJWTShape + ` && has(auth.identity.iss)`,
+			"predicate": `"authorization" in request.headers && ` + notAPIKeyPredicate + ` && ` + ExternalJWTShape + ` && has(auth.identity.iss)`,
 		},
 	}
 }

@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"github.com/google/cel-go/cel"
+
+	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/authpolicy"
 )
 
 const identityTestOrganizationID = "42c3e46f-2477-44d7-a85b-d3b43f6b31fa"
@@ -233,7 +235,7 @@ func TestVerifiedIdentityHeaderStrictContract(t *testing.T) {
 		`request.path.startsWith("/maas-api/v1/api-keys")`,
 		`request.path.startsWith("/v1/logs")`,
 		`request.path.startsWith("/maas-api/v1/logs")`,
-		`request.headers.authorization.matches("^Bearer [^.]+\\.[^.]+\\.[^.]+$")`,
+		authpolicy.ExternalJWTShape,
 		`has(auth.identity.iss)`,
 	} {
 		if !strings.Contains(predicate, required) {
