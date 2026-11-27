@@ -756,7 +756,7 @@ else
                     | awk '/^HTTP\//{b=""} {b=b $0 "\n"} END{printf "%s", b}' \
                     | grep -iE '^(server|www-authenticate|x-ext-auth-reason):' | sed 's/^/    /'
             fi
-            if [ "$SECONDS" -ge "$infer_deadline" ]; then
+            if [ $((SECONDS + infer_delay)) -ge "$infer_deadline" ]; then
                 break
             fi
             sleep "$infer_delay"
