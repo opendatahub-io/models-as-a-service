@@ -239,6 +239,7 @@ SKIP_DEPLOYMENT=true ./test/e2e/run-tests-quick.sh
 | `E2E_SUBSCRIPTION_TRLP_TIMEOUT` | `180` | Mirrored TRLP ready wait on tenant subscriptions |
 | `E2E_REQUIRE_TRLP_ENFORCED` | `false` | Gate TRLP waits on Kuadrant `Enforced=True`. Off because Limitador can leave it `False` long after the limit is programmed (known issue). |
 | `E2E_MODEL_BACKEND_READY_TIMEOUT` | `300` | LLMInferenceService backend ready (tenant model provisioning) |
+| `E2E_GATEWAY_PROGRAMMED_TIMEOUT` | `300` | `oc wait` for per-tenant Gateway `Programmed=True` (`multitenancy_helpers.wait_for_gateway_programmed`; Shepard ODH nightly uses `600` on shared pools) |
 | `E2E_USE_WORKER_TENANT` | `true` | When `true`, xdist workers bootstrap a dedicated AITenant for Bucket C pilots (`test_subscription.py` first). Set `false` to keep using `models-as-a-service`. |
 
 `@serial` and `@serial_exclusive` tests are excluded from pass 1; verify markers with `pytest -m serial tests/ --collect-only -q` and `pytest -m serial_exclusive tests/ --collect-only -q`.

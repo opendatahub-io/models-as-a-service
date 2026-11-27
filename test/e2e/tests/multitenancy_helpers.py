@@ -18,6 +18,8 @@ MULTITENANCY_PHASE_TIMEOUT = int(os.environ.get("E2E_MULTITENANCY_PHASE_TIMEOUT"
 # Parallel workers can create many simulators at once; 180s was flaking on
 # MinimumReplicasUnavailable under Konflux group-test load (see PR #1521 run).
 MODEL_BACKEND_READY_TIMEOUT = int(os.environ.get("E2E_MODEL_BACKEND_READY_TIMEOUT", "300"))
+# Per-tenant Gateway Programmed wait (oc wait); Shepard nightly sets 600 on shared pools.
+GATEWAY_PROGRAMMED_TIMEOUT = int(os.environ.get("E2E_GATEWAY_PROGRAMMED_TIMEOUT", "300"))
 
 from test_helper import (
     DEPLOYMENT_NAMESPACE,
@@ -800,8 +802,7 @@ def wait_for_gateway_programmed(
     gateway_name: str, *, timeout: int | None = None
 ) -> None:
     if timeout is None:
-        timeout = int(os.environ.get("E2E_GATEWAY_PROGRAMMED_TIMEOUT", "300"))
-    # Default 300s locally; nightly shared pools often set 600 via Shepard CI.
+        timeout = GATEWAY_PROGRAMMED_TIMEOUT
     result = _oc_run(
         [
             "wait",
