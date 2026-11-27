@@ -37,7 +37,7 @@ func TestCleanupLegacyMaaSAPIPodMonitor(t *testing.T) {
 		}
 		pm.SetManagedFields([]metav1.ManagedFieldsEntry{{
 			Manager: manager, Operation: metav1.ManagedFieldsOperationApply, APIVersion: GVKPodMonitor.GroupVersion().String(),
-			FieldsType: "FieldsV1", FieldsV1: &metav1.FieldsV1{Raw: []byte(`{"f:spec":{}}`)},
+			FieldsType: "FieldsV1", FieldsV1: metav1.NewFieldsV1(`{"f:spec":{}}`),
 		}})
 		return pm
 	}
