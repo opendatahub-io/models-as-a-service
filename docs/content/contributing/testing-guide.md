@@ -56,6 +56,7 @@ Tests are organized into **xdist groups** for parallel execution. All tests in a
 | `api_keys_sub_endpoints` | `test_subscription_list_endpoints.py` | Subscription listing endpoints (`worker_tenant`) |
 | `api_xkey` | `test_x_api_key_auth.py` | X-API-Key header authentication |
 | `api_embedding` | `test_embedding_inference.py` | Embedding inference (`worker_tenant`) |
+| `api_json_bbr` | `test_json_bbr_authz.py`, `test_rerank_inference.py` | JSON BBR authZ on `/v1/*` JSON endpoints (`serial`) |
 | `models_endpoint` | `test_models_endpoint.py` | `/v1/models` subscription-aware filtering (`worker_tenant`) |
 | `models_gw_authpolicy` | `test_gateway_scoped_authpolicy.py` | Gateway AuthPolicy structure and enforcement (`worker_tenant`) |
 | `models_identity` | `test_model_identity_conflict.py` | MaaSModelRef model-identity collision (`worker_tenant`) |
@@ -77,7 +78,9 @@ Tests are organized into **xdist groups** for parallel execution. All tests in a
 | `tenant_auto_resolve` | `test_tenant_auto_resolve.py` | MaaSModelRef tenant auto-resolution from gateway parentRef |
 | `inference_priority` | `test_inference_priority.py` | Subscription `inferencePriority` / InferenceObjective (`serial`) |
 | `echo_io` | `test_echo_large_io.py` | Large payload echo (`serial`) |
+| `large_io` | `test_large_io.py` | Large payload streaming inference (~3.2MB prompt / ~145MB SSE, gated by `E2E_LARGE_IO=1`); validates WASM/ext_proc/Envoy buffer limits and progressive SSE delivery on the streaming path (`serial`) |
 | `external` | `test_external_oidc.py`, `test_external_model_routing.py`, Grid governance modules | Externally gated OIDC/routing/admin tests |
+
 
 Each test file declares exactly one `xdist_group` (see module-level `pytestmark`). Pass 1 runs parallel groups; `@serial_exclusive` runs alone in pass 2a; `@serial` and `@legacy_ipp_pass2b` run in pass 2b. Opt-in `@legacy_ipp` suites are excluded from default CI passes.
 
@@ -196,6 +199,9 @@ The E2E framework auto-discovers most values from the cluster. These are the mos
 | `E2E_PARALLEL_WORKERS` | pytest-xdist worker count for pass 1 (default `5`). Set to `1` for single-worker pass 1 without xdist; the serial passes are unaffected. |
 | `E2E_SERIAL_WORKERS` | pytest-xdist lane count for serial pass 2b (default `1` everywhere, including CI). Lanes above 1 are implemented and were measured at 2 and 3 lanes, but they are **not enabled by default**: pass-2b files share the stored auth state of common models even across different `xdist_group`s, so concurrent lanes race (measured failure: `test_models_endpoint::test_empty_model_list`). Pass 2a is always one worker. |
 | `LLMISVC_CONTROLLER_CPU_REQUEST` / `LLMISVC_CONTROLLER_CPU_LIMIT` | CPU that `deploy-platform.sh` gives `llmisvc-controller-manager` on the test cluster (defaults `1` / `2`; shipped is 100m). Set the limit empty to keep the shipped resources. |
+| `E2E_LARGE_IO` | Set `1` or `true` to enable large payload I/O tests. Opt-in because: (1) each request sends and echoes ~3.2MB, making the suite slow (~3 min) and bandwidth-heavy; (2) the `echo-simulator-large-io` fixture requires a 1Gi memory limit which is expensive on shared clusters; (3) these tests validate a specific buffer-limit concern (WASM/ext_proc/Envoy truncation) rather than general model serving correctness, so they are not needed on every PR. Intended for nightly or extended runs. |
+| `E2E_LARGE_IO_TIMEOUT` | Request timeout in seconds for large I/O tests (default `300`) |
+| `E2E_LARGE_IO_WORDS` | Prompt size in words for large I/O tests (default `600000`, ~3.2MB) |
 
 See `test/e2e/tests/conftest.py` and individual test module docstrings for the full set of supported variables.
 

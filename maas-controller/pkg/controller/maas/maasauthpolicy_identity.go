@@ -21,14 +21,23 @@ request.path.startsWith("/v1/subscriptions/") ||
 	request.path.startsWith("/maas-api/v1/api-keys") ||
 	request.path.startsWith("/maas-api/v1/logs")`
 
+// verifiedIdentityRequiredClaims gates the identity header on the claims maas-api
+// requires in the envelope. maas-api rejects an envelope without them but treats a
+// missing header as a legacy request, which is what such tokens got before, when the
+// claims expression failed. Skipping the header also stops that failure from
+// cancelling the other priority-0 response headers.
+const verifiedIdentityRequiredClaims = `has(auth.identity.sub) && has(auth.identity.aud)`
+
 // verifiedIdentityClaims lists the claims carried in the trusted identity
 // envelope, in the order they appear in the generated CEL map.
 var verifiedIdentityClaims = []struct {
 	name       string
 	expression string
 }{
-	// Required provenance and token-binding claims. The authorization rules
-	// enforce their configured values before this success response can execute.
+	// Required provenance and token-binding claims. oidc-client-bound enforces
+	// iss and azp before this success response can execute. It checks aud only
+	// when an audience is configured and never checks sub, so
+	// verifiedIdentityRequiredClaims skips the header without them.
 	{name: "iss", expression: "auth.identity.iss"},
 	{name: "sub", expression: "auth.identity.sub"},
 	{name: "aud", expression: "auth.identity.aud"},
@@ -76,7 +85,8 @@ func verifiedIdentityClaimsExpression() string {
 func verifiedIdentityHeader(oidc *oidcConfig, notAPIKeyPredicate string) map[string]any {
 	predicate := "false"
 	if verifiedIdentityContractConfigured(oidc) {
-		predicate = "(" + managementIdentityRoutePredicate + ") && (" + externalOIDCPredicate(notAPIKeyPredicate) + ")"
+		predicate = "(" + managementIdentityRoutePredicate + ") && (" + externalOIDCPredicate(notAPIKeyPredicate) + ") && " +
+			verifiedIdentityRequiredClaims
 	}
 
 	return map[string]any{

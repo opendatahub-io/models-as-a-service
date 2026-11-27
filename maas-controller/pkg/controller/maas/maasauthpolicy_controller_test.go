@@ -19,6 +19,7 @@ package maas
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -40,6 +41,7 @@ import (
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
+	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/authpolicy"
 	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/platform/tenantreconcile"
 )
 
@@ -944,7 +946,7 @@ func TestMaaSAuthPolicyReconciler_MultiplePoliciesDeletion(t *testing.T) {
 	}
 }
 
-func TestMaaSAuthPolicyReconciler_EnsureBaseGatewayAuthPolicyDoesNotResolveGuardrails(t *testing.T) {
+func TestMaaSAuthPolicyReconciler_EnsureGatewayAuthPolicyDoesNotResolveGuardrails(t *testing.T) {
 	const (
 		gatewayNamespace = "openshift-ingress"
 		gatewayName      = "maas-default-gateway"
@@ -977,10 +979,10 @@ func TestMaaSAuthPolicyReconciler_EnsureBaseGatewayAuthPolicyDoesNotResolveGuard
 	if _, err := r.reconcileGatewayAuthPolicy(context.Background(), logr.Discard(), nil, false, tenantNamespace, "", gatewayNamespace, gatewayName); err == nil {
 		t.Fatal("reconcileGatewayAuthPolicy() error = nil, want guardrail resolution failure")
 	}
-	if err := r.ensureBaseGatewayAuthPolicy(
+	if err := r.ensureGatewayAuthPolicy(
 		context.Background(), logr.Discard(), nil, false, tenantNamespace, "", gatewayNamespace, gatewayName,
 	); err != nil {
-		t.Fatalf("ensureBaseGatewayAuthPolicy() error = %v", err)
+		t.Fatalf("ensureGatewayAuthPolicy() error = %v", err)
 	}
 
 	policy := &unstructured.Unstructured{}
@@ -998,6 +1000,266 @@ func TestMaaSAuthPolicyReconciler_EnsureBaseGatewayAuthPolicyDoesNotResolveGuard
 		if strings.HasPrefix(strings.ToLower(name), "x-aigateway-guardrail-") {
 			t.Fatalf("base gateway AuthPolicy must not include guardrail response header %q", name)
 		}
+	}
+}
+
+// TestMaaSAuthPolicyReconciler_EnsureGatewayAuthPolicyUpdatesExistingPolicy covers the
+// RHAI-27142 regression: the tenant reconcile path must diff-and-update an existing
+// gateway AuthPolicy when the resolved OIDC config changes, without requiring a
+// MaaSAuthPolicy CR to exist. The AITenant-managed label is intentionally absent so
+// guardrail resolution stays on the legacy (no headers, no error) path.
+func TestMaaSAuthPolicyReconciler_EnsureGatewayAuthPolicyUpdatesExistingPolicy(t *testing.T) {
+	const (
+		gatewayNamespace = "openshift-ingress"
+		gatewayName      = "maas-default-gateway"
+		tenantNamespace  = "legacy-tenant"
+	)
+
+	tenantConfig := &maasv1alpha1.MaasTenantConfig{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      maasv1alpha1.MaasTenantConfigInstanceName,
+			Namespace: tenantNamespace,
+		},
+	}
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(testRESTMapper()).
+		WithObjects(tenantConfig).
+		Build()
+	r := &MaaSAuthPolicyReconciler{
+		Client:           c,
+		Scheme:           scheme,
+		GatewayNamespace: gatewayNamespace,
+		GatewayName:      gatewayName,
+	}
+
+	issuerA := &oidcConfig{IssuerURL: "https://issuer-a.example.com/realms/e2e", TTL: 300}
+	issuerB := &oidcConfig{IssuerURL: "https://issuer-b.example.com/realms/e2e", TTL: 300}
+
+	// Bootstrap with the first issuer.
+	if err := r.ensureGatewayAuthPolicy(
+		context.Background(), logr.Discard(), issuerA, false, tenantNamespace, "", gatewayNamespace, gatewayName,
+	); err != nil {
+		t.Fatalf("ensureGatewayAuthPolicy() bootstrap error = %v", err)
+	}
+
+	getPolicy := func() *unstructured.Unstructured {
+		t.Helper()
+		policy := &unstructured.Unstructured{}
+		policy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
+		if err := c.Get(context.Background(), types.NamespacedName{Name: maasGatewayAuthPolicyName, Namespace: gatewayNamespace}, policy); err != nil {
+			t.Fatalf("Get gateway AuthPolicy: %v", err)
+		}
+		return policy
+	}
+	issuerOf := func(policy *unstructured.Unstructured) string {
+		t.Helper()
+		jwt := nestedMapRequired(t, policy, "spec", "defaults", "rules", "authentication", "oidc-identities", "jwt")
+		issuer, _ := jwt["issuerUrl"].(string)
+		return issuer
+	}
+
+	if got := issuerOf(getPolicy()); got != issuerA.IssuerURL {
+		t.Fatalf("after bootstrap issuerUrl = %q, want %q", got, issuerA.IssuerURL)
+	}
+
+	// OIDC config changed on the tenant: ensure must update the existing policy.
+	if err := r.ensureGatewayAuthPolicy(
+		context.Background(), logr.Discard(), issuerB, false, tenantNamespace, "", gatewayNamespace, gatewayName,
+	); err != nil {
+		t.Fatalf("ensureGatewayAuthPolicy() update error = %v", err)
+	}
+	updated := getPolicy()
+	if got := issuerOf(updated); got != issuerB.IssuerURL {
+		t.Fatalf("after update issuerUrl = %q, want %q", got, issuerB.IssuerURL)
+	}
+
+	// Re-ensuring the same config must not issue a spurious update.
+	version := updated.GetResourceVersion()
+	if err := r.ensureGatewayAuthPolicy(
+		context.Background(), logr.Discard(), issuerB, false, tenantNamespace, "", gatewayNamespace, gatewayName,
+	); err != nil {
+		t.Fatalf("ensureGatewayAuthPolicy() no-op error = %v", err)
+	}
+	if got := getPolicy(); got.GetResourceVersion() != version {
+		t.Fatalf("unchanged OIDC config must not update the gateway AuthPolicy (resourceVersion %q -> %q)", version, got.GetResourceVersion())
+	}
+}
+
+// TestMaaSAuthPolicyReconciler_EnsureGatewayAuthPolicyFailsClosedOnUnresolvableGuardrails
+// guards the update half of the ensure: when the gateway AuthPolicy already carries a
+// guardrail catalog but guardrail resolution fails closed, the ensure must return an
+// error (so the caller requeues) instead of updating with partial inputs and stripping
+// the catalog. Bootstrap without an existing policy is covered by
+// TestMaaSAuthPolicyReconciler_EnsureGatewayAuthPolicyDoesNotResolveGuardrails.
+func TestMaaSAuthPolicyReconciler_EnsureGatewayAuthPolicyFailsClosedOnUnresolvableGuardrails(t *testing.T) {
+	const (
+		gatewayNamespace = "openshift-ingress"
+		gatewayName      = "maas-default-gateway"
+		tenantNamespace  = "tenant-without-aitenant"
+	)
+
+	// A tenant config with the AITenant-managed label but no resolvable owning
+	// AITenant makes guardrail resolution fail closed.
+	tenantConfig := &maasv1alpha1.MaasTenantConfig{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      maasv1alpha1.MaasTenantConfigInstanceName,
+			Namespace: tenantNamespace,
+			Labels: map[string]string{
+				tenantreconcile.LabelManagedByAITenant: "true",
+			},
+		},
+	}
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(testRESTMapper()).
+		WithObjects(tenantConfig).
+		Build()
+	r := &MaaSAuthPolicyReconciler{
+		Client:           c,
+		Scheme:           scheme,
+		GatewayNamespace: gatewayNamespace,
+		GatewayName:      gatewayName,
+	}
+
+	// Seed an existing managed policy that carries a guardrail catalog.
+	if _, err := r.reconcileGatewayAuthPolicyWithHeaders(
+		context.Background(), logr.Discard(), nil, false, tenantNamespace, "", gatewayNamespace, gatewayName,
+		[]guardrailHeader{{ID: "check-a", Name: "x-aigateway-guardrail-check-a"}},
+	); err != nil {
+		t.Fatalf("seed gateway AuthPolicy with guardrail catalog: %v", err)
+	}
+
+	oidc := &oidcConfig{IssuerURL: "https://issuer.example.com/realms/e2e", TTL: 300}
+	if err := r.ensureGatewayAuthPolicy(
+		context.Background(), logr.Discard(), oidc, false, tenantNamespace, "", gatewayNamespace, gatewayName,
+	); err == nil {
+		t.Fatal("ensureGatewayAuthPolicy() error = nil, want guardrail resolution failure")
+	}
+
+	// The failed ensure must leave the existing policy untouched: catalog intact,
+	// no OIDC identities written.
+	policy := &unstructured.Unstructured{}
+	policy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
+	if err := c.Get(context.Background(), types.NamespacedName{Name: maasGatewayAuthPolicyName, Namespace: gatewayNamespace}, policy); err != nil {
+		t.Fatalf("Get gateway AuthPolicy: %v", err)
+	}
+	authorizationRules := nestedMapRequired(t, policy, "spec", "defaults", "rules", "authorization")
+	if _, exists := authorizationRules["guardrail-checks-known"]; !exists {
+		t.Fatal("failed ensure must not strip the guardrail catalog validation rule")
+	}
+	successHeaders := nestedMapRequired(t, policy, "spec", "defaults", "rules", "response", "success", "headers")
+	if _, exists := successHeaders["x-aigateway-guardrail-check-a"]; !exists {
+		t.Fatal("failed ensure must not strip the guardrail response header")
+	}
+	authenticationRules := nestedMapRequired(t, policy, "spec", "defaults", "rules", "authentication")
+	if _, exists := authenticationRules["oidc-identities"]; exists {
+		t.Fatal("failed ensure must not write OIDC identities with partial inputs")
+	}
+}
+
+// TestMaaSAuthPolicyReconciler_EnsureGatewayAuthPolicyDefersLegacyCutover pins the
+// upgrade gate mirrored from the MaaSAuthPolicy reconcile path: while a legacy
+// route-level model AuthPolicy is the working auth path and the replacement
+// maas-api Service has no ready endpoint, the tenant-driven ensure must defer the
+// gateway AuthPolicy update instead of rewriting gateway-wide callbacks.
+func TestMaaSAuthPolicyReconciler_EnsureGatewayAuthPolicyDefersLegacyCutover(t *testing.T) {
+	const (
+		gatewayNamespace = "openshift-ingress"
+		gatewayName      = "maas-default-gateway"
+		tenantNamespace  = "legacy-tenant"
+		modelNamespace   = "legacy-models"
+		modelName        = "legacy-model"
+		infraNamespace   = "opendatahub"
+	)
+
+	tenantConfig := &maasv1alpha1.MaasTenantConfig{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      maasv1alpha1.MaasTenantConfigInstanceName,
+			Namespace: tenantNamespace,
+		},
+	}
+	maasPolicy := &maasv1alpha1.MaaSAuthPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "legacy-policy", Namespace: tenantNamespace},
+		Spec: maasv1alpha1.MaaSAuthPolicySpec{
+			ModelRefs: []maasv1alpha1.ModelRef{{Name: modelName, Namespace: modelNamespace}},
+			Subjects:  maasv1alpha1.SubjectSpec{Groups: []maasv1alpha1.GroupReference{{Name: "system:authenticated"}}},
+		},
+	}
+	legacyModelPolicy := &unstructured.Unstructured{}
+	legacyModelPolicy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
+	legacyModelPolicy.SetName(fmt.Sprintf("maas-auth-%s", modelName))
+	legacyModelPolicy.SetNamespace(modelNamespace)
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(testRESTMapper()).
+		WithObjects(tenantConfig, maasPolicy, legacyModelPolicy).
+		Build()
+	r := &MaaSAuthPolicyReconciler{
+		Client:           c,
+		Scheme:           scheme,
+		InfraNamespace:   infraNamespace,
+		GatewayNamespace: gatewayNamespace,
+		GatewayName:      gatewayName,
+	}
+
+	issuerA := &oidcConfig{IssuerURL: "https://issuer-a.example.com/realms/e2e", TTL: 300}
+	issuerB := &oidcConfig{IssuerURL: "https://issuer-b.example.com/realms/e2e", TTL: 300}
+
+	if err := r.ensureGatewayAuthPolicy(
+		context.Background(), logr.Discard(), issuerA, false, tenantNamespace, "", gatewayNamespace, gatewayName,
+	); err != nil {
+		t.Fatalf("ensureGatewayAuthPolicy() bootstrap error = %v", err)
+	}
+
+	getIssuer := func() string {
+		t.Helper()
+		policy := &unstructured.Unstructured{}
+		policy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
+		if err := c.Get(context.Background(), types.NamespacedName{Name: maasGatewayAuthPolicyName, Namespace: gatewayNamespace}, policy); err != nil {
+			t.Fatalf("Get gateway AuthPolicy: %v", err)
+		}
+		jwt := nestedMapRequired(t, policy, "spec", "defaults", "rules", "authentication", "oidc-identities", "jwt")
+		issuer, _ := jwt["issuerUrl"].(string)
+		return issuer
+	}
+
+	// The legacy model AuthPolicy exists and maas-api has no ready endpoint: the
+	// OIDC update must be deferred with an error so the caller requeues.
+	err := r.ensureGatewayAuthPolicy(
+		context.Background(), logr.Discard(), issuerB, false, tenantNamespace, "", gatewayNamespace, gatewayName,
+	)
+	if err == nil || !strings.Contains(err.Error(), "deferring gateway AuthPolicy update") {
+		t.Fatalf("ensureGatewayAuthPolicy() error = %v, want legacy cutover deferral", err)
+	}
+	if got := getIssuer(); got != issuerA.IssuerURL {
+		t.Fatalf("deferred update changed issuerUrl to %q, want %q", got, issuerA.IssuerURL)
+	}
+
+	// Once the target maas-api Service has a ready endpoint the update proceeds.
+	ready := true
+	tlsPort := int32(8443)
+	endpointSlice := &discv1.EndpointSlice{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "maas-api-ready",
+			Namespace: infraNamespace,
+			Labels:    map[string]string{discv1.LabelServiceName: "maas-api"},
+		},
+		AddressType: discv1.AddressTypeIPv4,
+		Ports:       []discv1.EndpointPort{{Port: &tlsPort}},
+		Endpoints:   []discv1.Endpoint{{Conditions: discv1.EndpointConditions{Ready: &ready}}},
+	}
+	if err := c.Create(context.Background(), endpointSlice); err != nil {
+		t.Fatalf("Create ready EndpointSlice: %v", err)
+	}
+	if err := r.ensureGatewayAuthPolicy(
+		context.Background(), logr.Discard(), issuerB, false, tenantNamespace, "", gatewayNamespace, gatewayName,
+	); err != nil {
+		t.Fatalf("ensureGatewayAuthPolicy() post-cutover error = %v", err)
+	}
+	if got := getIssuer(); got != issuerB.IssuerURL {
+		t.Fatalf("after cutover issuerUrl = %q, want %q", got, issuerB.IssuerURL)
 	}
 }
 
@@ -2229,6 +2491,11 @@ func TestBuildGatewayAuthPolicySpec_OIDCAuth(t *testing.T) {
 	issuer := nestedStringRequired(t, obj, "spec", "defaults", "rules", "authentication", "oidc-identities", "jwt", "issuerUrl")
 	if issuer != oidc.IssuerURL {
 		t.Errorf("oidc issuerUrl = %v, want %v", issuer, oidc.IssuerURL)
+	}
+	_, isNotAPIKey, _ := apiKeyCELPredicates(false)
+	identityWhen := nestedWhenPredicateRequired(t, obj, "spec", "defaults", "rules", "authentication", "oidc-identities", "when")
+	if want := `"authorization" in request.headers && ` + isNotAPIKey + ` && ` + authpolicy.ExternalJWTShape; identityWhen != want {
+		t.Errorf("oidc-identities when predicate = %q, want %q", identityWhen, want)
 	}
 	rego := nestedStringRequired(t, obj, "spec", "defaults", "rules", "authorization", "oidc-groups-safe", "opa", "rego")
 	if !contains(rego, safeGroupNamePattern) || !contains(rego, "unsafe_group") {
