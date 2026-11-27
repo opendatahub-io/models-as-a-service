@@ -41,6 +41,7 @@ import (
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
+	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/authpolicy"
 	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/platform/tenantreconcile"
 )
 
@@ -2490,6 +2491,11 @@ func TestBuildGatewayAuthPolicySpec_OIDCAuth(t *testing.T) {
 	issuer := nestedStringRequired(t, obj, "spec", "defaults", "rules", "authentication", "oidc-identities", "jwt", "issuerUrl")
 	if issuer != oidc.IssuerURL {
 		t.Errorf("oidc issuerUrl = %v, want %v", issuer, oidc.IssuerURL)
+	}
+	_, isNotAPIKey, _ := apiKeyCELPredicates(false)
+	identityWhen := nestedWhenPredicateRequired(t, obj, "spec", "defaults", "rules", "authentication", "oidc-identities", "when")
+	if want := `"authorization" in request.headers && ` + isNotAPIKey + ` && ` + authpolicy.ExternalJWTShape; identityWhen != want {
+		t.Errorf("oidc-identities when predicate = %q, want %q", identityWhen, want)
 	}
 	rego := nestedStringRequired(t, obj, "spec", "defaults", "rules", "authorization", "oidc-groups-safe", "opa", "rego")
 	if !contains(rego, safeGroupNamePattern) || !contains(rego, "unsafe_group") {

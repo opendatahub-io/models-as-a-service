@@ -416,16 +416,25 @@ const (
 	celCanonicalOrganizationID        = `^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`
 	celCanonicalOrganizationIDPattern = celCanonicalOrganizationID + `$`
 	celOrganizationQualifiedGroup     = celCanonicalOrganizationID + `/`
-	celOIDCOrganizationIDSafe         = `type(auth.identity["org_id"]) == string && ` +
+	// celIsOrganizationQualifiedGroup tests a string group g against
+	// celOrganizationQualifiedGroup. Authorino compiles a matches() pattern on
+	// every evaluation, and this one is the costliest per group. A '/' at code
+	// point 36 is necessary for the pattern to match, so the guard skips the
+	// regex for nearly every group without changing the result. A list or map
+	// g with more than 36 entries still errors, so every use must follow a
+	// type(g) == string check.
+	celIsOrganizationQualifiedGroup = `(size(g) > 36 && g.charAt(36) == "/" && ` +
+		`g.matches('` + celOrganizationQualifiedGroup + `'))`
+	celOIDCOrganizationIDSafe = `type(auth.identity["org_id"]) == string && ` +
 		`auth.identity["org_id"].matches('` + celCanonicalOrganizationIDPattern + `')`
 	celOIDCLegacyGroupsSafe = celOIDCGroupsSafe + ` && ` +
-		`auth.identity.groups.all(g, !g.matches('` + celOrganizationQualifiedGroup + `'))`
+		`auth.identity.groups.all(g, !` + celIsOrganizationQualifiedGroup + `)`
 	celTokenReviewGroupsSafe = `auth.identity.user.groups.all(g, ` +
 		`type(g) == string && g.matches('` + safeGroupNamePattern + `') && ` +
-		`!g.matches('` + celOrganizationQualifiedGroup + `'))`
+		`!` + celIsOrganizationQualifiedGroup + `)`
 	celOIDCFlatGroupsSafe = `size(auth.identity.groups) <= 128 && auth.identity.groups.all(g, ` +
 		`type(g) == string && g.matches('` + safeGroupNamePattern + `') && ` +
-		`!g.matches('` + celOrganizationQualifiedGroup + `'))`
+		`!` + celIsOrganizationQualifiedGroup + `)`
 	celIdentityOrganizationID = `(has(auth.metadata) && has(auth.metadata.apiKeyValidation)) ? "" : ` +
 		`("org_id" in auth.identity && ` + celOIDCOrganizationIDSafe + ` ? auth.identity["org_id"] : "")`
 
@@ -956,8 +965,7 @@ func (r *MaaSAuthPolicyReconciler) buildGatewayAuthPolicySpec(oidc *oidcConfig, 
 				// celIsNotAPIKey when x-api-key is off. Authorino skips the method on an
 				// error as on false, so the guard only removes the error.
 				map[string]any{
-					"predicate": `"authorization" in request.headers && ` + celIsNotAPIKey +
-						` && request.headers.authorization.matches("^Bearer [^.]+\\.[^.]+\\.[^.]+$")`,
+					"predicate": `"authorization" in request.headers && ` + celIsNotAPIKey + ` && ` + authpolicy.ExternalJWTShape,
 				},
 			},
 			"metrics":  false,
@@ -2295,13 +2303,13 @@ func (r *MaaSAuthPolicyReconciler) discoverXAPIKeyNeeded(ctx context.Context, lo
 // keys from the x-api-key header (Anthropic SDK format).
 func apiKeyCELPredicates(xAPIKeyEnabled bool) (isAPIKey, isNotAPIKey, extractRawKey string) {
 	if !xAPIKeyEnabled {
-		return `request.headers.authorization.matches("^Bearer sk-oai-.*")`,
+		return `request.headers.authorization.startsWith("Bearer sk-oai-")`,
 			`!request.headers.authorization.startsWith("Bearer sk-oai-")`,
 			`request.headers.authorization.replace("Bearer ", "")`
 	}
-	authorizationAPIKey := `("authorization" in request.headers && request.headers["authorization"].matches("^Bearer sk-oai-.*"))`
-	//nolint:gosec // sk-oai- is a CEL pattern for API key format validation, not a credential
-	xAPIKey := `("x-api-key" in request.headers && request.headers["x-api-key"].matches("^sk-oai-.*"))`
+	authorizationAPIKey := `("authorization" in request.headers && request.headers["authorization"].startsWith("Bearer sk-oai-"))`
+	//nolint:gosec // sk-oai- is the API key prefix, not a credential
+	xAPIKey := `("x-api-key" in request.headers && request.headers["x-api-key"].startsWith("sk-oai-"))`
 	isAPIKey = authorizationAPIKey + ` || ` + xAPIKey
 	isNotAPIKey = `!(` + isAPIKey + `)`
 	extractRawKey = `(` +
