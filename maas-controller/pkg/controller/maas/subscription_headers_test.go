@@ -2,6 +2,7 @@ package maas
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -112,52 +113,37 @@ func TestParseSubscriptionHeaders_RejectsInvalidConfiguration(t *testing.T) {
 	}
 }
 
-func TestApplySubscriptionHeaders_DerivesRequestDenyPredicate(t *testing.T) {
+// applySubscriptionHeaders replaces the deny pattern rather than adding one, so the rule stays
+// a single pattern. TestGatewayAuthPolicyDeniesClientIdentityHeaders covers what it allows.
+func TestApplySubscriptionHeaders_KeepsOneDenyPattern(t *testing.T) {
 	reconciler := &MaaSAuthPolicyReconciler{InfraNamespace: "maas-system"}
 	spec := reconciler.buildGatewayAuthPolicySpec(nil, false, "", "models-as-a-service", "gateway-ns", "gateway", nil)
 
-	if err := applySubscriptionHeaders(spec, []string{"x-grid-geo-fencing"}); err != nil {
-		t.Fatalf("applySubscriptionHeaders() error = %v", err)
-	}
-
-	patterns, found, err := unstructured.NestedSlice(
-		spec, "defaults", "rules", "authorization", "deny-client-identity-headers", "patternMatching", "patterns",
-	)
-	if err != nil || !found {
-		t.Fatalf("identity deny patterns: found=%v err=%v", found, err)
-	}
-	want := `request.headers.all(name, !name.startsWith("x-grid-") || name in ["x-grid-geo-fencing"])`
-	foundPredicate := false
-	for _, pattern := range patterns {
-		patternMap, ok := pattern.(map[string]any)
-		if ok && patternMap["predicate"] == want {
-			foundPredicate = true
+	for _, names := range [][]string{{"x-grid-geo-fencing"}, nil, {"x-grid-a", "x-grid-b"}} {
+		if err := applySubscriptionHeaders(spec, names); err != nil {
+			t.Fatalf("applySubscriptionHeaders(%v) error = %v", names, err)
+		}
+		patterns, found, err := unstructured.NestedSlice(
+			spec, "defaults", "rules", "authorization", "deny-client-identity-headers", "patternMatching", "patterns",
+		)
+		if err != nil || !found {
+			t.Fatalf("identity deny patterns: found=%v err=%v", found, err)
+		}
+		want := []any{map[string]any{"predicate": clientIdentityHeadersDenyPredicate(names)}}
+		if !reflect.DeepEqual(patterns, want) {
+			t.Fatalf("after applySubscriptionHeaders(%v) patterns = %#v, want %#v", names, patterns, want)
 		}
 	}
-	if !foundPredicate {
-		t.Fatalf("identity deny patterns = %#v, want predicate %q", patterns, want)
-	}
 
-	spec = reconciler.buildGatewayAuthPolicySpec(nil, false, "", "models-as-a-service", "gateway-ns", "gateway", nil)
-	if err := applySubscriptionHeaders(spec, nil); err != nil {
-		t.Fatalf("applySubscriptionHeaders() without names error = %v", err)
+	// A second pattern from the builder would be dropped by the rebuild, so it is an error.
+	if err := unstructured.SetNestedSlice(spec, []any{
+		map[string]any{"predicate": clientIdentityHeadersDenyPredicate(nil)},
+		map[string]any{"predicate": "true"},
+	}, "defaults", "rules", "authorization", "deny-client-identity-headers", "patternMatching", "patterns"); err != nil {
+		t.Fatalf("set two patterns: %v", err)
 	}
-	patterns, found, err = unstructured.NestedSlice(
-		spec, "defaults", "rules", "authorization", "deny-client-identity-headers", "patternMatching", "patterns",
-	)
-	if err != nil || !found {
-		t.Fatalf("identity deny patterns without names: found=%v err=%v", found, err)
-	}
-	want = `request.headers.all(name, !name.startsWith("x-grid-"))`
-	foundPredicate = false
-	for _, pattern := range patterns {
-		patternMap, ok := pattern.(map[string]any)
-		if ok && patternMap["predicate"] == want {
-			foundPredicate = true
-		}
-	}
-	if !foundPredicate {
-		t.Fatalf("identity deny patterns without names = %#v, want predicate %q", patterns, want)
+	if err := applySubscriptionHeaders(spec, nil); err == nil {
+		t.Fatal("applySubscriptionHeaders() with two deny patterns succeeded, want an error")
 	}
 }
 
@@ -243,6 +229,99 @@ func TestReconcileGatewayAuthPolicyWithHeaders_RemovesStaleSubscriptionHeaders(t
 	successHeaders := nestedMapRequired(t, policy, "spec", "defaults", "rules", "response", "success", "headers")
 	if _, found := successHeaders["x-grid-geo-fencing"]; found {
 		t.Fatalf("success headers = %#v, want stale x-grid-geo-fencing removed", successHeaders)
+	}
+}
+
+// Policies written before the deny rule became one pattern and the header guards became
+// selector conditions must be rewritten on upgrade. specMatchesDesired ignores fields only the
+// cluster object has, so a stale shape must still compare as changed.
+func TestReconcileGatewayAuthPolicyWithHeaders_RewritesPreviousConditionShape(t *testing.T) {
+	const (
+		gatewayNS   = "gateway-ns"
+		gatewayName = "maas-default-gateway"
+	)
+	denyPatternsPath := []string{"spec", "defaults", "rules", "authorization", "deny-client-identity-headers", "patternMatching", "patterns"}
+	keyNameWhenPath := []string{"spec", "defaults", "rules", "response", "success", "headers", "X-MaaS-KeyName", "when"}
+	// The deny patterns as the previous controller version wrote them.
+	previousDenyPatterns := []any{}
+	for _, header := range []string{
+		"x-maas-username", "x-maas-group", "x-maas-exact-groups", "x-maas-keyname",
+		"x-maas-subscription-rate-limit-id", "x-maas-organization-id", "x-maas-cost-center",
+		"x-maas-identity", "x-maas-admin-scope",
+	} {
+		previousDenyPatterns = append(previousDenyPatterns, map[string]any{"predicate": `!("` + header + `" in request.headers)`})
+	}
+	previousDenyPatterns = append(previousDenyPatterns,
+		map[string]any{"predicate": `request.headers.all(name, !name.startsWith("x-aigateway-guardrail-"))`},
+		map[string]any{"predicate": `request.headers.all(name, !name.startsWith("x-grid-"))`},
+	)
+
+	cases := []struct {
+		name     string
+		path     []string
+		previous []any
+		want     []any
+	}{
+		{
+			name:     "one CEL pattern per denied header",
+			path:     denyPatternsPath,
+			previous: previousDenyPatterns,
+			want:     []any{map[string]any{"predicate": clientIdentityHeadersDenyPredicate(nil)}},
+		},
+		{
+			name:     "CEL guard on an API-key header",
+			path:     keyNameWhenPath,
+			previous: []any{map[string]any{"predicate": `request.headers.authorization.matches("^Bearer sk-oai-.*")`}},
+			want:     apiKeyWhen(false),
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			gateway := &gatewayapiv1.Gateway{ObjectMeta: metav1.ObjectMeta{Name: gatewayName, Namespace: gatewayNS}}
+			kubeClient := fake.NewClientBuilder().
+				WithScheme(scheme).
+				WithRESTMapper(testRESTMapper()).
+				WithObjects(gateway).
+				Build()
+			reconciler := &MaaSAuthPolicyReconciler{
+				Client:           kubeClient,
+				Scheme:           scheme,
+				GatewayNamespace: gatewayNS,
+				GatewayName:      gatewayName,
+			}
+			reconcile := func() bool {
+				t.Helper()
+				changed, err := reconciler.reconcileGatewayAuthPolicyWithHeaders(
+					t.Context(), logr.Discard(), nil, false, "", "", gatewayNS, gatewayName, nil,
+				)
+				if err != nil {
+					t.Fatalf("reconcileGatewayAuthPolicyWithHeaders() error = %v", err)
+				}
+				return changed
+			}
+			policyName := reconciler.gatewayAuthPolicyName(gatewayNS, gatewayName)
+
+			reconcile()
+			policy := gatewayAuthPolicy(t, kubeClient, gatewayNS, policyName)
+			if err := unstructured.SetNestedSlice(policy.Object, tc.previous, tc.path...); err != nil {
+				t.Fatalf("set previous shape: %v", err)
+			}
+			if err := kubeClient.Update(t.Context(), policy); err != nil {
+				t.Fatalf("store previous shape: %v", err)
+			}
+
+			if !reconcile() {
+				t.Fatal("reconcile left the previous shape in place")
+			}
+			policy = gatewayAuthPolicy(t, kubeClient, gatewayNS, policyName)
+			got, _, err := unstructured.NestedSlice(policy.Object, tc.path...)
+			if err != nil || !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("after reconcile %v = %#v (err %v), want %#v", tc.path, got, err, tc.want)
+			}
+			if reconcile() {
+				t.Fatal("second reconcile updated an up-to-date policy")
+			}
+		})
 	}
 }
 

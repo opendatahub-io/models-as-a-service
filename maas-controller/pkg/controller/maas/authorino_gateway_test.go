@@ -16,11 +16,13 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"reflect"
+	goruntime "runtime"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+	"weak"
 
 	envoyauth "github.com/envoyproxy/go-control-plane/envoy/service/auth/v3"
 	envoytype "github.com/envoyproxy/go-control-plane/envoy/type/v3"
@@ -500,7 +502,13 @@ func newAuthorinoGateway(t *testing.T, spec map[string]any, replies maasAPIRepli
 	}
 	maasAPI := &fakeMaaSAPI{log: log, replies: replies}
 	server := httptest.NewServer(maasAPI)
-	t.Cleanup(server.Close)
+	// The testing package keeps a finished parallel subtest, and the cleanups it ran, until
+	// the parent ends. Dropping the handler lets the gateway, and its compiled AuthConfig,
+	// be collected before then.
+	t.Cleanup(func() {
+		server.Close()
+		server.Config.Handler = nil
+	})
 
 	authConfigSpec := decodeAuthConfigSpec(t, requiredMap(spec, "defaults", "rules"))
 	if len(authConfigSpec.Callbacks) > 0 {
@@ -738,6 +746,37 @@ func TestCompileForGatewayRejectsNewerCELFunctions(t *testing.T) {
 	if err := compileForGateway(`request.headers[?"x-api-key"].orValue("") == "k"`, cel.BoolType); err != nil {
 		t.Errorf("optional index syntax: %v", err)
 	}
+}
+
+// The conditions tests run about a thousand gateways as parallel subtests, and the testing
+// package keeps each finished one until its parent ends. If those gateways stay reachable,
+// the package needs more than the 16 GB of a CI runner under -race.
+func TestAuthorinoGatewayCollectedAfterParallelSubtest(t *testing.T) {
+	var log weak.Pointer[pipelineLog]
+	t.Run("parent", func(t *testing.T) {
+		t.Cleanup(func() {
+			// then
+			goruntime.GC()
+			if log.Value() != nil {
+				t.Error("the gateway of a finished parallel subtest is still reachable")
+			}
+		})
+		t.Run("gateway", func(t *testing.T) {
+			t.Parallel()
+
+			// given
+			spec := map[string]any{"defaults": map[string]any{"rules": map[string]any{
+				"authentication": map[string]any{"test-identity": map[string]any{"anonymous": map[string]any{}}},
+				"response": map[string]any{"success": map[string]any{"headers": map[string]any{
+					"x-sub": map[string]any{"plain": map[string]any{"expression": `auth.identity.sub`}},
+				}}},
+			}}}
+
+			// when
+			gateway := newAuthorinoGateway(t, spec, nil)
+			log = weak.Make(gateway.log)
+		})
+	})
 }
 
 func TestAuthorinoGatewayReportsFailures(t *testing.T) {

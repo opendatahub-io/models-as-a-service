@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -2117,14 +2118,8 @@ func assertNonEmptySubscriptionHeader(t *testing.T, headers map[string]any, head
 	if expr != wantExpr {
 		t.Errorf("%s expression = %q, want %q", header, expr, wantExpr)
 	}
-	when, _ := raw["when"].([]any)
-	if len(when) == 0 {
-		t.Fatalf("%s should inject only when %s is non-empty", header, field)
-	}
-	when0, _ := when[0].(map[string]any)
-	pred, _ := when0["predicate"].(string)
-	if !strings.Contains(pred, wantExpr) || !strings.Contains(pred, `!= ""`) {
-		t.Errorf("%s when predicate = %q, want non-empty check on %s", header, pred, wantExpr)
+	if want := nonEmptyWhen("auth.metadata.subscription-info." + field); !reflect.DeepEqual(raw["when"], want) {
+		t.Errorf("%s when = %#v, want %#v so it is set only when %s is non-empty", header, raw["when"], want, field)
 	}
 }
 
@@ -2312,61 +2307,27 @@ func TestBuildGatewayAuthPolicySpec_ErrorResponses(t *testing.T) {
 	})
 }
 
-func TestBuildGatewayAuthPolicySpec_DenyClientIdentityHeaders(t *testing.T) {
+// Authorino re-parses the authorization JSON for every CEL pattern, so the deny rule stays a
+// single pattern. TestGatewayAuthPolicyDeniesClientIdentityHeaders covers what it denies.
+func TestBuildGatewayAuthPolicySpec_DenyClientIdentityHeadersIsOnePattern(t *testing.T) {
 	obj := gatewayAuthPolicySpecTestObject(t, nil)
 
 	patterns, found, err := unstructured.NestedSlice(
 		obj.Object,
 		"spec", "defaults", "rules", "authorization", "deny-client-identity-headers", "patternMatching", "patterns",
 	)
-
-	if err != nil || !found || len(patterns) != 10 {
-		t.Fatalf("deny-client-identity-headers patterns missing: found=%v len=%d err=%v", found, len(patterns), err)
-	}
-
-	got := make([]string, 0, len(patterns))
-	for i, p := range patterns {
-		m, ok := p.(map[string]any)
-		if !ok {
-			t.Fatalf("patterns[%d] is not a map: %T", i, p)
-		}
-		pred, ok := m["predicate"].(string)
-		if !ok {
-			t.Fatalf("patterns[%d] missing predicate string", i)
-		}
-		got = append(got, pred)
-	}
-
-	want := []string{
-		`!("x-maas-username" in request.headers)`,
-		`!("x-maas-group" in request.headers)`,
-		`!("x-maas-exact-groups" in request.headers)`,
-		`!("x-maas-keyname" in request.headers)`,
-		`!("x-maas-subscription-rate-limit-id" in request.headers)`,
-		`!("x-maas-organization-id" in request.headers)`,
-		`!("x-maas-cost-center" in request.headers)`,
-		`!("x-maas-identity" in request.headers)`,
-		`!("x-maas-admin-scope" in request.headers)`,
-		`request.headers.all(name, !name.startsWith("x-aigateway-guardrail-"))`,
-	}
-	if len(got) != len(want) {
-		t.Fatalf("deny-client-identity-headers predicates = %#v, want %#v", got, want)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("deny-client-identity-headers predicates = %#v, want %#v", got, want)
-		}
+	if err != nil || !found || len(patterns) != 1 {
+		t.Fatalf("deny-client-identity-headers patterns = %#v (found=%v, err=%v), want one pattern", patterns, found, err)
 	}
 }
 
 func TestBuildGatewayAuthPolicySpec_SubscriptionHeaderInjection(t *testing.T) {
 	obj := gatewayAuthPolicySpecTestObject(t, nil)
 
-	predicate := nestedWhenPredicateRequired(t, obj,
+	when, _, _ := unstructured.NestedSlice(obj.Object,
 		"spec", "defaults", "rules", "response", "success", "headers", "X-MaaS-Subscription", "when")
-	wantPredicate := `has(auth.metadata) && has(auth.metadata.apiKeyValidation) && auth.metadata.apiKeyValidation.subscription != ""`
-	if predicate != wantPredicate {
-		t.Errorf("subscription header must be injected only for API keys with a subscription: got %q, want %q", predicate, wantPredicate)
+	if want := nonEmptyWhen("auth.metadata.apiKeyValidation.subscription"); !reflect.DeepEqual(when, want) {
+		t.Errorf("subscription header must be injected only for API keys with a subscription: got %#v, want %#v", when, want)
 	}
 
 	// User tokens still use the client header for subscription selection, without
@@ -2397,14 +2358,8 @@ func TestSubscriptionInfoStringHeader(t *testing.T) {
 	if expr != `auth.metadata["subscription-info"].organizationId` {
 		t.Errorf("expression = %q", expr)
 	}
-	when, _ := h["when"].([]any)
-	if len(when) != 1 {
-		t.Fatalf("when length = %d, want 1", len(when))
-	}
-	when0, _ := when[0].(map[string]any)
-	pred, _ := when0["predicate"].(string)
-	if !strings.Contains(pred, `auth.metadata["subscription-info"].organizationId != ""`) {
-		t.Errorf("predicate = %q, want non-empty organizationId check", pred)
+	if want := nonEmptyWhen("auth.metadata.subscription-info.organizationId"); !reflect.DeepEqual(h["when"], want) {
+		t.Errorf("when = %#v, want %#v", h["when"], want)
 	}
 }
 
@@ -2616,18 +2571,11 @@ func TestBuildGatewayAuthPolicySpec_XAPIKeyEnabled(t *testing.T) {
 	if err != nil || !found || len(apiKeyWhen) == 0 {
 		t.Fatalf("apiKeyValidation when missing: found=%v err=%v", found, err)
 	}
+	// Metadata validation reads auth.identity, not a header: both API key methods set it, with
+	// or without the "Bearer " prefix. TestGatewayAuthPolicyAllowedRequests covers the outcome.
 	whenMap, ok := apiKeyWhen[0].(map[string]any)
-	if !ok {
-		t.Fatalf("apiKeyValidation when[0] is not a map")
-	}
-	pred, ok := whenMap["predicate"].(string)
-	if !ok {
-		t.Fatal("apiKeyValidation when should use predicate (not selector) when x-api-key enabled")
-	}
-	// Metadata validation uses auth.identity (post-auth, safe) which works for both Bearer and x-api-key
-	// Both auth methods populate auth.identity with an API key format (with or without "Bearer " prefix)
-	if !contains(pred, "auth.identity") || !contains(pred, "sk-oai") {
-		t.Errorf("apiKeyValidation when predicate should check auth.identity for API key format, got: %s", pred)
+	if !ok || whenMap["selector"] != "auth.identity" {
+		t.Errorf("apiKeyValidation when should test auth.identity, got: %#v", apiKeyWhen)
 	}
 
 	// openshift-identities intentionally has no `when` guard (see comments in code).
