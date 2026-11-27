@@ -18,6 +18,8 @@ MULTITENANCY_PHASE_TIMEOUT = int(os.environ.get("E2E_MULTITENANCY_PHASE_TIMEOUT"
 # Parallel workers can create many simulators at once; 180s was flaking on
 # MinimumReplicasUnavailable under Konflux group-test load (see PR #1521 run).
 MODEL_BACKEND_READY_TIMEOUT = int(os.environ.get("E2E_MODEL_BACKEND_READY_TIMEOUT", "300"))
+# Per-tenant Gateway Programmed wait (oc wait); Shepard nightly sets 600 on shared pools.
+GATEWAY_PROGRAMMED_TIMEOUT = int(os.environ.get("E2E_GATEWAY_PROGRAMMED_TIMEOUT", "300"))
 
 from test_helper import (
     DEPLOYMENT_NAMESPACE,
@@ -796,10 +798,11 @@ def cluster_domain_from_default_route() -> str:
     raise RuntimeError(f"could not determine cluster apps domain from routes in {GATEWAY_NAMESPACE}")
 
 
-def wait_for_gateway_programmed(gateway_name: str, *, timeout: int = 300) -> None:
-    # 300s: on a fresh cluster the first per-tenant gateway reconcile waits
-    # on cold image pulls and istiod warm-up; the second tenant can exceed
-    # a tighter window even though nothing is wrong.
+def wait_for_gateway_programmed(
+    gateway_name: str, *, timeout: int | None = None
+) -> None:
+    if timeout is None:
+        timeout = GATEWAY_PROGRAMMED_TIMEOUT
     result = _oc_run(
         [
             "wait",

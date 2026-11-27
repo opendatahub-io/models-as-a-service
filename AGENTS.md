@@ -110,6 +110,7 @@ Defaults live in `test/e2e/tests/test_helper.py` (and optional `E2E_*` env overr
 - **Do not pass `timeout=`** unless the value is **greater** than that helper’s default.
 - Every increasing override **must** have a one-line comment on the call explaining why the default is insufficient (e.g. Limitador backlog, dual-model bootstrap).
 - **Never** override to shorten a wait. If a shorter bound is truly required, change the helper default (or use a different helper) instead of a call-site decrease.
+- **New shared E2E timeout env vars** (`E2E_*`): read them once into a module-level constant at the top of the helper module (see `multitenancy_helpers.GATEWAY_PROGRAMMED_TIMEOUT`), and add a row to the env table in `test/e2e/README.md`.
 
 ## Documentation policy
 
