@@ -109,11 +109,12 @@ class PoolEcho:
     llmis: str
     model: str
     api_key: str = field(repr=False)
+    v1_url: str = field(default_factory=lambda: f"{_gateway_url()}/v1")
 
     def complete(self, prompt: str, stream: bool = False) -> requests.Response:
         """Body-routed chat completion: the model is only named in the body."""
         headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
-        return chat(prompt, f"{_gateway_url()}/v1", headers, self.model, stream=stream, timeout=REQUEST_TIMEOUT)
+        return chat(prompt, self.v1_url, headers, self.model, stream=stream, timeout=REQUEST_TIMEOUT)
 
     def redact(self, text: str) -> str:
         return text.replace(self.api_key, "<redacted>")

@@ -264,16 +264,16 @@ def _skip_unless_maas_payload_processing():
         pytest.skip("default tenant runs praxis-extproc; ai-gateway-controller owns its EnvoyFilter")
 
 
-def _log_pool_diagnostics(llmis: str):
+def _log_pool_diagnostics(llmis: str, namespace: str = MODEL_NAMESPACE):
     """Log the pool's state before cleanup deletes it."""
-    obj = get_json_or_none("llminferenceservice", llmis, MODEL_NAMESPACE) or {}
+    obj = get_json_or_none("llminferenceservice", llmis, namespace) or {}
     log.error("LLMInferenceService %s conditions: %s", llmis, (obj.get("status") or {}).get("conditions"))
     for kind in ("inferencepool", "httproute"):
-        for item in list_json(kind, MODEL_NAMESPACE):
+        for item in list_json(kind, namespace):
             if item["metadata"]["name"].startswith(llmis):
                 log.error("%s %s status: %s", kind, item["metadata"]["name"], item.get("status"))
     log.error("scheduler logs:\n%s", deployment_log_snapshot(
-        _picker_deployment(llmis), namespace=MODEL_NAMESPACE, since="10m"))
+        _picker_deployment(llmis), namespace=namespace, since="10m"))
 
 
 def _chat(api_key, model_name, stream=False):
